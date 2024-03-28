@@ -24,7 +24,7 @@ model_name=internlm-chat-20b
 # repo_id=/path/to/downloaded_model
 
 # Inference by TurboMind
-lmdeploy chat turbomind $repo_id --model-name $model_name
+lmdeploy chat $repo_id --model-name $model_name
 
 # Serving with gradio
 lmdeploy serve gradio $repo_id --model-name $model_name
@@ -44,7 +44,7 @@ model_name=qwen-7b
 # repo_id=/path/to/Qwen-7B-Chat/local_path
 
 # Inference by TurboMind
-lmdeploy chat turbomind $repo_id --model-name $model_name
+lmdeploy chat $repo_id --model-name $model_name
 
 # Serving with gradio
 lmdeploy serve gradio $repo_id --model-name $model_name
@@ -62,7 +62,7 @@ lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
 lmdeploy convert $MODEL_NAME /path/to/model --dst-path ./workspace
 
 # Inference by TurboMind
-lmdeploy chat turbomind ./workspace
+lmdeploy chat ./workspace
 
 # Serving with gradio
 lmdeploy serve gradio ./workspace

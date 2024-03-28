@@ -348,7 +348,7 @@ LlamaTritonModel<T>::createModelInstance(int                                    
 
     allocator->setStream(stream);
 
-    return std::make_unique<LlamaTritonModelInstance<T>>(instance, std::move(allocator));
+    return std::make_unique<LlamaTritonModelInstance<T>>(instance, std::move(allocator), device_id);
 }
 
 template<typename T>

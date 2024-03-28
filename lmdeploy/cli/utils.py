@@ -256,16 +256,6 @@ class ArgumentHelper:
                                    help='Set the inference backend')
 
     @staticmethod
-    def engine(parser):
-        """Add argument engine to parser."""
-
-        return parser.add_argument('--engine',
-                                   type=str,
-                                   default='turbomind',
-                                   choices=['pytorch', 'turbomind'],
-                                   help='Set the inference backend')
-
-    @staticmethod
     def stream_output(parser):
         """Add argument stream_output to parser."""
 
@@ -369,6 +359,15 @@ class ArgumentHelper:
             type=str,
             default='./work_dir',
             help='The working directory to save results')
+
+    @staticmethod
+    def trust_remote_code(parser):
+        """Add argument trust_remote_code to parser."""
+        return parser.add_argument(
+            '--trust-remote-code',
+            action='store_false',
+            default=True,
+            help='Trust remote code for loading hf models')
 
     @staticmethod
     def cache_block_seq_len(parser):
