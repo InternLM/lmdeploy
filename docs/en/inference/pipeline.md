@@ -143,6 +143,27 @@ response = pipe(prompts, gen_config=gen_config)
 print(response)
 ```
 
+- **An example for slora.**
+
+```python
+from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
+
+backend_config = PytorchEngineConfig(session_len=2048,
+                                     adapters=dict(lora_name_1='chenchi/lora-chatglm2-6b-guodegang'))
+gen_config = GenerationConfig(top_p=0.8,
+                              top_k=40,
+                              temperature=0.8,
+                              max_new_tokens=1024)
+pipe = pipeline('THUDM/chatglm2-6b',
+                backend_config=backend_config)
+prompts = [[{
+    'role': 'user',
+    'content': '您猜怎么着'
+}]]
+response = pipe(prompts, gen_config=gen_config, adapter_name='lora_name_1')
+print(response)
+```
+
 ## FAQs
 
 - **RuntimeError: An attempt has been made to start a new process before the current process has finished its bootstrapping phase**.
@@ -156,3 +177,5 @@ print(response)
   Generally, in the context of multi-threading or multi-processing, it might be necessary to ensure that initialization code is executed only once. In this case, `if __name__ == '__main__':` can help to ensure that these initialization codes are run only in the main program, and not repeated in each newly created process or thread.
 
 - To customize a chat template, please refer to [chat_template.md](../advance/chat_template.md).
+
+- If the weight of lora has a corresponding chat template, you can first register the chat template to lmdeploy, and then use the chat template name as the adapter name.

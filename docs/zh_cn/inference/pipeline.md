@@ -145,6 +145,27 @@ response = pipe(prompts, gen_config=gen_config)
 print(response)
 ```
 
+- **一个 slora 的例子**
+
+```python
+from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
+
+backend_config = PytorchEngineConfig(session_len=2048,
+                                     adapters=dict(lora_name_1='chenchi/lora-chatglm2-6b-guodegang'))
+gen_config = GenerationConfig(top_p=0.8,
+                              top_k=40,
+                              temperature=0.8,
+                              max_new_tokens=1024)
+pipe = pipeline('THUDM/chatglm2-6b',
+                backend_config=backend_config)
+prompts = [[{
+    'role': 'user',
+    'content': '您猜怎么着'
+}]]
+response = pipe(prompts, gen_config=gen_config, adapter_name='lora_name_1')
+print(response)
+```
+
 ## FAQs
 
 - **RuntimeError: An attempt has been made to start a new process before the current process has finished its bootstrapping phase**.
@@ -158,3 +179,5 @@ print(response)
   一般来说，在多线程或多进程上下文中，可能需要确保初始化代码只执行一次。这时候，`if __name__ == '__main__':` 可以帮助确保这些初始化代码只在主程序执行，而不会在每个新创建的进程或线程中重复执行。
 
 - 自定义对话模板，请参考[chat_template.md](../advance/chat_template.md)
+
+- 如果 lora 的权重有对应的对话模板，可以先注册对话模板到 lmdeploy，然后 adapter 名为对话模板名使用即可
