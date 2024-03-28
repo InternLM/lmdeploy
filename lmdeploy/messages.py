@@ -180,8 +180,18 @@ class PytorchEngineConfig:
     adapters: Dict[str, str] = None
     max_prefill_token_num: int = 4096
     thread_safe: bool = False
+    device_ids: List[int] = None
     download_dir: str = None
     revision: str = None
+
+    def __post_init__(self):
+        """post init."""
+        if self.device_ids is None:
+            self.device_ids = list(range(self.tp))
+        if isinstance(self.device_ids, int):
+            self.device_ids = [self.device_ids]
+
+        assert len(self.device_ids) == self.tp
 
 
 class ResponseType(enum.Enum):

@@ -161,7 +161,8 @@ def _dist_model(model: torch.nn.Module,
 
     def _init_params():
         """init params."""
-        device = torch.device(f'cuda:{rank}')
+        device_id = torch.cuda.current_device()
+        device = torch.device(f'cuda:{device_id}')
         for name, param in model.named_parameters(recurse=False):
             if device != param.device:
                 if rank == 0:
@@ -250,7 +251,7 @@ def patch(
     model: torch.nn.Module,
     extra_args: Sequence[str] = None,
     rank: int = 0,
-    world_size: int = 1,
+    device_mesh: DeviceMesh = None,
 ):
     """Patch the model with rewrite modules.
 
@@ -261,7 +262,7 @@ def patch(
         model (Module): Model to be patched.
         extra_args (Sequence[str]): Extra arguments of model forward.
         rank (int): Distribution rank.
-        world_size (int): Distribution world size.
+        device_mesh (DeviceMesh): DeviceMesh.
 
     Returns:
         Module: The patched model.
@@ -274,10 +275,9 @@ def patch(
 
     model = _patch(model, _patch_context)
 
-    if world_size > 1:
+    if device_mesh is not None:
         if rank == 0:
             logger.info('distribute model parameters.')
-        device_mesh = DeviceMesh('cuda', list(range(world_size)))
         model = _dist_model(model, rank, device_mesh=device_mesh)
 
     _update_model(model)

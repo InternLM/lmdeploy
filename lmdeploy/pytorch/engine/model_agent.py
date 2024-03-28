@@ -471,13 +471,15 @@ class AutoModelAgent:
                         cache_config: CacheConfig,
                         trust_remote_code: bool,
                         adapters: Dict[str, str] = None,
-                        tp: int = 1):
+                        tp: int = 1,
+                        device_ids: List[int] = None):
         """from pretrained."""
         return build_model_agent(pretrained_model_name_or_path,
                                  cache_config=cache_config,
                                  trust_remote_code=trust_remote_code,
                                  adapters=adapters,
-                                 tp=tp)
+                                 tp=tp,
+                                 device_ids=device_ids)
 
 
 class BaseModelAgent(AutoModelAgent):
@@ -497,25 +499,30 @@ class BaseModelAgent(AutoModelAgent):
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  adapters: Dict[str, str] = None,
+                 device_id: int = 0,
                  trust_remote_code: bool = True):
         super().__init__(model_config=model_config, cache_config=cache_config)
         torch_dtype = model_config.dtype
 
-        self.patched_model = self._build_model(
-            model_path,
-            torch_dtype=torch_dtype,
-            adapters=adapters,
-            trust_remote_code=trust_remote_code)
+        self.device_id = device_id
+        with torch.cuda.device(self.device_id):
+            self.patched_model = self._build_model(
+                model_path,
+                torch_dtype=torch_dtype,
+                adapters=adapters,
+                trust_remote_code=trust_remote_code)
 
-        block_size = _infer_block_size(self.patched_model, model_config,
-                                       cache_config)
-        if block_size != cache_config.block_size:
-            cache_config.block_size = block_size
-            logger.warning(f'infered block size: {block_size}')
-        _update_cache_config(model_config, cache_config)
+            block_size = _infer_block_size(self.patched_model, model_config,
+                                           cache_config)
+            if block_size != cache_config.block_size:
+                cache_config.block_size = block_size
+                logger.warning(f'infered block size: {block_size}')
+            _update_cache_config(model_config,
+                                 cache_config,
+                                 gpu_id=self.device_id)
 
-        self.cache_engine = CacheEngine(cache_config, model_config)
-        self.stream = torch.cuda.Stream()
+            self.cache_engine = CacheEngine(cache_config, model_config)
+            self.stream = torch.cuda.Stream()
 
     def _build_model(self,
                      model_path: str,
@@ -558,17 +565,16 @@ class BaseModelAgent(AutoModelAgent):
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
-        cache_swapping(self.cache_engine,
-                       swap_in_map=swap_in_map,
-                       swap_out_map=swap_out_map)
-        output = model_forward(
-            self.patched_model,
-            inputs,
-            self.cache_engine,
-            self.model_config.json_config,
-            world_size=1,
-            stream=self.stream,
-        )
+        with torch.cuda.device(self.device_id):
+            cache_swapping(self.cache_engine,
+                           swap_in_map=swap_in_map,
+                           swap_out_map=swap_out_map)
+            output = model_forward(self.patched_model,
+                                   inputs,
+                                   self.cache_engine,
+                                   self.model_config.json_config,
+                                   world_size=1,
+                                   stream=self.stream)
         return output
 
     def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
@@ -611,11 +617,10 @@ class TPResponse:
 
     def gather_error(self):
         """gather error."""
-        rank = dist.get_rank()
         world_size = dist.get_world_size()
 
         # gather errors
-        error_count = torch.tensor(self.ret_code).cuda(rank)
+        error_count = torch.tensor(self.ret_code).cuda()
         dist.all_reduce(error_count)
         if error_count.item() > 0:
             all_errors = [None] * world_size
@@ -652,17 +657,18 @@ def _get_model_memory_usage(model: torch.nn.Module) -> int:
 
 def _create_device_map(model: torch.nn.Module,
                        world_size: int,
+                       device_ids: List[int],
                        device_map: dict = None):
     """Distribute params to each devices."""
     if device_map is None:
         device_map = dict()
-    device_id = 0
+    idx = 0
     for name, _ in model.named_parameters():
-        device_map[name] = device_id
-        device_id = (device_id + 1) % world_size
+        device_map[name] = device_ids[idx]
+        idx = (idx + 1) % world_size
     for name, _ in model.named_buffers():
-        device_map[name] = device_id
-        device_id = (device_id + 1) % world_size
+        device_map[name] = device_ids[idx]
+        idx = (idx + 1) % world_size
     return device_map
 
 
@@ -674,6 +680,8 @@ def _tp_build_model(
     adapters: Dict[str, str],
     out_que: mp.Queue,
     world_size: int,
+    device_mesh: DeviceMesh,
+    device_ids: int,
     trust_remote_code=True,
 ):
     """build tensor parallel model."""
@@ -747,11 +755,12 @@ def _tp_build_model(
                 trust_remote_code=trust_remote_code,
                 **model_config.init_kwargs)
             if rank == 0:
-                device_map = _create_device_map(model, world_size)
+                device_map = _create_device_map(model, world_size, device_ids)
             _add_adapters(model, adapters)
             if rank == 0:
                 # adapter would remove weight of linear.
-                device_map = _create_device_map(model, world_size, device_map)
+                device_map = _create_device_map(model, world_size, device_ids,
+                                                device_map)
         model.eval()
         model.config.use_cache = True
 
@@ -773,7 +782,7 @@ def _tp_build_model(
             model,
             extra_args=_PATCH_ARG_NAMES,
             rank=rank,
-            world_size=world_size,
+            device_mesh=device_mesh,
         )
 
         block_size = _infer_block_size(patched_model, model_config,
@@ -782,9 +791,10 @@ def _tp_build_model(
             cache_config.block_size = block_size
             if rank == 0:
                 logger.warning(f'infered block size: {block_size}')
+        device_id = torch.cuda.current_device()
         _update_cache_config(model_config,
                              cache_config,
-                             gpu_id=rank,
+                             gpu_id=device_id,
                              world_size=world_size)
         cache_config = _broadcast_config(cache_config)
         cache_engine = CacheEngine(cache_config,
@@ -807,9 +817,8 @@ def _tp_build_model(
     return patched_model, cache_engine
 
 
-def _tp_get_input(rank: int, in_que: mp.Queue, world_size: int):
+def _tp_get_input(rank: int, in_que: mp.Queue, device_mesh: DeviceMesh):
     """get input tensor parallel."""
-    device_mesh = DeviceMesh('cuda', list(range(world_size)))
 
     # broadcast meta info
     if rank == 0:
@@ -910,6 +919,7 @@ def _tp_model_loop(
     in_que: mp.Queue,
     out_que: mp.Queue,
     world_size: int,
+    device_ids: List[int],
     trust_remote_code=True,
 ):
     """Start model loops for tensor parallel model inference.
@@ -925,6 +935,8 @@ def _tp_model_loop(
         world_size (int): The distribution world size.
     """
     stream = torch.cuda.Stream()
+    mesh = list(range(world_size))
+    device_mesh = DeviceMesh('cuda', mesh=mesh)
     patched_model, cache_engine = _tp_build_model(
         rank,
         model_path,
@@ -933,6 +945,8 @@ def _tp_model_loop(
         adapters,
         out_que=out_que,
         world_size=world_size,
+        device_mesh=device_mesh,
+        device_ids=device_ids,
         trust_remote_code=trust_remote_code)
 
     if adapters:
@@ -944,7 +958,7 @@ def _tp_model_loop(
 
     while True:
         inputs, swap_in_map, swap_out_map = _tp_get_input(
-            rank, in_que, world_size)
+            rank, in_que, device_mesh)
 
         cache_swapping(cache_engine,
                        swap_in_map=swap_in_map,
@@ -969,7 +983,8 @@ def _start_tp_process(rank: int,
                       func: Callable,
                       args: List = None,
                       kwargs: Dict = None,
-                      port: int = 29500):
+                      port: int = 29500,
+                      device_ids: List[int] = None):
     """Start the tensor parallel process.
 
     Args:
@@ -980,11 +995,22 @@ def _start_tp_process(rank: int,
         kwargs (Dict): The keyword arguments of the func.
     """
     try:
-        os.environ['MASTER_ADDR'] = '127.0.0.1'
-        os.environ['MASTER_PORT'] = str(port)
+        if 'MASTER_ADDR' not in os.environ:
+            os.environ['MASTER_ADDR'] = '127.0.0.1'
+        if 'MASTER_PORT' not in os.environ:
+            os.environ['MASTER_PORT'] = str(port)
+        if rank == 0:
+            master_addr = os.environ['MASTER_ADDR']
+            master_port = os.environ['MASTER_PORT']
+            logger.info('Initializing `nccl` process group: '
+                        f'{master_addr}:{master_port}, '
+                        f'world_size: {world_size}')
         dist.init_process_group('nccl', rank=rank, world_size=world_size)
 
-        with torch.cuda.device(rank), torch.no_grad():
+        if device_ids is None:
+            device_ids = list(range(world_size))
+        device_id = device_ids[rank]
+        with torch.cuda.device(device_id), torch.no_grad():
             args = args or tuple()
             kwargs = kwargs or dict()
             func(rank, *args, **kwargs)
@@ -1054,10 +1080,14 @@ class TPModelAgent(AutoModelAgent):
                  cache_config: CacheConfig,
                  world_size: int,
                  adapters: Dict[str, str] = None,
+                 device_ids: List[int] = None,
                  trust_remote_code: bool = True) -> None:
         self.mp_ctx = mp.get_context('spawn')
         super().__init__(model_config=model_config, cache_config=cache_config)
         self.world_size = world_size
+        if device_ids is None:
+            device_ids = len(range(self.world_size))
+        self.device_ids = device_ids
         self.tp_model_in_que = self.mp_ctx.Queue(10)
         self.tp_model_out_que = self.mp_ctx.Queue(10)
 
@@ -1110,8 +1140,10 @@ class TPModelAgent(AutoModelAgent):
                      in_que=in_que,
                      out_que=out_que,
                      world_size=world_size,
+                     device_ids=self.device_ids,
                      trust_remote_code=trust_remote_code),
                 __find_available_port(),
+                self.device_ids,
             ),
             nprocs=world_size,
             join=False,
@@ -1175,7 +1207,8 @@ def build_model_agent(model_path: str,
                       cache_config: CacheConfig,
                       trust_remote_code: bool,
                       adapters: Dict[str, str] = None,
-                      tp: int = 1):
+                      tp: int = 1,
+                      device_ids: List[int] = None):
     """create model agent."""
     model_config = ModelConfig.from_pretrained(
         model_path, trust_remote_code=trust_remote_code)
@@ -1184,6 +1217,7 @@ def build_model_agent(model_path: str,
                                      model_config=model_config,
                                      cache_config=cache_config,
                                      adapters=adapters,
+                                     device_id=device_ids[0],
                                      trust_remote_code=trust_remote_code)
     else:
         model_agent = TPModelAgent(model_path,
@@ -1191,5 +1225,6 @@ def build_model_agent(model_path: str,
                                    cache_config=cache_config,
                                    world_size=tp,
                                    adapters=adapters,
+                                   device_ids=device_ids,
                                    trust_remote_code=trust_remote_code)
     return model_agent
