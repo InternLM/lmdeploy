@@ -187,7 +187,6 @@ class AsyncEngine:
         if backend == 'turbomind':
             self._build_turbomind(model_path=model_path,
                                   backend_config=backend_config,
-                                  chat_template_config=chat_template_config,
                                   tp=tp,
                                   **kwargs)
         elif backend == 'pytorch':
@@ -221,7 +220,6 @@ class AsyncEngine:
             model_path: str,
             backend_config: Optional[Union[TurbomindEngineConfig,
                                            PytorchEngineConfig]] = None,
-            chat_template_config: Optional[ChatTemplateConfig] = None,
             tp: int = 1,
             **kwargs):
         """Innter build method for turbomind backend."""
@@ -235,10 +233,7 @@ class AsyncEngine:
             backend_config.session_len = self.chat_template.session_len
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
-            model_path,
-            engine_config=backend_config,
-            chat_template_config=chat_template_config,
-            **kwargs)
+            model_path, engine_config=backend_config, **kwargs)
         self.backend_config = backend_config
 
     def _build_pytorch(
