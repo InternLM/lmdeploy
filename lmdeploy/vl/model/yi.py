@@ -110,7 +110,7 @@ def disable_transformers_logging():
 class YiVisionModel(LlavaVisionModel):
     """Yi visual model."""
 
-    def __init__(self, model_path, device='cuda'):
+    def __init__(self, model_path, device='cuda:0'):
         self.model_path = model_path
         self.device = device
         self.build_model()

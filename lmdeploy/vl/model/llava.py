@@ -28,7 +28,7 @@ def check_llava_install():
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path, device='cuda'):
+    def __init__(self, model_path, device='cuda:0'):
         self.model_path = model_path
         self.device = device
         self.build_model()
