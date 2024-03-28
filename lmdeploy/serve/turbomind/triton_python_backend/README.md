@@ -21,7 +21,12 @@ The Triton Inference Server requires a specific folder structure for serving mod
    - If you use Huggingface model, you can copy the whole downloaded model folder to `1/` and rename it to `weights`.
    - If you use [converted Turbomind workspace](https://github.com/InternLM/lmdeploy/blob/main/docs/en/inference/load_hf.md#3-a-model-converted-by-lmdeploy-convert), you can copy the generated `workspace` folder to `1/` and rename it to `weights`.
 
-6. Place the `config.pbtxt` file directly inside the `lmdeploy_model/` directory. This configuration file is essential for Triton to understand how to serve your model. For advanced usage, you can modify the `config.pbtxt` to load your customized configurations.
+6. Place the `config.pbtxt` file directly inside the `lmdeploy_model/` directory. This configuration file is essential for Triton to understand how to serve your model.
+
+7. For advanced usage, you can modify the `config.pbtxt` to use your customized configurations. There are two important parameters you may change:
+
+   - `model_name`: The name of the to-be-deployed model, such as `llama`, `llama2`, `internlm2`, `baichuan2` and etc. You can run `lmdeploy list` to get the supported model names.
+   - `tp`: GPU number used in tensor parallelism. Should be 2^n.
 
 The final folder structure should look like this:
 
