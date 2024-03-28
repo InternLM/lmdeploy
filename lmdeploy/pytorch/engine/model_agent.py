@@ -25,6 +25,11 @@ logger = get_logger('lmdeploy')
 _PATCH_ARG_NAMES = ['context', 'use_origin']
 
 
+def _div_up(a, b):
+    """div up."""
+    return (a + b - 1) // b
+
+
 def _infer_block_size(model: torch.nn.Module,
                       model_config: ModelConfig,
                       cache_config: CacheConfig,
@@ -94,6 +99,7 @@ class ModelInputs:
     q_start_loc: torch.LongTensor
     history_lengths: List[int]
     is_decoding: bool
+    num_blocks: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
     global_adapter_ids: torch.LongTensor = None
     adapter_offsets: torch.LongTensor = None
@@ -138,15 +144,19 @@ class ModelInputs:
             if local_adapter_ids is not None:
                 local_adapter_ids = local_adapter_ids[:, start:end]
 
+            block_offsets = self.block_offsets[:, :block_end]
+            out_num_blocks = self.num_blocks.new_tensor(
+                [block_offsets.size(1)])
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
                 attention_mask=self.attention_mask[:, start:end],
-                block_offsets=self.block_offsets[:, :block_end],
+                block_offsets=block_offsets,
                 position_ids=self.position_ids[:, start:end],
                 q_start_loc=input_ids.new_zeros(1),
                 history_lengths=[history_len + start],
                 is_decoding=self.is_decoding,
+                num_blocks=out_num_blocks,
                 local_adapter_ids=local_adapter_ids,
                 global_adapter_ids=self.global_adapter_ids,
                 adapter_offsets=self.adapter_offsets,
@@ -206,6 +216,7 @@ class StepContext:
         device: str = 'cuda',
         json_config: dict = None,
         kv_caches: List = None,
+        cache_config: CacheConfig = None,
     ):
         """build step context.
 
@@ -227,6 +238,13 @@ class StepContext:
                                                   device)
 
         max_kv_seq_length = max_q_seq_length + max(inputs.history_lengths)
+
+        window_size = getattr(cache_config, 'window_size', 0)
+        if window_size > 0:
+            block_size = cache_config.block_size
+            expected_num_blocks = _div_up(kv_seq_length, block_size)
+            missed_num_blocks = expected_num_blocks - inputs.num_blocks
+            kv_seq_length = kv_seq_length - missed_num_blocks * block_size
 
         ret = StepContext(inputs=inputs,
                           block_offsets=inputs.block_offsets,
@@ -330,6 +348,7 @@ def model_forward(
             world_size=world_size,
             json_config=json_config,
             kv_caches=cache_engine.gpu_cache,
+            cache_config=cache_engine.cache_config,
         )
         output = patched_model.patched_forward(
             input_ids=inputs.input_ids,
