@@ -101,8 +101,18 @@ jobs:
       - linux-build
       - windows-build
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
       - name: Download artifacts
         uses: actions/download-artifact@v3
+      - name: Add cuda version to package name
+        run: |
+          ver=$(cat lmdeploy/version.py | grep '__version__ =' | cut -d\' -f2)
+          cuver=$ver+cu118
+          cd artifact
+          for file in *; do
+            mv "$file" "`echo $file | sed "s/$ver/$cuver/g"`";
+          done
       - name: Display artifacts
         run: ls artifact/ -lh
       - name: Publish
