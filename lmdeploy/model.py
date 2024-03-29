@@ -995,7 +995,7 @@ class DbrxInstruct(BaseChatTemplate):
         """
         path = model_path.lower()
         if 'dbrx-instruct' in path:
-            return 'yi-vl'
+            return 'dbrx-instruct'
 
 
 def best_match_model(query: str) -> Optional[str]:
