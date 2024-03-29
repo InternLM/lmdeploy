@@ -38,7 +38,7 @@ on:
         description: 'Default tp value'
         type: string
         default: '--tp 1'
-      generation_models:
+      models:
         required: true
         description: 'Set models run benchmark'
         type: string
@@ -50,7 +50,6 @@ env:
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
   DATASET_FILE: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
-  DATASET_PATH: /nvme/qa_test_models/datasets
   TP_INFO: --tp 1
   LOOP_NUM: 3
 
@@ -98,7 +97,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: ${{fromJSON(github.event.inputs.generation_models)}}
+        model: ${{fromJSON(github.event.inputs.models)}}
     timeout-minutes: 120
     env:
       MODEL_PATH: /mnt/bigdisk/qa_test_models/${{matrix.model}}
@@ -214,7 +213,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: ${{fromJSON(github.event.inputs.generation_models)}}
+        model: ${{fromJSON(github.event.inputs.models)}}
     timeout-minutes: 120
     env:
       MODEL_PATH: /mnt/bigdisk/qa_test_models/${{matrix.model}}
@@ -339,7 +338,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: ${{fromJSON(github.event.inputs.generation_models)}}
+        model: ${{fromJSON(github.event.inputs.models)}}
     timeout-minutes: 180
     env:
       MODEL_PATH: /mnt/bigdisk/qa_test_models/${{matrix.model}}
@@ -484,7 +483,6 @@ jobs:
     runs-on: [self-hosted, linux-a100-2]
     timeout-minutes: 120
     env:
-      HF_MODEL: /nvme/qa_test_models/internlm-chat-20b
       WORKDIR: /nvme/qa_test_models/triton_workspace
       OFFLINE_PKGS: /nvme/qa_test_models/offline_pkg
       MODEL_PATH: /nvme/qa_test_models/autotest_model/workspace_${{matrix.model}}

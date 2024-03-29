@@ -266,6 +266,7 @@ jobs:
           export report_dir="$REPORT_DIR/$date_today"
           echo "Save report to $report_dir"
           mv allure-results $report_dir
+          chmod -R 777 $report_dir
       - name: Clear workfile
         if: always()
         run: |
@@ -522,8 +523,9 @@ jobs:
         run: |
           export date_today="$(date +'%Y%m%d-%H%M%S')"
           export report_dir="$REPORT_DIR/$date_today"
-          echo "Save report to $ALLURE_DIR"
+          echo "Save report to $report_dir"
           mv allure-results $report_dir
+          chmod -R 777 $report_dir
       - name: Clear workfile
         if: always()
         run: |
