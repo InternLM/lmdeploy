@@ -80,7 +80,7 @@ jobs:
         run: |
           python3 -m pip install pynvml packaging protobuf transformers_stream_generator
           # manually install flash attn
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.3.6+cu122torch2.1cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install -r requirements.txt
           python3 -m pip install .
       - name: Install opencompass
