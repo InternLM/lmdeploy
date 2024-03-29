@@ -1,0 +1,85 @@
+name: benchmark_test
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_org:
+        required: false
+        description: 'Tested repository organization name. Default is InternLM'
+        type: string
+        default: 'InternLM/lmdeploy'
+      repo_ref:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
+      benchmark_type:
+        required: true
+        description: 'Set benchmark type. Default is "["generation", "throughtput", "api_server", "triton_server"]"'
+        type: string
+        default: "['generation', 'throughput', 'api_server', 'triton_server']"
+      backend:
+        required: true
+        description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
+        type: string
+        default: "['turbomind', 'pytorch']"
+      offline_mode:
+        required: true
+        description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
+        type: boolean
+        default: false
+      dependency_pkgs:
+        required: true
+        description: 'Dependency packages, you can also set a specific version'
+        type: string
+        default: 'packaging protobuf transformers_stream_generator transformers datasets matplotlib'
+      default_tp:
+        required: true
+        description: 'Default tp value'
+        type: string
+        default: '--tp 1'
+      models:
+        required: true
+        description: 'Set models run benchmark'
+        type: string
+        default: "['internlm/internlm2-chat-20b','internlm/internlm2-chat-20b-inner-w4a16','meta-llama/Llama-2-7b-chat-hf','meta-llama/Llama-2-7b-chat-hf-inner-w4a16']"
+
+env:
+  HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
+  HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
+  OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
+  DATASET_FILE: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+  TP_INFO: --tp 1
+  LOOP_NUM: 3
+
+
+jobs:
+  generation_benchmark:
+    runs-on: [self-hosted, linux-a100-2]
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ${{fromJSON(github.event.inputs.models)}}
+    timeout-minutes: 120
+    env:
+      MODEL_PATH: /mnt/bigdisk/qa_test_models/${{matrix.model}}
+    steps:
+      - name: Set params - shell
+        run: .github/scripts/env.sh
+      - name: Set params
+        if: contains( matrix.model, 'w4a16') || contains( matrix.model, '4bit')
+        run: |
+          echo "MODEL_FORMAT=--model-format awq" >> "$GITHUB_ENV"
+      - name: Set params
+        if: contains( matrix.model, 'llama') || contains( matrix.model, 'Llama')
+        run: |
+          echo "MAX_ENTRY_COUNT=--cache-max-entry-count 0.95" >> "$GITHUB_ENV"
+      - name: Set params
+        if: (!contains( matrix.model, 'llama') && !contains( matrix.model, 'Llama'))
+        run: |
+          echo "MAX_ENTRY_COUNT=--cache-max-entry-count 0.9" >> "$GITHUB_ENV"
+      - name: Set params
+        if: (contains( matrix.model, 'internlm2-chat-20b'))
+        run: |
+          echo "TP_INFO=--tp 2" >> "$GITHUB_ENV"
