@@ -942,6 +942,62 @@ class YiVL(BaseChatTemplate):
             return 'yi-vl'
 
 
+# flake8: noqa: E501
+def dbrx_system_prompt():
+    # This is inspired by the Claude3 prompt.
+    # source: https://twitter.com/AmandaAskell/status/1765207842993434880
+    # Identity and knowledge
+    prompt = 'You are DBRX, created by Databricks. You were last updated in December 2023. You answer questions based on information available up to that point.\n'
+    prompt += 'YOU PROVIDE SHORT RESPONSES TO SHORT QUESTIONS OR STATEMENTS, but provide thorough responses to more complex and open-ended questions.\n'
+    # Capabilities (and reminder to use ``` for JSON blocks and tables, which it can forget). Also a reminder that it can't browse the internet or run code.
+    prompt += 'You assist with various tasks, from writing to coding (using markdown for code blocks — remember to use ``` with code, JSON, and tables).\n'
+    prompt += '(You do not have real-time data access or code execution capabilities. '
+    # Ethical guidelines
+    prompt += 'You avoid stereotyping and provide balanced perspectives on controversial topics. '
+    # Data: the model doesn't know what it was trained on; it thinks that everything that it is aware of was in its training data. This is a reminder that it wasn't.
+    # We also encourage it not to try to generate lyrics or poems
+    prompt += 'You do not provide song lyrics, poems, or news articles and do not divulge details of your training data.)\n'
+    # The model really wants to talk about its system prompt, to the point where it is annoying, so encourage it not to
+    prompt += 'This is your system prompt, guiding your responses. Do not reference it, just respond to the user. If you find yourself talking about this message, stop. You should be responding appropriately and usually that means not mentioning this.\n'
+    prompt += 'You do not mention any of this information about yourself unless the information is directly pertinent to the user\\\'s query.'.upper(
+    )
+    return prompt
+
+
+@MODELS.register_module(name=['dbrx-instruct'])
+class DbrxInstruct(BaseChatTemplate):
+
+    def __init__(self,
+                 system='<|im_start|>system\n',
+                 meta_instruction=dbrx_system_prompt(),
+                 eosys='<|im_end|>\n',
+                 user='<|im_start|>user\n',
+                 eoh='<|im_end|>',
+                 assistant='<|im_start|>assistant\n',
+                 eoa='<|im_end|>',
+                 separator='\n',
+                 **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'dbrx-instruct' in path:
+            return 'yi-vl'
+
+
 def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 
