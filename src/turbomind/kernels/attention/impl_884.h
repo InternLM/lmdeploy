@@ -54,12 +54,9 @@ mma_m8n8k4_row_row(Array<float, 8>& d, const Array<half, 4>& a, const Array<half
 }
 
 template<class T_, int CTA_H_, int CTA_Q_, int CTA_S_, int WARP_H_, int WARP_Q, int WARP_S, int HeadDim>
-struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim> {
-
+struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim> {
     using T   = T_;
     using Tkv = T_;
-
-    using Arch = Sm70_884;
 
     static constexpr int CTA_H    = CTA_H_;
     static constexpr int CTA_Q    = CTA_Q_;

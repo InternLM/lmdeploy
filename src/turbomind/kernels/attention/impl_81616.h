@@ -18,11 +18,9 @@ template<class T_,
          int WARP_S,
          int HeadDim,
          int Stages>
-struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim, Stages> {
+struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim, Stages> {
     using T   = T_;
     using Tkv = Tkv_;
-
-    using Arch = Sm80_16816;
 
     static constexpr int kQuantKV = !std::is_same_v<T, Tkv>;
 

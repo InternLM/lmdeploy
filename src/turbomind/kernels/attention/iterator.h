@@ -91,21 +91,6 @@ struct CombinedIterator {
         iterator1_.Prefetch(args...);
     }
 
-    // template<class Partial, class TileIter>
-    // __device__ void
-    // Prefetch(Partial partial, const TileIter& tile_iter, int s_begin, int s_count, int max_s, int pipe_iter)
-    // {
-    //     iterator0_.Prefetch(partial, tile_iter, s_begin, s_count, max_s, pipe_iter);
-    //     iterator1_.Prefetch(partial, tile_iter, s_begin, s_count, max_s, pipe_iter);
-    // }
-
-    // template<class Partial, class TileIter>
-    // __device__ void Prefetch(Partial partial, const TileIter& tile_iter, int max_s, int pipe_iter)
-    // {
-    //     iterator0_.Prefetch(partial, tile_iter, max_s, pipe_iter);
-    //     iterator1_.Prefetch(partial, tile_iter, max_s, pipe_iter);
-    // }
-
     __device__ void ClearSmem(int pipe_iter = 0)
     {
         iterator0_.ClearSmem(pipe_iter);

@@ -116,13 +116,9 @@ void dispatchDecoding(const AttentionParams<nv_bfloat16>& params)
     if (is_kv_int8) {
         if (params.arch >= 80) {
             if (0) {}
-            // else if (query_group_sz % 2 == 0) {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm80, nv_bfloat16, int8_t, 2, kHeadDim>::Kernel>(
-            //         params);
-            // }
+
             else {
-                return invokeDecoding<typename DecodingConfig<arch::Sm80, nv_bfloat16, uint8_t, 8, kHeadDim>::Kernel>(
-                    params);
+                return invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, uint8_t, 8, kHeadDim>>(params);
             }
         }
     }
@@ -145,8 +141,7 @@ void dispatchDecoding(const AttentionParams<nv_bfloat16>& params)
             //         typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 2, kHeadDim>::Kernel>(params);
             // }
             else {
-                return invokeDecoding<
-                    typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, kHeadDim>::Kernel>(params);
+                return invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, kHeadDim>>(params);
             }
         }
     }

@@ -5,13 +5,22 @@ add_library(attention STATIC
             decoding.cu
             kv_cache_utils_v2.cu
             utils.cc
-            attention_128_f16_sm80.cu
-            attention_128_f16_sm75.cu
-            attention_128_f16_sm70.cu
-            attention_128_bf16_sm80.cu
-            # decoding_128_f16_sm70.cu
-            decoding_128_f16_sm80.cu
-            decoding_128_bf16_sm80.cu
+            codegen/attention_sm70_128_f16.cu
+            codegen/attention_sm75_128_f16.cu
+            codegen/attention_sm80_128_bf16.cu
+            codegen/attention_sm80_128_f16.cu
+            codegen/decoding_sm70_128_f16_f16.cu
+            codegen/decoding_sm70_128_f16_u4.cu
+            codegen/decoding_sm70_128_f16_u8.cu
+            codegen/decoding_sm75_128_f16_f16.cu
+            codegen/decoding_sm75_128_f16_u4.cu
+            codegen/decoding_sm75_128_f16_u8.cu
+            codegen/decoding_sm80_128_bf16_bf16.cu
+            codegen/decoding_sm80_128_bf16_u4.cu
+            codegen/decoding_sm80_128_bf16_u8.cu
+            codegen/decoding_sm80_128_f16_f16.cu
+            codegen/decoding_sm80_128_f16_u4.cu
+            codegen/decoding_sm80_128_f16_u8.cu
             )
 set_property(TARGET attention PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

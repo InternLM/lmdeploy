@@ -16,7 +16,7 @@
 
 namespace turbomind {
 
-template<class Mainloop, class CacheIteratorFactory_, class CtaMap_>
+template<class Arch_, class Mainloop, class CacheIteratorFactory_, class CtaMap_>
 struct AttentionUniversal {
 
     using T   = typename Mainloop::T;
@@ -27,7 +27,7 @@ struct AttentionUniversal {
     using CacheIteratorFactory = CacheIteratorFactory_;
     using CtaMap               = CtaMap_;
 
-    using Arch = typename Impl::Arch;
+    using Arch = Arch_;
 
     static constexpr int kWarpCount = Impl::kWarpCount;
 
@@ -500,14 +500,14 @@ struct AttentionUniversal {
 
 extern __shared__ char smem_buf[];
 
-template<class Attention>
-__global__ void attention_kernel(typename Attention::ParamType            params,
-                                 typename Attention::CacheIteratorFactory cache_iter_factory,
-                                 typename Attention::CtaMap               cta_map)
+template<class Kernel>
+__global__ void attention_kernel(typename Kernel::ParamType            params,
+                                 typename Kernel::CacheIteratorFactory cache_iter_factory,
+                                 typename Kernel::CtaMap               cta_map)
 {
 #if __CUDA_ARCH__
-    if constexpr (Attention::Arch::is_compatible(__CUDA_ARCH__ / 10)) {
-        Attention{}(params, cache_iter_factory, cta_map, smem_buf);
+    if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
+        Kernel{}(params, cache_iter_factory, cta_map, smem_buf);
     }
 #endif
 }

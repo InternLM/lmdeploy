@@ -23,9 +23,7 @@ template<class T_,
          int WARP_S,
          int HeadDim,
          int Stages>
-struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim, Stages> {
-
-    using Arch = Sm70_Simt;
+struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim, Stages> {
 
     using T   = T_;
     using Tkv = Tkv_;

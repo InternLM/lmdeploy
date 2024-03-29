@@ -4,16 +4,20 @@
 
 namespace turbomind::arch {
 
-struct Sm70 {
-    static constexpr int value = 70;
+// tags for dispatching & conditional codegen
+
+template<int Begin, int End = -1>
+struct Arch {
+    static constexpr bool is_compatible(int arch)
+    {
+        return Begin <= arch && (End == -1 || arch < End);
+    }
 };
 
-struct Sm75 {
-    static constexpr int value = 75;
-};
+struct Sm70: Arch<700, 750> {};
 
-struct Sm80 {
-    static constexpr int value = 80;
-};
+struct Sm75: Arch<750, 800> {};
+
+struct Sm80: Arch<800> {};
 
 }  // namespace turbomind::arch
