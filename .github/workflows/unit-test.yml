@@ -35,7 +35,7 @@ jobs:
     runs-on: [self-hosted, linux-a100-s2]
     timeout-minutes: 4320 # 72hours
     container:
-      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      image: nvcr.io/nvidia/tritonserver:24.03-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=2,3"
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
