@@ -13,7 +13,7 @@ from lmdeploy.vl.model.utils import load_model_from_weight_files
 class QwenVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path, device='cuda'):
+    def __init__(self, model_path, device='cuda:0'):
         self.model_path = model_path
         self.device = device
         self.build_model()
