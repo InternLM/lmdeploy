@@ -95,6 +95,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |        QWen        |  7B - 72B  |
 |      QWen-VL       |     7B     |
 |      QWen1.5       | 0.5B - 72B |
+|    QWen1.5-MoE     |   A2.7B    |
 |      Baichuan      |  7B - 13B  |
 |     Baichuan2      |  7B - 13B  |
 |     Code Llama     |  7B - 34B  |
