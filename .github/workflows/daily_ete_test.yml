@@ -48,8 +48,6 @@ on:
         description: 'Whether start a triton server api regression'
         type: boolean
         default: true
-  schedule:
-    - cron:  '00 21 * * *'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
