@@ -26,8 +26,9 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/03\] 支持视觉-语言模型（VLM）的离线推理 pipeline 和推理服务
 - \[2024/02\] 支持 Qwen 1.5、Gemma、Mistral、Mixtral、Deepseek-MOE 等模型
-- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) 发布，支持无缝接入[LMDeploy Serving Service](./docs/zh_cn/serving/restful_api.md)
+- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) 发布，支持无缝接入[LMDeploy Serving Service](./docs/zh_cn/serving/api_server.md)
 - \[2024/01\] 支持多模型、多机、多卡推理服务。使用方法请参考[此处](./docs/zh_cn/serving/proxy_server.md)
 - \[2024/01\] 增加 [PyTorch 推理引擎](./docs/zh_cn/inference/pytorch.md)，作为 TurboMind 引擎的补充。帮助降低开发门槛，和快速实验新特性、新技术
 
@@ -94,6 +95,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |        QWen        |  7B - 72B  |
 |      QWen-VL       |     7B     |
 |      QWen1.5       | 0.5B - 72B |
+|    QWen1.5-MoE     |   A2.7B    |
 |      Baichuan      |  7B - 13B  |
 |     Baichuan2      |  7B - 13B  |
 |     Code Llama     |  7B - 34B  |
@@ -104,6 +106,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |    DeepSeek-MoE    |    16B     |
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
+|        Dbrx        |    132B    |
 
 LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 
@@ -150,14 +153,16 @@ print(response)
 为了帮助用户更进一步了解 LMDeploy，我们准备了用户指南和进阶指南，请阅读我们的[文档](https://lmdeploy.readthedocs.io/zh-cn/latest/)：
 
 - 用户指南
-  - [推理pipeline](./docs/zh_cn/inference/pipeline.md)
-  - [推理引擎 - TurboMind](./docs/zh_cn/inference/turbomind.md)
-  - [推理引擎 - PyTorch](./docs/zh_cn/inference/pytorch.md)
-  - [推理服务](./docs/zh_cn/serving/restful_api.md)
+  - [LLM 推理 pipeline](./docs/zh_cn/inference/pipeline.md)
+  - [VLM 推理 pipeline](./docs/zh_cn/inference/vl_pipeline.md)
+  - [LLM 推理服务](./docs/zh_cn/serving/api_server.md)
+  - [VLM 推理服务](./docs/zh_cn/serving/api_server_vl.md)
   - [模型量化](./docs/zh_cn/quantization)
 - 进阶指南
-  - 增加对话模板
-  - 支持新模型
+  - [推理引擎 - TurboMind](./docs/zh_cn/inference/turbomind.md)
+  - [推理引擎 - PyTorch](./docs/zh_cn/inference/pytorch.md)
+  - [自定义对话模板](./docs/zh_cn/advance/chat_template.md)
+  - [支持新模型](./docs/zh_cn/advance/pytorch_new_model.md)
   - gemm tuning
   - [长文本推理](./docs/zh_cn/advance/long_context.md)
   - [多模型推理服务](./docs/zh_cn/serving/proxy_server.md)
@@ -177,6 +182,17 @@ print(response)
 - [vLLM](https://github.com/vllm-project/vllm)
 - [DeepSpeed-MII](https://github.com/microsoft/DeepSpeed-MII)
 
-## License
+## 引用
+
+```bibtex
+@misc{2023lmdeploy,
+    title={LMDeploy: A Toolkit for Compressing, Deploying, and Serving LLM},
+    author={LMDeploy Contributors},
+    howpublished = {\url{https://github.com/InternLM/lmdeploy}},
+    year={2023}
+}
+```
+
+## 开源许可证
 
 该项目采用 [Apache 2.0 开源许可证](LICENSE)。

@@ -210,8 +210,8 @@ class ArgumentHelper:
             type=str,
             default='chat',
             choices=['completion', 'infilling', 'chat', 'python'],
-            help='The capability of a model. For example, codellama has the '
-            'ability among ["completion", "infilling", "chat", "python"]')
+            help='The capability of a model. '
+            'Deprecated. Please use --chat-template instead')
 
     @staticmethod
     def log_level(parser):
@@ -250,16 +250,6 @@ class ArgumentHelper:
         """Add argument backend to parser."""
 
         return parser.add_argument('--backend',
-                                   type=str,
-                                   default='turbomind',
-                                   choices=['pytorch', 'turbomind'],
-                                   help='Set the inference backend')
-
-    @staticmethod
-    def engine(parser):
-        """Add argument engine to parser."""
-
-        return parser.add_argument('--engine',
                                    type=str,
                                    default='turbomind',
                                    choices=['pytorch', 'turbomind'],
@@ -316,10 +306,25 @@ class ArgumentHelper:
     def meta_instruction(parser):
         """Add argument meta_instruction to parser."""
 
-        return parser.add_argument('--meta-instruction',
-                                   type=str,
-                                   default=None,
-                                   help='System prompt for ChatTemplateConfig')
+        return parser.add_argument(
+            '--meta-instruction',
+            type=str,
+            default=None,
+            help='System prompt for ChatTemplateConfig. Deprecated. '
+            'Please use --chat-template instead')
+
+    @staticmethod
+    def chat_template(parser):
+        """Add chat template config to parser."""
+
+        return parser.add_argument(
+            '--chat-template',
+            type=str,
+            default=None,
+            help=\
+            'A JSON file or string that specifies the chat template configuration. '  # noqa
+            'Please refer to https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html for the specification'  # noqa
+        )
 
     @staticmethod
     def cache_max_entry_count(parser):
@@ -354,3 +359,27 @@ class ArgumentHelper:
             type=str,
             default='./work_dir',
             help='The working directory to save results')
+
+    @staticmethod
+    def trust_remote_code(parser):
+        """Add argument trust_remote_code to parser."""
+        return parser.add_argument(
+            '--trust-remote-code',
+            action='store_false',
+            default=True,
+            help='Trust remote code for loading hf models')
+
+    @staticmethod
+    def cache_block_seq_len(parser):
+        """Add argument cache_block_seq_len to parser."""
+
+        return parser.add_argument(
+            '--cache-block-seq-len',
+            type=int,
+            default=64,
+            help='The length of the token sequence in a k/v block. '
+            'For Turbomind Engine, if the GPU compute capability '
+            'is >= 8.0, it should be a multiple of 32, otherwise '
+            'it should be a multiple of 64. For Pytorch Engine, '
+            'if Lora Adapter is specified, this parameter will '
+            'be ignored')

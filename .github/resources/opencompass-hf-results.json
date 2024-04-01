@@ -1,0 +1,90 @@
+{
+    "meta-llama/Llama-2-7b-chat": {
+        "ceval": "28.3",
+        "mmlu": "35.49",
+        "wic": "0",
+        "wsc": "0",
+        "triviaqa": "42.83",
+        "gsm8k": "26.38",
+        "race-middle": "41.57",
+        "race-high": "38.77",
+        "crows_pairs": "23.21"
+    },
+    "Qwen/Qwen-7B-Chat": {
+        "ceval": "55.41",
+        "mmlu": "53.74",
+        "wic": "52.04",
+        "wsc": "53.85",
+        "triviaqa": "43.71",
+        "gsm8k": "45.11",
+        "race-middle": "82.87",
+        "race-high": "77.96",
+        "crows_pairs": "55.37"
+    },
+    "internlm/internlm-chat-7b": {
+        "ceval": "53.40",
+        "mmlu": "50.86",
+        "wic": "57.21",
+        "wsc": "41.35",
+        "triviaqa": "28.19",
+        "gsm8k": "33.43",
+        "race-middle": "80.99",
+        "race-high": "77.62",
+        "crows_pairs": "43.04"
+    },
+    "baichuan-inc/Baichuan2-7B-Chat": {
+        "ceval": "53.92",
+        "mmlu": "50.13",
+        "wic": "0.16",
+        "wsc": "2.88",
+        "triviaqa": "37.66",
+        "gsm8k": "32.37",
+        "race-middle": "72.01",
+        "race-high": "67.44",
+        "crows_pairs": "8.09"
+    },
+    "internlm/internlm2-chat-7b": {
+        "ceval": "61.46",
+        "mmlu": "63.68",
+        "wic": "63.01",
+        "wsc": "41.35",
+        "triviaqa": "49.41",
+        "gsm8k": "71.57",
+        "race-middle": "89.21",
+        "race-high": "84.82",
+        "crows_pairs": "13.46"
+    },
+    "internlm/internlm2-chat-20b": {
+        "ceval": "-",
+        "mmlu": "66.50",
+        "wic": "-",
+        "wsc": "-",
+        "triviaqa": "-",
+        "gsm8k": "79.53",
+        "race-middle": "-",
+        "race-high": "-",
+        "crows_pairs": "-"
+    },
+    "Qwen/Qwen1.5-7B-Chat": {
+        "ceval": "-",
+        "mmlu": "61.44",
+        "wic": "-",
+        "wsc": "-",
+        "triviaqa": "-",
+        "gsm8k": "55.65",
+        "race-middle": "-",
+        "race-high": "-",
+        "crows_pairs": "-"
+    },
+    "mistralai/Mistral-7B-Instruct-v0.1": {
+        "ceval": "-",
+        "mmlu": "52.64",
+        "wic": "-",
+        "wsc": "-",
+        "triviaqa": "-",
+        "gsm8k": "41.93",
+        "race-middle": "-",
+        "race-high": "-",
+        "crows_pairs": "-"
+    }
+}

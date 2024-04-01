@@ -33,6 +33,9 @@ def sample_requests(
     dataset = [(data['conversations'][0]['value'],
                 data['conversations'][1]['value']) for data in dataset]
 
+    # pre-sample to avoid go through all the dataset
+    dataset = random.sample(dataset, max(int(num_requests * 1.2), 1000))
+
     # Tokenize the prompts and completions.
     prompts = [prompt for prompt, _ in dataset]
     prompt_token_ids = tokenizer(prompts).input_ids
@@ -279,12 +282,14 @@ def parse_args():
     tp_act = ArgumentHelper.tp(pt_group)
     session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
+    cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
 
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
     tb_group._group_actions.append(tp_act)
     tb_group._group_actions.append(session_len_act)
     tb_group._group_actions.append(cache_count_act)
+    tb_group._group_actions.append(cache_block_seq_len_act)
     ArgumentHelper.model_format(tb_group, default='hf')
 
     args = parser.parse_args()
@@ -301,11 +306,13 @@ def main():
             max_batch_size=args.concurrency,
             tp=args.tp,
             cache_max_entry_count=args.cache_max_entry_count,
+            cache_block_seq_len=args.cache_block_seq_len,
             model_format=args.model_format)
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
             session_len=args.session_len,
             cache_max_entry_count=args.cache_max_entry_count,
+            block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
             thread_safe=True)

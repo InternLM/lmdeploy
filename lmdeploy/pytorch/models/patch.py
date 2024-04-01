@@ -83,8 +83,9 @@ def _find_rewrite_module_qualname(model):
         rewrite_qualname = _find_submodulename()
 
     origin_qualname = f'{module_name}.{class_name}'
-    logger.debug(
-        f'Find rewrite of module {origin_qualname}: {rewrite_qualname}.')
+    if rewrite_qualname is not None:
+        logger.debug('Find rewrite of module\n'
+                     f'{origin_qualname} <=> {rewrite_qualname}')
     return rewrite_qualname
 
 
@@ -182,6 +183,7 @@ def _dist_model(model: torch.nn.Module,
                 else:
                     new_param = torch.empty_like(param, device=device)
                     model.register_buffer(name, new_param)
+        torch.cuda.synchronize()
 
     def _dist_params():
         """dist params."""

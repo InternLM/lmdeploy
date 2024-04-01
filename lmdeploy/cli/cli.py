@@ -3,7 +3,8 @@ import argparse
 import os
 
 from ..version import __version__
-from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
+from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
+                    convert_args, get_lora_adapters)
 
 
 class CLI(object):
@@ -73,8 +74,58 @@ class CLI(object):
             description=CLI.list.__doc__,
             help=CLI.list.__doc__)
         parser.set_defaults(run=CLI.list)
-        # define arguments
-        ArgumentHelper.engine(parser)
+
+    @staticmethod
+    def add_parser_chat():
+        """Add parser for list command."""
+        parser = CLI.subparsers.add_parser(
+            'chat',
+            formatter_class=DefaultsAndTypesHelpFormatter,
+            description=CLI.chat.__doc__,
+            help=CLI.chat.__doc__)
+        parser.set_defaults(run=CLI.chat)
+        parser.add_argument(
+            'model_path',
+            type=str,
+            help='The path of a model. it could be one of the following '
+            'options: - i) a local directory path of a turbomind model'
+            ' which is converted by `lmdeploy convert` command or '
+            'download from ii) and iii). - ii) the model_id of a '
+            'lmdeploy-quantized model hosted inside a model repo on '
+            'huggingface.co, such as "internlm/internlm-chat-20b-4bit",'
+            ' "lmdeploy/llama2-chat-70b-4bit", etc. - iii) the model_id'
+            ' of a model hosted inside a model repo on huggingface.co,'
+            ' such as "internlm/internlm-chat-7b", "qwen/qwen-7b-chat "'
+            ', "baichuan-inc/baichuan2-7b-chat" and so on')
+        # common args
+        ArgumentHelper.backend(parser)
+        ArgumentHelper.trust_remote_code(parser)
+        # # chat template args
+        ArgumentHelper.meta_instruction(parser)
+        ArgumentHelper.cap(parser)
+        #
+        # pytorch engine args
+        pt_group = parser.add_argument_group('PyTorch engine arguments')
+        ArgumentHelper.adapters(pt_group)
+
+        # common engine args
+        tp_act = ArgumentHelper.tp(pt_group)
+        model_name_act = ArgumentHelper.model_name(pt_group)
+        session_len_act = ArgumentHelper.session_len(pt_group)
+        max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
+        cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
+
+        # turbomind args
+        tb_group = parser.add_argument_group('TurboMind engine arguments')
+        # common engine args
+        tb_group._group_actions.append(tp_act)
+        tb_group._group_actions.append(model_name_act)
+        tb_group._group_actions.append(session_len_act)
+        tb_group._group_actions.append(max_batch_size_act)
+        tb_group._group_actions.append(cache_max_entry_act)
+        ArgumentHelper.model_format(tb_group)
+        ArgumentHelper.quant_policy(tb_group)
+        ArgumentHelper.rope_scaling_factor(tb_group)
 
     @staticmethod
     def add_parser_checkenv():
@@ -102,20 +153,26 @@ class CLI(object):
     @staticmethod
     def list(args):
         """List the supported model names."""
-        engine = args.engine
-        assert engine in ['turbomind', 'pytorch']
-        if engine == 'pytorch':
-            model_names = [
-                'llama', 'llama2', 'internlm', 'internlm2', 'baichuan2',
-                'chatglm2', 'falcon', 'yi', 'mistral', 'mixtral', 'qwen1.5',
-                'gemma', 'deepseek'
-            ]
-        elif engine == 'turbomind':
-            from lmdeploy.model import MODELS
-            model_names = list(MODELS.module_dict.keys())
-            model_names = [n for n in model_names if n.lower() not in ['base']]
+        from lmdeploy.model import MODELS
+        model_names = list(MODELS.module_dict.keys())
+        deprecate_names = [
+            'baichuan-7b', 'baichuan2-7b', 'chatglm2-6b', 'internlm-chat-20b',
+            'internlm-chat-7b', 'internlm-chat-7b-8k', 'internlm2-1_8b',
+            'internlm-20b', 'internlm2-20b', 'internlm2-7b', 'internlm2-chat',
+            'internlm2-chat-1_8b', 'internlm2-chat-20b', 'internlm2-chat-7b',
+            'llama-2-chat', 'llama-2', 'qwen-14b', 'qwen-7b', 'solar-70b',
+            'yi-200k', 'yi-34b', 'yi-chat', 'Mistral-7B-Instruct',
+            'Mixtral-8x7B-Instruct', 'baichuan-base', 'deepseek-chat',
+            'internlm-chat'
+        ]
+        model_names = [
+            n for n in model_names if n not in deprecate_names + ['base']
+        ]
+        deprecate_names.sort()
         model_names.sort()
-        print('Supported model names:')
+        print('The older chat template name like "internlm2-7b", "qwen-7b"'
+              ' and so on are deprecated and will be removed in the future.'
+              ' The supported chat template names are:')
         print('\n'.join(model_names))
 
     @staticmethod
@@ -139,7 +196,9 @@ class CLI(object):
                 env_info.pop(req)
 
         # extra important dependencies
-        extra_reqs = ['transformers', 'gradio', 'fastapi', 'pydantic']
+        extra_reqs = [
+            'transformers', 'gradio', 'fastapi', 'pydantic', 'triton'
+        ]
 
         for req in extra_reqs:
             try:
@@ -158,6 +217,33 @@ class CLI(object):
             if work_dir:
                 os.makedirs(work_dir, exist_ok=True)
             mmengine.dump(env_info, dump_file)
+
+    @staticmethod
+    def chat(args):
+        """Chat with pytorch or turbomind engine."""
+        from lmdeploy.archs import autoget_backend
+        backend = args.backend
+        if backend != 'pytorch':
+            # set auto backend mode
+            backend = autoget_backend(args.model_path)
+        if backend == 'pytorch':
+            from lmdeploy.messages import PytorchEngineConfig
+            from lmdeploy.pytorch.chat import run_chat
+
+            adapters = get_lora_adapters(args.adapters)
+            engine_config = PytorchEngineConfig(
+                model_name=args.model_name,
+                tp=args.tp,
+                session_len=args.session_len,
+                cache_max_entry_count=args.cache_max_entry_count,
+                adapters=adapters)
+            run_chat(args.model_path,
+                     engine_config,
+                     trust_remote_code=args.trust_remote_code)
+        else:
+            from lmdeploy.turbomind.chat import main as run_chat
+            kwargs = convert_args(args)
+            run_chat(**kwargs)
 
     @staticmethod
     def add_parsers():

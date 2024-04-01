@@ -15,6 +15,10 @@ on:
       - "setup.py"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -34,6 +38,7 @@ jobs:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
         - /nvme/share_data/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
@@ -41,7 +46,6 @@ jobs:
           rm /etc/apt/sources.list.d/cuda*.list
           apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
               libgoogle-glog-dev libgl1 openjdk-8-jre-headless
-          dpkg -i /root/packages/allure_2.24.1-1_all.deb
           rm -rf /var/lib/apt/lists/*
       - name: Clone repository
         uses: actions/checkout@v2
@@ -69,7 +73,7 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets openai
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
@@ -80,15 +84,14 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Test lmdeploy
-        timeout-minutes: 120
-        run: CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test --alluredir=allure-results --clean-alluredir
+        run: CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test -v -s --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
         run: |
           export date_today="$(date +'%Y%m%d-%H%M%S')"
           export report_dir="$REPORT_DIR/$date_today"
-          echo "Save report to $ALLURE_DIR"
-          allure generate -c -o $report_dir
+          echo "Save report to $report_dir"
+          mv allure-results $report_dir
       - name: Clear workfile
         if: always()
         run: |

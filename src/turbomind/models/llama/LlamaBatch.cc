@@ -613,21 +613,11 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     Copy(state_->h_finished, batch_size, finished_buf_);
     Copy(state_->h_rope_theta, batch_size, rope_theta_);
 
-    // used for dispatching split-k decoding kernels
-    const int sum_seq_len =
-        std::accumulate(state_->h_context_length, state_->h_context_length + batch_size, -batch_size);
-    const int max_seq_len = *std::max_element(state_->h_context_length, state_->h_context_length + batch_size) - 1;
-
-    // TM_LOG_INFO(
-    //     "[init] batch_size = %d, max_ctx_len = %d, partial = %d", (int)batch_size, (int)max_context_len, partial);
-
     bool skip_init_sampling = std::equal(g.unique_ids.begin(),  //
                                          g.unique_ids.end() - g.partial,
                                          unique_ids.begin(),
                                          unique_ids.end() - partial);
 
-    g.sum_seq_len            = sum_seq_len;
-    g.max_seq_len            = max_seq_len;
     g.partial                = partial;
     g.partial_context_legnth = partial_len;
     g.unique_ids             = std::move(unique_ids);
@@ -1493,22 +1483,18 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
     // - `context_decoder_input` and `context_decoder_output` can hold `max_context_token_num_` tokens w/o padding
     std::vector<int> offsets{0};
     // initialize first mini-batch with decode tokens
-    int accum_size    = pf_offset;
     int accum_q_count = pf_offset;
     int accum_k_count = 0;  // only for prefill
     for (int i = pf_offset; i < active_size; ++i) {
         FT_CHECK(iter == 0);
-        int size    = accum_size + 1;
         int q_count = accum_q_count + h_input_length_buf_[i];
         int k_count = accum_k_count + state_->h_context_length[i];
         if (q_count <= max_context_token_num_ && k_count <= max_context_token_num_) {
-            accum_size    = size;
             accum_q_count = q_count;
             accum_k_count = k_count;
         }
         else {
             offsets.push_back(i);
-            accum_size    = 1;
             accum_q_count = h_input_length_buf_[i];
             accum_k_count = state_->h_context_length[i];
         }
@@ -1633,8 +1619,6 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
     ////////////////////////////////////////////////
     /// ! increase the counters
     g.step += 1;
-    g.max_seq_len += 1;
-    g.sum_seq_len += state_->active_size;
 
     // PrintDecodeTokens(token_ids_buf_, g.step, active_size, stream_, "Forward");
 

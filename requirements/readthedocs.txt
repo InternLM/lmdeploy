@@ -1,5 +1,6 @@
-fuzzywuzzy
+accelerate
 mmengine-lite
+pillow
 pydantic
 torch
 transformers

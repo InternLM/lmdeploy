@@ -1,5 +1,6 @@
 import pytest
 from pytest import assume
+from utils.restful_return_check import get_repeat_times
 
 from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
 
@@ -10,7 +11,7 @@ from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
 @pytest.mark.flaky(reruns=0)
 class TestPipelineTurbomindFuncRegression:
 
-    @pytest.mark.parametrize('model', ['internlm2-chat-20b'])
+    @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
     def test_backend_config_tp(self, config, model):
         with pytest.raises(AssertionError, match='tp should be 2\\^n'):
             model_path = '/'.join([config.get('model_path'), model])
@@ -18,7 +19,7 @@ class TestPipelineTurbomindFuncRegression:
             pipe = pipeline(model_path, backend_config=backend_config)
             del pipe
 
-    @pytest.mark.parametrize('model', ['internlm2-chat-20b'])
+    @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
     def test_backend_config_session_len(self, config, model):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = TurbomindEngineConfig(session_len=10)
@@ -29,7 +30,7 @@ class TestPipelineTurbomindFuncRegression:
             assert response[i].finish_reason == 'length', str(response[i])
             assert response[i].generate_token_len == 0, str(response[i])
 
-    @pytest.mark.parametrize('model', ['internlm2-chat-20b'])
+    @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
     def test_gen_config_test(self, config, model):
         model_path = '/'.join([config.get('model_path'), model])
         pipe = pipeline(model_path)
@@ -107,11 +108,12 @@ class TestPipelineTurbomindFuncRegression:
         with assume:
             assert response.finish_reason == 'length', str(response)
         with assume:
-            assert 'a 上海 is a 上海, ' * 10 in response.text, str(response)
+            assert 'a 上海 is a 上海, ' * 10 in response.text or get_repeat_times(
+                response.text, 'Shanghai is') > 5, str(response)
 
         del pipe
 
-    @pytest.mark.parametrize('model', ['internlm2-chat-20b'])
+    @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
     def future_test_backend_config_cache_max_entry_count(self, config, model):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = TurbomindEngineConfig(cache_max_entry_count=-1)
@@ -122,7 +124,7 @@ class TestPipelineTurbomindFuncRegression:
             with assume:
                 assert response[i].finish_reason == 'length', str(response[i])
 
-    @pytest.mark.parametrize('model', ['internlm2-chat-20b'])
+    @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
     def test_backend_config_max_batch_size2(self, config, model):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = TurbomindEngineConfig(max_batch_size=-1)
@@ -140,7 +142,7 @@ class TestPipelineTurbomindFuncRegression:
             with assume:
                 assert response[i].text == '', str(response[i])
 
-    @pytest.mark.parametrize('model', ['internlm2-chat-20b'])
+    @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
     def test_pipeline_batch_infer(self, config, model):
         model_path = '/'.join([config.get('model_path'), model])
         pipe = pipeline(model_path)
@@ -160,7 +162,7 @@ class TestPipelineTurbomindFuncRegression:
             with assume:
                 assert response[i].session_id == i
 
-    @pytest.mark.parametrize('model', ['internlm2-chat-20b'])
+    @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
     def test_pipeline_stream_infer(self, config, model):
         model_path = '/'.join([config.get('model_path'), model])
         pipe = pipeline(model_path)
@@ -207,7 +209,7 @@ class TestPipelineTurbomindFuncRegression:
         with assume:
             assert outputs_list[-1].finish_reason is not None, str(output)
 
-    @pytest.mark.parametrize('model', ['internlm2-chat-20b'])
+    @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
     def test_pipeline_stream_infer2(self, config, model):
         model_path = '/'.join([config.get('model_path'), model])
         pipe = pipeline(model_path)

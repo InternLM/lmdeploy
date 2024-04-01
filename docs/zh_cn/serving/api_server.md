@@ -1,4 +1,4 @@
-# 部署类 openai 服务
+# 部署 LLM 类 openai 服务
 
 本文主要介绍单个模型在单机多卡环境下，部署兼容 openai 接口服务的方式，以及服务接口的用法。为行文方便，我们把该服务名称为 `api_server`。对于多模型的并行服务，请阅读[请求分发服务器](./proxy_server.md)一文。
 
@@ -71,9 +71,9 @@ client = OpenAI(
     api_key='YOUR_API_KEY',
     base_url="http://0.0.0.0:23333/v1"
 )
-
+model_name = client.models.list().data[0].id
 response = client.chat.completions.create(
-  model="internlm2-chat-7b",
+  model=model_name,
   messages=[
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": " provide three suggestions about time management"},
@@ -226,6 +226,6 @@ openaoe -f /path/to/your/config-template.yaml
 
 4. `/v1/chat/interactive` api 支持多轮对话, 但是默认关闭。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
 
-5. 如需调整会话默认的其他参数，比如 system 等字段的内容，可以直接将[对话模板](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/model.py)初始化参数传入。比如 internlm-chat-7b 模型，可以通过启动`api_server`时，设置`--meta-instruction`参数。
+5. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
 
-6. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
+6. 自定义对话模板，请参考[chat_template.md](../advance/chat_template.md)

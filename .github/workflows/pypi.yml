@@ -18,8 +18,8 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda11.8
-      OUTPUT_FOLDER: cuda11.8_dist
+      DOCKER_TAG: cuda12.1
+      OUTPUT_FOLDER: cuda12.1_dist
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -69,7 +69,7 @@ jobs:
       - uses: Jimver/cuda-toolkit@v0.2.11
         id: cuda-toolkit
         with:
-          cuda: '11.8.0'
+          cuda: '12.1.0'
           use-github-cache: false
       - name: Build wheel
         run: |

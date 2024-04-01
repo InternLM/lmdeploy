@@ -26,8 +26,9 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/03\] Support VLM offline inference pipeline and serving.
 - \[2024/02\] Support Qwen 1.5, Gemma, Mistral, Mixtral, Deepseek-MOE and so on.
-- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](./docs/en/serving/restful_api.md).
+- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](./docs/en/serving/api_server.md).
 - \[2024/01\] Support for multi-model, multi-machine, multi-card inference services. For usage instructions, please refer to [here](./docs/en/serving/proxy_server.md)
 - \[2024/01\] Support [PyTorch inference engine](./docs/en/inference/pytorch.md), developed entirely in Python, helping to lower the barriers for developers and enable  rapid experimentation with new features and technologies.
 
@@ -92,6 +93,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 | InternLM-XComposer |     7B     |
 |        QWen        |  7B - 72B  |
 |      QWen1.5       | 0.5B - 72B |
+|    QWen1.5-MoE     |   A2.7B    |
 |      QWen-VL       |     7B     |
 |      Baichuan      |  7B - 13B  |
 |     Baichuan2      |  7B - 13B  |
@@ -103,6 +105,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |    DeepSeek-MoE    |    16B     |
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
+|        Dbrx        |    132B    |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
@@ -149,14 +152,16 @@ Please overview [getting_started](./docs/en/get_started.md) section for the basi
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
 - User Guide
-  - [Inference pipeline](./docs/en/inference/pipeline.md)
-  - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
-  - [Inference Engine - PyTorch](docs/en/inference/pytorch.md)
-  - [Serving](docs/en/serving/restful_api.md)
+  - [LLM Inference pipeline](./docs/en/inference/pipeline.md)
+  - [VLM Inference pipeline](./docs/en/inference/vl_pipeline.md)
+  - [LLM Serving](docs/en/serving/api_server.md)
+  - [VLM Serving](docs/en/serving/api_server_vl.md)
   - [Quantization](docs/en/quantization)
 - Advance Guide
-  - Add chat template
-  - Add a new model
+  - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
+  - [Inference Engine - PyTorch](docs/en/inference/pytorch.md)
+  - [Customize chat templates](docs/en/advance/chat_template.md)
+  - [Add a new model](docs/en/advance/pytorch_new_model.md)
   - gemm tuning
   - [Long context inference](docs/en/advance/long_context.md)
   - [Multi-model inference service](docs/en/serving/proxy_server.md)
@@ -175,6 +180,17 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
 - [llm-awq](https://github.com/mit-han-lab/llm-awq)
 - [vLLM](https://github.com/vllm-project/vllm)
 - [DeepSpeed-MII](https://github.com/microsoft/DeepSpeed-MII)
+
+## Citation
+
+```bibtex
+@misc{2023lmdeploy,
+    title={LMDeploy: A Toolkit for Compressing, Deploying, and Serving LLM},
+    author={LMDeploy Contributors},
+    howpublished = {\url{https://github.com/InternLM/lmdeploy}},
+    year={2023}
+}
+```
 
 ## License
 

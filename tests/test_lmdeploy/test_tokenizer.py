@@ -46,3 +46,13 @@ def test_tokenizer_with_stop_words(model_path, stop_words):
     tokenizer = HuggingFaceTokenizer(model_path)
     indexes = tokenizer.indexes_containing_token(stop_words)
     assert indexes is not None
+
+
+def test_qwen_vl_decode_special():
+    from lmdeploy.tokenizer import Tokenizer
+    tok = Tokenizer('Qwen/Qwen-VL-Chat')
+    try:
+        tok.decode([151857])
+        assert (0)
+    except Exception as e:
+        assert str(e) == 'Unclosed image token'

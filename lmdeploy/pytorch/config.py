@@ -12,6 +12,18 @@ def _get_torch_dtype(config: Any, default: str = 'float16'):
         config: Config of the hf model.
         default (str): default device type.
     """
+
+    def __hack_qwen(hf_config: Any):
+        if hf_config.model_type == 'qwen' and hf_config.torch_dtype is None:
+            torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
+            ) else 'float16'
+            if hf_config.bf16:
+                torch_dtype = 'bfloat16'
+            elif hf_config.fp16:
+                torch_dtype = 'float16'
+            setattr(hf_config, 'torch_dtype', torch_dtype)
+
+    __hack_qwen(config)
     torch_dtype = getattr(config, 'torch_dtype', default)
     # torch_dtype in config could be none
     torch_dtype = torch_dtype or default
@@ -28,7 +40,6 @@ class SchedulerConfig:
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
-    max_prefill_token_num: int = 8192
 
 
 @dataclass
@@ -40,6 +51,7 @@ class CacheConfig:
     num_gpu_blocks: int
     window_size: int = -1
     cache_max_entry_count: float = 0.8
+    max_prefill_token_num: int = 4096
 
 
 @dataclass
@@ -56,6 +68,7 @@ class ModelConfig:
     sliding_window: int = -1
     dtype: torch.dtype = torch.float16
     multi_query_attention: bool = False
+    vocab_size: int = 40000
     json_config: dict = field(default_factory=dict)
     hf_config: Any = None
     init_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -102,6 +115,7 @@ class ModelConfig:
                 eos_token_id=hf_config.eos_token_id,
                 head_dim=head_dim,
                 multi_query_attention=hf_config.multi_query,
+                vocab_size=hf_config.vocab_size,
             )
 
         def __build_chatglm():
@@ -119,6 +133,7 @@ class ModelConfig:
                 bos_token_id=bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
                 head_dim=head_dim,
+                vocab_size=hf_config.padded_vocab_size,
                 init_kwargs=init_kwargs)
 
         def __build_gemma():
@@ -129,7 +144,28 @@ class ModelConfig:
                 num_key_value_heads=hf_config.num_key_value_heads,
                 bos_token_id=hf_config.bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
-                head_dim=hf_config.head_dim)
+                head_dim=hf_config.head_dim,
+                vocab_size=hf_config.vocab_size)
+
+        def __build_dbrx():
+            hidden_size = hf_config.d_model
+            num_heads = hf_config.n_heads
+            head_dim = hidden_size // num_heads
+            eos_token_id = getattr(hf_config, 'eos_token_id', None)
+            if eos_token_id is None:
+                eos_token_id = 100257
+            bos_token_id = getattr(hf_config, 'bos_token_id', None)
+            if bos_token_id is None:
+                bos_token_id = eos_token_id
+            return ModelConfig(
+                hidden_size=hidden_size,
+                num_layers=hf_config.n_layers,
+                num_attention_heads=num_heads,
+                num_key_value_heads=hf_config.attn_config.kv_n_heads,
+                bos_token_id=bos_token_id,
+                eos_token_id=eos_token_id,
+                head_dim=head_dim,
+                vocab_size=hf_config.vocab_size)
 
         def __build_default():
             head_dim = hf_config.hidden_size // hf_config.num_attention_heads
@@ -149,18 +185,22 @@ class ModelConfig:
                 bos_token_id=hf_config.bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
                 sliding_window=sliding_window,
-                head_dim=head_dim)
+                head_dim=head_dim,
+                vocab_size=hf_config.vocab_size)
 
-        if 'falcon' in model_path:
+        if hf_config.model_type == 'falcon':
             model_config = __build_falcon()
-        elif 'chatglm' in model_path:
+        elif hf_config.model_type == 'chatglm':
             model_config = __build_chatglm()
         elif hf_config.model_type == 'gemma':
             model_config = __build_gemma()
+        elif hf_config.model_type == 'dbrx':
+            model_config = __build_dbrx()
         else:
             model_config = __build_default()
 
         model_config.dtype = _get_torch_dtype(hf_config)
+
         model_config.hf_config = hf_config
         model_config.json_config = hf_config.to_dict()
         return model_config

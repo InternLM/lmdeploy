@@ -9,10 +9,10 @@ import torch
 from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                ResponseType)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger, get_model
+from lmdeploy.utils import get_logger, get_model, logging_timer
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
-from ..check_env import check_env, check_model
+from ..check_env import check_adapters, check_env, check_model
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SamplingParam, SchedulerSequence
 from ..paging import Scheduler
@@ -160,6 +160,8 @@ class Engine:
                  trust_remote_code: bool = True) -> None:
         check_env()
         check_model(model_path, trust_remote_code)
+        if engine_config.adapters is not None:
+            check_adapters(list(engine_config.adapters.values()))
 
         if engine_config is None:
             engine_config = PytorchEngineConfig()
@@ -175,8 +177,7 @@ class Engine:
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
             eviction_type=engine_config.eviction_type,
-            prefill_interval=engine_config.prefill_interval,
-            max_prefill_token_num=engine_config.max_prefill_token_num)
+            prefill_interval=engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
@@ -184,7 +185,8 @@ class Engine:
             block_size=engine_config.block_size,
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
-            cache_max_entry_count=engine_config.cache_max_entry_count)
+            cache_max_entry_count=engine_config.cache_max_entry_count,
+            max_prefill_token_num=engine_config.max_prefill_token_num)
 
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,
@@ -404,6 +406,7 @@ class Engine:
         """Add new session."""
         return end(self.req_sender, session_id)
 
+    @logging_timer('CreateModelInputs', logger)
     @torch.inference_mode()
     def create_model_inputs(self, messages: SeqList, adapters: AdapterList):
         """create model inputs from messages.
@@ -412,23 +415,7 @@ class Engine:
             messages (SeqList): The input messages.
             adapters (AdapterList): Adapters.
         """
-
-        def __get_history_length():
-            """get history length."""
-            if self.model_config.sliding_window > 0:
-                history_lengths = []
-                for msg in messages:
-                    num_real_blocks = len(msg.logical_blocks)
-                    num_all_blocks = _div_up(msg.num_all_tokens(),
-                                             msg.block_size)
-                    num_drop_blocks = num_all_blocks - num_real_blocks
-                    num_drop_tokens = num_drop_blocks * msg.block_size
-                    history_lengths.append(msg.history_len - num_drop_tokens)
-                return history_lengths
-            else:
-                return [msg.history_len for msg in messages]
-
-        history_lengths = __get_history_length()
+        history_lengths = [msg.history_len for msg in messages]
 
         token_ids = [msg.token_ids for msg in messages]
 
@@ -460,6 +447,7 @@ class Engine:
 
         # TODO: get block offsets is slow when block_size = 1
         block_offsets = self.scheduler.get_block_tables(messages)
+        num_blocks = torch.tensor([len(boff) for boff in block_offsets])
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
         local_adapter_ids = None
@@ -488,6 +476,7 @@ class Engine:
                            q_start_loc=q_start_loc,
                            history_lengths=history_lengths,
                            is_decoding=is_decoding,
+                           num_blocks=num_blocks,
                            local_adapter_ids=local_adapter_ids,
                            global_adapter_ids=global_adapter_ids,
                            adapter_offsets=adapter_offsets,
@@ -506,6 +495,8 @@ class Engine:
         """
 
         def _check_stop_word(sampling_param, next_token_id):
+            if sampling_param.ignore_eos:
+                return False
             return (sampling_param.stop_words is not None
                     and next_token_id in sampling_param.stop_words)
 
@@ -515,7 +506,7 @@ class Engine:
         def _check_session_len(msg, max_session_len):
             if max_session_len is None:
                 return False
-            session_len = msg.num_all_tokens() + 1
+            session_len = msg.num_all_tokens()
             return session_len >= max_session_len
 
         sampling_param = msg.sampling_param
@@ -527,6 +518,7 @@ class Engine:
             return True
         return False
 
+    @logging_timer('SamplingLogits', logger)
     async def async_sampling_logits(self, logits: torch.Tensor,
                                     running: SeqList, inputs: ModelInputs):
         """sampling logits."""
@@ -565,11 +557,13 @@ class Engine:
         with torch.inference_mode(), torch.cuda.stream(self.stream):
             logits = logits_processor(input_ids, split_logits)
             next_token_ids = logits_processor.sampling(logits)
-        self.stream.synchronize()
+        await asyncio.get_event_loop().run_in_executor(None,
+                                                       self.stream.synchronize)
         next_token_ids = next_token_ids.cpu()
 
         return next_token_ids, split_logits
 
+    @logging_timer('UpdateRunning', logger)
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor,
                        meta: Any):
         """update scheduler."""
@@ -593,10 +587,11 @@ class Engine:
 
         return True
 
+    @logging_timer('ModelForward', logger)
     async def _async_model_forward(self, inputs: ModelInputs,
                                    swap_in_map: Dict, swap_out_map: Dict):
         """model forward."""
-        max_prefill_token_num = self.scheduler_config.max_prefill_token_num
+        max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
 
         class _LogitsGather:
@@ -699,6 +694,7 @@ class Engine:
         else:
             return await __long_context_forward(inputs)
 
+    @logging_timer('AsyncStep', logger)
     async def async_step(self, is_prefill: bool, return_logits: bool = False):
         """one step inference. Used to perform streaming chat.
 
@@ -716,6 +712,8 @@ class Engine:
             return dict()
 
         inputs = self.create_model_inputs(running, adapters)
+        logger.debug(f'<AsyncStep>: batch_size={len(running)} '
+                     f'num_tokens={inputs.input_ids.size(-1)}')
 
         # inference
         output = await self._async_model_forward(inputs,
@@ -952,7 +950,6 @@ class Engine:
                 await asyncio.sleep(0.01)
                 continue
 
-            logger.debug('async_loop: RequestManager Step.')
             self.req_manager.step()
 
             # forward
@@ -961,8 +958,6 @@ class Engine:
                 is_prefill = not prefill_counter or not has_running
                 if is_prefill:
                     prefill_counter = prefill_interval
-                logger.debug('async_loop: Engine Step - '
-                             f'prefilling: {is_prefill}')
                 with torch.inference_mode():
                     step_tokens: Dict[int,
                                       InferOutput] = await self.async_step(
@@ -970,7 +965,6 @@ class Engine:
                 prefill_counter -= 1
 
                 # send response
-                logger.debug('async_loop: Response.')
                 _send_resp(step_tokens)
 
 

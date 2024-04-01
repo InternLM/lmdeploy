@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 
+from lmdeploy.archs import get_task
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig
@@ -25,6 +26,7 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     GenerateRequest, GenerateRequestQos, GenerateResponse, ModelCard,
     ModelList, ModelPermission, UsageInfo)
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
+from lmdeploy.utils import get_logger
 
 
 class VariableInterface:
@@ -70,9 +72,13 @@ async def check_api_key(
 def get_model_list():
     """Available models.
 
-    Only provided one now.
+    If it is a slora serving. The model list would be [model_name,
+    adapter_name1, adapter_name2, ...]
     """
-    return [VariableInterface.async_engine.model_name]
+    model_names = [VariableInterface.async_engine.model_name]
+    cfg = VariableInterface.async_engine.backend_config
+    model_names += getattr(cfg, 'adapters', None) or []
+    return model_names
 
 
 @app.get('/v1/models', dependencies=[Depends(check_api_key)])
@@ -296,6 +302,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         return error_check_ret
 
     model_name = request.model
+    adapter_name = None
+    if model_name != VariableInterface.async_engine.model_name:
+        adapter_name = model_name  # got a adapter name
     request_id = str(request.session_id)
     created_time = int(time.time())
 
@@ -321,6 +330,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         sequence_end=True,
         do_preprocess=not isinstance(request.messages,
                                      str),  # text completion for string input
+        adapter_name=adapter_name,
     )
 
     def create_stream_response_json(
@@ -605,6 +615,9 @@ async def completions_v1(request: CompletionRequest,
         return error_check_ret
 
     model_name = request.model
+    adapter_name = None
+    if model_name != VariableInterface.async_engine.model_name:
+        adapter_name = model_name  # got a adapter name
     request_id = str(request.session_id)
     created_time = int(time.time())
     if isinstance(request.prompt, str):
@@ -629,7 +642,8 @@ async def completions_v1(request: CompletionRequest,
             stream_response=True,  # always use stream to enable batching
             sequence_start=True,
             sequence_end=True,
-            do_preprocess=False)
+            do_preprocess=False,
+            adapter_name=adapter_name)
         generators.append(result_generator)
 
     def create_stream_response_json(
@@ -872,6 +886,8 @@ async def chat_interactive_v1(request: GenerateRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - adapter_name (str): For slora inference. Choose which lora to do the
+        inference.
     """
     if request.cancel:
         if request.session_id != -1:
@@ -913,7 +929,8 @@ async def chat_interactive_v1(request: GenerateRequest,
         gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
         sequence_start=sequence_start,
-        sequence_end=sequence_end)
+        sequence_end=sequence_end,
+        adapter_name=request.adapter_name)
 
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
@@ -1013,6 +1030,8 @@ def serve(model_path: str,
     """ # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
+    logger = get_logger('lmdeploy')
+    logger.setLevel(log_level)
 
     if allow_origins:
         app.add_middleware(
@@ -1032,7 +1051,9 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
-    VariableInterface.async_engine = AsyncEngine(
+    pipeline_type, pipeline_class = get_task(model_path)
+
+    VariableInterface.async_engine = pipeline_class(
         model_path=model_path,
         model_name=model_name,
         backend=backend,

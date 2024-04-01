@@ -7,10 +7,11 @@ from utils.rule_condition_assert import assert_result
 from lmdeploy.serve.openai.api_client import APIClient
 
 
-def open_chat_test(config, case_info, model, url):
+def open_chat_test(config, case_info, model, url, worker_id: str = 'default'):
     log_path = config.get('log_path')
 
-    restful_log = os.path.join(log_path, 'restful_' + model + '.log')
+    restful_log = os.path.join(log_path,
+                               'restful_' + model + '_' + worker_id + '.log')
 
     file = open(restful_log, 'w')
 
@@ -49,10 +50,15 @@ def open_chat_test(config, case_info, model, url):
     return result, restful_log, msg
 
 
-def interactive_test(config, case_info, model, url):
+def interactive_test(config,
+                     case_info,
+                     model,
+                     url,
+                     worker_id: str = 'default'):
     log_path = config.get('log_path')
 
-    interactive_log = os.path.join(log_path, 'interactive_' + model + '.log')
+    interactive_log = os.path.join(
+        log_path, 'interactive_' + model + '_' + worker_id + '.log')
 
     file = open(interactive_log, 'w')
 

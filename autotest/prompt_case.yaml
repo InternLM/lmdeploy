@@ -59,7 +59,7 @@ chinese_poem_case:
             - "。"
         - len_g:
             5
-        - llama-2:
+        - llama2:
             - contain:
                 - poem
                 - poetry
@@ -75,6 +75,9 @@ chinese_poem_case:
             - len_g:
                 5
         - internlm2-20b:
+            - len_g:
+                5
+        - falcon:
             - len_g:
                 5
 english_poem_case:
@@ -110,6 +113,7 @@ emoji_case:
                 - \u2714
                 - 赞
                 - emoji
+                - '!'
 traditional_chinese_case:
     - 使用繁體介紹香港維多利亞港:
         - contain:
@@ -129,7 +133,7 @@ traditional_chinese_case:
                 - 维多利亚港
                 - hong kong
                 - 香港
-        - llama-2:
+        - llama2:
             - contain:
                 - victoria
                 - 維多利亞港

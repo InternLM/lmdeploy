@@ -33,8 +33,8 @@ print(response)
 
 LMDeploy 提供了多种部署模型推理服务的方式，总有一款适合你。
 
-- [部署类 openai 的服务](https://lmdeploy.readthedocs.io/zh-cn/latest//serving/restful_api.html)
-- [通过 docker 部署服务](https://lmdeploy.readthedocs.io/zh-cn/latest/serving/restful_api.html#docker)
+- [部署类 openai 的服务](https://lmdeploy.readthedocs.io/zh-cn/latest//serving/api_server.html)
+- [通过 docker 部署服务](https://lmdeploy.readthedocs.io/zh-cn/latest/serving/api_server.html#docker)
 - [部署 gradio 服务](https://lmdeploy.readthedocs.io/zh-cn/latest/serving/gradio.html)
 
 ## 模型量化
@@ -50,7 +50,7 @@ LMDeploy CLI 提供了如下便捷的工具，方便用户快速体验模型对�
 ### 控制台交互式对话
 
 ```shell
-lmdeploy chat turbomind internlm/internlm-chat-7b
+lmdeploy chat internlm/internlm-chat-7b
 ```
 
 ### WebUI 交互式对话
