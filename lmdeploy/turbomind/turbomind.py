@@ -309,9 +309,6 @@ class TurboMind:
         logger.warning(f'get {len(tm_params)} model params')
         output_model.export()
 
-        # load kv qparams
-        self._load_kv_qparams(model_path, tm_params, kv_sym=False, kv_bits=8)
-        assert len(tm_params) == 0, f'missing {tm_params.keys()}'
 
         return model_comm
 
