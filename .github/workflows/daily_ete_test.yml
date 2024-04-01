@@ -180,28 +180,28 @@ jobs:
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
         timeout-minutes: 20
         run: |
-          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
         timeout-minutes: 20
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - chat hf torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'chat'))
         timeout-minutes: 20
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - pipeline turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
         timeout-minutes: 25
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - pipeline turbomind vl
         continue-on-error: true
@@ -210,14 +210,14 @@ jobs:
         env:
           PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
           pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
       - name: Test lmdeploy - restful turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
         timeout-minutes: 30
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
           pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
       - name: Test lmdeploy - restful turbomind vl
         continue-on-error: true
@@ -226,14 +226,14 @@ jobs:
         env:
           PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
           pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
       - name: Test lmdeploy - restful workspace
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
         timeout-minutes: 30
         run: |
-          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
           pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
       - name: Test lmdeploy - interface pipeline turbomind case
         continue-on-error: true
@@ -246,14 +246,14 @@ jobs:
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
         timeout-minutes: 25
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - restful torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'restful'))
         timeout-minutes: 40
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - rerun all fail cases
         timeout-minutes: 30
@@ -506,7 +506,7 @@ jobs:
         if: matrix.backend == 'turbomind'
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
           pytest autotest/interface/restful/test_restful_interface_func_turbomind.py -n 20 --alluredir=allure-results
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
@@ -518,7 +518,7 @@ jobs:
         if: matrix.backend == 'pytorch'
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
           pytest autotest/interface/restful/test_restful_interface_func_pytorch.py -n 20 --alluredir=allure-results
       - name: Kill api server
         if: always()
