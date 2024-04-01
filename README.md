@@ -26,7 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/04\] TurboMind latest upgrade boosts GQA,  rocketing the \[InternLM2-7B\]() model inference to over 22 RPS
+- \[2024/04\] TurboMind latest upgrade boosts GQA,  rocketing the \[internlm2-20b\](https://huggingface.co/internlm/internlm2-20b) model inference to over 22 RPS
 - \[2024/03\] Support DeepSeek-VL offline inference pipeline and serving.
 - \[2024/03\] Support VLM offline inference pipeline and serving.
 - \[2024/02\] Support Qwen 1.5, Gemma, Mistral, Mixtral, Deepseek-MOE and so on.
@@ -129,7 +129,7 @@ Since v0.3.0, The default prebuilt package is compiled on **CUDA 12**. However, 
 ```shell
 export LMDEPLOY_VERSION=0.3.0
 export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## Offline Batch Inference

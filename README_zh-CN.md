@@ -26,7 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/04\] TurboMind 引擎升级，优化 GQA 推理。InternLM2-7B 推理速度提高到 22+ RPS
+- \[2024/04\] TurboMind 引擎升级，优化 GQA 推理。\[internlm2-20b\](https://huggingface.co/internlm/internlm2-20b) 推理速度比 v0.2.6 提高近 20%，达 16 RPS
 - \[2024/03\] 支持 DeepSeek-VL 的离线推理 pipeline 和推理服务
 - \[2024/03\] 支持视觉-语言模型（VLM）的离线推理 pipeline 和推理服务
 - \[2024/02\] 支持 Qwen 1.5、Gemma、Mistral、Mixtral、Deepseek-MOE 等模型
@@ -130,7 +130,7 @@ pip install lmdeploy
 ```shell
 export LMDEPLOY_VERSION=0.3.0
 export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## 离线批处理
