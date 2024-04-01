@@ -59,7 +59,7 @@ jobs:
     if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py38, py310]
+        pyver: [py38]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -150,21 +150,9 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Set params
-        if: contains( matrix.model, 'w4a16') || contains( matrix.model, '4bit')
         run: |
-          echo "MODEL_FORMAT=--model-format awq" >> "$GITHUB_ENV"
-      - name: Set params
-        if: contains( matrix.model, 'llama') || contains( matrix.model, 'Llama')
-        run: |
-          echo "MAX_ENTRY_COUNT=--cache-max-entry-count 0.95" >> "$GITHUB_ENV"
-      - name: Set params
-        if: (!contains( matrix.model, 'llama') && !contains( matrix.model, 'Llama'))
-        run: |
-          echo "MAX_ENTRY_COUNT=--cache-max-entry-count 0.9" >> "$GITHUB_ENV"
-      - name: Set params
-        if: (contains( matrix.model, 'internlm2-chat-20b'))
-        run: |
-          echo "TP_INFO=--tp 2" >> "$GITHUB_ENV"
+          chmod +x .github/scripts/set_benchmark_param.sh
+          .github/scripts/set_benchmark_param.sh ${{matrix.model}}
       - name: Run generation benchmark
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
         env:
@@ -267,21 +255,9 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Set params
-        if: contains( matrix.model, 'w4a16') || contains( matrix.model, '4bit')
         run: |
-          echo "MODEL_FORMAT=--model-format awq" >> "$GITHUB_ENV"
-      - name: Set params
-        if: contains( matrix.model, 'llama') || contains( matrix.model, 'Llama')
-        run: |
-          echo "MAX_ENTRY_COUNT=--cache-max-entry-count 0.95" >> "$GITHUB_ENV"
-      - name: Set params
-        if: (!contains( matrix.model, 'llama') && !contains( matrix.model, 'Llama'))
-        run: |
-          echo "MAX_ENTRY_COUNT=--cache-max-entry-count 0.9" >> "$GITHUB_ENV"
-      - name: Set params
-        if: (contains( matrix.model, 'internlm2-chat-20b'))
-        run: |
-          echo "TP_INFO=--tp 2" >> "$GITHUB_ENV"
+          chmod +x .github/scripts/set_benchmark_param.sh
+          .github/scripts/set_benchmark_param.sh ${{matrix.model}}
       - name: Run throughput benchmark
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
         env:
@@ -392,21 +368,9 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Set params
-        if: contains( matrix.model, 'w4a16') || contains( matrix.model, '4bit')
         run: |
-          echo "MODEL_FORMAT=--model-format awq" >> "$GITHUB_ENV"
-      - name: Set params
-        if: contains( matrix.model, 'llama') || contains( matrix.model, 'Llama')
-        run: |
-          echo "MAX_ENTRY_COUNT=--cache-max-entry-count 0.95" >> "$GITHUB_ENV"
-      - name: Set params
-        if: (!contains( matrix.model, 'llama') && !contains( matrix.model, 'Llama'))
-        run: |
-          echo "MAX_ENTRY_COUNT=--cache-max-entry-count 0.9" >> "$GITHUB_ENV"
-      - name: Set params
-        if: (contains( matrix.model, 'internlm2-chat-20b'))
-        run: |
-          echo "TP_INFO=--tp 2" >> "$GITHUB_ENV"
+          chmod +x .github/scripts/set_benchmark_param.sh
+          .github/scripts/set_benchmark_param.sh ${{matrix.model}}
       - name: Start restful api turbomind
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
@@ -491,7 +455,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: ${{fromJSON(github.event.inputs.generation_models)}}
+        model: ${{fromJSON(github.event.inputs.models)}}
     steps:
       - name: Clone repository
         uses: actions/checkout@v3

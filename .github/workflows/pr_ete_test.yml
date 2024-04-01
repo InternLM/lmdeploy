@@ -32,7 +32,7 @@ jobs:
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
-      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      image: nvcr.io/nvidia/tritonserver:24.03-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
