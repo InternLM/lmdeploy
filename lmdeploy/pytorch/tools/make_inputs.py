@@ -8,7 +8,6 @@ from .layout_convert import continuous_tensor, page_cache
 
 def make_model_inputs(input_ids: torch.Tensor,
                       block_offsets: torch.Tensor,
-                      num_blocks: torch.Tensor,
                       seq_length: torch.Tensor = None,
                       history_length: List[int] = None):
     """make model inputs."""
@@ -33,15 +32,16 @@ def make_model_inputs(input_ids: torch.Tensor,
     if isinstance(history_length, torch.Tensor):
         history_length = history_length.tolist()
 
+    num_ignored_history = torch.zeros_like(seq_length)
     return ModelInputs(input_ids=input_ids,
                        seq_length=seq_length,
                        attention_mask=attention_mask,
                        block_offsets=block_offsets,
-                       num_blocks=num_blocks,
                        position_ids=position_ids,
                        q_start_loc=q_start_loc,
                        history_lengths=history_length,
-                       is_decoding=is_decoding)
+                       is_decoding=is_decoding,
+                       num_ignored_history=num_ignored_history)
 
 
 def make_step_context(
@@ -116,13 +116,12 @@ def make_step_context(
             page_cache(k_cache, past_k, history_length, block_offsets)
             page_cache(v_cache, past_v, history_length, block_offsets)
 
-    kv_caches, block_offsets, num_blocks = __create_kv_caches(past_key_values)
+    kv_caches, block_offsets, _ = __create_kv_caches(past_key_values)
     __fill_kv_caches(kv_caches, past_key_values, block_offsets)
 
     history_length = history_length.tolist()
     model_inputs = make_model_inputs(input_ids,
                                      block_offsets=block_offsets,
-                                     num_blocks=num_blocks,
                                      seq_length=seq_length,
                                      history_length=history_length)
 
