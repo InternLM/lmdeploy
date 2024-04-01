@@ -14,10 +14,13 @@ struct Arch {
     }
 };
 
-struct Sm70: Arch<700, 750> {};
+struct Sm70: Arch<700, 750> {
+};
 
-struct Sm75: Arch<750, 800> {};
+struct Sm75: Arch<750, 800> {
+};
 
-struct Sm80: Arch<800> {};
+struct Sm80: Arch<800> {
+};
 
 }  // namespace turbomind::arch

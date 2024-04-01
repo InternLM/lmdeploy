@@ -3,12 +3,12 @@
 #pragma once
 
 #include "arch.h"
-#include "cta_map.h"
-#include "impl_884.h"
-#include "impl_1688.h"
-#include "impl_16816.h"
-#include "linear_iterator.h"
 #include "block_iterator.h"
+#include "cta_map.h"
+#include "impl_16816.h"
+#include "impl_1688.h"
+#include "impl_884.h"
+#include "linear_iterator.h"
 #include "mainloop_sm70.h"
 #include "mainloop_sm80.h"
 #include "src/turbomind/kernels/attention/attention_universal.h"
@@ -16,7 +16,8 @@
 
 namespace turbomind::attention {
 
-enum class CacheType {
+enum class CacheType
+{
     kLinear,
     kBlock,
 };

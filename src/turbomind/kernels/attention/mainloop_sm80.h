@@ -11,7 +11,8 @@
 namespace turbomind::attention {
 
 template<int Stages>
-struct Sm80_CpAsync {};
+struct Sm80_CpAsync {
+};
 
 template<int Stages, class Impl_>
 struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
@@ -51,17 +52,17 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     template<class... Args>
     __device__ void operator()(Args&&... args)
     {
-        Run(Sm80_CpAsync<Stages>{}, ((Args&&)args)...);
+        Run(Sm80_CpAsync<Stages>{}, ((Args &&) args)...);
     }
 
     template<int Idx, class A, class B>
     __device__ static decltype(auto) Select(A&& a, B&& b)
     {
         if constexpr (Idx) {
-            return (B&&)b;
+            return (B &&) b;
         }
         else {
-            return (A&&)a;
+            return (A &&) a;
         }
     }
 

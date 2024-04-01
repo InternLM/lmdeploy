@@ -173,7 +173,7 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                     for (int q = 0; q < 2; ++q) {
                         const int si = m * OP_M + lane_id / 4 * 1 + s * 8 + warp_id * WARP_S;
                         const int hi = n * OP_N + lane_id % 4 * 2 + q * 1;
-                        ((Func&&)func)(hi, /*qi*/ 0, si, /*ri*/ 0, S[m][n][s * 2 + q]);
+                        ((Func &&) func)(hi, /*qi*/ 0, si, /*ri*/ 0, S[m][n][s * 2 + q]);
                     }
                 }
             }
@@ -190,7 +190,7 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             for (int q = 0; q < 2; ++q) {
                 const int hi = lane_id % 4 * 2 + n * OP_N + q * 1;
                 const int ri = lane_id / 4 * 1;
-                ((Func&&)func)(hi, /*qi*/ 0, ri, frag_M[n][q], frag_L[n][q]);
+                ((Func &&) func)(hi, /*qi*/ 0, ri, frag_M[n][q], frag_L[n][q]);
             }
         }
     }
@@ -328,7 +328,7 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     ComputeQK(StateQK state_QK, FragS& frag_S, int offset, Prefetch&& prefetch, Preload&& preload)
     {
         if constexpr (K_K == 1) {
-            ((Prefetch&&)prefetch)(0);
+            ((Prefetch &&) prefetch)(0);
         }
 
         PRAGMA_UNROLL
@@ -337,7 +337,7 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 state_QK.Load(k + 1, offset);
             }
             else {
-                ((Preload&&)preload)();
+                ((Preload &&) preload)();
             }
 
             state_QK.Transform(k);
@@ -350,10 +350,10 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 }
             }
             if (k < K_K - 1) {
-                ((Prefetch&&)prefetch)(k);
+                ((Prefetch &&) prefetch)(k);
             }
             if (k == K_K - 2) {
-                ((Prefetch&&)prefetch)(K_K - 1);
+                ((Prefetch &&) prefetch)(K_K - 1);
             }
         }
     }
@@ -458,7 +458,7 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 state_PV.Load(m + 1, offset);
             }
             else {
-                ((Preload&&)preload)();
+                ((Preload &&) preload)();
             }
 
             state_PV.Transform(m);
@@ -471,10 +471,10 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 }
             }
             if (m < V_M - 1) {
-                ((Prefetch&&)prefetch)(m);
+                ((Prefetch &&) prefetch)(m);
             }
             if (m == V_M - 2) {
-                ((Prefetch&&)prefetch)(V_M - 1);
+                ((Prefetch &&) prefetch)(V_M - 1);
             }
         }
     }
@@ -762,7 +762,7 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 const int hi = offset.y + s * Map::kDeltaS;
                 const int di = offset.x + c * Map::kDeltaC;
                 Load(tmp_O[s][c], &storage.O1[hi][di]);
-                ((Func&&)func)(hi, 0, di, tmp_O[s][c]);
+                ((Func &&) func)(hi, 0, di, tmp_O[s][c]);
             }
         }
     }

@@ -245,16 +245,16 @@ void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv)
                                    max_k_len_,               // k
                                    &alpha,                   // alpha
                                    v_cache,                  // A
-                                   data_type,               // A type
+                                   data_type,                // A type
                                    head_dim_,                // lda
                                    max_k_len_ * head_dim_,   // strideA
                                    pr_.data().get(),         // B
-                                   data_type,               // B type
+                                   data_type,                // B type
                                    max_k_len_,               // ldb
                                    max_q_len_ * max_k_len_,  // stride B
                                    &beta,                    // beta
                                    out_.data().get(),        // C [b, h, q, d]
-                                   data_type,               // C type
+                                   data_type,                // C type
                                    head_dim_,                // ldc
                                    max_q_len_ * head_dim_,   // stride C
                                    batch_size_ * head_num_,  // batch count

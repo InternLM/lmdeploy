@@ -114,7 +114,7 @@ public:
 
         char* block = block_ptrs[block_id];
 
-        return ((Func&&)func)(
+        return ((Func &&) func)(
             k_data(block, block_ti), v_data(block, block_ti), k_param(block, block_ti), v_param(block, block_ti));
     }
 

@@ -98,12 +98,14 @@ struct CombinedIterator {
 
     /// TODO: Load(bool_constant, CacheIter&) -> Fragment
     template<bool is_residue, class CacheIter>
-    __device__ void Load(const CacheIter& cache_iter, Fragment& frag, int max_s) {
+    __device__ void Load(const CacheIter& cache_iter, Fragment& frag, int max_s)
+    {
         iterator0_.Load<is_residue>(cache_iter, frag.frag0, max_s);
         iterator1_.Load<is_residue>(cache_iter, frag.frag1, max_s);
     }
 
-    __device__ void Save(const Fragment& frag) {
+    __device__ void Save(const Fragment& frag)
+    {
         iterator0_.Save(frag.frag0);
         iterator1_.Save(frag.frag1);
     }

@@ -2,22 +2,31 @@
 
 namespace turbomind {
 
-struct uint3_t {};
-struct uint4_t {};
-struct uint5_t {};
-struct uint6_t {};
+struct uint3_t {
+};
+struct uint4_t {
+};
+struct uint5_t {
+};
+struct uint6_t {
+};
 
 template<class T>
-struct bitsof_t: std::integral_constant<int, sizeof(T) * 8> {};
+struct bitsof_t: std::integral_constant<int, sizeof(T) * 8> {
+};
 
 template<>
-struct bitsof_t<uint3_t>: std::integral_constant<int, 3> {};
+struct bitsof_t<uint3_t>: std::integral_constant<int, 3> {
+};
 template<>
-struct bitsof_t<uint4_t>: std::integral_constant<int, 4> {};
+struct bitsof_t<uint4_t>: std::integral_constant<int, 4> {
+};
 template<>
-struct bitsof_t<uint5_t>: std::integral_constant<int, 5> {};
+struct bitsof_t<uint5_t>: std::integral_constant<int, 5> {
+};
 template<>
-struct bitsof_t<uint6_t>: std::integral_constant<int, 6> {};
+struct bitsof_t<uint6_t>: std::integral_constant<int, 6> {
+};
 
 template<class T>
 inline constexpr bitsof_t<T> bitsof{};

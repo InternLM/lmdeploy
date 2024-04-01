@@ -160,7 +160,7 @@ struct Impl<MMA_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, He
                 state_QK.Load(k + 1, offset);
             }
             else {
-                ((Preload&&)preload)();
+                ((Preload &&) preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
@@ -208,7 +208,7 @@ struct Impl<MMA_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, He
                 state_PV.Load(k + 1, offset);
             }
             else {
-                ((Preload&&)preload)();
+                ((Preload &&) preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < V_M; ++m) {

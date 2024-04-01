@@ -6,15 +6,20 @@ namespace turbomind {
 
 namespace attention {
 
-struct MMA_16816 {};
+struct MMA_16816 {
+};
 
-struct MMA_81616 {};  // MMA_16816 transposed
+struct MMA_81616 {
+};  // MMA_16816 transposed
 
-struct MMA_1688 {};
+struct MMA_1688 {
+};
 
-struct MMA_884 {};
+struct MMA_884 {
+};
 
-struct MMA_SIMT {};
+struct MMA_SIMT {
+};
 
 template<class Tag,
          class T,
@@ -27,7 +32,8 @@ template<class Tag,
          int WARP_S,
          int HeadDim,
          int Stages = 2>
-struct Impl {};
+struct Impl {
+};
 
 }  // namespace attention
 

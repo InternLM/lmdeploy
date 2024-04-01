@@ -173,7 +173,7 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
                         for (int s0 = 0; s0 < 2; ++s0) {
                             const int qi = m * OP_M + (lane_id & 8) + (lane_id & 1) + lane_id / 16 * 4 + q * 2;
                             const int si = n * OP_N + (lane_id & 4) * 2 + (lane_id & 2) + s1 * 4 + s0;
-                            ((Func&&)func)(0, warp_id * WARP_Q + qi, si, /*ri*/ 0, S[m][n][s1 * 4 + q * 2 + s0]);
+                            ((Func &&) func)(0, warp_id * WARP_Q + qi, si, /*ri*/ 0, S[m][n][s1 * 4 + q * 2 + s0]);
                         }
                     }
                 }
@@ -247,7 +247,7 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
                 state_QK.Load(k + 1, offset);
             }
             else {
-                ((Preload&&)preload)();
+                ((Preload &&) preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
@@ -303,7 +303,7 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
                 state_PV.Load(k + 1, offset);
             }
             else {
-                ((Preload&&)preload)();
+                ((Preload &&) preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < V_M; ++m) {
@@ -461,7 +461,7 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
                                 frag_O[m][n][d1 * 4 + q * 2 + d0] *= inv_L[m][q];
                             }
                         }
-                        ((Func&&)func)(0, qi, di, (Array<float, 2>&)frag_O[m][n][d1 * 4 + q * 2]);
+                        ((Func &&) func)(0, qi, di, (Array<float, 2>&)frag_O[m][n][d1 * 4 + q * 2]);
                     }
                 }
             }
