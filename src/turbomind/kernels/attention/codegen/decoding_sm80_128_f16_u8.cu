@@ -7,10 +7,12 @@ namespace turbomind {
 
 using namespace attention;
 
-using sm80_f16_u8_g1_d128 = Decoding<arch::Sm80, half, uint8_t, 1, 128>;
-template void invokeDecoding<sm80_f16_u8_g1_d128>(const typename sm80_f16_u8_g1_d128::ParamType& params);
+template bool invokeDecoding<Decoding<arch::Sm80, half, uint8_t, 1, 128>>(const AttentionParams<half>&);
 
-using sm80_f16_u8_g8_d128 = Decoding<arch::Sm80, half, uint8_t, 8, 128>;
-template void invokeDecoding<sm80_f16_u8_g8_d128>(const typename sm80_f16_u8_g8_d128::ParamType& params);
+template bool invokeDecoding<Decoding<arch::Sm80, half, uint8_t, 4, 128>>(const AttentionParams<half>&);
+
+template bool invokeDecoding<Decoding<arch::Sm80, half, uint8_t, 6, 128>>(const AttentionParams<half>&);
+
+template bool invokeDecoding<Decoding<arch::Sm80, half, uint8_t, 8, 128>>(const AttentionParams<half>&);
 
 }  // namespace turbomind

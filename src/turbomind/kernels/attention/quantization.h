@@ -34,9 +34,15 @@ __device__ T Infinity()
 template<class T>
 __device__ constexpr T Max(T a, T b)
 {
-    if constexpr (sizeof(T) == 2) {
+    if constexpr (std::is_same_v<T, half>) {
         return __hmax(a, b);
     }
+
+#if __CUDA_ARCH__ >= 800
+    if constexpr (std::is_same_v<T, nv_bfloat16>) {
+        return __hmin(a, b);
+    }
+#endif
 
     if constexpr (std::is_same_v<T, float>) {
         return fmaxf(a, b);
@@ -52,9 +58,15 @@ __device__ constexpr T Max(T a, T b)
 template<class T>
 __device__ constexpr T Min(T a, T b)
 {
-    if constexpr (sizeof(T) == 2) {
+    if constexpr (std::is_same_v<T, half>) {
         return __hmin(a, b);
     }
+
+#if __CUDA_ARCH__ >= 800
+    if constexpr (std::is_same_v<T, nv_bfloat16>) {
+        return __hmin(a, b);
+    }
+#endif
 
     if constexpr (std::is_same_v<T, float>) {
         return fminf(a, b);
@@ -154,6 +166,7 @@ inline __device__ Array<float, 4> cvt_f32x4_u8(const Array<uint8_t, 4>& src)
 template<bool norm = true>
 inline __device__ Array<nv_bfloat16, 8> cvt_bf16x8_u4(const Array<uint4_t, 8>& src)
 {
+#if __CUDA_ARCH__ >= 800
     // 01234567 01234567
     // SEEEEEEE EMMMMMMM
     //          1...XXXX
@@ -184,6 +197,9 @@ inline __device__ Array<nv_bfloat16, 8> cvt_bf16x8_u4(const Array<uint4_t, 8>& s
         }
     }
     return (Array<nv_bfloat16, 8>&)h;
+#else
+    return {};
+#endif
 }
 
 template<class T>
@@ -553,9 +569,11 @@ struct ConvertKvCache<uint8_t, T> {
             else if constexpr (std::is_same_v<T, float>) {
                 uo = cvt_f32x4_u8(ui);
             }
+#if __CUDA_ARCH__ >= 800
             else if constexpr (std::is_same_v<T, nv_bfloat16>) {
                 uo = cvt_bf16x4_u8(ui);
             }
+#endif
         }
         return vo;
     }

@@ -30,7 +30,7 @@ struct Sm70GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                clear(rmem[s][c]);
+                copy(Array<T, Map::kAccessC>{}, rmem[s][c]);
                 if (!is_residue || offset_s + s * Map::kDeltaS < max_s) {
                     Ldg(rmem[s][c], &src_data[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
                 }

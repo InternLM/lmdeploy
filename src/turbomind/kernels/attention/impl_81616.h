@@ -366,10 +366,10 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
         FragP     frag_P;
         FragV     frag_V;
 
-        __device__ StatePV(SharedStorage& storage)
+        __device__ StatePV(SharedStorage& storage, bool offset = false)
         {
-            smem_V       = storage.KV.data();
-            smem_V_param = storage.KVp;
+            smem_V       = storage.KV.data() + (offset ? SmemLayoutK::kSize : 0);
+            smem_V_param = storage.KVp + (offset ? SmemLayoutKVp::kSize : 0);
         }
 
         __device__ void Load(int m, int pipe_iter)

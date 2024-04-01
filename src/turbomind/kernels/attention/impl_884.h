@@ -269,8 +269,9 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
         FragP frag_P;
         FragV frag_V;
 
-        __device__ StatePV(SharedStorage& storage): smem_V{storage.V}
+        __device__ StatePV(SharedStorage& storage, bool offset): smem_V{storage.V}
         {
+            assert(offset);
             const int lane_id = threadIdx.x % WARP_SIZE;
             PRAGMA_UNROLL
             for (int n = 0; n < 8; n += 2) {
@@ -402,7 +403,7 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
     __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, SharedStorage& storage)
     {
         ForeachS(frag_S,
-                 [&](int, int qi, int si, int ri, float p) { storage.smem_P[SmemLayoutP::apply(qi, si)] = half(p); });
+                 [&](int, int qi, int si, int ri, float p) { storage.P[SmemLayoutP::apply(qi, si)] = half(p); });
 
         if constexpr (!kUseSmemP) {
             const int warp_id = threadIdx.x / WARP_SIZE;
@@ -413,7 +414,7 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
                 for (int m = 0; m < V_M; ++m) {
                     const int qi = m * OP_M + lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4 + warp_id * WARP_Q;
                     const int si = k * OP_K;
-                    Lds(frag_P[k][m], &storage.smem_P[SmemLayoutP::apply(qi, si)]);
+                    Lds(frag_P[k][m], &storage.P[SmemLayoutP::apply(qi, si)]);
                 }
             }
         }

@@ -15,6 +15,7 @@
 #include <numeric>
 #include <random>
 #include <thrust/universal_vector.h>
+#include <utility>
 
 using namespace turbomind;
 
@@ -460,7 +461,9 @@ int test_attention()
         // blocked -> linear
         invokeFlattenKV_v2_(params, cu_kv_lens[kBatchSize]);
 
+        // auto tmp = std::exchange(params.linear_iter_params.kv_cache, nullptr);
         dispatchAttention(params);
+        // params.linear_iter_params.kv_cache = std::exchange(tmp, nullptr);
 #endif
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
             std::cout << cudaGetErrorString(err) << "\n";

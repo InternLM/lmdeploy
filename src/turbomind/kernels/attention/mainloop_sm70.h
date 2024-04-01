@@ -62,7 +62,7 @@ struct Mainloop<arch::Sm70, Impl_> {
         typename GmemIterK::Fragment tmp_K;
 
         typename Impl::StateQK state_QK{storage, frag_Q};
-        typename Impl::StatePV state_PV{storage};
+        typename Impl::StatePV state_PV{storage, true};
 
         Impl::Sync();
 

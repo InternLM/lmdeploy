@@ -420,12 +420,13 @@ struct AttentionUniversal {
 
     __device__ bool check_h(int hi)
     {
-#if 0
-        /// FIXME: for tensor core decoding `CTA_H == 1` fails (currently CTA_H > 2 are used for TC)
-        return CTA_H == 1 || hi < CTA_H;
-#else
-        return hi < CTA_H;
-#endif
+        if constexpr (CTA_Q > 1) {  
+            // bypass the check for prefill kernels since `hi == 0` constantly
+            return true;
+        }
+        else {
+            return hi < CTA_H;
+        }
     }
 
     __device__ void StoreO(FragO&           frag_O,

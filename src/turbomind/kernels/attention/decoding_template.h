@@ -10,15 +10,16 @@
 namespace turbomind {
 
 template<class Kernel>
-void invokeDecoding(const typename Kernel::ParamType& params)
+bool invokeDecoding(const typename Kernel::ParamType& params)
 {
     static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
-    if constexpr (0) {
+    if constexpr (1) {
         [[maybe_unused]] static const int _ = [&] {
-            std::cout << "GmemMap:\n";
-            Print(typename Kernel::Impl::ThreadMapKV{});
-            std::cout << "\nDynamic smem size: " << kSmemSize << "\n";
+            std::cout << __PRETTY_FUNCTION__ << std::endl;
+            // std::cout << "GmemMap:\n";
+            // Print(typename Kernel::Impl::ThreadMapKV{});
+            // std::cout << "\nDynamic smem size: " << kSmemSize << "\n";
             return 0;
         }();
     }
@@ -84,6 +85,8 @@ void invokeDecoding(const typename Kernel::ParamType& params)
                                                     params.inv_sqrt_dh,
                                                     params.stream);
     }
+
+    return true;
 }
 
 }  // namespace turbomind

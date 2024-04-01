@@ -364,10 +364,10 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
         DataV     data_V;
         ParamV    param_V;
 
-        __device__ StatePV(SharedStorage& storage)
+        __device__ StatePV(SharedStorage& storage, bool offset = false)
         {
-            smem_V       = storage.KV.data();
-            smem_V_param = storage.KVp;
+            smem_V       = storage.KV.data() + (offset ? SmemLayoutK::kSize : 0);
+            smem_V_param = storage.KVp + (offset ? SmemLayoutKVp::kSize : 0);
         }
 
         __device__ void Load(int k, int pipe_iter)
@@ -534,9 +534,9 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
             for (int w = 0; w < kWarpCntS - 1; ++w) {
                 frag_M[m][0] = fmaxf(frag_M[m][0], storage.M[m][warp_id_h][(warp_id_s + w + 1) % kWarpCntS]);
             }
-            if (threadIdx.x == 0) {
-                printf("M %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_M[m][0]);
-            }
+            // if (threadIdx.x == 0) {
+            //     printf("M %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_M[m][0]);
+            // }
         }
 
         ///////////////////////////////////////////////////////////////////////////
@@ -619,9 +619,9 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
             for (int w = 0; w < kWarpCntS - 1; ++w) {
                 frag_L[m][0] += storage.L[m][warp_id_h][(warp_id_s + w + 1) % kWarpCntS];
             }
-            if (threadIdx.x == 0) {
-                printf("L %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_L[m][0]);
-            }
+            // if (threadIdx.x == 0) {
+            //     printf("L %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_L[m][0]);
+            // }
         }
     }
 

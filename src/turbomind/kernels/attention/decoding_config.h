@@ -15,7 +15,7 @@
 
 namespace turbomind::attention {
 
-template<class Arch, class T, class Tkv, int Qh, int HeadDim>
+template<class Arch, class T, class Tkv, int Qh, int HeadDim, class SFINAE = void>
 struct DecodingConfig {
     static_assert(sizeof(T) == 0, "config not found");
 };
@@ -23,48 +23,50 @@ struct DecodingConfig {
 template<class Arch, class T, class Tkv, int Qh, int HeadDim>
 using Decoding = typename DecodingConfig<Arch, T, Tkv, Qh, HeadDim>::Kernel;
 
-template<class T, class Tkv, int Qh, int HeadDim>
-struct DecodingConfig<arch::Sm80, T, Tkv, Qh, HeadDim> {
-    // using Attention = Impl<Sm70_Simt, T, Tkv, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
-    using Attention = Impl<MMA_81616, T, T, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
-    using CacheIter = GetBlockIterFactory<T, Tkv, 64, HeadDim>;
+//////////////////////////////////////////////////////////////
+template<class T, int Qh, int HeadDim>
+struct DecodingConfig<arch::Sm80, T, T, Qh, HeadDim, std::enable_if_t<!(Qh > 2)>> {
+    using Attention = Impl<MMA_SIMT, T, T, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
+    using CacheIter = GetBlockIterFactory<T, T, 64, HeadDim>;
     using Kernel    = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<3>, Attention>, CacheIter, DecodingCtaMap>;
 };
 
-template<class T, int HeadDim>
-struct DecodingConfig<arch::Sm80, T, T, 8, HeadDim> {
-    using Attention = Impl<MMA_81616, T, T, 8, 1, 64, 8, 1, 16, HeadDim, 3>;
+template<class T, int Qh, int HeadDim>
+struct DecodingConfig<arch::Sm80, T, T, Qh, HeadDim, std::enable_if_t<(Qh > 2)>> {
+    using Attention = Impl<MMA_81616, T, T, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
     using CacheIter = GetBlockIterFactory<T, T, 64, HeadDim>;
     using Kernel    = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<3>, Attention>, CacheIter, DecodingCtaMap>;
 };
 
 template<class T, int Qh, int HeadDim>
 struct DecodingConfig<arch::Sm80, T, uint8_t, Qh, HeadDim> {
-    // using Attention = Impl<Sm70_Simt, T, uint8_t, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
-    using Attention = Impl<MMA_81616, T, uint8_t, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
+    using Attention = Impl<MMA_81616, T, uint8_t, Qh, 1, 64, Qh, 1, 16, HeadDim, 5>;
     using CacheIter = GetBlockIterFactory<T, uint8_t, 64, HeadDim>;
-    using Kernel    = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<3>, Attention>, CacheIter, DecodingCtaMap>;
+    using Kernel    = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<5>, Attention>, CacheIter, DecodingCtaMap>;
 };
 
 template<class T, int Qh, int HeadDim>
 struct DecodingConfig<arch::Sm80, T, uint4_t, Qh, HeadDim> {
-    // using Attention = Impl<Sm70_Simt, T, uint4_t, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
-    using Attention = Impl<MMA_81616, T, uint4_t, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
+    using Attention = Impl<MMA_81616, T, uint4_t, Qh, 1, 64, Qh, 1, 16, HeadDim, 5>;
     using CacheIter = GetBlockIterFactory<T, uint4_t, 64, HeadDim>;
-    using Kernel    = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<3>, Attention>, CacheIter, DecodingCtaMap>;
+    using Kernel    = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<5>, Attention>, CacheIter, DecodingCtaMap>;
 };
+
+//////////////////////////////////////////////////////////////
+
+template<class T, class Tkv, int Qh, int HeadDim>
+struct DecodingConfig<arch::Sm75, T, Tkv, Qh, HeadDim> {
+    using Attention = Impl<MMA_81616, T, Tkv, Qh, 1, 64, Qh, 1, 16, HeadDim, 2>;
+    using CacheIter = GetBlockIterFactory<T, Tkv, 64, HeadDim>;
+    using Kernel    = AttentionUniversal<arch::Sm75, Mainloop<arch::Sm70, Attention>, CacheIter, DecodingCtaMap>;
+};
+
+//////////////////////////////////////////////////////////////
 
 template<class T, class Tkv, int Qh, int HeadDim>
 struct DecodingConfig<arch::Sm70, T, Tkv, Qh, HeadDim> {
-    using Attention = Impl<MMA_SIMT, T, Tkv, Qh, 1, 64, Qh, 1, 16, HeadDim, 2>;
-    using CacheIter = GetBlockIterFactory<T, T, 64, HeadDim>;
-    using Kernel    = AttentionUniversal<arch::Sm70, Mainloop<arch::Sm70, Attention>, CacheIter, DecodingCtaMap>;
-};
-
-template<class T, int Qh, int HeadDim>
-struct DecodingConfig<arch::Sm70, T, uint8_t, Qh, HeadDim> {
-    using Attention = Impl<MMA_SIMT, T, uint8_t, Qh, 1, 64, Qh, 1, 16, HeadDim, 2>;
-    using CacheIter = GetBlockIterFactory<T, uint8_t, 64, HeadDim>;
+    using Attention = Impl<MMA_SIMT, T, Tkv, 1, 1, 64, 1, 1, 16, HeadDim, 2>;
+    using CacheIter = GetBlockIterFactory<T, Tkv, 64, HeadDim>;
     using Kernel    = AttentionUniversal<arch::Sm70, Mainloop<arch::Sm70, Attention>, CacheIter, DecodingCtaMap>;
 };
 

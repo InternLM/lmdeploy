@@ -61,8 +61,8 @@ struct Impl<MMA_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, He
                                           //    1   2     8   8     1
 
     using SmemLayoutQ = SmemLayoutV2<CTA_Q * CTA_H, HeadDim, 64, 128, Swizzle<3, 3, 4>>;
-    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<3, 3, 4>>;
-    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>;
+    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<3, 3, 4>>;  // load by (s32,d8) tile
+    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>;  // load by (s8,d32) tile
 
     using SmemLayoutKVp = void;
 
@@ -139,12 +139,11 @@ struct Impl<MMA_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, He
         __device__ void Load(int k, int pipe_iter)
         {
             const int lane_id = threadIdx.x % WARP_SIZE;
-            const int offset  = pipe_iter * SmemLayoutK::kSize;
             PRAGMA_UNROLL
             for (int n = 0; n < K_N; n += 4) {  // Load (s32,d8) tiles
                 const int s = n * 8 + lane_id;
                 const int c = k * 8;
-                ldsm_x4((Array<uint32_t, 4>&)frag_K[k][n], cast_smem_ptr_to_uint(&smem_K(s, c, offset)));
+                ldsm_x4((Array<uint32_t, 4>&)frag_K[k][n], cast_smem_ptr_to_uint(&smem_K(s, c)));
             }
         }
 
@@ -180,17 +179,19 @@ struct Impl<MMA_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, He
         FragP frag_P;
         FragV frag_V;
 
-        __device__ StatePV(SharedStorage& storage): smem_V{storage.V} {}
+        __device__ StatePV(SharedStorage& storage, bool offset = true): smem_V{storage.V}
+        {
+            assert(offset);
+        }
 
         __device__ void Load(int k, int pipe_iter)
         {
             const int lane_id = threadIdx.x % WARP_SIZE;
-            const int offset  = pipe_iter * SmemLayoutV::kSize;
             PRAGMA_UNROLL
             for (int n = 0; n < V_N; n += 4) {  // Load (d32,s8) tiles
                 const int si = k * 8 + lane_id % 8;
                 const int di = n * 8 + lane_id / 8 * 8;
-                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[k][n], cast_smem_ptr_to_uint(&smem_V(si, di, offset)));
+                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[k][n], cast_smem_ptr_to_uint(&smem_V(si, di)));
             }
         }
 

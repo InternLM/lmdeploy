@@ -41,7 +41,7 @@ void round_trip_test(size_t n, float s1 = 1., float z1 = 0., float s2 = 1., floa
     universal_vector<Array<T1, kVecSize>> tmp(src.size() / kVecSize);
 
     for (size_t i = 0; i < src.size(); ++i) {
-        src[i] = T0(rand() % (1 << bitsof<T1>));
+        src[i] = T0(float(rand() % (1 << bitsof<T1>)));
     }
 
     convert<kVecSize><<<256, 256>>>((T1*)tmp.data().get(), src.data().get(), n, s1, z1);

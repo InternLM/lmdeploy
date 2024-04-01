@@ -212,7 +212,9 @@ struct Impl<MMA_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
         FragP frag_P;
         FragV frag_V;
 
-        __device__ StatePV(SharedStorage& storage): smem_V{storage.KV} {}
+        __device__ StatePV(SharedStorage& storage, bool offset = false): smem_V{storage.KV + (offset ? SmemLayoutK::kSize : 0)}
+        {
+        }
 
         __device__ void Load(int k, int pipe_iter)
         {

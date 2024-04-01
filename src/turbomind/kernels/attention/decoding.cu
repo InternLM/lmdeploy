@@ -3,14 +3,14 @@
 #include "decoding.h"
 #include "decoding_config.h"
 #include "src/turbomind/models/llama/llama_utils.h"
-#include "src/turbomind/utils/dispatch.h"
+// #include "src/turbomind/utils/dispatch.h"
 #include <type_traits>
 #include <utility>
 
 namespace turbomind {
 
 template<class Kernel>
-void invokeDecoding(const typename Kernel::ParamType& params);
+bool invokeDecoding(const typename Kernel::ParamType& params);
 
 template<int... idxs>
 using seq = std::integer_sequence<int, idxs...>;
@@ -37,118 +37,65 @@ void dispatchDecoding(const AttentionParams<T>& params)
 
     using namespace attention;
 
-    // TODO: we need better Qh dispatching, when #waves < 1, smaller Qh may outperform larger Qh due to better
+    /// TODO: we need better Qh dispatching, when #waves < 1, smaller Qh may outperform larger Qh due to better
     // concurrency
-
-    if (is_kv_int8) {
-        if (params.arch >= 80) {
-            if (0) {}
-            // else if (query_group_sz % 2 == 0) {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm80, T, int8_t, 2, kHeadDim>::Kernel>(params);
-            // }
-            // else {
-            return invokeDecoding<typename DecodingConfig<arch::Sm80, T, uint8_t, 8, kHeadDim>::Kernel>(params);
-            // }
+    auto dispatch_h = [&](auto arch, auto kv) -> bool {
+        using Arch = decltype(arch);
+        using Tkv  = decltype(kv);
+        if (query_group_sz % 8 == 0) {
+            return invokeDecoding<Decoding<Arch, T, Tkv, 8, kHeadDim>>(params);
+        }
+        else if (query_group_sz % 6 == 0) {
+            return invokeDecoding<Decoding<Arch, T, Tkv, 6, kHeadDim>>(params);
+        }
+        else if (query_group_sz % 4 == 0) {
+            return invokeDecoding<Decoding<Arch, T, Tkv, 4, kHeadDim>>(params);
         }
         else {
-            // if (0) {}
-            // else if (query_group_sz % 4 == 0) {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm70, T, int8_t, 4, kHeadDim>::Kernel>(params);
-            // }
-            // else if (query_group_sz % 2 == 0) {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm70, T, int8_t, 2, kHeadDim>::Kernel>(params);
-            // }
-            // else {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm70, T, int8_t, 1, kHeadDim>::Kernel>(params);
-            // }
+            return invokeDecoding<Decoding<Arch, T, Tkv, 1, kHeadDim>>(params);
         }
-    }
-    else if (is_kv_int4) {
-        return invokeDecoding<typename DecodingConfig<arch::Sm80, T, uint4_t, 8, kHeadDim>::Kernel>(params);
-    }
-    else {
-        if (params.arch >= 80) {  // tensor core & async copy
-            if (0) {}
-            // else if (query_group_sz % 8 == 0) {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 8, kHeadDim>::Kernel>(params);
-            // }
-            // else if (query_group_sz % 4 == 0) {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 4, kHeadDim>::Kernel>(params);
-            // }
-            // else if (query_group_sz % 2 == 0) {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 2, kHeadDim>::Kernel>(params);
-            // }
-            else {
-                return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 8, kHeadDim>::Kernel>(params);
-            }
+        return false;
+    };
+
+    auto dispatch_kv = [&](auto arch) -> bool {
+        FT_CHECK(!(is_kv_int4 && is_kv_int8));
+        if (is_kv_int4) {
+            return dispatch_h(arch, uint4_t{});
         }
-        else {  // SIMT & sync copy
-            // if (0) {}
-            // else if (query_group_sz % 4 == 0) {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm70, T, T, 4, kHeadDim>::Kernel>(params);
-            // }
-            // else if (query_group_sz % 2 == 0) {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm70, T, T, 2, kHeadDim>::Kernel>(params);
-            // }
-            // else {
-            //     return invokeDecoding<typename DecodingConfig<arch::Sm70, T, T, 1, kHeadDim>::Kernel>(params);
-            // }
+        else if (is_kv_int8) {
+            return dispatch_h(arch, uint8_t{});
         }
-    }
+        else {
+            return dispatch_h(arch, T{});
+        }
+        return false;
+    };
 
-    FT_CHECK(0);
-}
-
-template<>
-void dispatchDecoding(const AttentionParams<nv_bfloat16>& params)
-{
-    constexpr int kHeadDim = 128;
-
-    const bool is_kv_int8     = params.quant_policy & QuantPolicy::kCacheKVInt8;
-    const bool is_kv_int4     = params.quant_policy & QuantPolicy::kCacheKVInt4;
-    const int  query_group_sz = params.num_heads / params.num_kv_heads;
-
-    using namespace attention;
-
-    // TODO: we need better Qh dispatching, when #waves < 1, smaller Qh may outperform larger Qh due to better
-    // concurrency
-
-    if (is_kv_int8) {
+    auto dispatch = [&]() {
         if (params.arch >= 80) {
-            if (0) {}
+            return dispatch_kv(arch::Sm80{});
+        }
 
-            else {
-                return invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, uint8_t, 8, kHeadDim>>(params);
+        if constexpr (!std::is_same_v<T, nv_bfloat16>) {
+            if (params.arch == 75) {
+                return dispatch_kv(arch::Sm75{});
+            }
+            else if (params.arch >= 70) {
+                return dispatch_kv(arch::Sm70{});
             }
         }
-    }
-    else if (is_kv_int4) {
-        return invokeDecoding<typename DecodingConfig<arch::Sm80, nv_bfloat16, uint4_t, 8, kHeadDim>::Kernel>(params);
-    }
-    else {
-        if (params.arch >= 80) {
-            if (0) {}
-            // else if (query_group_sz % 8 == 0) {
-            //     return invokeDecoding<
-            //         typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, kHeadDim>::Kernel>(params);
-            // }
-            // else if (query_group_sz % 4 == 0) {
-            //     return invokeDecoding<
-            //         typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 4, kHeadDim>::Kernel>(params);
-            // }
-            // else if (query_group_sz % 2 == 0) {
-            //     return invokeDecoding<
-            //         typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 2, kHeadDim>::Kernel>(params);
-            // }
-            else {
-                return invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, kHeadDim>>(params);
-            }
-        }
-    }
 
-    FT_CHECK(0);
+        return false;
+    };
+
+    auto success = dispatch();
+
+    FT_CHECK(success);
 }
 
 template void dispatchDecoding(const AttentionParams<half>& params);
+#if ENABLE_BF16
+template void dispatchDecoding(const AttentionParams<nv_bfloat16>& params);
+#endif
 
 }  // namespace turbomind
