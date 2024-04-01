@@ -183,6 +183,7 @@ def _dist_model(model: torch.nn.Module,
                 else:
                     new_param = torch.empty_like(param, device=device)
                     model.register_buffer(name, new_param)
+        torch.cuda.synchronize()
 
     def _dist_params():
         """dist params."""

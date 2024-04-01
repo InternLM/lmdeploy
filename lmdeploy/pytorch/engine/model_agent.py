@@ -654,15 +654,18 @@ def _create_device_map(model: torch.nn.Module,
                        world_size: int,
                        device_map: dict = None):
     """Distribute params to each devices."""
+    free_mems = [get_gpu_memory(gpu_id)[0] for gpu_id in range(world_size)]
+    free_mems = torch.tensor(free_mems)
     if device_map is None:
         device_map = dict()
-    device_id = 0
-    for name, _ in model.named_parameters():
+    for name, param in model.named_parameters():
+        device_id = free_mems.argmin().item()
         device_map[name] = device_id
-        device_id = (device_id + 1) % world_size
-    for name, _ in model.named_buffers():
+        free_mems[device_id] += param.numel() * param.element_size()
+    for name, param in model.named_buffers():
+        device_id = free_mems.argmin().item()
         device_map[name] = device_id
-        device_id = (device_id + 1) % world_size
+        free_mems[device_id] += param.numel() * param.element_size()
     return device_map
 
 
