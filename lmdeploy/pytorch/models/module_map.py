@@ -214,3 +214,15 @@ MODULE_MAP.update({
     'transformers.models.mixtral.modeling_mixtral.MixtralRMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
+
+# dbrx
+MODULE_MAP.update({
+    'modeling_dbrx.DbrxAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxAttention',
+    'modeling_dbrx.DbrxFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxAttention',
+    'modeling_dbrx.DbrxModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxModel',
+    'modeling_dbrx.DbrxExpertGLU':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxExpertGLU'
+})

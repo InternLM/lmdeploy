@@ -1,4 +1,4 @@
-name: cuda12.1-whl-release
+name: cuda11.8-whl-release
 
 on:
   push:
@@ -18,9 +18,9 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.1
-      OUTPUT_FOLDER: cuda12.1_dist
-      CUDA_VER: 12.1
+      DOCKER_TAG: cuda11.8
+      OUTPUT_FOLDER: cuda11.8_dist
+      CUDA_VER: 11.8
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -70,7 +70,7 @@ jobs:
       - uses: Jimver/cuda-toolkit@v0.2.11
         id: cuda-toolkit
         with:
-          cuda: '12.1.0'
+          cuda: '11.8.0'
           use-github-cache: false
       - name: Build wheel
         run: |
@@ -101,8 +101,18 @@ jobs:
       - linux-build
       - windows-build
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
       - name: Download artifacts
         uses: actions/download-artifact@v3
+      - name: Add cuda version to package name
+        run: |
+          ver=$(cat lmdeploy/version.py | grep '__version__ =' | cut -d\' -f2)
+          cuver=$ver+cu118
+          cd artifact
+          for file in *; do
+            mv "$file" "`echo $file | sed "s/$ver/$cuver/g"`";
+          done
       - name: Display artifacts
         run: ls artifact/ -lh
       - name: Publish

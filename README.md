@@ -105,6 +105,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |    DeepSeek-MoE    |    16B     |
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
+|        Dbrx        |    132B    |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
