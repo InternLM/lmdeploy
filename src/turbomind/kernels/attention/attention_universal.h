@@ -420,7 +420,7 @@ struct AttentionUniversal {
 
     __device__ bool check_h(int hi)
     {
-        if constexpr (CTA_Q > 1) {  
+        if constexpr (CTA_Q > 1) {
             // bypass the check for prefill kernels since `hi == 0` constantly
             return true;
         }

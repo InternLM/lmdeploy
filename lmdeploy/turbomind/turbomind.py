@@ -309,7 +309,6 @@ class TurboMind:
         logger.warning(f'get {len(tm_params)} model params')
         output_model.export()
 
-
         return model_comm
 
     def _from_workspace(self, model_path: str,
