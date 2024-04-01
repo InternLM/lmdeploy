@@ -100,11 +100,12 @@ class ImageEncoder:
 
     def forward(self, inputs: List[Image]):
         """Model forward."""
-        time_start = time.perf_counter()
-        outputs = self.model.forward(inputs)
-        time_end = time.perf_counter()
-        logger.info(f'ImageEncoder forward {len(inputs)} images, '
-                    f'cost {time_end - time_start:.3f}s')
+        with torch.device(self.model.device):
+            time_start = time.perf_counter()
+            outputs = self.model.forward(inputs)
+            time_end = time.perf_counter()
+            logger.info(f'ImageEncoder forward {len(inputs)} images, '
+                        f'cost {time_end - time_start:.3f}s')
         return outputs
 
     def infer(self, inputs: List[Image]):

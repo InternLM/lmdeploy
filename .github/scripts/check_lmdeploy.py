@@ -20,6 +20,8 @@ def check_module_init(root: str):
             continue
         elif d.startswith('lmdeploy/serve/turbomind/triton_models'):
             continue
+        elif d.startswith('lmdeploy/serve/turbomind/triton_python_backend'):
+            continue
         init_file = os.path.join(d, '__init__.py')
         if not os.path.exists(init_file):
             not_exist.append(init_file)
