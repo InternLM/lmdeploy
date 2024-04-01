@@ -42,9 +42,9 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v3
       - name: clone set
-        run: chmod +x .github/scripts/env.sh
-      - name: Set params - shell
-        run: .github/scripts/env.sh
+        run: |
+          chmod +x .github/scripts/env.sh
+          .github/scripts/env.sh
       - name: Set params
         if: contains( matrix.model, 'w4a16') || contains( matrix.model, '4bit')
         run: |
