@@ -174,14 +174,11 @@ class Engine:
         Args:
             pretrained_model_name_or_path (str):
                 It could be one of the following options:
-                    - i) A local directory path of a turbomind model which is
-                      converted by `lmdeploy convert` command or download from
-                      ii) and iii)
-                    - ii) The model_id of a lmdeploy-quantized model hosted
+                    - i) The model_id of a lmdeploy-quantized model hosted
                       inside a model repo on huggingface.co, such as
                       "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
-                    - iii) The model_id of a model hosted inside a model repo
+                    - ii) The model_id of a model hosted inside a model repo
                       on huggingface.co, such as "InternLM/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
@@ -763,12 +760,12 @@ class Engine:
                 await __step(False)
 
     def create_instance(self, cuda_stream_id=0):
-        """Create a turbomind instance.
+        """Create a pytorch engine instance.
 
         Args:
             cuda_stream_id(int): identity of a cuda stream
         Returns:
-            EngineInstance: an instance of turbomind
+            EngineInstance: an instance of pytorch engine
         """
         from .engine_instance import EngineInstance
         return EngineInstance(self)
