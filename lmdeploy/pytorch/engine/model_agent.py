@@ -60,29 +60,56 @@ def _update_cache_config(model_config: ModelConfig,
         gpu_id (int): The GPU id to use.
     """
 
-    def __get_free_gpu_mem_size():
+    def __get_runtime_size(num_free_gpu_mem: int, cache_block_size: int,
+                           vocal_size: int):
+        """find best prefill num."""
+        cache_max_entry_count = cache_config.cache_max_entry_count
+        max_prefill_token_num = cache_config.max_prefill_token_num
+        runtime_cache_size = 0
+        while max_prefill_token_num > 0:
+            # lm_head output(2) + to float(4) + estimated misc(1) = 7
+            runtime_cache_size = int(max_prefill_token_num * vocal_size * 7)
+            num_available = (num_free_gpu_mem -
+                             runtime_cache_size) * cache_max_entry_count
+            if int(num_available) // cache_block_size >= 16:
+                break
+            max_prefill_token_num = max_prefill_token_num // 2
+        return runtime_cache_size, max_prefill_token_num
+
+    def __get_free_gpu_mem_size(cache_block_size: int):
         """get free gpu memory size."""
         torch.cuda.empty_cache()
         gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
         logger.debug(f'device<{gpu_id}> free gpu memory:'
                      f' {gpu_mem_physical_free>>20} mb')
         vocal_size = model_config.vocab_size
-        max_prefill_token_num = cache_config.max_prefill_token_num
-        # lm_head output(2) + to float(4) + estimated misc(1) = 7
-        intermediate_cache_size = int(max_prefill_token_num * vocal_size * 7)
+
+        runtime_cache_size, max_prefill_token_num = __get_runtime_size(
+            gpu_mem_physical_free, cache_block_size, vocal_size)
+        if cache_config.max_prefill_token_num != max_prefill_token_num:
+            if max_prefill_token_num <= 0:
+                raise RuntimeError('No enough gpu memory for runtime.')
+            cache_config.max_prefill_token_num = max_prefill_token_num
+            logger.warning(f'device<{gpu_id}> No enough memory. '
+                           'update max_prefill_token_num='
+                           f'{max_prefill_token_num}')
+        gpu_mem_physical_free -= runtime_cache_size
         logger.debug('estimated max runtime memory:'
-                     f' {intermediate_cache_size>>20} mb')
-        gpu_mem_physical_free -= intermediate_cache_size
+                     f' {runtime_cache_size>>20} mb')
         return gpu_mem_physical_free * cache_config.cache_max_entry_count
 
-    gpu_mem = __get_free_gpu_mem_size()
-    cpu_mem = host_mem_size
     cache_block_size = CacheEngine.get_cache_block_size(
         cache_config.block_size, model_config, world_size)
+    gpu_mem = __get_free_gpu_mem_size(cache_block_size)
+    cpu_mem = host_mem_size
     if cache_config.num_cpu_blocks == 0:
         cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
+        if cache_config.num_cpu_blocks <= 0:
+            raise RuntimeError('No enough host memory for kv cache.')
     if cache_config.num_gpu_blocks == 0:
         cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
+        if cache_config.num_gpu_blocks <= 0:
+            raise RuntimeError('No enough gpu memory for kv cache.')
     cache_config.window_size = model_config.sliding_window
 
     logger.debug('block num: {}'.format(cache_config.num_gpu_blocks))
@@ -654,15 +681,18 @@ def _create_device_map(model: torch.nn.Module,
                        world_size: int,
                        device_map: dict = None):
     """Distribute params to each devices."""
+    free_mems = [get_gpu_memory(gpu_id)[0] for gpu_id in range(world_size)]
+    free_mems = torch.tensor(free_mems)
     if device_map is None:
         device_map = dict()
-    device_id = 0
-    for name, _ in model.named_parameters():
+    for name, param in model.named_parameters():
+        device_id = free_mems.argmin().item()
         device_map[name] = device_id
-        device_id = (device_id + 1) % world_size
-    for name, _ in model.named_buffers():
+        free_mems[device_id] += param.numel() * param.element_size()
+    for name, param in model.named_buffers():
+        device_id = free_mems.argmin().item()
         device_map[name] = device_id
-        device_id = (device_id + 1) % world_size
+        free_mems[device_id] += param.numel() * param.element_size()
     return device_map
 
 

@@ -38,6 +38,10 @@ _SUPPORTED_ARCHS = dict(
     QWenLMHeadModel=True,
     # Qwen1.5 7B-72B
     Qwen2ForCausalLM=True,
+    # Qwen1.5-MoE-A2.7B-Chat
+    Qwen2MoeForCausalLM=True,
+    # Dbrx 132B
+    DbrxForCausalLM=True,
 )
 
 
