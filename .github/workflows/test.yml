@@ -44,7 +44,7 @@ jobs:
       - name: clone set
         run: |
           chmod +x .github/scripts/env.sh
-          .github/scripts/env.sh
+          .github/scripts/env.sh ${{matrix.model}}
       - name: Set params
         if: contains( matrix.model, 'w4a16') || contains( matrix.model, '4bit')
         run: |
