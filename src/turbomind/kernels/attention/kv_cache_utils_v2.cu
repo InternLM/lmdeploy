@@ -209,10 +209,7 @@ void invokeProcessKV_v2(char**       blocks,
                         cudaStream_t stream)
 {
     constexpr int WARPS = 4;
-    constexpr int DIMS  = 128;
     constexpr int CTA_S = 64;
-
-    FT_CHECK(head_dim == 128);
 
     int  block = WARPS * WARP_SIZE;
     dim3 grid((max_q_len + CTA_S - 1) / CTA_S, head_num, batch_size);
@@ -220,24 +217,27 @@ void invokeProcessKV_v2(char**       blocks,
     auto invoke = [&](auto tkv) {
         using Tkv = decltype(tkv);
 
-        block::Layout block_layout{block::Config<T, Tkv, DIMS>{head_num, block_seq_len}};
+        constexpr int kHeadDim = 128;
+        FT_CHECK(head_dim == kHeadDim);
 
-        ProcessKV_v2<Tkv, CTA_S, DIMS, WARPS><<<grid, block, 0, stream>>>(blocks,
-                                                                          k,
-                                                                          v,
-                                                                          k_bias,
-                                                                          v_bias,
-                                                                          cu_q_len,
-                                                                          cu_k_len,
-                                                                          cu_block_num,
-                                                                          rope_base,
-                                                                          rope_ti_scale,
-                                                                          stride_b,
-                                                                          stride_c,
-                                                                          stride_h,
-                                                                          stride_s,
-                                                                          layer_id,
-                                                                          block_layout);
+        block::Layout block_layout{block::Config<T, Tkv, kHeadDim>{head_num, block_seq_len}};
+
+        ProcessKV_v2<Tkv, CTA_S, kHeadDim, WARPS><<<grid, block, 0, stream>>>(blocks,
+                                                                              k,
+                                                                              v,
+                                                                              k_bias,
+                                                                              v_bias,
+                                                                              cu_q_len,
+                                                                              cu_k_len,
+                                                                              cu_block_num,
+                                                                              rope_base,
+                                                                              rope_ti_scale,
+                                                                              stride_b,
+                                                                              stride_c,
+                                                                              stride_h,
+                                                                              stride_s,
+                                                                              layer_id,
+                                                                              block_layout);
     };
 
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
@@ -423,16 +423,16 @@ void invokeFlattenKV_v2(T*           k,
                         cudaStream_t stream)
 {
     constexpr int kWarpCnt = 4;
-    constexpr int kHeadDim = 128;
     constexpr int CTA_S    = 64;
-
-    FT_CHECK(head_dim == 128);
 
     constexpr int block = kWarpCnt * WARP_SIZE;
     const dim3    grid((max_seq_len + CTA_S - 1) / CTA_S, head_num, batch_size);
 
     auto invoke = [&](auto tkv) {
         using Tkv = decltype(tkv);
+
+        constexpr int kHeadDim = 128;
+        FT_CHECK(head_dim == kHeadDim);
 
         block::Layout block_layout{block::Config<T, Tkv, kHeadDim>{head_num, block_seq_len}};
 
