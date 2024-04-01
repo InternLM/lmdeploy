@@ -1,7 +1,6 @@
 #pragma once
 
 #include "data_type.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include <iostream>
 #include <type_traits>
 
