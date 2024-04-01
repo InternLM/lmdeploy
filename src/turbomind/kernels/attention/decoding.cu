@@ -29,7 +29,7 @@ constexpr auto get_kv_type(std::integral_constant<int, is_kv_int8>)
 template<class T>
 void dispatchDecoding(const AttentionParams<T>& params)
 {
-    constexpr int kHeadDim = 128;
+    static constexpr std::integral_constant<int, 128> kHeadDim{};
 
     const bool is_kv_int8     = params.quant_policy & QuantPolicy::kCacheKVInt8;
     const bool is_kv_int4     = params.quant_policy & QuantPolicy::kCacheKVInt4;
