@@ -404,11 +404,11 @@ class Engine:
                                  num_appendable_ids: torch.Tensor):
         """batched stopping criteria."""
         with torch.inference_mode(), torch.cuda.stream(self.stream):
+            num_appendable_ids = num_appendable_ids - 1
             stopped = num_appendable_ids <= 0
             if stop_words is not None:
                 sw_stopped = (token_ids[:, None] == stop_words).any(1)
                 stopped = stopped | sw_stopped
-            num_appendable_ids = num_appendable_ids - 1
         self.stream.synchronize()
         return stopped, num_appendable_ids
 
