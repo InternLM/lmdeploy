@@ -135,6 +135,7 @@ class WindowBlockManager(DefaultBlockManager):
 
         num_drop_blocks = _num_blocks_to_drop(msg, self.window_size)
         num_required_blocks = self.num_required_blocks(msg, prealloc_size)
+        msg.num_ignored_history += num_drop_blocks * msg.block_size
 
         droped_blocks = __get_droped_blocks(num_drop_blocks)
 

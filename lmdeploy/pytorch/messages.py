@@ -319,6 +319,7 @@ class SchedulerSequence:
     return_logits: bool = False
     random_offsets: int = 0
     _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
+    num_ignored_history: int = 0
 
     def __post_init__(self):
         """post init."""
@@ -413,3 +414,4 @@ class SchedulerSequence:
         num_all_ids = self.num_all_ids
         self._num_history_ids = step
         self._num_token_ids = num_all_ids - step
+        self.num_ignored_history = min(step, self.num_ignored_history)

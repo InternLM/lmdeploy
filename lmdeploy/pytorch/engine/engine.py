@@ -360,7 +360,6 @@ class Engine:
 
         # TODO: get block offsets is slow when block_size = 1
         block_offsets = self.scheduler.get_block_tables(messages)
-        num_blocks = torch.tensor([len(boff) for boff in block_offsets])
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
         local_adapter_ids = None
@@ -381,6 +380,8 @@ class Engine:
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
 
+        num_ignored_history = [msg.num_ignored_history for msg in messages]
+        num_ignored_history = torch.tensor(num_ignored_history)
         return ModelInputs(input_ids=input_ids,
                            seq_length=seq_length,
                            attention_mask=attention_mask,
@@ -389,7 +390,7 @@ class Engine:
                            q_start_loc=q_start_loc,
                            history_lengths=history_lengths,
                            is_decoding=is_decoding,
-                           num_blocks=num_blocks,
+                           num_ignored_history=num_ignored_history,
                            local_adapter_ids=local_adapter_ids,
                            global_adapter_ids=global_adapter_ids,
                            adapter_offsets=adapter_offsets,

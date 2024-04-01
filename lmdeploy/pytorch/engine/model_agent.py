@@ -99,7 +99,7 @@ class ModelInputs:
     q_start_loc: torch.LongTensor
     history_lengths: List[int]
     is_decoding: bool
-    num_blocks: torch.LongTensor
+    num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
     global_adapter_ids: torch.LongTensor = None
     adapter_offsets: torch.LongTensor = None
@@ -145,8 +145,6 @@ class ModelInputs:
                 local_adapter_ids = local_adapter_ids[:, start:end]
 
             block_offsets = self.block_offsets[:, :block_end]
-            out_num_blocks = self.num_blocks.new_tensor(
-                [block_offsets.size(1)])
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
@@ -156,7 +154,7 @@ class ModelInputs:
                 q_start_loc=input_ids.new_zeros(1),
                 history_lengths=[history_len + start],
                 is_decoding=self.is_decoding,
-                num_blocks=out_num_blocks,
+                num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=local_adapter_ids,
                 global_adapter_ids=self.global_adapter_ids,
                 adapter_offsets=self.adapter_offsets,
@@ -241,10 +239,7 @@ class StepContext:
 
         window_size = getattr(cache_config, 'window_size', 0)
         if window_size > 0:
-            block_size = cache_config.block_size
-            expected_num_blocks = _div_up(kv_seq_length, block_size)
-            missed_num_blocks = expected_num_blocks - inputs.num_blocks
-            kv_seq_length = kv_seq_length - missed_num_blocks * block_size
+            kv_seq_length -= inputs.num_ignored_history
 
         ret = StepContext(inputs=inputs,
                           block_offsets=inputs.block_offsets,
