@@ -964,7 +964,7 @@ def dbrx_system_prompt():
     return prompt
 
 
-@MODELS.register_module(name=['dbrx-instruct'])
+@MODELS.register_module(name=['dbrx'])
 class DbrxInstruct(BaseChatTemplate):
 
     def __init__(self,
@@ -994,8 +994,8 @@ class DbrxInstruct(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'dbrx-instruct' in path:
-            return 'dbrx-instruct'
+        if 'dbrx' in path:
+            return 'dbrx'
 
 
 def best_match_model(query: str) -> Optional[str]:
