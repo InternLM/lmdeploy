@@ -633,13 +633,13 @@ def _create_device_map(model: torch.nn.Module,
     if device_map is None:
         device_map = dict()
     for name, param in model.named_parameters():
-        device_id = free_mems.argmin().item()
+        device_id = free_mems.argmax().item()
         device_map[name] = device_id
-        free_mems[device_id] += param.numel() * param.element_size()
+        free_mems[device_id] -= param.numel() * param.element_size()
     for name, param in model.named_buffers():
-        device_id = free_mems.argmin().item()
+        device_id = free_mems.argmax().item()
         device_map[name] = device_id
-        free_mems[device_id] += param.numel() * param.element_size()
+        free_mems[device_id] -= param.numel() * param.element_size()
     return device_map
 
 
