@@ -18,7 +18,8 @@ from lmdeploy.model import MODELS, best_match_model
      ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
      ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
      ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
-     ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek', 'deepseek-chat']),
+     ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
+     ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
      ('tiiuae/falcon-7b', ['falcon']), ('workspace', [None])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
