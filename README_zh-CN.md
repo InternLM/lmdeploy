@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/03\] 支持 DeepSeek-VL 的离线推理 pipeline 和推理服务
 - \[2024/03\] 支持视觉-语言模型（VLM）的离线推理 pipeline 和推理服务
 - \[2024/02\] 支持 Qwen 1.5、Gemma、Mistral、Mixtral、Deepseek-MOE 等模型
 - \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) 发布，支持无缝接入[LMDeploy Serving Service](./docs/zh_cn/serving/api_server.md)
@@ -104,6 +105,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |         YI         |  6B - 34B  |
 |      Mistral       |     7B     |
 |    DeepSeek-MoE    |    16B     |
+|    DeepSeek-VL     |     7B     |
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
 |        Dbrx        |    132B    |
