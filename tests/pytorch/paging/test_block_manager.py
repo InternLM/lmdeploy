@@ -139,32 +139,6 @@ class TestDefaultBlockManager:
         assert len(block_table) == 2
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 2
 
-    def test_fork(self, block_mgr, block_size, num_gpu_blocks):
-        sess = SchedulerSession(0, block_size)
-
-        token_ids = torch.tensor([1] * (block_size * 2 + 1))
-        from_msg = sess.add_sequence(token_ids)
-        block_mgr.allocate(from_msg)
-        from_block_table = block_mgr.get_block_table(from_msg)
-        assert len(from_block_table) == 3
-
-        to_msg = sess.fork_sequence(torch.tensor([1]), from_msg)
-
-        # fork
-        assert block_mgr.can_fork(from_msg)
-        copy_map = block_mgr.fork(from_msg, to_msg)
-        block_table = block_mgr.get_block_table(to_msg)
-        assert len(block_table) == 3
-        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 4
-        assert block_table[0] == from_block_table[0]
-        assert block_table[1] == from_block_table[1]
-        assert block_table[2] != from_block_table[2]
-        assert len(copy_map) == 1
-        assert copy_map[from_block_table[2]] == block_table[2]
-
-        # can not fork
-        assert not block_mgr.can_fork(from_msg)
-
     def test_swap(self, block_mgr, block_size, num_gpu_blocks):
         sess = SchedulerSession(0, block_size)
 

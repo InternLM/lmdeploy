@@ -126,43 +126,22 @@ class ModelInputs:
     q_start_loc: torch.LongTensor
     history_lengths: List[int]
     is_decoding: bool
-    num_blocks: torch.LongTensor
+    num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
     global_adapter_ids: torch.LongTensor = None
     adapter_offsets: torch.LongTensor = None
     max_rank: int = 0
     meta: Any = None
 
-    def slice(self, start: int, end: int):
-        """select by indices."""
-        sli = slice(start, end)
-
-        start_loc = self.q_start_loc[sli]
-        seq_length = self.seq_length[sli]
-        end_loc = start_loc[-1] + seq_length[-1]
-        input_ids = self.input_ids[:, start_loc[0]:end_loc]
-        start_loc = start_loc - start_loc[0]
-
-        history_lengths = self.history_lengths[sli]
-
-        local_adapter_ids = self.local_adapter_ids
-        if local_adapter_ids is not None:
-            local_adapter_ids = local_adapter_ids[sli]
-
-        return ModelInputs(input_ids=input_ids,
-                           seq_length=seq_length,
-                           attention_mask=self.attention_mask[sli],
-                           block_offsets=self.block_offsets[sli],
-                           position_ids=self.position_ids[sli],
-                           q_start_loc=start_loc,
-                           history_lengths=history_lengths,
-                           is_decoding=self.is_decoding,
-                           num_blocks=self.num_blocks[sli],
-                           local_adapter_ids=local_adapter_ids,
-                           global_adapter_ids=self.global_adapter_ids,
-                           adapter_offsets=self.adapter_offsets,
-                           max_rank=self.max_rank,
-                           meta=self.meta)
+    def update(self, input_ids: torch.LongTensor):
+        """update input ids."""
+        assert self.is_decoding
+        self.position_ids = self.position_ids + 1
+        self.history_lengths = [h + 1 for h in self.history_lengths]
+        if input_ids.dim() == 1:
+            input_ids = input_ids[None, :]
+        self.input_ids = input_ids
+        return self
 
     def split(self, split_size: int, block_size: int):
         """split inputs."""
@@ -193,8 +172,6 @@ class ModelInputs:
                 local_adapter_ids = local_adapter_ids[:, start:end]
 
             block_offsets = self.block_offsets[:, :block_end]
-            out_num_blocks = self.num_blocks.new_tensor(
-                [block_offsets.size(1)])
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
@@ -204,7 +181,7 @@ class ModelInputs:
                 q_start_loc=input_ids.new_zeros(1),
                 history_lengths=[history_len + start],
                 is_decoding=self.is_decoding,
-                num_blocks=out_num_blocks,
+                num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=local_adapter_ids,
                 global_adapter_ids=self.global_adapter_ids,
                 adapter_offsets=self.adapter_offsets,
@@ -289,10 +266,7 @@ class StepContext:
 
         window_size = getattr(cache_config, 'window_size', 0)
         if window_size > 0:
-            block_size = cache_config.block_size
-            expected_num_blocks = _div_up(kv_seq_length, block_size)
-            missed_num_blocks = expected_num_blocks - inputs.num_blocks
-            kv_seq_length = kv_seq_length - missed_num_blocks * block_size
+            kv_seq_length -= inputs.num_ignored_history
 
         ret = StepContext(inputs=inputs,
                           block_offsets=inputs.block_offsets,
@@ -686,13 +660,13 @@ def _create_device_map(model: torch.nn.Module,
     if device_map is None:
         device_map = dict()
     for name, param in model.named_parameters():
-        device_id = free_mems.argmin().item()
+        device_id = free_mems.argmax().item()
         device_map[name] = device_id
-        free_mems[device_id] += param.numel() * param.element_size()
+        free_mems[device_id] -= param.numel() * param.element_size()
     for name, param in model.named_buffers():
-        device_id = free_mems.argmin().item()
+        device_id = free_mems.argmax().item()
         device_map[name] = device_id
-        free_mems[device_id] += param.numel() * param.element_size()
+        free_mems[device_id] -= param.numel() * param.element_size()
     return device_map
 
 
