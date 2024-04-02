@@ -74,9 +74,6 @@ def is_supported(model_path: str):
             cfg = AutoConfig.from_pretrained(model_path,
                                              trust_remote_code=True).to_dict()
         except Exception as e:  # noqa
-            logger.warning('AutoConfig.from_pretrained failed for '
-                           f'{model_path}, try PretrainedConfig.'
-                           'get_config_dict instead.')
             from transformers import PretrainedConfig
             cfg = PretrainedConfig.get_config_dict(model_path)[0]
 
