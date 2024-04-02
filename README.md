@@ -173,18 +173,18 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
 
 - Deploying LLMs offline on the NVIDIA Jetson platform by LMDeploy: [LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
 
-## Contributing
+# Contributing
 
 We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the contributing guideline.
 
-## Acknowledgement
+# Acknowledgement
 
 - [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)
 - [llm-awq](https://github.com/mit-han-lab/llm-awq)
 - [vLLM](https://github.com/vllm-project/vllm)
 - [DeepSpeed-MII](https://github.com/microsoft/DeepSpeed-MII)
 
-## Citation
+# Citation
 
 ```bibtex
 @misc{2023lmdeploy,
@@ -195,6 +195,6 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
 }
 ```
 
-## License
+# License
 
 This project is released under the [Apache 2.0 license](LICENSE).
