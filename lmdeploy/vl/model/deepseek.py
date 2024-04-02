@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import warnings
 from typing import List
 
 import torch
 from PIL.Image import Image
 
 from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.utils import load_model_from_weight_files
 
 
 def check_deepseek_vl_install():
@@ -28,12 +30,18 @@ class DeepSeekVisionModel(VisonModel):
 
     def build_model(self):
         check_deepseek_vl_install()
+        # empty init
+        from accelerate import init_empty_weights
         from deepseek_vl.models import VLChatProcessor
         from transformers import AutoModelForCausalLM
-        with torch.device('cpu'):
-            model = AutoModelForCausalLM.from_pretrained(
-                self.model_path, trust_remote_code=True)
+        with init_empty_weights():
+            warnings.simplefilter('ignore')
+            model = AutoModelForCausalLM.from_pretrained(self.model_path)
             del model.language_model
+        # load weight
+        model.to_empty(device='cpu')
+        load_model_from_weight_files(model, self.model_path)
+
         self.vision_model = model.vision_model
         self.aligner = model.aligner
         self.vision_model.eval().half().to(self.device)
