@@ -19,8 +19,6 @@
 
 #pragma once
 
-#include "src/turbomind/layers/FfnWeight.h"
-#include "src/turbomind/layers/attention_layers/AttentionWeight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {

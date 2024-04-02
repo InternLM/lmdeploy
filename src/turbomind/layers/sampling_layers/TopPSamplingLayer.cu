@@ -390,6 +390,6 @@ TopPSamplingLayer<T>::~TopPSamplingLayer()
 }
 
 template class TopPSamplingLayer<float>;
-template class TopPSamplingLayer<half>;
+// template class TopPSamplingLayer<half>;
 
 }  // namespace turbomind
