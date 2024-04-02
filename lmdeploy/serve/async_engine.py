@@ -6,8 +6,6 @@ import random
 from argparse import ArgumentError
 from contextlib import asynccontextmanager
 from itertools import count
-from queue import Empty, Queue
-from threading import Thread
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
@@ -121,6 +119,18 @@ class Session:
                 user = str(user)
             res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
         return res
+
+
+def _get_event_loop():
+    """get event loop."""
+    try:
+        event_loop = asyncio.get_event_loop()
+    except Exception:
+        logger.warning('Can not found event loop in current thread.'
+                       ' Create a new event loop.')
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
+    return event_loop
 
 
 class AsyncEngine:
@@ -408,7 +418,7 @@ class AsyncEngine:
                     for i in range(len(batch_prompts))
                 ])
 
-            asyncio.new_event_loop().run_until_complete(gather())
+            _get_event_loop().run_until_complete(gather())
         outputs = outputs[0] if need_list_wrap else outputs
         return outputs
 
@@ -444,7 +454,7 @@ class AsyncEngine:
         if gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
-        outputs = Queue()
+        outputs = asyncio.Queue()
         generators = []
         for j in range(0, prompt_num, self.instance_num):
             batch_prompts = prompts[j:j + self.instance_num]
@@ -463,7 +473,7 @@ class AsyncEngine:
 
             async def _inner_call(i, generator):
                 async for out in generator:
-                    outputs.put(
+                    await outputs.put(
                         Response(out.response, out.generate_token_len,
                                  out.input_token_len, i + j,
                                  out.finish_reason))
@@ -473,22 +483,29 @@ class AsyncEngine:
                     _inner_call(i, generators[i])
                     for i in range(len(batch_prompts))
                 ])
-                outputs.put(None)
+                await outputs.put(None)
 
-            proc = Thread(target=lambda: asyncio.new_event_loop().
-                          run_until_complete(gather()))
-            proc.start()
+            task = _get_event_loop().create_task(gather())
 
-            while True:
-                try:
-                    out = outputs.get(timeout=0.001)
+            async def yield_from_outputs():
+                while True:
+                    out = await outputs.get()
                     if out is None:
                         break
                     yield out
-                except Empty:
-                    pass
+                await task
 
-            proc.join()
+            def __call_async():
+                """call async."""
+                coro_gen = yield_from_outputs()
+                while True:
+                    try:
+                        yield _get_event_loop().run_until_complete(
+                            coro_gen.__anext__())
+                    except StopAsyncIteration:
+                        break
+
+            yield from __call_async()
 
     async def _get_prompt_input(self, prompt: str, do_preprocess: bool,
                                 sequence_start: bool, adapter_name: str):
