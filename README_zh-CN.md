@@ -27,6 +27,7 @@ ______________________________________________________________________
 <summary><b>2024</b></summary>
 
 - \[2024/04\] TurboMind 引擎升级，优化 GQA 推理。[internlm2-20b](https://huggingface.co/internlm/internlm2-20b) 推理速度达 16+ RPS，约是 vLLM 的 1.8 倍
+- \[2024/04\] 支持 Qwen1.5-MOE 和 dbrx.
 - \[2024/03\] 支持 DeepSeek-VL 的离线推理 pipeline 和推理服务
 - \[2024/03\] 支持视觉-语言模型（VLM）的离线推理 pipeline 和推理服务
 - \[2024/02\] 支持 Qwen 1.5、Gemma、Mistral、Mixtral、Deepseek-MOE 等模型
