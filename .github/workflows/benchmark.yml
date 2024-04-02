@@ -430,6 +430,7 @@ jobs:
               done
           done
       - name: Kill restful api turbomind
+        continue-on-error: true
         if: always()
         run: |
           kill -9 "$restful_pid"
