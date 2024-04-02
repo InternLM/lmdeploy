@@ -1,3 +1,5 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #include "quantization.h"
 #include "src/turbomind/kernels/attention/array_ops.h"
 #include "src/turbomind/kernels/attention/test_utils.h"

@@ -1,3 +1,8 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#include <cstdint>
+#include <type_traits>
+
 #pragma once
 
 namespace turbomind {

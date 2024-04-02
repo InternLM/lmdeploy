@@ -1,3 +1,7 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#pragma once
+
 #include "array_ops.h"
 #include "impl.h"
 #include "iterator.h"

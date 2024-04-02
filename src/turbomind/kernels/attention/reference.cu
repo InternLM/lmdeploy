@@ -1,3 +1,4 @@
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include "array_ops.h"
 #include "reference.h"
