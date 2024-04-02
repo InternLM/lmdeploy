@@ -389,10 +389,14 @@ PYBIND11_MODULE(_turbomind, m)
 #endif
                 }
                 else {
+#ifdef ENABLE_FP32
                     auto model = std::make_shared<LlamaTritonModel<float>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
                     model->setFfiLock(gil_control);
                     return model;
+#else
+                     throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
+#endif
                 }
             },
             "model_dir"_a,

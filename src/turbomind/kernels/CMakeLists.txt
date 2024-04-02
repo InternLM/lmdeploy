@@ -59,7 +59,7 @@ set_property(TARGET custom_ar_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET custom_ar_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
 add_subdirectory(gemm_s_f16)
-if (BUILD_TEST) 
+if (BUILD_TEST)
     add_subdirectory(flash_attention)
 endif ()
 add_subdirectory(attention)
