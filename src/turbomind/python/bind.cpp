@@ -395,7 +395,7 @@ PYBIND11_MODULE(_turbomind, m)
                     model->setFfiLock(gil_control);
                     return model;
 #else
-                     throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
+                    throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
 #endif
                 }
             },
