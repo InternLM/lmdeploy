@@ -398,7 +398,7 @@ def paged_attention_fwd(
     q_seqlens: Tensor,
     kv_seqlens: Tensor,
     max_seqlen: int,
-    window_size: int = -1,
+    window_size: int = None,
 ):
     """Paged Attention forward.
 
@@ -418,6 +418,9 @@ def paged_attention_fwd(
     if _convert_pv is None:
         nv_cap = torch.cuda.get_device_capability()
         _convert_pv = _get_convert_pv(nv_cap)
+
+    if window_size is None:
+        window_size = -1
 
     def _kernel_meta():
         """kernel meta."""

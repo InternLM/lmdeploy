@@ -34,7 +34,7 @@ lmdeploy lite calibrate \
 Test the chat performance. Note that setting `--quant-policy 4` would set to KV Cache int8 mode.
 
 ```bash
-lmdeploy chat turbomind $HF_MODEL --model-format hf --quant-policy 4
+lmdeploy chat $HF_MODEL --model-format hf --quant-policy 4
 ```
 
 ## GPU Memory Test
@@ -82,5 +82,5 @@ Please refer to [w4a16](./w4a16.md) do `WeightInt4` and then
 start chat like:
 
 ```shell
-lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq --quant-policy 4
+lmdeploy chat ./internlm-chat-7b-4bit --model-format awq --quant-policy 4
 ```

@@ -50,6 +50,7 @@ class TestMakeInputs:
         model_inputs = make_model_inputs(input_ids,
                                          seq_length=seq_length,
                                          block_offsets=None,
+                                         num_blocks=None,
                                          history_length=history_length)
         position_ids = torch.tensor([
             [10, 11, 11, 11],

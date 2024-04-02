@@ -415,23 +415,7 @@ class Engine:
             messages (SeqList): The input messages.
             adapters (AdapterList): Adapters.
         """
-
-        def __get_history_length():
-            """get history length."""
-            if self.model_config.sliding_window > 0:
-                history_lengths = []
-                for msg in messages:
-                    num_real_blocks = len(msg.logical_blocks)
-                    num_all_blocks = _div_up(msg.num_all_tokens(),
-                                             msg.block_size)
-                    num_drop_blocks = num_all_blocks - num_real_blocks
-                    num_drop_tokens = num_drop_blocks * msg.block_size
-                    history_lengths.append(msg.history_len - num_drop_tokens)
-                return history_lengths
-            else:
-                return [msg.history_len for msg in messages]
-
-        history_lengths = __get_history_length()
+        history_lengths = [msg.history_len for msg in messages]
 
         token_ids = [msg.token_ids for msg in messages]
 
@@ -463,6 +447,7 @@ class Engine:
 
         # TODO: get block offsets is slow when block_size = 1
         block_offsets = self.scheduler.get_block_tables(messages)
+        num_blocks = torch.tensor([len(boff) for boff in block_offsets])
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
         local_adapter_ids = None
@@ -491,6 +476,7 @@ class Engine:
                            q_start_loc=q_start_loc,
                            history_lengths=history_lengths,
                            is_decoding=is_decoding,
+                           num_blocks=num_blocks,
                            local_adapter_ids=local_adapter_ids,
                            global_adapter_ids=global_adapter_ids,
                            adapter_offsets=adapter_offsets,
@@ -520,7 +506,7 @@ class Engine:
         def _check_session_len(msg, max_session_len):
             if max_session_len is None:
                 return False
-            session_len = msg.num_all_tokens() + 1
+            session_len = msg.num_all_tokens()
             return session_len >= max_session_len
 
         sampling_param = msg.sampling_param

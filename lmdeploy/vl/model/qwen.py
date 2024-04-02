@@ -3,7 +3,6 @@
 from typing import List
 
 import torch
-from accelerate import init_empty_weights
 from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -14,12 +13,13 @@ from lmdeploy.vl.model.utils import load_model_from_weight_files
 class QwenVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path, device='cuda'):
+    def __init__(self, model_path, device='cuda:0'):
         self.model_path = model_path
         self.device = device
         self.build_model()
 
     def build_model(self):
+        from accelerate import init_empty_weights
         with init_empty_weights():
             config = AutoConfig.from_pretrained(self.model_path,
                                                 trust_remote_code=True)

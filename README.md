@@ -94,6 +94,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 | InternLM-XComposer |     7B     |
 |        QWen        |  7B - 72B  |
 |      QWen1.5       | 0.5B - 72B |
+|    QWen1.5-MoE     |   A2.7B    |
 |      QWen-VL       |     7B     |
 |      Baichuan      |  7B - 13B  |
 |     Baichuan2      |  7B - 13B  |
@@ -106,6 +107,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |    DeepSeek-VL     |     7B     |
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
+|        Dbrx        |    132B    |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
