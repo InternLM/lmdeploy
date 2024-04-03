@@ -119,6 +119,20 @@ class YiVLChatTemplateWrapper(VLChatTemplateWrapper):
     pass
 
 
+class DeepSeekVLChatTemplateWrapper(VLChatTemplateWrapper):
+    """DeepSeek vl chat template."""
+
+    def append_image_token(self, prompt, num_images: int):
+        """append image tokens to user prompt."""
+        if num_images == 1:
+            return f'{IMAGE_TOKEN}{prompt}'
+        res = ''
+        for i in range(num_images):
+            res += f'{IMAGE_TOKEN} is Figure {str(i)}.\n'
+        res = res + prompt
+        return res
+
+
 class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
     """Qwen vl chat template."""
 
@@ -143,4 +157,6 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return QwenVLChatTemplateWrapper(chat_template)
     elif arch == 'LlavaLlamaForCausalLM':
         return LlavaVLChatTemplateWrapper(chat_template)
+    elif arch == 'MultiModalityCausalLM':  # deepseek-vl
+        return DeepSeekVLChatTemplateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')

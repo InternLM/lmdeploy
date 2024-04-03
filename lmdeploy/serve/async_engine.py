@@ -272,6 +272,7 @@ class AsyncEngine:
                  repetition_penalty: float = 1.0,
                  ignore_eos: bool = False,
                  do_preprocess: bool = True,
+                 adapter_name: Optional[str] = None,
                  **kwargs):
         """Inference a batch of prompts.
 
@@ -295,6 +296,8 @@ class AsyncEngine:
             ignore_eos (bool): indicator for ignoring eos
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
+            adapter_name (str): the adapter name of slora for pytorch backend.
+                Pick one from adapters. Default to None, using the base model.
         """
         if gen_config is None:
             gen_config = GenerationConfig(
@@ -307,6 +310,7 @@ class AsyncEngine:
         return self.batch_infer(prompts,
                                 gen_config=gen_config,
                                 do_preprocess=do_preprocess,
+                                adapter_name=adapter_name,
                                 **kwargs)
 
     async def stop_session(self, session_id: int):
@@ -368,6 +372,8 @@ class AsyncEngine:
                 GenerationConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
+            adapter_name (str): the adapter name of slora for pytorch backend.
+                Pick one from adapters. Default to None, using the base model.
         """
         need_list_wrap = isinstance(prompts, str) or isinstance(
             prompts[0], Dict)
@@ -439,6 +445,8 @@ class AsyncEngine:
                 GenerationConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
+            adapter_name (str): the adapter name of slora for pytorch backend.
+                Pick one from adapters. Default to None, using the base model.
         """
         need_list_wrap = isinstance(prompts, str) or isinstance(
             prompts[0], Dict)

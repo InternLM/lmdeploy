@@ -191,9 +191,12 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
 
 
 class MemoryMonitor:
-    from multiprocessing import Manager
-    max_mem = Manager().Value('f', 0)  # GB
-    device_count = Manager().Value('f', 0)
+
+    @classmethod
+    def init(cls):
+        from multiprocessing import Manager
+        cls.max_mem = Manager().Value('f', 0)  # GB
+        cls.device_count = Manager().Value('f', 0)
 
     @staticmethod
     def nvidia_info():
@@ -380,6 +383,7 @@ def main():
     os.environ['TM_LOG_LEVEL'] = args.log_level
     results: List[ProfileResult] = []
 
+    MemoryMonitor.init()
     for batch in args.concurrency:
         for prompt_tokens, completion_tokens in zip(args.prompt_tokens,
                                                     args.completion_tokens):

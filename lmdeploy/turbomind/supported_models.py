@@ -38,7 +38,9 @@ _SUPPORTED_ARCHS = dict(
     # Qwen1.5 7B-72B
     Qwen2ForCausalLM=False,
     # llava
-    LlavaLlamaForCausalLM=True)
+    LlavaLlamaForCausalLM=True,
+    # deepseek-vl
+    MultiModalityCausalLM=True)
 
 
 def is_supported(model_path: str):
@@ -68,13 +70,18 @@ def is_supported(model_path: str):
     if os.path.exists(triton_model_path):
         support_by_turbomind = True
     else:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        try:
+            cfg = AutoConfig.from_pretrained(model_path,
+                                             trust_remote_code=True).to_dict()
+        except Exception as e:  # noqa
+            from transformers import PretrainedConfig
+            cfg = PretrainedConfig.get_config_dict(model_path)[0]
 
-        if hasattr(cfg, 'architectures'):
-            arch = cfg.architectures[0]
-        elif hasattr(cfg,
-                     'auto_map') and 'AutoModelForCausalLM' in cfg.auto_map:
-            arch = cfg.auto_map['AutoModelForCausalLM'].split('.')[-1]
+        if cfg.get('architectures', None):
+            arch = cfg['architectures'][0]
+        elif cfg.get('auto_map',
+                     None) and 'AutoModelForCausalLM' in cfg['auto_map']:
+            arch = cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
         else:
             raise RuntimeError(
                 f'Could not find model architecture from config: {cfg}')
@@ -83,7 +90,7 @@ def is_supported(model_path: str):
             support_by_turbomind = _SUPPORTED_ARCHS[arch]
             # special cases
             if arch == 'BaichuanForCausalLM':
-                num_attn_head = cfg.num_attention_heads
+                num_attn_head = cfg['num_attention_heads']
                 if num_attn_head == 40:
                     # baichuan-13B, baichuan2-13B not supported by turbomind
                     support_by_turbomind = False

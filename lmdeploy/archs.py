@@ -39,21 +39,35 @@ def autoget_backend(model_path: str) -> Union[Literal['turbomind', 'pytorch']]:
         is_supported as is_supported_pytorch
 
     pytorch_has, turbomind_has = False, False
+    is_turbomind_installed = True
     try:
         from lmdeploy.turbomind.supported_models import \
             is_supported as is_supported_turbomind
         turbomind_has = is_supported_turbomind(model_path)
     except ImportError:
-        logger.warning(
-            'Lmdeploy with turbomind engine is not installed correctly. '
-            'You may need to install lmdeploy from pypi or build from source '
-            'for turbomind engine.')
+        is_turbomind_installed = False
 
     pytorch_has = is_supported_pytorch(model_path)
 
-    if not (pytorch_has or turbomind_has):
-        logger.warning(f'{model_path} is not explicitly supported by lmdeploy.'
-                       f' Try to run with lmdeploy pytorch engine.')
+    try_run_msg = (f'Try to run with pytorch engine because `{model_path}`'
+                   ' is not explicitly supported by lmdeploy. ')
+    if is_turbomind_installed:
+        if not turbomind_has:
+            if pytorch_has:
+                logger.warning('Fallback to pytorch engine because '
+                               f'`{model_path}` not supported by turbomind'
+                               ' engine.')
+            else:
+                logger.warning(try_run_msg)
+    else:
+        logger.warning(
+            'Fallback to pytorch engine because turbomind engine is not '
+            'installed correctly. If you insist to use turbomind engine, '
+            'you may need to reinstall lmdeploy from pypi or build from '
+            'source and try again.')
+        if not pytorch_has:
+            logger.warning(try_run_msg)
+
     backend = 'turbomind' if turbomind_has else 'pytorch'
     return backend
 
@@ -103,6 +117,8 @@ def check_vl_llm(config: dict) -> bool:
     if arch == 'LlavaLlamaForCausalLM':
         return True
     elif arch == 'QWenLMHeadModel' and 'visual' in config:
+        return True
+    elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
     return False
 

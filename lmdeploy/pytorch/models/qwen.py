@@ -21,10 +21,13 @@ def rotate_half(x: torch.Tensor):
 
 def apply_rotary_pos_emb(t: torch.Tensor, freqs: torch.Tensor):
     """apply rotary."""
-    dtype = t.dtype
-    t_ = t.float()
-    t_ = (t_ * freqs.cos()) + (rotate_half(t_) * freqs.sin())
-    return t_.to(dtype)
+    rot_dim = freqs[0].shape[-1]
+    cos, sin = freqs
+    t_, t_pass_ = t[..., :rot_dim], t[..., rot_dim:]
+    t_ = t_.float()
+    t_pass_ = t_pass_.float()
+    t_ = (t_ * cos) + (rotate_half(t_) * sin)
+    return torch.cat((t_, t_pass_), dim=-1).type_as(t)
 
 
 class PatchedQWenAttention(nn.Module):
@@ -58,6 +61,7 @@ class PatchedQWenAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb_list: Optional[List[List[torch.Tensor]]] = None,
         world_size: int = 1,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
@@ -82,26 +86,14 @@ class PatchedQWenAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-            kv_seq_len = max_kv_seq_length
-            if (self.use_dynamic_ntk
-                    and kv_seq_len == hidden_states.size()[1]):
-                import math
-                context_value = math.log(kv_seq_len / self.seq_length, 2) + 1
-                ntk_alpha = 2**math.ceil(context_value) - 1
-                ntk_alpha = max(ntk_alpha, 1)
-                self._ntk_cached = ntk_alpha
-            else:
-                ntk_alpha = self._ntk_cached
-            rotary_pos_emb = self.rotary_emb(
-                kv_seq_len, ntk_alpha=ntk_alpha).to(hidden_states.device)
-            if isinstance(rotary_pos_emb, tuple):
-                rotary_pos_emb = rotary_pos_emb
-            else:
-                rotary_pos_emb = (rotary_pos_emb, ) * 2
+            assert len(rotary_pos_emb_list) == 1, 'do not support dynamic ntk'
+            rotary_pos_emb = rotary_pos_emb_list[0]
+            rotary_pos_emb = [
+                i[:, position_ids_1d, :, :] for i in rotary_pos_emb
+            ]
+            rotary_pos_emb = (rotary_pos_emb, ) * 2
             q_pos_emb, k_pos_emb = rotary_pos_emb
-
-            q_pos_emb = q_pos_emb[:, position_ids_1d, :, :]
-            k_pos_emb = k_pos_emb[:, position_ids_1d, :, :]
+            # Slice the pos emb for current inference
             query_states = apply_rotary_pos_emb(query_states, q_pos_emb)
             key_states = apply_rotary_pos_emb(key_states, k_pos_emb)
 
@@ -110,17 +102,17 @@ class PatchedQWenAttention(nn.Module):
         context = self.context.context
         block_offsets = context.block_offsets
         position_ids_1d = context.position_ids_1d
+        max_kv_seq_length = context.max_kv_seq_length
         max_q_seq_length = context.max_q_seq_length
         kv_seq_length = context.kv_seq_length
-        max_kv_seq_length = context.max_kv_seq_length
         q_start_loc = context.q_start_loc
         q_seq_length = context.q_seq_length
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
-        query_states, key_states, value_states = __rotary_emb_fn(
-            query_states, key_states, value_states)
-
-        if self.use_logn_attn:
+        if rotary_pos_emb_list is not None:
+            query_states, key_states, value_states = __rotary_emb_fn(
+                query_states, key_states, value_states)
+        if max_kv_seq_length > self.seq_length and self.use_logn_attn:
             if self.logn_tensor.device != query_states.device or \
                     self.logn_tensor.dtype != query_states.dtype:
                 self.logn_tensor = self.logn_tensor.to(
@@ -162,7 +154,8 @@ class PatchedQWenAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
+        hidden_states: Optional[Tuple[torch.FloatTensor]],
+        rotary_pos_emb_list: Optional[List[List[torch.Tensor]]] = None,
         layer_past: Optional[Tuple[torch.Tensor]] = None,
         **kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
@@ -174,6 +167,7 @@ class PatchedQWenAttention(nn.Module):
         return self._contiguous_batching_forward_impl(
             hidden_states,
             past_key_value=layer_past,
+            rotary_pos_emb_list=rotary_pos_emb_list,
             world_size=world_size,
         )
 
@@ -215,21 +209,27 @@ class PatchedQWenModel(nn.Module):
         # Attention mask is not necessary in continuous batching
         hidden_states = inputs_embeds
 
-        # decoder layers
-        for idx, decoder_layer in enumerate(self.h):
-            past_key_value = (past_key_values[idx]
-                              if past_key_values is not None else None)
-            layer_outputs = decoder_layer(
+        context = self.context.context
+        max_kv_seq_length = context.max_kv_seq_length
+        # do not support use_dynamic_ntk
+        ntk_alpha_list = [1.0]
+        self.rotary_emb._ntk_alpha_cached_list = ntk_alpha_list
+        rotary_pos_emb_list = [
+            self.rotary_emb(max_kv_seq_length, ntk_alpha=ntk_alpha)
+            for ntk_alpha in ntk_alpha_list
+        ]
+        for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
+            outputs = block(
                 hidden_states,
-                layer_past=past_key_value,
+                layer_past=layer_past,
+                rotary_pos_emb_list=rotary_pos_emb_list,
             )
-            hidden_states = layer_outputs[0]
+            hidden_states = outputs[0]
 
         hidden_states = self.ln_f(hidden_states)
-
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=past_key_value,
+            past_key_values=past_key_values,
             hidden_states=None,
             attentions=None,
         )

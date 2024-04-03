@@ -38,6 +38,10 @@ _SUPPORTED_ARCHS = dict(
     QWenLMHeadModel=True,
     # Qwen1.5 7B-72B
     Qwen2ForCausalLM=True,
+    # Qwen1.5-MoE-A2.7B-Chat
+    Qwen2MoeForCausalLM=True,
+    # Dbrx 132B
+    DbrxForCausalLM=True,
 )
 
 
@@ -70,7 +74,13 @@ def is_supported(model_path: str):
         logger.warning(f'{model_path} seems to be a turbomind workspace, '
                        'which can only be ran with turbomind engine.')
     else:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        try:
+            cfg = AutoConfig.from_pretrained(model_path,
+                                             trust_remote_code=True)
+        except Exception as e:  # noqa
+            logger.warning('AutoConfig.from_pretrained failed for '
+                           f'{model_path}. Exception: {e}')
+            return False
 
         if hasattr(cfg, 'architectures'):
             arch = cfg.architectures[0]

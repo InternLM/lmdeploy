@@ -44,10 +44,10 @@ void triton_stream_callback(std::unordered_map<std::string, ft::Tensor>* output_
 }
 
 template<typename T>
-LlamaTritonModelInstance<T>::LlamaTritonModelInstance(
-    std::shared_ptr<LlamaTritonSharedModelInstance<T>>      instance,
-    std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator):
-    instance_(std::move(instance)), allocator_(std::move(allocator))
+LlamaTritonModelInstance<T>::LlamaTritonModelInstance(std::shared_ptr<LlamaTritonSharedModelInstance<T>>      instance,
+                                                      std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator,
+                                                      int device_id):
+    device_id_{device_id}, instance_(std::move(instance)), allocator_(std::move(allocator))
 {
 }
 
@@ -56,9 +56,6 @@ std::unordered_map<std::string, ft::Tensor> LlamaTritonModelInstance<T>::convert
     std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-    move_tensor_H2D(input_tensors->at("input_ids"), d_input_ids_, &allocator_);
-    move_tensor_H2D(input_tensors->at("input_lengths"), d_input_lengths_, &allocator_);
 
     const size_t request_batch_size = input_tensors->at("input_ids").shape[0];
     const size_t input_data_len     = input_tensors->at("input_ids").shape[1];
@@ -127,9 +124,9 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
                                      ft::AbstractInstanceComm*                                        instance_comm)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    // for (const auto& kv : *input_tensors) {
-    //     TM_LOG_INFO("%s: %s", kv.first.c_str(), format_vector(kv.second.shape).c_str());
-    // }
+
+    // In some cases, this is needed to trigger the creation of CUDA context, or later `cudaMallocAsync` will die
+    ft::check_cuda_error(cudaSetDevice(device_id_));
 
     FT_CHECK_WITH_INFO(input_tensors->at("input_ids").shape.size() == 2,
                        "input_tensors->at(\"input_ids\").shape.size() == 2");

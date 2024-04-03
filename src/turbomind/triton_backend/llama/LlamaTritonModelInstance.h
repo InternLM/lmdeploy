@@ -43,7 +43,8 @@ template<typename T>
 struct LlamaTritonModelInstance: AbstractTransformerModelInstance {
 
     LlamaTritonModelInstance(std::shared_ptr<LlamaTritonSharedModelInstance<T>>      instance,
-                             std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator);
+                             std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator,
+                             int                                                     device_id);
     ~LlamaTritonModelInstance();
 
     std::shared_ptr<std::vector<triton::Tensor>>
@@ -72,6 +73,8 @@ private:
                         const size_t session_len,
                         const bool   is_return_logits);
     void freeBuffer();
+
+    int device_id_;
 
     int*   d_input_ids_                = nullptr;
     int*   d_input_lengths_            = nullptr;

@@ -26,6 +26,9 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/04\] TurboMind 引擎升级，优化 GQA 推理。[internlm2-20b](https://huggingface.co/internlm/internlm2-20b) 推理速度达 16+ RPS，约是 vLLM 的 1.8 倍
+- \[2024/04\] 支持 Qwen1.5-MOE 和 dbrx.
+- \[2024/03\] 支持 DeepSeek-VL 的离线推理 pipeline 和推理服务
 - \[2024/03\] 支持视觉-语言模型（VLM）的离线推理 pipeline 和推理服务
 - \[2024/02\] 支持 Qwen 1.5、Gemma、Mistral、Mixtral、Deepseek-MOE 等模型
 - \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) 发布，支持无缝接入[LMDeploy Serving Service](./docs/zh_cn/serving/api_server.md)
@@ -95,6 +98,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |        QWen        |  7B - 72B  |
 |      QWen-VL       |     7B     |
 |      QWen1.5       | 0.5B - 72B |
+|    QWen1.5-MoE     |   A2.7B    |
 |      Baichuan      |  7B - 13B  |
 |     Baichuan2      |  7B - 13B  |
 |     Code Llama     |  7B - 34B  |
@@ -103,8 +107,10 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |         YI         |  6B - 34B  |
 |      Mistral       |     7B     |
 |    DeepSeek-MoE    |    16B     |
+|    DeepSeek-VL     |     7B     |
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
+|        Dbrx        |    132B    |
 
 LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 
@@ -120,12 +126,12 @@ LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomin
 pip install lmdeploy
 ```
 
-LMDeploy的预编译包默认是基于 CUDA 11.8 编译的。如果需要在 CUDA 12+ 下安装 LMDeploy，请执行以下命令：
+自 v0.3.0 起，LMDeploy 预编译包默认基于 CUDA 12 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，请执行以下命令：
 
 ```shell
-export LMDEPLOY_VERSION=0.2.0
+export LMDEPLOY_VERSION=0.3.0
 export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## 离线批处理
@@ -169,18 +175,18 @@ print(response)
 
 - 使用LMDeploy在英伟达Jetson系列板卡部署大模型：[LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
 
-## 贡献指南
+# 贡献指南
 
 我们感谢所有的贡献者为改进和提升 LMDeploy 所作出的努力。请参考[贡献指南](.github/CONTRIBUTING.md)来了解参与项目贡献的相关指引。
 
-## 致谢
+# 致谢
 
 - [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)
 - [llm-awq](https://github.com/mit-han-lab/llm-awq)
 - [vLLM](https://github.com/vllm-project/vllm)
 - [DeepSpeed-MII](https://github.com/microsoft/DeepSpeed-MII)
 
-## 引用
+# 引用
 
 ```bibtex
 @misc{2023lmdeploy,
@@ -191,6 +197,6 @@ print(response)
 }
 ```
 
-## 开源许可证
+# 开源许可证
 
 该项目采用 [Apache 2.0 开源许可证](LICENSE)。

@@ -42,7 +42,7 @@ def prepare_environment(request, config, worker_id):
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
-    if 'llava-v1.5-7b' in model:
+    if 'llava-v1.5' in model:
         cmd += ' --model-name vicuna'
 
     start_log = os.path.join(log_path,

@@ -5,6 +5,7 @@ import time
 from threading import Thread
 from typing import List, Union
 
+import torch
 from PIL.Image import Image
 
 from lmdeploy.utils import get_logger
@@ -68,6 +69,7 @@ class ImageEncoder:
         self.max_batch_size = max_batch_size
         self.loop = asyncio.new_event_loop()
         self.work_thread = self._start_work_thread()
+        torch.cuda.empty_cache()
 
     def _start_work_thread(self):
         """internal thread."""
@@ -98,11 +100,12 @@ class ImageEncoder:
 
     def forward(self, inputs: List[Image]):
         """Model forward."""
-        time_start = time.perf_counter()
-        outputs = self.model.forward(inputs)
-        time_end = time.perf_counter()
-        logger.info(f'ImageEncoder forward {len(inputs)} images, '
-                    f'cost {time_end - time_start:.3f}s')
+        with torch.device(self.model.device):
+            time_start = time.perf_counter()
+            outputs = self.model.forward(inputs)
+            time_end = time.perf_counter()
+            logger.info(f'ImageEncoder forward {len(inputs)} images, '
+                        f'cost {time_end - time_start:.3f}s')
         return outputs
 
     def infer(self, inputs: List[Image]):

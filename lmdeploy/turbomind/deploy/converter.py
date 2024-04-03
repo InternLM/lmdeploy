@@ -19,7 +19,8 @@ special_input_model_map = {
     'qwen': 'qwen',
     'baichuan': 'baichuan',
     'baichuan2': 'baichuan2',
-    'internlm2': 'internlm2'
+    'internlm2': 'internlm2',
+    'deepseekvl': 'deepseekvl'
 }
 
 
@@ -147,7 +148,12 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
         return _fix_device_support(updated_output_format)
     else:
         from transformers import AutoConfig
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        try:
+            config = AutoConfig.from_pretrained(model_path,
+                                                trust_remote_code=True)
+        except Exception as e:  # noqa
+            from transformers import PretrainedConfig
+            config = PretrainedConfig.get_config_dict(model_path)[0]
         return _infer_output_format(config)
 
 

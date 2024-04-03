@@ -28,7 +28,7 @@ def check_llava_install():
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path, device='cuda'):
+    def __init__(self, model_path, device='cuda:0'):
         self.model_path = model_path
         self.device = device
         self.build_model()
@@ -55,13 +55,13 @@ class LlavaVisionModel(VisonModel):
             del model.model.norm
 
         # # load weight
-        with torch.device(self.device):
-            model.to_empty(device=self.device)
+        with torch.device('cpu'):
+            model.to_empty(device='cpu')
             vision_tower = model.get_vision_tower()
             vision_tower.is_loaded = False
             vision_tower.load_model()
-            load_model_from_weight_files(model, self.model_path)
-            model.eval().half()
+        load_model_from_weight_files(model, self.model_path)
+        model.to(self.device).eval().half()
 
         self.model = model.model
         self.vision_tower = model.model.vision_tower

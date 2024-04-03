@@ -22,7 +22,7 @@ on:
         required: true
         description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
         type: string
-        default: "['quantization','convert','pipeline','restful','chat','interface-pipeline']"
+        default: "['quantization','convert','pipeline','restful','chat','interface-pipeline','local_case']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -107,6 +107,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -122,20 +123,22 @@ jobs:
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}-py38
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs}}
+          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging protobuf transformers_stream_generator transformers datasets matplotlib openai'}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
-          python3 -m pip install my-artifact-${{ github.run_id }}-py38/lmdeploy-*.whl
+          python3 -m pip install lmdeploy-*.whl
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
@@ -177,28 +180,28 @@ jobs:
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
         timeout-minutes: 20
         run: |
-          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
         timeout-minutes: 20
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - chat hf torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'chat'))
         timeout-minutes: 20
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - pipeline turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
         timeout-minutes: 25
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - pipeline turbomind vl
         continue-on-error: true
@@ -207,15 +210,15 @@ jobs:
         env:
           PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
       - name: Test lmdeploy - restful turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
         timeout-minutes: 30
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
       - name: Test lmdeploy - restful turbomind vl
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'restful'))
@@ -223,40 +226,45 @@ jobs:
         env:
           PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
       - name: Test lmdeploy - restful workspace
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
         timeout-minutes: 30
         run: |
-          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
-          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
+          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
       - name: Test lmdeploy - interface pipeline turbomind case
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'interface-pipeline'))
         timeout-minutes: 75
         run: |
-          pytest autotest/interface/pipeline -m 'not pr_test' --alluredir=allure-results
+          pytest autotest/interface/pipeline -m 'not pr_test' -s -vv --alluredir=allure-results
       - name: Test lmdeploy - pipeline torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
         timeout-minutes: 25
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - restful torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'restful'))
         timeout-minutes: 40
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - rerun all fail cases
         timeout-minutes: 30
         if: github.event_name == 'schedule' || (github.event.inputs.backend != '[]' && github.event.inputs.model != '[]')
         run: |
           pytest autotest --lf --lfnf none --alluredir=allure-results
+      - name: Test lmdeploy - local testcase
+        timeout-minutes: 30
+        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
+        run: |
+          pytest /local_case/issue_regression --alluredir=allure-results
       - name: Generate reports
         if: always()
         run: |
@@ -264,6 +272,7 @@ jobs:
           export report_dir="$REPORT_DIR/$date_today"
           echo "Save report to $report_dir"
           mv allure-results $report_dir
+          chmod -R 777 $report_dir
       - name: Clear workfile
         if: always()
         run: |
@@ -419,12 +428,13 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
-          export workdir=$(pwd)
-          docker exec --workdir /__w/lmdeploy $CONTAINER_ID rm -rf lmdeploy
-          mkdir $workdir
-          chmod -R 777 $workdir
           docker exec --workdir /__w/lmdeploy $CONTAINER_ID rm -rf /root/workspace/workdir/${TB_MODEL}
+          docker exec --workdir /__w/lmdeploy $CONTAINER_ID chmod -R 777 lmdeploy
           docker stop $CONTAINER_ID
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
 
 
   test_restful:
@@ -459,20 +469,22 @@ jobs:
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}-py38
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs}}
+          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging protobuf transformers_stream_generator transformers datasets matplotlib openai'}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
-          python3 -m pip install my-artifact-${{ github.run_id }}-py38/lmdeploy-*.whl
+          python3 -m pip install lmdeploy-*.whl
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
@@ -494,7 +506,7 @@ jobs:
         if: matrix.backend == 'turbomind'
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
           pytest autotest/interface/restful/test_restful_interface_func_turbomind.py -n 20 --alluredir=allure-results
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
@@ -506,7 +518,7 @@ jobs:
         if: matrix.backend == 'pytorch'
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
           pytest autotest/interface/restful/test_restful_interface_func_pytorch.py -n 20 --alluredir=allure-results
       - name: Kill api server
         if: always()
@@ -517,8 +529,9 @@ jobs:
         run: |
           export date_today="$(date +'%Y%m%d-%H%M%S')"
           export report_dir="$REPORT_DIR/$date_today"
-          echo "Save report to $ALLURE_DIR"
+          echo "Save report to $report_dir"
           mv allure-results $report_dir
+          chmod -R 777 $report_dir
       - name: Clear workfile
         if: always()
         run: |

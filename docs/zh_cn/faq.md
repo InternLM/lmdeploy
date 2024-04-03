@@ -64,7 +64,7 @@ print(response)
 
 ```shell
 # chat 命令
-lmdeploy chat turbomind internlm/internlm2-chat-7b --cache-max-entry-count 0.2
+lmdeploy chat internlm/internlm2-chat-7b --cache-max-entry-count 0.2
 
 # server 命令
 lmdeploy serve api_server internlm/internlm2-chat-7b --cache-max-entry-count 0.2
