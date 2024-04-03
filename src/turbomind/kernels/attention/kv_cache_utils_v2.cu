@@ -1,12 +1,12 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "array_ops.h"
-#include "block.h"
-#include "kv_cache_utils_v2.h"
-#include "quantization.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
+#include "src/turbomind/kernels/attention/block.h"
+#include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
+#include "src/turbomind/kernels/attention/quantization.h"
+#include "src/turbomind/kernels/attention/rotary_embedding.h"
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/thread_map.h"
 #include "src/turbomind/models/llama/llama_utils.h"
-#include "thread_map.h"
 #include <type_traits>
 
 namespace turbomind {

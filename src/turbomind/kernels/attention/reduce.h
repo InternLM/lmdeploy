@@ -3,9 +3,8 @@
 #pragma once
 
 #include "cta_map.h"
-#include "src/turbomind/kernels/attention/array_ops.h"
-#include "src/turbomind/kernels/attention/thread_map.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/thread_map.h"
 #include <cstddef>
 #include <type_traits>
 

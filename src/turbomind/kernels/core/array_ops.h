@@ -2,10 +2,9 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
-#include "src/turbomind/utils/cuda_bf16_wrapper.h"
-#include <cfloat>
-#include <limits>
+#include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/common.h"
+#include <cassert>
 #include <type_traits>
 
 namespace turbomind {
@@ -172,149 +171,6 @@ inline __device__ void copy(const Array<T, N> (&src)[M], Array<T, N> (&dst)[M])
     }
 }
 
-template<int N>
-struct RotaryEmbedding {
-
-    static_assert(N % 2 == 0);
-
-    Array<float, N> cs_;
-
-    __device__ RotaryEmbedding(float base, int dims, int timestep, int2 offset)
-    {
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            const float2 tmp = get_coefficient(offset.x + i, dims, base, timestep);
-            cs_[i]           = tmp.x;
-            cs_[i + 1]       = tmp.y;
-        }
-    }
-
-    // ! depending on the context, this function may generate different result when inlined
-    static __device__ __noinline__ float2 get_coefficient(int idx, int dims, float base, int timestep)
-    {
-        const float inv_freq = timestep / powf(base, idx / (float)dims);
-        float2      cs;
-        sincosf(inv_freq, &cs.y, &cs.x);
-        return cs;
-    }
-
-    template<typename T>
-    __device__ void apply(Array<T, N>& x)
-    {
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            float tmp0 = cs_[i] * (float)x[i] - cs_[i + 1] * (float)x[i + 1];
-            float tmp1 = cs_[i] * (float)x[i + 1] + cs_[i + 1] * (float)x[i];
-            x[i]       = (T)tmp0;
-            x[i + 1]   = (T)tmp1;
-        }
-    }
-};
-
-template<class C, class T>
-__device__ void ApplyRotaryEmbedding(Array<T, 4>& x, float base, int dims, int ti, int di)
-{
-    PRAGMA_UNROLL
-    for (int d1 = 0; d1 < 2; ++d1) {
-        int    d        = d1 * 8 + di;
-        float  inv_freq = ti / powf(base, d / (float)dims);
-        float2 cs;
-        sincosf(inv_freq, &cs.y, &cs.x);
-        C x1          = (C)cs.x * (C)x[d1 * 2 + 0] - (C)cs.y * (C)x[d1 * 2 + 1];
-        C x2          = (C)cs.x * (C)x[d1 * 2 + 1] + (C)cs.y * (C)x[d1 * 2 + 0];
-        x[d1 * 2 + 0] = (T)x1;
-        x[d1 * 2 + 1] = (T)x2;
-    }
-}
-
-template<class D, int N>
-struct FastRoPE {
-
-    static_assert(N % 2 == 0);
-
-    Array<float, N / 2> inv_freq_;
-
-    __device__ FastRoPE(int idx, D dims, float base, float ti_scale, std::integral_constant<int, N>)
-    {
-        // ! Check compiler CSE
-        const float scale_factor = -log2f(base) / dims;
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            inv_freq_[i / 2] = ti_scale * exp2f((idx + i) * scale_factor);
-        }
-    }
-
-    template<typename T>
-    __device__ void apply(Array<T, N>& x, float timestep)
-    {
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            float c, s;
-            sincosf(timestep * inv_freq_[i / 2], &s, &c);
-            float tmp0 = c * (float)x[i] - s * (float)x[i + 1];
-            float tmp1 = c * (float)x[i + 1] + s * (float)x[i];
-            x[i]       = (T)tmp0;
-            x[i + 1]   = (T)tmp1;
-        }
-    }
-};
-
-template<int N, int C = 8>
-struct RoPE {
-    Array<float, N> inv_freqs_;
-
-    RoPE() = default;
-    __device__ RoPE(float idx, float base, float dims)
-    {
-        for (int i = 0; i < N; ++i) {
-            inv_freqs_[i] = powf(base, idx / dims + (C / dims) * i);
-        }
-    }
-
-    template<class T>
-    __device__ void apply(Array<T, N * 2>& x, float timestep)
-    {
-        for (int i = 0; i < N; ++i) {
-            const float inv_freq = timestep * inv_freqs_[i];
-            float2      cs;
-            sincosf(inv_freq, &cs.y, &cs.x);
-            float tmp0   = cs.x * (float)x[i * 2] - cs.y * (float)x[i * 2 + 1];
-            float tmp1   = cs.x * (float)x[i * 2 + 1] + cs.y * (float)x[i * 2];
-            x[i * 2]     = (T)tmp0;
-            x[i * 2 + 1] = (T)tmp1;
-        }
-    }
-};
-
-struct LogNScaling {
-
-    float scale_;
-
-    __device__ static float get_scale(int seq_len, int max_position_embeddings)
-    {
-        if (seq_len <= max_position_embeddings) {
-            return 1.f;
-        }
-        else {
-            return log2f(seq_len) / log2f(max_position_embeddings);
-        }
-    }
-
-    __device__ LogNScaling(int seq_len, int max_position_embeddings)
-    {
-        scale_ = get_scale(seq_len, max_position_embeddings);
-    }
-
-    template<typename T, int N>
-    __device__ void apply(Array<T, N>& x) const
-    {
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; ++i) {
-            x[i] = (T)((float)x[i] * scale_);
-        }
-    }
-};
-
 template<typename T, int N>
 inline __device__ void Store(T* __restrict__ dst, const Array<T, N>& src)
 {
@@ -461,43 +317,58 @@ inline __device__ Array<T, N> blockSum(Array<T, N> val, T* smem_red, int warp_id
     return val;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////////
+template<class T, int N>
+__device__ void CpAsync(T* dst, const Array<T, N>* __restrict__ src)
+{
+    const int     smem_int_ptr = cast_smem_ptr_to_uint(dst);
+    constexpr int cp_size      = sizeof(Array<T, N>);
+#if TURBOMIND_ARCH_SM80
+    asm volatile("cp.async.ca.shared.global [%0], [%1], %2;\n" ::"r"(smem_int_ptr), "l"(src), "n"(cp_size));
+#else
+    assert(TURBOMIND_ARCH_SM80);
+#endif
+}
 
-// generic case for floating point -> floating point / integer -> integer conversion
-template<typename Ti, typename To, typename = void>
-struct ConvertKvCache {
-    __device__ __host__ ConvertKvCache(float, float) {}
-    template<int N>
-    __device__ static auto convert(const Array<Ti, N>& vi)
-    {
-        Array<To, N> vo;
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; ++i) {
-            vo[i] = (To)vi[i];
-        }
-        return vo;
-    }
-    template<int N>
-    inline __device__ auto operator()(const Array<Ti, N>& vi) const -> Array<To, N>
-    {
-        return convert(vi);
-    }
-};
+__inline__ __device__ uint transpose_m8n8_b16_warp_shuffle(uint value)
+{
+    const int lane_id  = threadIdx.x % WARP_SIZE;
+    int       src_lane = lane_id / 8 + lane_id % 4 * 8;
+    uint      u0       = __shfl_sync(0xffffffff, value, src_lane);
+    uint      u1       = __shfl_sync(0xffffffff, value, src_lane + 4);
+    short2    r;
 
-// generic case for converting to same type, bypass
-template<typename T>
-struct ConvertKvCache<T, T> {
-    __device__ __host__ ConvertKvCache(float, float) {}
-    template<int N>
-    __device__ static auto convert(const Array<T, N>& v)
-    {
-        return v;
+    if (lane_id % 8 < 4) {
+        r.x = ((short2&)u0).x;
+        r.y = ((short2&)u1).x;
     }
-    template<int N>
-    inline __device__ auto operator()(const Array<T, N>& v) const -> Array<T, N>
-    {
-        return convert(v);
+    else {
+        r.x = ((short2&)u0).y;
+        r.y = ((short2&)u1).y;
     }
-};
+    return (uint&)r;
+}
+
+#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDACC_VER_MINOR__ >= 8)
+__inline__ __device__ uint transpose_m8n8_b16_movmatrix(uint a)
+{
+#if TURBOMIND_ARCH_SM75
+    uint d;
+    asm volatile("movmatrix.sync.aligned.m8n8.trans.b16 %0, %1;\n" : "=r"(d) : "r"(a));
+    return d;
+#else
+    assert(TURBOMIND_ARCH_SM75);
+    return 0;
+#endif
+}
+#endif
+
+__inline__ __device__ uint32_t transpose_m8n8_b16(uint32_t a)
+{
+#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDACC_VER_MINOR__ >= 8)
+    return transpose_m8n8_b16_movmatrix(a);
+#else
+    return transpose_m8n8_b16_warp_shuffle(a);
+#endif
+}
 
 }  // namespace turbomind

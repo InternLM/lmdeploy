@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
+#include "src/turbomind/kernels/core/array.h"
 
 namespace turbomind::attention {
 

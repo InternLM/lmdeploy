@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "src/turbomind/kernels/attention/array_ops.h"
+#include "src/turbomind/kernels/attention/rotary_embedding.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"

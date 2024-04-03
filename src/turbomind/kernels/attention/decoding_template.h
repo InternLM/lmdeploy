@@ -5,7 +5,7 @@
 #include "attention_params.h"
 #include "attention_universal.h"
 #include "reduce_template.h"
-#include "src/turbomind/kernels/attention/thread_map.h"
+#include "src/turbomind/kernels/core/thread_map.h"
 #include "utils.h"
 namespace turbomind {
 

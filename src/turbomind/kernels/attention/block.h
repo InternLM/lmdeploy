@@ -2,19 +2,10 @@
 
 #pragma once
 
-#include "data_type.h"
+#include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/data_type.h"
 #include <iostream>
 #include <type_traits>
-
-#if defined(__CUDACC__)
-#define TM_HOST_DEVICE __forceinline__ __host__ __device__
-#define TM_DEVICE __forceinline__ __device__
-#define TM_HOST __forceinline__ __host__
-#else
-#define TM_HOST_DEVICE inline
-#define TM_DEVICE inline
-#define TM_HOST inline
-#endif
 
 namespace turbomind {
 

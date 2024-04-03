@@ -1,12 +1,21 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#pragma once
+
 #include <cstdint>
 #include <type_traits>
 
-#pragma once
+#include <cuda_fp16.h>
+#if ENABLE_BF16
+#include <cuda_bf16.h>
+#endif
 
 namespace turbomind {
 
+struct uint1_t {
+};
+struct uint2_t {
+};
 struct uint3_t {
 };
 struct uint4_t {
@@ -21,17 +30,28 @@ struct bitsof_t: std::integral_constant<int, sizeof(T) * 8> {
 };
 
 template<>
-struct bitsof_t<uint3_t>: std::integral_constant<int, 3> {
+struct bitsof_t<uint1_t>: std::integral_constant<int, 1> {
 };
+
+template<>
+struct bitsof_t<uint2_t>: std::integral_constant<int, 2> {
+};
+
+template<>
+struct bitsof_t<uint3_t>: std::integral_constant<int, 3> {
+};  // 2 + 1
+
 template<>
 struct bitsof_t<uint4_t>: std::integral_constant<int, 4> {
 };
+
 template<>
 struct bitsof_t<uint5_t>: std::integral_constant<int, 5> {
-};
+};  // 4 + 1
+
 template<>
 struct bitsof_t<uint6_t>: std::integral_constant<int, 6> {
-};
+};  // 4 + 2
 
 template<class T>
 inline constexpr bitsof_t<T> bitsof{};

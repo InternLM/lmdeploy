@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/attention/data_type.h"
+#include "src/turbomind/kernels/core/data_type.h"
 namespace turbomind {
 
 template<int Bits, int Base, int Shift>

@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include "array_ops.h"
 #include "iterator.h"
+#include "src/turbomind/kernels/core/array_ops.h"
 
 namespace turbomind {
 

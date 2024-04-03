@@ -1,9 +1,7 @@
 #pragma once
 
-#include "src/turbomind/kernels/attention/array_ops.h"
-#include "src/turbomind/kernels/attention/data_type.h"
-#include "src/turbomind/kernels/attention/smem_layout.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/data_type.h"
 
 #include <cmath>
 #include <cuda_bf16.h>
@@ -315,6 +313,45 @@ quantize(Array<Q, N> (&dst)[S][C], const Array<T, N> (&src)[S][C], const Array<P
         }
     }
 }
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+
+// generic case for floating point -> floating point / integer -> integer conversion
+template<typename Ti, typename To, typename = void>
+struct ConvertKvCache {
+    __device__ __host__ ConvertKvCache(float, float) {}
+    template<int N>
+    __device__ static auto convert(const Array<Ti, N>& vi)
+    {
+        Array<To, N> vo;
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            vo[i] = (To)vi[i];
+        }
+        return vo;
+    }
+    template<int N>
+    inline __device__ auto operator()(const Array<Ti, N>& vi) const -> Array<To, N>
+    {
+        return convert(vi);
+    }
+};
+
+// generic case for converting to same type, bypass
+template<typename T>
+struct ConvertKvCache<T, T> {
+    __device__ __host__ ConvertKvCache(float, float) {}
+    template<int N>
+    __device__ static auto convert(const Array<T, N>& v)
+    {
+        return v;
+    }
+    template<int N>
+    inline __device__ auto operator()(const Array<T, N>& v) const -> Array<T, N>
+    {
+        return convert(v);
+    }
+};
 
 //  floating point -> u8
 template<class T>
