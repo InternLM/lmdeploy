@@ -789,8 +789,7 @@ class TurboMindInstance:
                                                   logprob_nums, output_ids[0],
                                                   gen_config.logprobs,
                                                   sequence_length.cpu().item(),
-                                                  out_logprobs,
-                                                  session_id)
+                                                  out_logprobs, session_id)
 
             outputs = []
             status = ResponseType.FINISH if finish else ResponseType.SUCCESS
@@ -902,8 +901,7 @@ class TurboMindInstance:
                                                   logprob_nums, output_ids[0],
                                                   gen_config.logprobs,
                                                   sequence_length.cpu().item(),
-                                                  out_logprobs,
-                                                  session_id)
+                                                  out_logprobs, session_id)
 
             outputs = []
             status = ResponseType.FINISH if finish else ResponseType.SUCCESS
