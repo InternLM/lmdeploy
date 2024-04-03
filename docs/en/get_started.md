@@ -13,9 +13,9 @@ pip install lmdeploy
 The default prebuilt package is compiled on CUDA 11.8. However, if CUDA 12+ is required, you can install lmdeploy by:
 
 ```shell
-export LMDEPLOY_VERSION=0.2.0
+export LMDEPLOY_VERSION=0.3.0
 export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## Offline batch inference
@@ -33,8 +33,8 @@ For more information on inference pipeline parameters, please refer to [here](./
 
 LMDeploy offers various serving methods, choosing one that best meet your requirements.
 
-- [Serving with openai compatible server](https://lmdeploy.readthedocs.io/en/latest/serving/restful_api.html)
-- [Serving with docker](https://lmdeploy.readthedocs.io/en/latest/serving/restful_api.html#option-2-deploying-with-docker)
+- [Serving with openai compatible server](https://lmdeploy.readthedocs.io/en/latest/serving/api_server.html)
+- [Serving with docker](https://lmdeploy.readthedocs.io/en/latest/serving/api_server.html#option-2-deploying-with-docker)
 - [Serving with gradio](https://lmdeploy.readthedocs.io/en/latest/serving/gradio.html)
 
 ## Quantization
@@ -52,7 +52,7 @@ LMDeploy CLI offers the following utilities, helping users experience LLM featur
 ### Inference with Command line Interface
 
 ```shell
-lmdeploy chat turbomind internlm/internlm-chat-7b
+lmdeploy chat internlm/internlm-chat-7b
 ```
 
 ### Serving with Web UI

@@ -9,7 +9,6 @@ import torch
 
 from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                ResponseType)
-from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model, logging_timer
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
@@ -40,11 +39,6 @@ def _raise_exception_on_finish(task: asyncio.Task) -> None:
 class NoRunningSeqs(Exception):
     """NoRunningSeqs."""
     pass
-
-
-def _div_up(x, n):
-    """perform div up."""
-    return (x + n - 1) // n
 
 
 @dataclass
@@ -133,6 +127,7 @@ class Engine:
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,
                                    engine_config.revision)
+        self.model_path = model_path
 
         self.model_agent = AutoModelAgent.from_pretrained(
             model_path,
@@ -157,12 +152,8 @@ class Engine:
 
         # create main thread
         self._start_loop()
-        self.req_sender = self.req_manager.build_sender()
-
         self._create_buffers()
-
         self.engine_instance = self.create_instance()
-        self.tokenizer = Tokenizer(model_path)
 
     @classmethod
     def from_pretrained(cls,
@@ -175,24 +166,30 @@ class Engine:
         Args:
             pretrained_model_name_or_path (str):
                 It could be one of the following options:
-                    - i) A local directory path of a turbomind model which is
-                      converted by `lmdeploy convert` command or download from
-                      ii) and iii)
-                    - ii) The model_id of a lmdeploy-quantized model hosted
+                    - i) The model_id of a lmdeploy-quantized model hosted
                       inside a model repo on huggingface.co, such as
                       "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
-                    - iii) The model_id of a model hosted inside a model repo
+                    - ii) The model_id of a model hosted inside a model repo
                       on huggingface.co, such as "InternLM/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
         """
-        logger.debug(f'Get unexpected kwargs: {kwargs}')
+        if len(kwargs) > 0:
+            logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
                    engine_config=engine_config,
                    trust_remote_code=trust_remote_code)
+
+    @property
+    def tokenizer(self):
+        """create tokenizer."""
+        from lmdeploy.tokenizer import Tokenizer
+        if not hasattr(self, '_tokenizer'):
+            self._tokenizer = Tokenizer(self.model_path)
+        return self._tokenizer
 
     def _create_buffers(self):
         max_batches = self.scheduler_config.max_batches
@@ -215,6 +212,20 @@ class Engine:
         """start loop."""
         return self.req_manager.start_loop(self.async_loop)
 
+    def _response(self,
+                  resp_type: ResponseType,
+                  sender_id: int,
+                  req_id: int,
+                  data: Any = None,
+                  err_msg: str = ''):
+        """response."""
+        self.req_manager.response(
+            Response(type=resp_type,
+                     sender_id=sender_id,
+                     req_id=req_id,
+                     data=data,
+                     err_msg=err_msg))
+
     def _on_add_session(self, reqs: Request, **kwargs):
         """on add session callback."""
         for req in reqs:
@@ -223,10 +234,7 @@ class Engine:
             if session_id not in self.scheduler.sessions:
                 self.scheduler.add_session(session_id)
                 resp_type = ResponseType.SUCCESS
-            self.req_manager.response(
-                Response(type=resp_type,
-                         sender_id=req.sender_id,
-                         req_id=req.req_id))
+            self._response(resp_type, req.sender_id, req.req_id)
 
     def _on_stop_session(self, reqs: Request, **kwargs):
         """on stop session callback."""
@@ -236,10 +244,7 @@ class Engine:
             if session_id in self.scheduler.sessions:
                 self.scheduler.stop_session(session_id)
                 resp_type = ResponseType.SUCCESS
-            self.req_manager.response(
-                Response(type=resp_type,
-                         sender_id=req.sender_id,
-                         req_id=req.req_id))
+            self._response(resp_type, req.sender_id, req.req_id)
 
     def _on_end_session(self, reqs: Request, **kwargs):
         """on end session callback."""
@@ -249,10 +254,7 @@ class Engine:
             if session_id in self.scheduler.sessions:
                 self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
-            self.req_manager.response(
-                Response(type=resp_type,
-                         sender_id=req.sender_id,
-                         req_id=req.req_id))
+            self._response(resp_type, req.sender_id, req.req_id)
 
     def _on_add_message(self, reqs: Request, **kwargs):
         """on add message callback."""
@@ -261,6 +263,8 @@ class Engine:
             """update bad words."""
             sampling_param = msg.sampling_param
             eos_token_id = self.model_config.eos_token_id
+            if eos_token_id is None:
+                return
             if sampling_param.ignore_eos:
                 sampling_param.bad_words.append(eos_token_id)
             elif eos_token_id not in sampling_param.stop_words:
@@ -271,17 +275,15 @@ class Engine:
             max_session_len = self.scheduler_config.max_session_len
             if max_session_len is not None:
                 sampling_param = msg.sampling_param
-                max_new_tokens = sampling_param.max_new_tokens
-                max_new_tokens = min(max_new_tokens,
-                                     max_session_len - msg.num_all_tokens())
+                sampling_param.max_new_tokens = min(
+                    sampling_param.max_new_tokens,
+                    max_session_len - msg.num_all_tokens())
 
         for req in reqs:
             session_id = req.data['session_id']
             if session_id not in self.scheduler.sessions:
-                self.req_manager.response(
-                    Response(type=ResponseType.SESSION_NOT_EXIST,
-                             sender_id=req.sender_id,
-                             req_id=req.req_id))
+                self._response(ResponseType.SESSION_NOT_EXIST, req.sender_id,
+                               req.req_id)
                 continue
             session_id = req.data['session_id']
             sess = self.scheduler.sessions[session_id]
@@ -329,23 +331,7 @@ class Engine:
             messages (SeqList): The input messages.
             adapters (AdapterList): Adapters.
         """
-
-        def __get_history_length():
-            """get history length."""
-            if self.model_config.sliding_window > 0:
-                history_lengths = []
-                for msg in messages:
-                    num_real_blocks = len(msg.logical_blocks)
-                    num_all_blocks = _div_up(msg.num_all_tokens(),
-                                             msg.block_size)
-                    num_drop_blocks = num_all_blocks - num_real_blocks
-                    num_drop_tokens = num_drop_blocks * msg.block_size
-                    history_lengths.append(msg.history_len - num_drop_tokens)
-                return history_lengths
-            else:
-                return [msg.history_len for msg in messages]
-
-        history_lengths = __get_history_length()
+        history_lengths = [msg.history_len for msg in messages]
 
         token_ids = [msg.token_ids for msg in messages]
 
@@ -397,6 +383,8 @@ class Engine:
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
 
+        num_ignored_history = [msg.num_ignored_history for msg in messages]
+        num_ignored_history = torch.tensor(num_ignored_history)
         return ModelInputs(input_ids=input_ids,
                            seq_length=seq_length,
                            attention_mask=attention_mask,
@@ -405,6 +393,7 @@ class Engine:
                            q_start_loc=q_start_loc,
                            history_lengths=history_lengths,
                            is_decoding=is_decoding,
+                           num_ignored_history=num_ignored_history,
                            local_adapter_ids=local_adapter_ids,
                            global_adapter_ids=global_adapter_ids,
                            adapter_offsets=adapter_offsets,
@@ -415,12 +404,14 @@ class Engine:
                                  stop_words: torch.Tensor,
                                  num_appendable_ids: torch.Tensor):
         """batched stopping criteria."""
-        stopped = num_appendable_ids <= 0
-        if stop_words is not None:
-            sw_stopped = (token_ids[:, None] == stop_words).any(1)
-            stopped = stopped | sw_stopped
-
-        return stopped, num_appendable_ids - 1
+        with torch.inference_mode(), torch.cuda.stream(self.stream):
+            num_appendable_ids = num_appendable_ids - 1
+            stopped = num_appendable_ids <= 0
+            if stop_words is not None:
+                sw_stopped = (token_ids[:, None] == stop_words).any(1)
+                stopped = stopped | sw_stopped
+        self.stream.synchronize()
+        return stopped, num_appendable_ids
 
     @logging_timer('SamplingLogits', logger)
     async def async_sampling_logits(self, logits: torch.Tensor,
@@ -647,9 +638,9 @@ class Engine:
                 return None
             batch = len(seqs)
             max_len = max(seq.history_len for seq in seqs)
-            output = torch.full((batch, max_len),
-                                self.model_config.bos_token_id,
-                                dtype=torch.int64)
+            pad_id = self.model_config.bos_token_id
+            pad_id = 0 if pad_id is None else pad_id
+            output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
             for idx, seq in enumerate(seqs):
                 h_len = seq.history_len
                 if h_len == 0:
@@ -725,13 +716,11 @@ class Engine:
             """send response."""
             resp_type = (ResponseType.FINISH
                          if out.finish else ResponseType.SUCCESS)
-            self.req_manager.response(
-                Response(
-                    type=resp_type,
-                    sender_id=out.sender_id,
-                    req_id=out.req_id,
-                    data=dict(token_ids=out.token_ids, logits=out.logits),
-                ))
+            self._response(resp_type,
+                           sender_id=out.sender_id,
+                           req_id=out.req_id,
+                           data=dict(token_ids=out.token_ids,
+                                     logits=out.logits))
 
         def __send_resps(step_outputs: Dict[int, InferOutput]):
             """send response callback."""
@@ -775,12 +764,12 @@ class Engine:
                 await __step(False)
 
     def create_instance(self, cuda_stream_id=0):
-        """Create a turbomind instance.
+        """Create a pytorch engine instance.
 
         Args:
             cuda_stream_id(int): identity of a cuda stream
         Returns:
-            EngineInstance: an instance of turbomind
+            EngineInstance: an instance of pytorch engine
         """
         from .engine_instance import EngineInstance
         return EngineInstance(self)

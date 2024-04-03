@@ -32,6 +32,7 @@ def make_model_inputs(input_ids: torch.Tensor,
     if isinstance(history_length, torch.Tensor):
         history_length = history_length.tolist()
 
+    num_ignored_history = torch.zeros_like(seq_length)
     return ModelInputs(input_ids=input_ids,
                        seq_length=seq_length,
                        attention_mask=attention_mask,
@@ -39,7 +40,8 @@ def make_model_inputs(input_ids: torch.Tensor,
                        position_ids=position_ids,
                        q_start_loc=q_start_loc,
                        history_lengths=history_length,
-                       is_decoding=is_decoding)
+                       is_decoding=is_decoding,
+                       num_ignored_history=num_ignored_history)
 
 
 def make_step_context(
@@ -87,6 +89,7 @@ def make_step_context(
             block_offsets_1d[sloc:eloc]
             for sloc, eloc in zip(block_start_loc, block_end_loc)
         ]
+        num_blocks_offs = torch.tensor([len(boff) for boff in block_offsets])
         block_offsets = pad_sequence(block_offsets, batch_first=True)
 
         kv_caches = []
@@ -96,7 +99,7 @@ def make_step_context(
                                   device=device)
             v_cache = torch.empty_like(k_cache)
             kv_caches.append((k_cache, v_cache))
-        return kv_caches, block_offsets
+        return kv_caches, block_offsets, num_blocks_offs
 
     def __fill_kv_caches(kv_caches, past_key_values, block_offsets):
         """fill kv caches."""
@@ -113,7 +116,7 @@ def make_step_context(
             page_cache(k_cache, past_k, history_length, block_offsets)
             page_cache(v_cache, past_v, history_length, block_offsets)
 
-    kv_caches, block_offsets = __create_kv_caches(past_key_values)
+    kv_caches, block_offsets, _ = __create_kv_caches(past_key_values)
     __fill_kv_caches(kv_caches, past_key_values, block_offsets)
 
     history_length = history_length.tolist()

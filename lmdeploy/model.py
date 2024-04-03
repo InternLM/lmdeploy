@@ -771,7 +771,8 @@ class Yi(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'yi' in model_path.lower():
+        path = model_path.lower()
+        if 'yi' in path and 'vl' not in path:
             return 'yi'
 
 
@@ -864,8 +865,170 @@ class Deepseek(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'deepseek' in path and 'chat' in path:
+        if 'deepseek' in path and 'chat' in path and 'vl' not in path:
             return 'deepseek'
+
+
+@MODELS.register_module(name=['deepseek-vl'])
+class DeepseekVL(BaseChatTemplate):
+
+    def __init__(
+            self,
+            meta_instruction="""You are a helpful language and vision assistant. You are able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language.""",  # noqa: E501
+            eosys='\n\n',
+            user='User: ',
+            eoh='\n\n',
+            assistant='Assistant: ',
+            eoa='<｜end▁of▁sentence｜>',
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'deepseek-vl' in path and 'chat' in path:
+            return 'deepseek-vl'
+
+
+@MODELS.register_module(name='deepseek-coder')
+class DeepSeek(BaseChatTemplate):
+    """Chat template of deepseek model."""
+
+    def __init__(
+            self,
+            session_len=4096,
+            system='',
+            meta_instruction="""You are an AI programming assistant, utilizing the Deepseek Coder model, developed by Deepseek Company, and you only answer questions related to computer science. For politically sensitive questions, security and privacy issues, and other non-computer science questions, you will refuse to answer\n""",  # noqa: E501
+            eosys='',
+            user='### Instruction:\n',
+            eoh='\n',
+            assistant='### Response:\n',
+            eoa='\n<|EOT|>',
+            separator='\n',
+            stop_words=['<|EOT|>'],
+            **kwargs):
+        super().__init__(session_len=session_len,
+                         system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'deepseek-coder' in path:
+            return 'deepseek-coder'
+
+
+@MODELS.register_module(name=['yi-vl'])
+class YiVL(BaseChatTemplate):
+
+    def __init__(
+            self,
+            meta_instruction="""This is a chat between an inquisitive human and an AI assistant. Assume the role of the AI assistant. Read all the images carefully, and respond to the human's questions with informative, helpful, detailed and polite answers. 这是一个好奇的人类和一个人工智能助手之间的对话。假设你扮演这个AI助手的角色。仔细阅读所有的图像，并对人类的问题做出信息丰富、有帮助、详细的和礼貌的回答。\n\n""",  # noqa: E501
+            user='### Human: ',
+            eoh='\n',
+            assistant='### Assistant:',
+            eoa='\n',
+            stop_words=['###'],
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'yi-vl' in path:
+            return 'yi-vl'
+
+
+# flake8: noqa: E501
+def dbrx_system_prompt():
+    # This is inspired by the Claude3 prompt.
+    # source: https://twitter.com/AmandaAskell/status/1765207842993434880
+    # Identity and knowledge
+    prompt = 'You are DBRX, created by Databricks. You were last updated in December 2023. You answer questions based on information available up to that point.\n'
+    prompt += 'YOU PROVIDE SHORT RESPONSES TO SHORT QUESTIONS OR STATEMENTS, but provide thorough responses to more complex and open-ended questions.\n'
+    # Capabilities (and reminder to use ``` for JSON blocks and tables, which it can forget). Also a reminder that it can't browse the internet or run code.
+    prompt += 'You assist with various tasks, from writing to coding (using markdown for code blocks — remember to use ``` with code, JSON, and tables).\n'
+    prompt += '(You do not have real-time data access or code execution capabilities. '
+    # Ethical guidelines
+    prompt += 'You avoid stereotyping and provide balanced perspectives on controversial topics. '
+    # Data: the model doesn't know what it was trained on; it thinks that everything that it is aware of was in its training data. This is a reminder that it wasn't.
+    # We also encourage it not to try to generate lyrics or poems
+    prompt += 'You do not provide song lyrics, poems, or news articles and do not divulge details of your training data.)\n'
+    # The model really wants to talk about its system prompt, to the point where it is annoying, so encourage it not to
+    prompt += 'This is your system prompt, guiding your responses. Do not reference it, just respond to the user. If you find yourself talking about this message, stop. You should be responding appropriately and usually that means not mentioning this.\n'
+    prompt += 'You do not mention any of this information about yourself unless the information is directly pertinent to the user\\\'s query.'.upper(
+    )
+    return prompt
+
+
+@MODELS.register_module(name=['dbrx'])
+class DbrxInstruct(BaseChatTemplate):
+
+    def __init__(self,
+                 system='<|im_start|>system\n',
+                 meta_instruction=dbrx_system_prompt(),
+                 eosys='<|im_end|>\n',
+                 user='<|im_start|>user\n',
+                 eoh='<|im_end|>\n',
+                 assistant='<|im_start|>assistant\n',
+                 eoa='<|im_end|>',
+                 separator='\n',
+                 **kwargs):
+        super().__init__(system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'dbrx' in path:
+            return 'dbrx'
 
 
 def best_match_model(query: str) -> Optional[str]:
@@ -880,3 +1043,11 @@ def best_match_model(query: str) -> Optional[str]:
     for name, model in MODELS.module_dict.items():
         if model.match(query):
             return model.match(query)
+    try:
+        from transformers import AutoTokenizer
+        tokenizer_config = AutoTokenizer.from_pretrained(
+            query, trust_remote_code=True)
+        if tokenizer_config.chat_template is None:
+            return 'base'
+    except Exception as e:
+        assert type(e) == OSError

@@ -15,14 +15,15 @@ if TRITON_VERSION >= version.parse('2.2.0'):
 
     @triton.jit
     def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
-                            BLOCK: tl.constexpr):
+                            BLOCK: tl.constexpr, num_blocks: int):
         """load block offsets."""
         if num_sub_blocks > 1:
             offs_sub = tl.arange(0, num_sub_blocks)
             offs_n = tl.arange(0, BLOCK // num_sub_blocks)
+            mask = block_id * num_sub_blocks + offs_sub < num_blocks
             ret = tl.load(
-                offset_ptr + block_id * num_sub_blocks +
-                offs_sub)[:, None] * BLOCK // num_sub_blocks + offs_n[None, :]
+                offset_ptr + block_id * num_sub_blocks + offs_sub,
+                mask=mask)[:, None] * BLOCK // num_sub_blocks + offs_n[None, :]
             return tl.ravel(ret)
         else:
             offs_n = tl.arange(0, BLOCK)
@@ -31,13 +32,15 @@ else:
 
     @triton.jit
     def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
-                            BLOCK: tl.constexpr):
+                            BLOCK: tl.constexpr, num_blocks: int):
         """load block offsets triton<2.2.0."""
         if num_sub_blocks > 1:
             offs_sub = tl.arange(0, num_sub_blocks)
             offs_n = tl.arange(0, BLOCK // num_sub_blocks)
-            ret = tl.load(offset_ptr + block_id * num_sub_blocks + offs_sub)[
-                None, :] * BLOCK // num_sub_blocks + offs_n[:, None]
+            mask = block_id * num_sub_blocks + offs_sub < num_blocks
+            ret = tl.load(
+                offset_ptr + block_id * num_sub_blocks + offs_sub,
+                mask=mask)[None, :] * BLOCK // num_sub_blocks + offs_n[:, None]
             return tl.ravel(ret)
         else:
             offs_n = tl.arange(0, BLOCK)
@@ -108,6 +111,7 @@ def _fwd_split_kernel(
     kv_len_per_prog = block_per_cta * BLOCK_N
     loop_start = kv_len_per_prog * split_k_id
     loop_end = tl.minimum(loop_start + kv_len_per_prog, kv_seqlen)
+    num_blocks = tl.cdiv(kv_seqlen, BLOCK_N // num_sub_blocks)
 
     # load block offset
     # dirty
@@ -117,7 +121,7 @@ def _fwd_split_kernel(
                                     loop_start) // BLOCK_N
         kv_min_loc = tl.maximum(history_len - window_size, 0)
     b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                   num_sub_blocks, BLOCK_N)
+                                   num_sub_blocks, BLOCK_N, num_blocks)
 
     loop_start = start_block_id * BLOCK_N
     for start_n in range(loop_start, loop_end, BLOCK_N):
@@ -142,7 +146,7 @@ def _fwd_split_kernel(
         if start_n + BLOCK_N < loop_end:
             start_block_id += 1
             b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           num_sub_blocks, BLOCK_N)
+                                           num_sub_blocks, BLOCK_N, num_blocks)
 
         qk = tl.sum(q[None, :] * k, 1)
         qk *= sm_scale
@@ -319,6 +323,7 @@ def _fwd_kernel(
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
 
     block_mask = tl.where(block_start_loc < q_seqlen, 1, 0)
+    num_blocks = tl.cdiv(kv_seqlen, BLOCK_N // num_sub_blocks)
 
     # this is dirty
     start_block_id = kv_seqlen - kv_seqlen
@@ -326,7 +331,7 @@ def _fwd_kernel(
         start_block_id = tl.maximum(history_len - window_size, 0) // BLOCK_N
         kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
     b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                   num_sub_blocks, BLOCK_N)
+                                   num_sub_blocks, BLOCK_N, num_blocks)
     kv_start_loc = start_block_id * BLOCK_N
     for start_n in range(kv_start_loc, block_mask * kv_seqlen, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -346,7 +351,7 @@ def _fwd_kernel(
         if start_n + BLOCK_N < kv_seqlen:
             start_block_id = start_n // BLOCK_N + 1
             b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           num_sub_blocks, BLOCK_N)
+                                           num_sub_blocks, BLOCK_N, num_blocks)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -398,7 +403,7 @@ def paged_attention_fwd(
     q_seqlens: Tensor,
     kv_seqlens: Tensor,
     max_seqlen: int,
-    window_size: int = -1,
+    window_size: int = None,
 ):
     """Paged Attention forward.
 
@@ -418,6 +423,9 @@ def paged_attention_fwd(
     if _convert_pv is None:
         nv_cap = torch.cuda.get_device_capability()
         _convert_pv = _get_convert_pv(nv_cap)
+
+    if window_size is None:
+        window_size = -1
 
     def _kernel_meta():
         """kernel meta."""

@@ -10,10 +10,12 @@ tp_config:
     Baichuan2-13B-Chat: 2
     Mixtral-8x7B-Instruct-v0.1: 2
     internlm2-20b: 2
+    Qwen-VL-Chat: 2
+    llava-v1.5-13b: 2
 
 
 turbomind_model:
-    - meta-llama/Llama-2-7b-chat
+    - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm2-chat-1_8b
     - internlm/internlm-chat-7b
     - internlm/internlm-chat-20b
@@ -32,7 +34,7 @@ turbomind_model:
 
 
 pytorch_model:
-    - meta-llama/Llama-2-7b-chat
+    - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm-chat-7b
     - internlm/internlm-chat-20b
     - internlm/internlm2-chat-7b
@@ -49,11 +51,19 @@ pytorch_model:
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-7b-it
     - deepseek-ai/deepseek-moe-16b-chat
+    - deepseek-ai/deepseek-coder-6.7b-instruct
 
+
+vl_model:
+    - Qwen/Qwen-VL-Chat
+    - liuhaotian/llava-v1.5-7b
+    - liuhaotian/llava-v1.5-13b
+    - liuhaotian/llava-v1.6-vicuna-7b
+    - 01-ai/Yi-VL-6B
 
 quatization_case_config:
     w4a16:
-        - meta-llama/Llama-2-7b-chat
+        - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b
         - Qwen/Qwen-7B-Chat
         - Qwen/Qwen-14B-Chat
@@ -61,11 +71,11 @@ quatization_case_config:
         - baichuan-inc/Baichuan2-7B-Chat
         - internlm/internlm2-20b
     kvint8: # more models are supported kvint8 quantization, but the chat response are not good, already removed
-        - meta-llama/Llama-2-7b-chat
+        - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b
         - internlm/internlm2-chat-20b
     kvint8_w4a16:
-        - meta-llama/Llama-2-7b-chat
+        - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b
         - internlm/internlm2-chat-20b
         - internlm/internlm2-20b
@@ -73,7 +83,7 @@ quatization_case_config:
         - Qwen/Qwen-14B-Chat
         - baichuan-inc/Baichuan2-7B-Chat
     w8a8:
-        - meta-llama/Llama-2-7b-chat
+        - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b
         - internlm/internlm2-chat-20b
         - internlm/internlm2-chat-7b

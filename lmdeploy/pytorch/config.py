@@ -12,6 +12,20 @@ def _get_torch_dtype(config: Any, default: str = 'float16'):
         config: Config of the hf model.
         default (str): default device type.
     """
+
+    def __hack_qwen():
+        """hack qwen."""
+        torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
+        ) else 'float16'
+        if config.bf16:
+            torch_dtype = 'bfloat16'
+        elif config.fp16:
+            torch_dtype = 'float16'
+        setattr(config, 'torch_dtype', torch_dtype)
+
+    if config.model_type == 'qwen' and config.torch_dtype is None:
+        __hack_qwen()
+
     torch_dtype = getattr(config, 'torch_dtype', default)
     # torch_dtype in config could be none
     torch_dtype = torch_dtype or default
@@ -145,6 +159,26 @@ class ModelConfig:
                 head_dim=hf_config.head_dim,
                 vocab_size=hf_config.vocab_size)
 
+        def __build_dbrx():
+            hidden_size = hf_config.d_model
+            num_heads = hf_config.n_heads
+            head_dim = hidden_size // num_heads
+            eos_token_id = getattr(hf_config, 'eos_token_id', None)
+            if eos_token_id is None:
+                eos_token_id = 100257
+            bos_token_id = getattr(hf_config, 'bos_token_id', None)
+            if bos_token_id is None:
+                bos_token_id = eos_token_id
+            return ModelConfig(
+                hidden_size=hidden_size,
+                num_layers=hf_config.n_layers,
+                num_attention_heads=num_heads,
+                num_key_value_heads=hf_config.attn_config.kv_n_heads,
+                bos_token_id=bos_token_id,
+                eos_token_id=eos_token_id,
+                head_dim=head_dim,
+                vocab_size=hf_config.vocab_size)
+
         def __build_default():
             head_dim = hf_config.hidden_size // hf_config.num_attention_heads
             num_attention_heads = hf_config.num_attention_heads
@@ -166,16 +200,19 @@ class ModelConfig:
                 head_dim=head_dim,
                 vocab_size=hf_config.vocab_size)
 
-        if 'falcon' in model_path:
+        if hf_config.model_type == 'falcon':
             model_config = __build_falcon()
-        elif 'chatglm' in model_path:
+        elif hf_config.model_type == 'chatglm':
             model_config = __build_chatglm()
         elif hf_config.model_type == 'gemma':
             model_config = __build_gemma()
+        elif hf_config.model_type == 'dbrx':
+            model_config = __build_dbrx()
         else:
             model_config = __build_default()
 
         model_config.dtype = _get_torch_dtype(hf_config)
+
         model_config.hf_config = hf_config
         model_config.json_config = hf_config.to_dict()
         return model_config

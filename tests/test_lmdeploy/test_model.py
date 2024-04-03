@@ -6,6 +6,7 @@ from lmdeploy.model import MODELS, best_match_model
 @pytest.mark.parametrize(
     'model_path_and_name',
     [('internlm/internlm-chat-7b', ['internlm']),
+     ('internlm/internlm2-1_8b', ['base']),
      ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
      ('Qwen/Qwen-7B-Chat', ['qwen']),
      ('codellama/CodeLlama-7b-hf', ['codellama']),
@@ -16,9 +17,14 @@ from lmdeploy.model import MODELS, best_match_model
      ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
      ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
      ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
+     ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
+     ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
+     ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
      ('tiiuae/falcon-7b', ['falcon']), ('workspace', [None])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
+    if model_path_and_name[0] == 'internlm/internlm2-1_8b' and suffix:
+        return  # internlm/internlm2-1_8b-suffix will got None
     deduced_name = best_match_model(model_path_and_name[0] + suffix)
     if deduced_name is not None:
         assert deduced_name in model_path_and_name[
@@ -203,3 +209,23 @@ def test_codellama_others():
     with pytest.raises(AssertionError):
         model = MODELS.get('codellama')(capability='java')
     assert model is None
+
+
+def test_deepseek_coder():
+    model = MODELS.get('deepseek-coder')()
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        'deepseek-ai/deepseek-coder-1.3b-instruct', trust_remote_code=True)
+    ref = tokenizer.apply_chat_template(messages, tokenize=False)
+    res = '<｜begin▁of▁sentence｜>' + model.messages2prompt(messages)
+    assert res.startswith(ref)

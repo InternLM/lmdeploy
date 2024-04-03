@@ -35,7 +35,7 @@ class TestAutoBackend:
             ('codellama/CodeLlama-7b-Instruct-hf', True, True),
             ('mistralai/Mistral-7B-Instruct-v0.1', True, False),
             ('mistralai/Mixtral-8x7B-Instruct-v0.1', True, False),
-            ('Qwen/Qwen-7B-Chat', False, True),
+            ('Qwen/Qwen-7B-Chat', True, True),
             ('Qwen/Qwen-VL-Chat', False, True),
             ('Qwen/Qwen1.5-4B-Chat', True, False),
         ]
@@ -75,3 +75,10 @@ class TestAutoBackend:
         assert type(
             autoget_backend_config(
                 'mistralai/Mistral-7B-Instruct-v0.1')) is PytorchEngineConfig
+        backend_config = TurbomindEngineConfig(max_batch_size=64,
+                                               cache_block_seq_len=128)
+        config = autoget_backend_config('mistralai/Mistral-7B-Instruct-v0.1',
+                                        backend_config)
+        assert type(config) is PytorchEngineConfig
+        assert config.max_batch_size == 64
+        assert config.block_size == 128

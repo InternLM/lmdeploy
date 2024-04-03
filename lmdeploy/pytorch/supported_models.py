@@ -35,9 +35,13 @@ _SUPPORTED_ARCHS = dict(
     # Mixtral-8x7B
     MixtralForCausalLM=True,
     # Qwen 7B-72B, Qwen-VL-7B
-    QWenLMHeadModel=False,
+    QWenLMHeadModel=True,
     # Qwen1.5 7B-72B
     Qwen2ForCausalLM=True,
+    # Qwen1.5-MoE-A2.7B-Chat
+    Qwen2MoeForCausalLM=True,
+    # Dbrx 132B
+    DbrxForCausalLM=True,
 )
 
 
@@ -70,7 +74,13 @@ def is_supported(model_path: str):
         logger.warning(f'{model_path} seems to be a turbomind workspace, '
                        'which can only be ran with turbomind engine.')
     else:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        try:
+            cfg = AutoConfig.from_pretrained(model_path,
+                                             trust_remote_code=True)
+        except Exception as e:  # noqa
+            logger.warning('AutoConfig.from_pretrained failed for '
+                           f'{model_path}. Exception: {e}')
+            return False
 
         if hasattr(cfg, 'architectures'):
             arch = cfg.architectures[0]
@@ -87,6 +97,10 @@ def is_supported(model_path: str):
             if arch == 'BaichuanForCausalLM':
                 # baichuan-13B not supported by pytorch
                 if cfg.num_attention_heads == 40 and cfg.vocab_size == 64000:
+                    support_by_torch = False
+            elif arch == 'QWenLMHeadModel':
+                # qwen-vl not supported by pytorch
+                if getattr(cfg, 'visual', None):
                     support_by_torch = False
 
     return support_by_torch
