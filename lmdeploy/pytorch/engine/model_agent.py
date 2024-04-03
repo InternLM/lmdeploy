@@ -2,7 +2,7 @@
 import asyncio
 import os
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List
 
 import torch
 import torch.distributed as dist
@@ -585,43 +585,6 @@ class BaseModelAgent(AutoModelAgent):
         await asyncio.get_event_loop().run_in_executor(None,
                                                        self.stream.synchronize)
         return output
-
-
-@dataclass
-class TPResponse:
-    ret_code: int
-    error: Union[Exception, List[Exception]] = None
-    data: Any = None
-
-    def gather_error(self):
-        """gather error."""
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
-
-        # gather errors
-        error_count = torch.tensor(self.ret_code).cuda(rank)
-        dist.all_reduce(error_count)
-        if error_count.item() > 0:
-            all_errors = [None] * world_size
-            dist.all_gather_object(all_errors, self.error)
-            self.ret_code = 1
-            self.error = all_errors
-
-    def raise_error(self, default_error: Exception):
-        """raise error."""
-        if self.error is None:
-            raise default_error
-        elif isinstance(self.error, Exception):
-            raise self.error
-        else:
-            assert isinstance(self.error, List), ('expect error type list, '
-                                                  f'got {type(self.error)}')
-            rank = dist.get_rank()
-            err = self.error[rank]
-            if err is None:
-                raise default_error
-            else:
-                raise err
 
 
 def _get_model_memory_usage(model: torch.nn.Module) -> int:
