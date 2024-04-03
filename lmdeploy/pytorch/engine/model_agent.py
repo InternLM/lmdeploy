@@ -7,7 +7,6 @@ from typing import Any, Callable, Dict, List, Union
 import torch
 import torch.distributed as dist
 from torch import multiprocessing as mp
-from torch.distributed._tensor import DeviceMesh, Replicate, distribute_tensor
 from transformers import AutoModelForCausalLM
 
 from lmdeploy.pytorch.accel import LoadNoInit
@@ -23,11 +22,6 @@ from .cache_engine import CacheEngine
 logger = get_logger('lmdeploy')
 
 _PATCH_ARG_NAMES = ['context', 'use_origin']
-
-
-def _div_up(a, b):
-    """div up."""
-    return (a + b - 1) // b
 
 
 def _infer_block_size(model: torch.nn.Module,
@@ -120,11 +114,10 @@ class ModelInputs:
     """Input of the model."""
     input_ids: torch.LongTensor
     seq_length: torch.LongTensor
-    attention_mask: torch.Tensor
+    history_lengths: torch.LongTensor
     block_offsets: torch.LongTensor
-    position_ids: torch.LongTensor
-    q_start_loc: torch.LongTensor
-    history_lengths: List[int]
+    max_q_seq_length: int
+    max_history_length: int
     is_decoding: bool
     num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
@@ -136,8 +129,7 @@ class ModelInputs:
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
         assert self.is_decoding
-        self.position_ids = self.position_ids + 1
-        self.history_lengths = [h + 1 for h in self.history_lengths]
+        self.history_lengths = self.history_lengths + 1
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
@@ -159,7 +151,6 @@ class ModelInputs:
         max_seq_len = self.seq_length[0].item()
         ret = []
         block_start = 0
-        history_len = self.history_lengths[0]
         for i in range(0, max_seq_len, split_size):
             start = i
             end = min(max_seq_len, i + split_size)
@@ -175,11 +166,10 @@ class ModelInputs:
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
-                attention_mask=self.attention_mask[:, start:end],
                 block_offsets=block_offsets,
-                position_ids=self.position_ids[:, start:end],
-                q_start_loc=input_ids.new_zeros(1),
-                history_lengths=[history_len + start],
+                history_lengths=self.history_lengths + start,
+                max_q_seq_length=input_ids.new_tensor(end - start),
+                max_history_length=self.max_history_length + start,
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=local_adapter_ids,
@@ -217,6 +207,7 @@ class StepContext:
     position_ids: torch.LongTensor
     position_ids_1d: torch.LongTensor
     q_start_loc: torch.LongTensor
+    attention_mask: torch.LongTensor
     history_lengths: torch.LongTensor
     q_seq_length: torch.LongTensor
     kv_seq_length: torch.LongTensor
@@ -250,19 +241,31 @@ class StepContext:
             world_size (int): The distribution world size.
             device (str): The device of the tensors.
         """
+        q_seq_length = inputs.seq_length
+        max_q_seq_length = inputs.max_q_seq_length
+        history_lengths = inputs.history_lengths
+        batch_size = len(q_seq_length)
+        device = q_seq_length.device
 
-        position_ids = inputs.position_ids
-        max_q_seq_length = position_ids.size(-1)
-
-        # seq_len + history_length
-        kv_seq_length = position_ids[..., -1] + 1
+        # q_start_loc and kv_seq_length
+        if inputs.is_decoding:
+            q_start_loc = torch.arange(0, batch_size, device=device)
+            attention_mask = torch.ones_like(q_seq_length)[:, None]
+            position_ids = history_lengths.unsqueeze(-1)
+        else:
+            q_start_loc = q_seq_length.cumsum(0) - q_seq_length
+            mask_range = torch.arange(max_q_seq_length, device=device)[None, :]
+            attention_mask = (mask_range < q_seq_length[:, None]).long()
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids += history_lengths.unsqueeze(-1)
 
         # position ids 1d
-        q_seq_length = inputs.seq_length
         position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
                                                   device)
 
-        max_kv_seq_length = max_q_seq_length + max(inputs.history_lengths)
+        # seq_len + history_length
+        kv_seq_length = q_seq_length + history_lengths
+        max_kv_seq_length = max_q_seq_length + inputs.max_history_length
 
         window_size = getattr(cache_config, 'window_size', 0)
         if window_size > 0:
@@ -270,9 +273,10 @@ class StepContext:
 
         ret = StepContext(inputs=inputs,
                           block_offsets=inputs.block_offsets,
-                          position_ids=inputs.position_ids,
+                          position_ids=position_ids,
                           position_ids_1d=position_ids_1d,
-                          q_start_loc=inputs.q_start_loc,
+                          attention_mask=attention_mask,
+                          q_start_loc=q_start_loc,
                           history_lengths=inputs.history_lengths,
                           q_seq_length=inputs.seq_length,
                           kv_seq_length=kv_seq_length,
@@ -289,23 +293,6 @@ class StepContext:
         return ret
 
     @classmethod
-    def tensorlize_block_offsets(cls, block_offsets, device):
-        """tensorlize block_offsets."""
-        import numpy as np
-        offset_len = [len(offset) for offset in block_offsets]
-        max_offsets_len = max(offset_len)
-        batch_size = len(offset_len)
-        pad_block_offsets = np.zeros((batch_size, max_offsets_len),
-                                     dtype=np.int64)
-
-        for pad_offset, offset, off_len in zip(pad_block_offsets,
-                                               block_offsets, offset_len):
-            pad_offset[:off_len] = offset
-
-        block_offsets = torch.from_numpy(pad_block_offsets).to(device)
-        return block_offsets
-
-    @classmethod
     def get_position_ids_1d(cls,
                             position_ids: torch.LongTensor,
                             seq_length: torch.LongTensor,
@@ -319,10 +306,6 @@ class StepContext:
             ]
             position_ids_1d = torch.cat(position_ids_1d).to(device)
         return position_ids_1d
-
-    def get_block_offsets(self):
-        """return block offsets."""
-        return self.block_offsets
 
     def set_output(self, key, value):
         """set output."""
@@ -374,8 +357,8 @@ def model_forward(
         )
         output = patched_model.patched_forward(
             input_ids=inputs.input_ids,
-            position_ids=inputs.position_ids,
-            attention_mask=inputs.attention_mask,
+            position_ids=context.position_ids,
+            attention_mask=context.attention_mask,
             past_key_values=cache_engine.gpu_cache,
             return_dict=True,
             output_attentions=False,
@@ -796,9 +779,7 @@ def _tp_build_model(
                                    rank=rank,
                                    world_size=world_size)
     except Exception as e:
-        logger.error(f'rank[{rank}] failed with error: {e}')
-        error_code = 1
-        error_type = e
+        raise e
 
     # response
     resp = TPResponse(error_code, error_type, cache_config)
@@ -811,48 +792,17 @@ def _tp_build_model(
     return patched_model, cache_engine
 
 
-def _tp_get_input(rank: int, in_que: mp.Queue, world_size: int):
+def _tp_get_input(rank: int, in_que: mp.Queue, stream: torch.cuda.Stream):
     """get input tensor parallel."""
-    device_mesh = DeviceMesh('cuda', list(range(world_size)))
-
     # broadcast meta info
     if rank == 0:
-        inputs, swap_in_map, swap_out_map = in_que.get()
-        inputs = asdict(inputs)
-        input_tensors = dict(
-            (k, v) for k, v in inputs.items() if isinstance(v, torch.Tensor))
-        tensor_metas = dict(
-            (name, (t.shape, t.dtype)) for name, t in input_tensors.items())
-        other_metas = dict((k, v) for k, v in inputs.items()
-                           if not isinstance(v, torch.Tensor))
-        input_metas = (tensor_metas, other_metas)
-        objs = [input_metas, swap_in_map, swap_out_map]
+        objs = in_que.get()
     else:
         objs = [None, None, None]
 
-    dist.broadcast_object_list(objs)
-
-    if rank != 0:
-        input_metas = objs[0]
-        tensor_metas, other_metas = input_metas
-        input_tensors = dict((name, torch.empty(meta[0], dtype=meta[1]))
-                             for name, meta in tensor_metas.items())
-
-    updated_inputs = dict()
-    for name, t in input_tensors.items():
-        updated_inputs[name] = distribute_tensor(t,
-                                                 device_mesh=device_mesh,
-                                                 placements=[Replicate()
-                                                             ]).to_local()
-    torch.cuda.synchronize()
-
-    inputs = updated_inputs
-    inputs.update(other_metas)
-    inputs = ModelInputs(**inputs)
-
-    swap_in_map = objs[1]
-    swap_out_map = objs[2]
-    return inputs, swap_in_map, swap_out_map
+    with torch.cuda.stream(stream):
+        dist.broadcast_object_list(objs)
+    return objs
 
 
 def _tp_paging_adapters(
@@ -947,8 +897,7 @@ def _tp_model_loop(
                             out_que=out_que)
 
     while True:
-        inputs, swap_in_map, swap_out_map = _tp_get_input(
-            rank, in_que, world_size)
+        inputs, swap_in_map, swap_out_map = _tp_get_input(rank, in_que, stream)
 
         cache_swapping(cache_engine,
                        swap_in_map=swap_in_map,
@@ -988,7 +937,7 @@ def _start_tp_process(rank: int,
         os.environ['MASTER_PORT'] = str(port)
         dist.init_process_group('nccl', rank=rank, world_size=world_size)
 
-        with torch.cuda.device(rank), torch.no_grad():
+        with torch.cuda.device(rank), torch.inference_mode():
             args = args or tuple()
             kwargs = kwargs or dict()
             func(rank, *args, **kwargs)
@@ -996,15 +945,23 @@ def _start_tp_process(rank: int,
         from traceback import print_exc
         logger.error(f'Rank[{rank}] failed.')
         print_exc()
+        if dist.is_initialized():
+            dist.destroy_process_group()
         raise e
 
 
 def _check_context_alive(mp_context: mp.ProcessContext):
     """check context alive."""
-    procs = mp_context.processes
-    for idx, p in enumerate(procs):
-        if not p.is_alive():
-            raise RuntimeError(f'Rank[{idx}] failed.')
+    procs: List[mp.Process] = mp_context.processes
+    failed_ranks = list(idx for idx, p in enumerate(procs) if not p.is_alive())
+    if len(failed_ranks) > 0:
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
+            else:
+                p.close()
+        logger.error(f'TP process Rank{failed_ranks} failed.')
+        exit(1)
 
 
 def _queue_get_response(que: mp.Queue,
