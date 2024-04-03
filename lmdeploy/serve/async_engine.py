@@ -6,6 +6,8 @@ import random
 from argparse import ArgumentError
 from contextlib import asynccontextmanager
 from itertools import count
+from queue import Empty, Queue
+from threading import Thread
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
@@ -440,6 +442,8 @@ class AsyncEngine:
                 GenerationConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
+            adapter_name (str): the adapter name of slora for pytorch backend.
+                Pick one from adapters. Default to None, using the base model.
         """
         need_list_wrap = isinstance(prompts, str) or isinstance(
             prompts[0], Dict)
@@ -454,7 +458,7 @@ class AsyncEngine:
         if gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
-        outputs = asyncio.Queue()
+        outputs = Queue()
         generators = []
         for j in range(0, prompt_num, self.instance_num):
             batch_prompts = prompts[j:j + self.instance_num]
@@ -473,7 +477,7 @@ class AsyncEngine:
 
             async def _inner_call(i, generator):
                 async for out in generator:
-                    await outputs.put(
+                    outputs.put(
                         Response(out.response, out.generate_token_len,
                                  out.input_token_len, i + j,
                                  out.finish_reason))
@@ -483,29 +487,22 @@ class AsyncEngine:
                     _inner_call(i, generators[i])
                     for i in range(len(batch_prompts))
                 ])
-                await outputs.put(None)
+                outputs.put(None)
 
-            task = _get_event_loop().create_task(gather())
+            proc = Thread(
+                target=lambda: _get_event_loop().run_until_complete(gather()))
+            proc.start()
 
-            async def yield_from_outputs():
-                while True:
-                    out = await outputs.get()
+            while True:
+                try:
+                    out = outputs.get(timeout=0.001)
                     if out is None:
                         break
                     yield out
-                await task
+                except Empty:
+                    pass
 
-            def __call_async():
-                """call async."""
-                coro_gen = yield_from_outputs()
-                while True:
-                    try:
-                        yield _get_event_loop().run_until_complete(
-                            coro_gen.__anext__())
-                    except StopAsyncIteration:
-                        break
-
-            yield from __call_async()
+            proc.join()
 
     async def _get_prompt_input(self, prompt: str, do_preprocess: bool,
                                 sequence_start: bool, adapter_name: str):
