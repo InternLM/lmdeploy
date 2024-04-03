@@ -72,6 +72,8 @@ class GenOut:
     input_token_len: int
     generate_token_len: int
     finish_reason: Optional[Literal['stop', 'length']] = None
+    token_ids: List[int] = None
+    logprobs: List[Dict[int, float]] = None
 
 
 class Session:
@@ -402,6 +404,12 @@ class AsyncEngine:
                     outputs[i + j].generate_token_len = out.generate_token_len
                     outputs[i + j].input_token_len = out.input_token_len
                     outputs[i + j].finish_reason = out.finish_reason
+                    if out.token_ids:
+                        outputs[i + j].token_ids.extend(out.token_ids)
+                    if out.logprobs:
+                        if outputs[i + j].logprobs is None:
+                            outputs[i + j].logprobs = []
+                        outputs[i + j].logprobs.extend(out.logprobs)
 
             async def gather():
                 await asyncio.gather(*[
@@ -466,8 +474,8 @@ class AsyncEngine:
                 async for out in generator:
                     outputs.put(
                         Response(out.response, out.generate_token_len,
-                                 out.input_token_len, i + j,
-                                 out.finish_reason))
+                                 out.input_token_len, i + j, out.finish_reason,
+                                 out.token_ids, out.logprobs))
 
             async def gather():
                 await asyncio.gather(*[
@@ -587,16 +595,27 @@ class AsyncEngine:
                         sequence_start=sequence_start,
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
-                    _, res, tokens = outputs
                     # decode res
+                    res, tokens = outputs.token_ids, outputs.num_token
+                    if len(res) <= state.ids_offset:
+                        continue
+
+                    ids_offset = state.ids_offset
                     response, state = self.tokenizer.detokenize_incrementally(
                         res,
                         state,
                         skip_special_tokens=gen_config.skip_special_tokens)
+
+                    res = res[ids_offset:]
+                    logprobs = None
+                    if outputs.logprobs:
+                        logprobs = outputs.logprobs[ids_offset:]
+
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.id2step[str(session_id)],
-                                 len(input_ids), tokens, finish_reason)
+                                 len(input_ids), tokens, finish_reason, res,
+                                 logprobs)
 
                 finish_reason = 'length' \
                     if tokens >= gen_config.max_new_tokens else 'stop'

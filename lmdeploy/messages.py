@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -34,6 +34,7 @@ class GenerationConfig:
             ignoring the number of tokens in the prompt.
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
+        logprobs (int): Number of log probabilities to return per output token.
     """
 
     n: int = 1
@@ -48,6 +49,7 @@ class GenerationConfig:
     bad_words: List[str] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
+    logprobs: int = None
 
 
 @dataclass
@@ -86,6 +88,7 @@ class EngineGenerationConfig(GenerationConfig):
 
         return EngineGenerationConfig(
             n=gen_config.n,
+            logprobs=gen_config.logprobs,
             max_new_tokens=gen_config.max_new_tokens,
             min_new_tokens=gen_config.min_new_tokens,
             top_p=gen_config.top_p,
@@ -212,9 +215,32 @@ class Response:
             generating tokens. This will be 'stop' if the model hit a natural
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
+        token_ids: (List[int]): the output token ids.
+        logprobs: (List[Dict[int, float]]): the top logprobs for each output
+            position.
     """
     text: str
     generate_token_len: int
     input_token_len: int
     session_id: int
     finish_reason: Optional[Literal['stop', 'length']] = None
+    token_ids: List[int] = field(default_factory=list)
+    logprobs: List[Dict[int, float]] = None
+
+
+@dataclass
+class EngineOutput:
+    """Engine output for turbomind/pytorch engine.
+
+    Args:
+        status (ResponseType): the response type.
+        token_ids (List[int]): the output token ids.
+        num_token (int): the length of output token, for turbomind, num_token
+            may not equal to the length of token_ids
+        logprobs (List[Dict[int, float]]): the top logprobs for each output
+            position.
+    """
+    status: ResponseType
+    token_ids: List[int]
+    num_token: int
+    logprobs: List[Dict[int, float]] = None
