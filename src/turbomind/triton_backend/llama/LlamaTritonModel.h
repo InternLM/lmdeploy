@@ -117,4 +117,7 @@ private:
     std::string model_dir_;
 
     ffi_api_lock_ctrl_t ffi_lock_ = nullptr;
+
+    int medusa_num_heads_  = 0;
+    int medusa_num_layers_ = 0;
 };
