@@ -372,7 +372,8 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
         {"should_stop", {MEMORY_CPU, TYPE_BOOL, {1}, should_stop}},
         {"curand_state", {MEMORY_GPU, TYPE_VOID, {batch_size}, curand_state}}};
 
-    const std::vector<std::string> optional_outputs{"cum_log_probs", "output_log_probs"};
+    const std::vector<std::string> optional_outputs{
+        "cum_log_probs", "output_log_probs", "sampled_indexes", "sampled_logprobs", "sampled_nums"};
     for (const auto& key : optional_outputs) {
         if (outputs->isExist(key)) {
             dynamic_decode_output_tensors.insert({key, outputs->at(key)});

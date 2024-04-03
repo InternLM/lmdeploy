@@ -307,6 +307,13 @@ void TopPSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
     float* output_log_probs =
         output_tensors->isExist("output_log_probs") ? output_tensors->at("output_log_probs").getPtr<float>() : nullptr;
 
+    float* sampled_logprobs =
+        output_tensors->isExist("sampled_logprobs") ? output_tensors->at("sampled_logprobs").getPtr<float>() : nullptr;
+    uint32_t* sampled_indexes =
+        output_tensors->isExist("sampled_indexes") ? output_tensors->at("sampled_indexes").getPtr<uint32_t>() : nullptr;
+    uint32_t* sampled_nums =
+        output_tensors->isExist("sampled_nums") ? output_tensors->at("sampled_nums").getPtr<uint32_t>() : nullptr;
+
     invokeBatchTopPSampling<T>(
         sampling_workspace_,
         sampling_workspace_size_,
@@ -317,6 +324,9 @@ void TopPSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
         cum_log_probs,
         output_log_probs,
         logits,
+        sampled_logprobs,
+        sampled_indexes,
+        sampled_nums,
         topp_id_vals_buf_,
         topp_offset_buf_,
         begin_topp_offset_buf_,
