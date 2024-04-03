@@ -363,7 +363,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                                                                                  output_log_probs,     \
                                                                                                  sampled_logprobs,     \
                                                                                                  sampled_indexes,      \
-                                                                                                 sampled_nums_,        \
+                                                                                                 sampled_nums,         \
                                                                                                  max_top_k,            \
                                                                                                  top_ks,               \
                                                                                                  top_p,                \
