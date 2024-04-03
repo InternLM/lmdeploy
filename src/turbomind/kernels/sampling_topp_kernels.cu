@@ -1047,10 +1047,11 @@ __global__ void topp_logprobs(T*           sorted_log_probs,
     // and skip the sorting. So, we can skip then during sampling.
     if (begin_offset_buf[batch_id] == offset_buf[batch_id]) {
         if (tid == 0) {
-            int offset               = batch_id * vocab_size;
-            sampled_logprobs[offset] = (float)sorted_log_probs[offset];
-            sampled_indexes[offset]  = sorted_id_vals[offset];
-            sampled_nums[batch_id]   = 1;
+            int offset                       = batch_id * vocab_size;
+            int sampled_offset               = batch_id * kMaxLogProb;
+            sampled_logprobs[sampled_offset] = (float)sorted_log_probs[offset];
+            sampled_indexes[sampled_offset]  = sorted_id_vals[offset];
+            sampled_nums[batch_id]           = 1;
         }
         return;
     }
@@ -1096,7 +1097,7 @@ __global__ void topp_logprobs(T*           sorted_log_probs,
 
     if (tid == 0) {
         sample_n  = vocab_size;
-        selected  = vocab_size - 1;
+        selected  = 0;
         cum_probs = 1.0;
     }
     __syncthreads();
@@ -1126,12 +1127,14 @@ __global__ void topp_logprobs(T*           sorted_log_probs,
         sampled_indexes[sampled_offset + i]  = sorted_id_vals[offset + i];
     }
 
-    if (i_active >= sample_n) {
+    __syncthreads();
+
+    if (selected >= sample_n) {
         if (tid == kMaxLogProb - 1 || ((kMaxLogProb - 1 + BLOCK_SIZE - tid) % BLOCK_SIZE == 0)) {
             int p                                = sample_n - (sample_n == kMaxLogProb);
             sampled_nums[batch_id]               = p + 1;
-            sampled_logprobs[sampled_offset + p] = logf((float)sorted_log_probs[offset + i_active]) - logf(cum_probs);
-            sampled_indexes[sampled_offset + p]  = sorted_id_vals[offset + i_active];
+            sampled_logprobs[sampled_offset + p] = logf((float)sorted_log_probs[offset + selected]) - logf(cum_probs);
+            sampled_indexes[sampled_offset + p]  = sorted_id_vals[offset + selected];
         }
     }
 }

@@ -526,9 +526,11 @@ class TurboMindInstance:
                       logprob_vals: torch.Tensor,
                       logprob_indexes: torch.Tensor,
                       logprob_nums: torch.Tensor,
-                      output_ids: List[int],
+                      output_ids: torch.Tensor,
                       logprobs: int = None,
-                      out_logprobs: List[Dict[int, float]] = None):
+                      length: int = None,
+                      out_logprobs: List[Dict[int, float]] = None,
+                      session_id: int = None):
         if logprobs is None:
             return None
         if out_logprobs is None:
@@ -536,9 +538,10 @@ class TurboMindInstance:
         if len(output_ids) <= len(out_logprobs):
             return out_logprobs
         offset = len(out_logprobs)
-        for (token_id, idx, val,
-             n) in zip(output_ids[offset:], logprob_indexes[offset:],
-                       logprob_vals[offset:], logprob_nums[offset:]):
+        for (token_id, idx, val, n) in zip(output_ids[offset:length],
+                                           logprob_indexes[offset:length],
+                                           logprob_vals[offset:length],
+                                           logprob_nums[offset:length]):
             n = min(n.item(), logprobs)
             tok_res = {idx[i].item(): val[i].item() for i in range(n)}
             if token_id.item() not in tok_res:
@@ -785,7 +788,9 @@ class TurboMindInstance:
                                                   logprob_indexes,
                                                   logprob_nums, output_ids[0],
                                                   gen_config.logprobs,
-                                                  out_logprobs)
+                                                  sequence_length.cpu().item(),
+                                                  out_logprobs,
+                                                  session_id)
 
             outputs = []
             status = ResponseType.FINISH if finish else ResponseType.SUCCESS
@@ -896,7 +901,9 @@ class TurboMindInstance:
                                                   logprob_indexes,
                                                   logprob_nums, output_ids[0],
                                                   gen_config.logprobs,
-                                                  out_logprobs)
+                                                  sequence_length.cpu().item(),
+                                                  out_logprobs,
+                                                  session_id)
 
             outputs = []
             status = ResponseType.FINISH if finish else ResponseType.SUCCESS

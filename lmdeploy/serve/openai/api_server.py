@@ -137,7 +137,7 @@ def _create_logprobs(tokenizer: Tokenizer,
         state (DetokenizeState): tokenizer decode state.
     """
     if logprobs is None or len(logprobs) == 0:
-        return None
+        return None, None, None, None
 
     if all_token_ids is None:
         all_token_ids = []
@@ -471,7 +471,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             final_logprobs.extend(res.logprobs)
 
     logprobs = None
-    if gen_logprobs:
+    if gen_logprobs and len(final_logprobs):
         logprobs, _, _, _ = _create_logprobs(
             VariableInterface.async_engine.tokenizer, final_token_ids,
             final_logprobs, gen_config.skip_special_tokens)
@@ -814,7 +814,7 @@ async def completions_v1(request: CompletionRequest,
                 final_logprobs.extend(res.logprobs)
 
         logprobs = None
-        if request.logprobs:
+        if request.logprobs and len(final_logprobs):
             logprobs, _, _, _ = _create_logprobs(
                 VariableInterface.async_engine.tokenizer, final_token_ids,
                 final_logprobs, gen_config.skip_special_tokens)

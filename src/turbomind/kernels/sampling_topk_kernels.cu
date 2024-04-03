@@ -333,13 +333,8 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
         __syncthreads();
 
         for (int ite = tid; ite < sampled_n; ite += BLOCK_SIZE_) {
-            s_id[ite] = topk_tmp_id_buf[batch_id * stride + s_id[ite]];
-        }
-        __syncthreads();
-
-        for (int ite = tid; ite < sampled_n; ite += BLOCK_SIZE_) {
             sampled_logprobs[batch_id * kMaxLogProb + ite] = logf(s_val2[ite]) - logf(cum_probs);
-            sampled_indexes[batch_id * kMaxLogProb + ite]  = s_id[ite];
+            sampled_indexes[batch_id * kMaxLogProb + ite] = topk_tmp_id_buf[batch_id * stride + s_id[ite]] % vocab_size;
         }
     }
 }
