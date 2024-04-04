@@ -130,6 +130,7 @@ class ModelInputs:
         """update input ids."""
         assert self.is_decoding
         self.history_lengths = self.history_lengths + 1
+        self.max_history_length = self.max_history_length + 1
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
