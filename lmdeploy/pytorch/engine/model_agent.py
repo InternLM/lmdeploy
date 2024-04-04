@@ -985,6 +985,7 @@ class TPModelAgent(AutoModelAgent):
                 dist.destroy_process_group()
             raise e
 
+    @torch.inference_mode()
     def _build_model(
         self,
         model_path: str,
