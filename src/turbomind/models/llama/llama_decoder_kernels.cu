@@ -188,8 +188,10 @@ void invokeFusedAddBiasResidualRMSNorm(
         residual, in_out, bias, scale, eps, batch_size, n_dims);
 }
 
+#ifdef ENABLE_FP32
 template void
 invokeFusedAddBiasResidualRMSNorm(float*, float*, const float*, const float*, float, int, int, cudaStream_t);
+#endif
 template void invokeFusedAddBiasResidualRMSNorm(half*, half*, const half*, const half*, float, int, int, cudaStream_t);
 #ifdef ENABLE_BF16
 template void invokeFusedAddBiasResidualRMSNorm(

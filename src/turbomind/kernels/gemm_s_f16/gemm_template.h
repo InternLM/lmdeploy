@@ -380,7 +380,9 @@ __global__ void gemm_s4_f16_nn(half* __restrict__ C,
                                int K,
                                int output_op_idx)
 {
+#if __CUDA_ARCH__ >= 750
     Gemm{}.run_v2(C, A, B, Q, M, N, K, output_op_idx);
+#endif
 }
 
 }  // namespace turbomind

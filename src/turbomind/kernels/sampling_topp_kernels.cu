@@ -1181,7 +1181,7 @@ template void invokeBatchTopPSampling(void*           workspace,
                                       cudaStream_t    stream,
                                       cudaDeviceProp* cuda_device_prop,
                                       const bool*     skip_decode);
-
+#if 0
 template void invokeBatchTopPSampling(void*           workspace,
                                       size_t&         workspace_size,
                                       size_t&         cub_temp_storage_size,
@@ -1203,7 +1203,7 @@ template void invokeBatchTopPSampling(void*           workspace,
                                       cudaStream_t    stream,
                                       cudaDeviceProp* cuda_device_prop,
                                       const bool*     skip_decode);
-
+#endif
 template<typename T>
 void invokeTopPSampling(void*           workspace,
                         size_t&         workspace_size,
@@ -1269,7 +1269,7 @@ template void invokeTopPSampling(void*           workspace,
                                  cudaStream_t    stream,
                                  cudaDeviceProp* cuda_device_prop,
                                  const bool*     skip_decode);
-
+#if 0
 template void invokeTopPSampling(void*           workspace,
                                  size_t&         workspace_size,
                                  size_t&         cub_temp_storage_size,
@@ -1290,7 +1290,7 @@ template void invokeTopPSampling(void*           workspace,
                                  cudaStream_t    stream,
                                  cudaDeviceProp* cuda_device_prop,
                                  const bool*     skip_decode);
-
+#endif
 template<typename T>
 __global__ void
 addBiasSoftMax(T* logits, const T* bias, const int* end_ids, const bool* finished, const int n_padded, const int n)
@@ -1368,7 +1368,7 @@ template void invokeAddBiasSoftMax(float*       logits,
                                    const int    n_padded,
                                    const int    n,
                                    cudaStream_t stream);
-
+#if 0
 template void invokeAddBiasSoftMax(half*        logits,
                                    const half*  bias,
                                    const int*   end_ids,
@@ -1377,7 +1377,7 @@ template void invokeAddBiasSoftMax(half*        logits,
                                    const int    n_padded,
                                    const int    n,
                                    cudaStream_t stream);
-
+#endif
 __global__ void computeToppDecay(float*         runtime_top_p,
                                  const float*   runtime_initial_top_p,
                                  const int*     output_ids,

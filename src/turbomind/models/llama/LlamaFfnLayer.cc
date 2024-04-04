@@ -123,7 +123,9 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     // LOG(WARNING);
 }
 
+#ifdef ENABLE_FP32
 template class LlamaFfnLayer<float>;
+#endif
 template class LlamaFfnLayer<half>;
 #ifdef ENABLE_BF16
 template class LlamaFfnLayer<__nv_bfloat16>;
