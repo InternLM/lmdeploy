@@ -616,6 +616,7 @@ def _create_device_map(model: torch.nn.Module,
     return device_map
 
 
+@torch.inference_mode()
 def _tp_build_model(
     rank: int,
     model_path: str,
@@ -755,6 +756,7 @@ def _broadcast_inputs(rank: int, inputs: Any, stream: torch.cuda.Stream):
     return inputs
 
 
+@torch.inference_mode()
 def _tp_paging_adapters(
     rank: int,
     patched_model: torch.nn.Module,
