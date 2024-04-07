@@ -117,7 +117,7 @@ template void invokeAddBiasEndMask(float*       logits,
                                    const int    vocab_size,
                                    const int    vocab_size_padded,
                                    cudaStream_t stream);
-
+#if 0
 template void invokeAddBiasEndMask(half*        logits,
                                    const half*  bias,
                                    const int*   end_ids,
@@ -126,7 +126,7 @@ template void invokeAddBiasEndMask(half*        logits,
                                    const int    vocab_size,
                                    const int    vocab_size_padded,
                                    cudaStream_t stream);
-
+#endif
 template<typename T, int BLOCK_SIZE_, int BLOCKS_PER_BEAM_>
 __global__ void topk_stage1(const T* __restrict log_probs,
                             T*          tmp_log_probs,
@@ -459,7 +459,7 @@ template void invokeBatchTopKSampling(void*          workspace,
                                       cudaStream_t   stream,
                                       const int      batch_size,
                                       const bool*    skip_decode);
-
+#if 0
 template void invokeBatchTopKSampling(void*          workspace,
                                       size_t&        workspace_size,
                                       const half*    log_probs,
@@ -478,7 +478,7 @@ template void invokeBatchTopKSampling(void*          workspace,
                                       cudaStream_t   stream,
                                       const int      batch_size,
                                       const bool*    skip_decode);
-
+#endif
 template<typename T>
 void invokeTopKSampling(void*          workspace,
                         size_t&        workspace_size,
@@ -533,7 +533,7 @@ template void invokeTopKSampling(void*          workspace,
                                  cudaStream_t   stream,
                                  const int      batch_size,
                                  const bool*    skip_decode);
-
+#if 0
 template void invokeTopKSampling(void*          workspace,
                                  size_t&        workspace_size,
                                  const half*    log_probs,
@@ -550,7 +550,7 @@ template void invokeTopKSampling(void*          workspace,
                                  cudaStream_t   stream,
                                  const int      batch_size,
                                  const bool*    skip_decode);
-
+#endif
 template<typename T>
 void invokeTopKTopPSampling(void*          workspace,
                             size_t&        workspace_size,
@@ -586,7 +586,7 @@ void invokeTopKTopPSampling(void*          workspace,
                        batch_size,
                        nullptr);
 }
-
+#if 0
 template void invokeTopKTopPSampling(void*          workspace,
                                      size_t&        workspace_size,
                                      int*           output_ids,
@@ -618,5 +618,5 @@ template void invokeTopKTopPSampling(void*          workspace,
                                      const int      vocab_size_padded,
                                      const int*     end_ids,
                                      cudaStream_t   stream);
-
+#endif
 }  // namespace turbomind

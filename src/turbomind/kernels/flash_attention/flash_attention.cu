@@ -60,7 +60,9 @@ void FlashAttentionOp<T>::operator()(Params& params, cudaStream_t st) const
 #endif
 }
 
+#ifdef ENABLE_FP32
 template class FlashAttentionOp<float>;
+#endif
 template class FlashAttentionOp<half>;
 #ifdef ENABLE_BF16
 template class FlashAttentionOp<__nv_bfloat16>;
