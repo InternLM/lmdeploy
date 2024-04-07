@@ -112,3 +112,62 @@ class QwenModel(LlamaModel):
                     max_position_embeddings=seq_length,
                     use_dynamic_ntk=int(use_dynamic_ntk),
                     use_logn_attn=use_logn_attn)
+
+
+class Qwen2Reader(LlamaReader):
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
+
+    def attn_bias(self, i: int):
+        """Get q, k, v bias for layer i."""
+        result = []
+
+        for key in ['q', 'k', 'v']:
+            tensor = self.params.get(
+                f'model.layers.{i}.self_attn.{key}_proj.bias')
+            assert tensor is not None
+            result.append(tensor)
+
+        tensor = self.params.get(f'model.layers.{i}.self_attn.o_proj.weight')
+        dummy_oproj_bias = torch.zeros(tensor.shape[-1],
+                                       dtype=torch.bfloat16).to(tensor.device)
+        result.append(dummy_oproj_bias)
+        return (*result, )
+
+
+@INPUT_MODELS.register_module(name='qwen2')
+class Qwen2Model(LlamaModel):
+    """Qwen model in hf format."""
+
+    Reader = Qwen2Reader
+
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
+        super().__init__(model_path, tokenizer_path, **kwargs)
+
+    def tokenizer_info(self):
+        """Read tokenizer info."""
+        n_words = 152064
+        bos_id = 151643
+        eos_id = 151645
+        return n_words, bos_id, eos_id
+
+    def model_info(self):
+        """Read model info."""
+        params_path = osp.join(self.model_path, 'config.json')
+        with open(params_path) as f:
+            config = json.load(f)
+            num_layer = config['num_hidden_layers']
+            norm_eps = config['layer_norm_epsilon']
+            rope_theta = float(config.get('rotary_emb_base', 10000.0))
+            if 'num_key_value_heads' in config:
+                kv_head_num = config['num_key_value_heads']
+            else:
+                kv_head_num = config['num_attention_heads']
+            seq_length = config['max_position_embeddings']
+        return dict(num_layer=num_layer,
+                    norm_eps=norm_eps,
+                    kv_head_num=kv_head_num,
+                    rope_theta=rope_theta,
+                    max_position_embeddings=seq_length)

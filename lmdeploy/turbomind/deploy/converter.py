@@ -17,6 +17,7 @@ from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 supported_formats = ['llama', 'hf', 'awq', None]
 special_input_model_map = {
     'qwen': 'qwen',
+    'qwen2': 'qwen2',
     'baichuan': 'baichuan',
     'baichuan2': 'baichuan2',
     'internlm2': 'internlm2',
@@ -45,19 +46,19 @@ def get_tokenizer_path(model_path: str, tokenizer_path: str):
     return tokenizer_path
 
 
-def get_model_format(model_name: str, model_format: str):
+def get_model_format(arch: str, model_format: str):
     """Get model format if not given or equal awq."""
     # get model name prefix
-    if model_name.find('-') != -1:
-        model_name = model_name[:model_name.find('-')]
+    if arch.find('-') != -1:
+        arch = arch[:arch.find('-')]
     # rules:
     # 1) llama -> match special -> hf (if not matched)
     # 2) append awq (if model_format is awq)
     inferred_model_format = model_format
     if model_format in [None, 'hf']:
-        inferred_model_format = special_input_model_map.get(model_name, 'hf')
+        inferred_model_format = special_input_model_map.get(arch, 'hf')
     elif model_format == 'awq':
-        inferred_model_format = special_input_model_map.get(model_name,
+        inferred_model_format = special_input_model_map.get(arch,
                                                             'hf') + '-awq'
     return inferred_model_format
 
@@ -119,8 +120,8 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
                          output_format: str):
     """Update output format according to model info."""
     TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16'}
-    MODEL_NAME_MAP = {'qwen': 'bf16', 'llama': 'half'}
-    model_name = model_name.split('-')[0]
+    MODEL_FORMAT_MAP = {'qwen': 'bf16', 'llama': 'half'}
+    model_format_prefix = model_format.split('-')[0]
 
     def _fix_device_support(output_format):
         """fix device support."""
@@ -139,12 +140,13 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
                 torch_dtype, output_format)
         else:
             # get model name prefix
-            updated_output_format = MODEL_NAME_MAP.get(model_name,
-                                                       output_format)
+            updated_output_format = MODEL_FORMAT_MAP.get(
+                model_format_prefix, output_format)
         return _fix_device_support(updated_output_format)
 
-    if model_format in MODEL_NAME_MAP:
-        updated_output_format = MODEL_NAME_MAP.get(model_name, output_format)
+    if model_format in MODEL_FORMAT_MAP:
+        updated_output_format = MODEL_FORMAT_MAP.get(model_format_prefix,
+                                                     output_format)
         return _fix_device_support(updated_output_format)
     else:
         from transformers import AutoConfig

@@ -21,6 +21,8 @@ SUPPORTED_ARCHS = dict(
     LlamaForCausalLM='llama',
     # Qwen 7B-72B, Qwen-VL-7B
     QWenLMHeadModel='qwen',
+    # Qwen2
+    Qwen2ForCausalLM='qwen2',
     # llava
     LlavaLlamaForCausalLM='llama',
     # deepseek-vl
@@ -82,5 +84,12 @@ def is_supported(model_path: str):
                 num_attn_head = cfg['num_attention_heads']
                 if num_attn_head == 40:
                     # baichuan-13B, baichuan2-13B not supported by turbomind
+                    support_by_turbomind = False
+            elif arch == 'Qwen2ForCausalLM':
+                num_attn_head = cfg['num_attention_heads']
+                hidden_size = cfg['hidden_size']
+                # qwen2 0.5b size_per_head is 64, which hasn't been supported
+                # by turbomind yet
+                if hidden_size // num_attn_head != 128:
                     support_by_turbomind = False
     return support_by_turbomind
