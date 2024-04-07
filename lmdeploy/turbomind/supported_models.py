@@ -5,42 +5,45 @@ from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
-_SUPPORTED_ARCHS = dict(
+SUPPORTED_ARCHS = dict(
     # baichuan-7b
-    BaiChuanForCausalLM=True,
+    BaiChuanForCausalLM='baichuan',
     # baichuan2-7b, baichuan-13b, baichuan2-13b
-    BaichuanForCausalLM=True,
-    # chatglm2-6b, chatglm3-6b
-    ChatGLMModel=False,
-    # deepseek-moe
-    DeepseekForCausalLM=False,
-    # falcon-7b
-    FalconForCausalLM=False,
-    # gemma-7b
-    GemmaForCausalLM=False,
+    BaichuanForCausalLM='baichuan2',
     # internlm
-    InternLMForCausalLM=True,
+    InternLMForCausalLM='llama',
     # internlm2
-    InternLM2ForCausalLM=True,
+    InternLM2ForCausalLM='internlm2',
     # internlm-xcomposer
-    InternLMXComposerForCausalLM=True,
-    # internlm2-xcomposer
-    InternLM2XComposerForCausalLM=False,
+    InternLMXComposerForCausalLM='llama',
     # llama, llama2, alpaca, vicuna, codellama, ultracm, yi,
     # deepseek-coder, deepseek-llm
-    LlamaForCausalLM=True,
-    # Mistral-7B
-    MistralForCausalLM=False,
-    # Mixtral-8x7B
-    MixtralForCausalLM=False,
+    LlamaForCausalLM='llama',
     # Qwen 7B-72B, Qwen-VL-7B
-    QWenLMHeadModel=True,
-    # Qwen1.5 7B-72B
-    Qwen2ForCausalLM=False,
+    QWenLMHeadModel='qwen',
     # llava
-    LlavaLlamaForCausalLM=True,
+    LlavaLlamaForCausalLM='llama',
     # deepseek-vl
-    MultiModalityCausalLM=True)
+    MultiModalityCausalLM='deepseekvl')
+
+
+def get_model_arch(model_path: str):
+    try:
+        cfg = AutoConfig.from_pretrained(model_path,
+                                         trust_remote_code=True).to_dict()
+    except Exception as e:  # noqa
+        from transformers import PretrainedConfig
+        cfg = PretrainedConfig.get_config_dict(model_path)[0]
+
+    if cfg.get('architectures', None):
+        arch = cfg['architectures'][0]
+    elif cfg.get('auto_map',
+                 None) and 'AutoModelForCausalLM' in cfg['auto_map']:
+        arch = cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
+    else:
+        raise RuntimeError(
+            f'Could not find model architecture from config: {cfg}')
+    return arch, cfg
 
 
 def is_supported(model_path: str):
@@ -70,24 +73,10 @@ def is_supported(model_path: str):
     if os.path.exists(triton_model_path):
         support_by_turbomind = True
     else:
-        try:
-            cfg = AutoConfig.from_pretrained(model_path,
-                                             trust_remote_code=True).to_dict()
-        except Exception as e:  # noqa
-            from transformers import PretrainedConfig
-            cfg = PretrainedConfig.get_config_dict(model_path)[0]
+        arch, cfg = get_model_arch(model_path)
 
-        if cfg.get('architectures', None):
-            arch = cfg['architectures'][0]
-        elif cfg.get('auto_map',
-                     None) and 'AutoModelForCausalLM' in cfg['auto_map']:
-            arch = cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
-        else:
-            raise RuntimeError(
-                f'Could not find model architecture from config: {cfg}')
-
-        if arch in _SUPPORTED_ARCHS:
-            support_by_turbomind = _SUPPORTED_ARCHS[arch]
+        if arch in SUPPORTED_ARCHS.keys():
+            support_by_turbomind = True
             # special cases
             if arch == 'BaichuanForCausalLM':
                 num_attn_head = cfg['num_attention_heads']

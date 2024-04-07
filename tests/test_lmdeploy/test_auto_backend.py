@@ -41,13 +41,13 @@ class TestAutoBackend:
         ]
         return models
 
-    def test_pytorch_is_suppored(self, turbomind_workspace, models):
+    def test_pytorch_is_supported(self, turbomind_workspace, models):
         from lmdeploy.pytorch.supported_models import is_supported
         assert is_supported(turbomind_workspace) is False
         for m, flag, _ in models:
             assert is_supported(m) is flag
 
-    def test_turbomind_is_suppored(self, turbomind_workspace, models):
+    def test_turbomind_is_supported(self, turbomind_workspace, models):
         from lmdeploy.turbomind.supported_models import is_supported
         assert is_supported(turbomind_workspace) is True
         for m, _, flag in models:
