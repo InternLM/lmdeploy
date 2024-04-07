@@ -384,6 +384,6 @@ bool DynamicDecodeLayer<T>::hasDiffRuntimeArgs(TensorMap* input_tensors)
 }
 
 template class DynamicDecodeLayer<float>;
-template class DynamicDecodeLayer<half>;
+// template class DynamicDecodeLayer<half>;
 
 }  // namespace turbomind

@@ -375,7 +375,9 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
     return output;
 }
 
+#ifdef ENABLE_FP32
 template struct LlamaDecoderLayerWeight<float>;
+#endif
 template struct LlamaDecoderLayerWeight<half>;
 #ifdef ENABLE_BF16
 template struct LlamaDecoderLayerWeight<__nv_bfloat16>;

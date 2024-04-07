@@ -9,7 +9,7 @@ from .layout_convert import continuous_tensor, page_cache
 def make_model_inputs(input_ids: torch.Tensor,
                       block_offsets: torch.Tensor,
                       seq_length: torch.Tensor = None,
-                      history_length: List[int] = None):
+                      history_length: torch.Tensor = None):
     """make model inputs."""
     from lmdeploy.pytorch.engine.model_agent import ModelInputs
     batch_size = input_ids.size(0)
@@ -22,24 +22,18 @@ def make_model_inputs(input_ids: torch.Tensor,
         history_length = [0] * batch_size
     else:
         assert len(history_length) == len(seq_length)
+    history_length = torch.tensor(history_length)
     is_decoding = input_ids.size(0) == batch_size
-    q_start_loc = seq_length.cumsum(0) - seq_length
-    mask_range = torch.arange(max_seq_len)[None, :]
-    attention_mask = (mask_range < seq_length[:, None]).long()
-    position_ids = attention_mask.long().cumsum(-1) - 1
-    position_ids += position_ids.new_tensor(history_length).unsqueeze(-1)
-
-    if isinstance(history_length, torch.Tensor):
-        history_length = history_length.tolist()
+    max_q_seq_length = seq_length.max().item()
+    max_history_length = history_length.max().item()
 
     num_ignored_history = torch.zeros_like(seq_length)
     return ModelInputs(input_ids=input_ids,
                        seq_length=seq_length,
-                       attention_mask=attention_mask,
-                       block_offsets=block_offsets,
-                       position_ids=position_ids,
-                       q_start_loc=q_start_loc,
                        history_lengths=history_length,
+                       block_offsets=block_offsets,
+                       max_q_seq_length=max_q_seq_length,
+                       max_history_length=max_history_length,
                        is_decoding=is_decoding,
                        num_ignored_history=num_ignored_history)
 
@@ -47,7 +41,7 @@ def make_model_inputs(input_ids: torch.Tensor,
 def make_step_context(
     input_ids: torch.Tensor,
     seq_length: torch.Tensor = None,
-    history_length: List[int] = None,
+    history_length: torch.Tensor = None,
     past_key_values: List[Tuple] = None,
     world_size: int = 1,
     device: str = 'cuda',
@@ -119,7 +113,6 @@ def make_step_context(
     kv_caches, block_offsets, _ = __create_kv_caches(past_key_values)
     __fill_kv_caches(kv_caches, past_key_values, block_offsets)
 
-    history_length = history_length.tolist()
     model_inputs = make_model_inputs(input_ids,
                                      block_offsets=block_offsets,
                                      seq_length=seq_length,
