@@ -181,7 +181,7 @@ def run_pipeline_vl_chat_test(config, model_case):
                for img_url in image_urls]
     response = pipe(prompts)
     result = 'ski' in response[0].text.lower(
-    ) and 'tiger' in response[0].text.lower()
+    ) and 'tiger' in response[1].text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: Batch example: tiger not in ' + str(response) +
                     '\n')
