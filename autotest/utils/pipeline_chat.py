@@ -145,7 +145,7 @@ def run_pipeline_vl_chat_test(config, model_case):
     image = load_image(PIC1)
     response = pipe(('describe this image', image))
     result = 'tiger' in response.text.lower()
-    file.writelines('result:' + result +
+    file.writelines('result:' + str(result) +
                     ', reason: simple example tiger not in ' + response.text +
                     '\n')
 
@@ -164,7 +164,7 @@ def run_pipeline_vl_chat_test(config, model_case):
     }]
     response = pipe(prompts)
     result = 'tiger' in response.text.lower()
-    file.writelines('result:' + result +
+    file.writelines('result:' + str(result) +
                     ', reason: OpenAI format example: tiger not in ' +
                     response.text + '\n')
 
@@ -172,7 +172,7 @@ def run_pipeline_vl_chat_test(config, model_case):
     images = [load_image(img_url) for img_url in image_urls]
     response = pipe(('describe these images', images))
     result = 'tiger' in response.text.lower() or 'ski' in response.text.lower()
-    file.writelines('result:' + result +
+    file.writelines('result:' + str(result) +
                     ', reason: Multi-images example: tiger or ski not in ' +
                     response.text + '\n')
 
@@ -182,19 +182,19 @@ def run_pipeline_vl_chat_test(config, model_case):
     response = pipe(prompts)
     result = 'ski' in response[0].text.lower(
     ) and 'tiger' in response[0].text.lower()
-    file.writelines('result:' + result +
+    file.writelines('result:' + str(result) +
                     ', reason: Batch example: tiger not in ' + str(response) +
                     '\n')
 
     image = load_image(PIC2)
     sess = pipe.chat(('describe this image', image))
     result = 'ski' in sess.response.text.lower()
-    file.writelines('result:' + result +
+    file.writelines('result:' + str(result) +
                     ', reason: Multi-turn example: ski not in ' +
                     sess.response.text + '\n')
     sess = pipe.chat('What is the woman doing?', session=sess)
     result = 'ski' in sess.response.text.lower()
-    file.writelines('result:' + result +
+    file.writelines('result:' + str(result) +
                     ', reason: Multi-turn example: ski not in ' +
                     sess.response.text + '\n')
 

@@ -59,6 +59,7 @@ jobs:
           python3 -m pip install -r requirements/build.txt
           mkdir build
           cd build
+          cp -r /nvme/qa_test_models/offline_pkg/_deps .
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
               -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
@@ -73,7 +74,7 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets openai einops
+          python3 -m pip install packaging transformers_stream_generator transformers datasets openai einops
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
       - name: Check env
