@@ -57,9 +57,9 @@ jobs:
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
+          sed -i 's/https:\/\/github.com\/NVIDIA\/cutlass.git/https:\/\/521github.com\/extdomains\/github.com\/NVIDIA\/cutlass.git/g' CMakeLists.txt
           mkdir build
           cd build
-          cp -r /nvme/qa_test_models/offline_pkg/_deps .
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
               -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
