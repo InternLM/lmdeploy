@@ -40,7 +40,7 @@ __device__ constexpr T Max(T a, T b)
 
 #if __CUDA_ARCH__ >= 800
     if constexpr (std::is_same_v<T, nv_bfloat16>) {
-        return __hmin(a, b);
+        return __hmax(a, b);
     }
 #endif
 
