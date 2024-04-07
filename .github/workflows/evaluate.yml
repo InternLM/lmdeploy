@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 4320 # 72hours
     environment: 'prod'
     container:
-      image: nvcr.io/nvidia/tritonserver:24.03-py3
+      image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
       volumes:
         - /mnt/bigdisk/lmdeploy-github-actions/pip-cache:/root/.cache/pip
@@ -57,7 +57,7 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu121
+          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Build lmdeploy
         run: |
           python3 -m pip install cmake
@@ -80,7 +80,7 @@ jobs:
         run: |
           python3 -m pip install pynvml packaging protobuf transformers_stream_generator
           # manually install flash attn
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu122torch2.1cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install -r requirements.txt
           python3 -m pip install .
       - name: Install opencompass
