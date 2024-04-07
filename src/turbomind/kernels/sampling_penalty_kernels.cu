@@ -105,7 +105,7 @@ template void invokeApplyTemperaturePenalty(float*       logits,
                                             const int    vocab_size,
                                             const int    vocab_size_padd,
                                             cudaStream_t stream);
-
+#if 0
 template void invokeApplyTemperaturePenalty(half*        logits,
                                             const half*  bias,
                                             const float  temperature,
@@ -113,7 +113,7 @@ template void invokeApplyTemperaturePenalty(half*        logits,
                                             const int    vocab_size,
                                             const int    vocab_size_padd,
                                             cudaStream_t stream);
-
+#endif
 template<typename T>
 __global__ void batchApplyTemperaturePenalty(T*           logits,
                                              const T*     bias,
@@ -212,7 +212,7 @@ template void invokeBatchApplyTemperaturePenalty(float*       logits,
                                                  const int    vocab_size,
                                                  const int    vocab_size_padd,
                                                  cudaStream_t stream);
-
+#if 0
 template void invokeBatchApplyTemperaturePenalty(half*        logits,
                                                  const half*  bias,
                                                  const float* temperatures,
@@ -220,7 +220,7 @@ template void invokeBatchApplyTemperaturePenalty(half*        logits,
                                                  const int    vocab_size,
                                                  const int    vocab_size_padd,
                                                  cudaStream_t stream);
-
+#endif
 template<typename T, RepetitionPenaltyType penalty_type>
 __global__ void applyRepetitionPenalty(T*          logits,
                                        const float penalty,
@@ -349,7 +349,7 @@ template void invokeApplyRepetitionPenalty(float*                      logits,
                                            const int                   step,
                                            const RepetitionPenaltyType penalty_type,
                                            cudaStream_t                stream);
-
+#if 0
 template void invokeApplyRepetitionPenalty(half*                       logits,
                                            const float                 penalty,
                                            const int*                  start_ids,
@@ -363,7 +363,7 @@ template void invokeApplyRepetitionPenalty(half*                       logits,
                                            const int                   step,
                                            const RepetitionPenaltyType penalty_type,
                                            cudaStream_t                stream);
-
+#endif
 template<typename T, RepetitionPenaltyType penalty_type>
 __global__ void batchApplyRepetitionPenalty(T*           logits,
                                             const float* penalties,
@@ -486,7 +486,7 @@ template void invokeBatchApplyRepetitionPenalty(float*                logits,
                                                 const int             step,
                                                 RepetitionPenaltyType penalty_type,
                                                 cudaStream_t          stream);
-
+#if 0
 template void invokeBatchApplyRepetitionPenalty(half*                 logits,
                                                 const float*          penalties,
                                                 int*                  penalty_workspace,
@@ -499,7 +499,7 @@ template void invokeBatchApplyRepetitionPenalty(half*                 logits,
                                                 const int             step,
                                                 RepetitionPenaltyType penalty_type,
                                                 cudaStream_t          stream);
-
+#endif
 template<typename T>
 __global__ void batchApplyMinLengthPenalty(T*         logits,
                                            const int* min_lengths,
@@ -541,7 +541,7 @@ template void invokeMinLengthPenalty(float*       logits,
                                      const int    batch_size,
                                      const int    vocab_size_padded,
                                      cudaStream_t stream);
-
+#if 0
 template void invokeMinLengthPenalty(half*        logits,
                                      const int*   min_lengths,
                                      const int*   end_ids,
@@ -550,5 +550,5 @@ template void invokeMinLengthPenalty(half*        logits,
                                      const int    batch_size,
                                      const int    vocab_size_padded,
                                      cudaStream_t stream);
-
+#endif
 }  // namespace turbomind

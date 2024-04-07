@@ -268,7 +268,12 @@ std::shared_ptr<AbstractTransformerModel> ModelState::ModelFactory(common::Trito
             ft_model = std::make_shared<LlamaTritonModel<half>>(tp, pp, custom_ar, model_dir);
         }
         else {
+#if ENABLE_FP32
             ft_model = std::make_shared<LlamaTritonModel<float>>(tp, pp, custom_ar, model_dir);
+#else
+            THROW_IF_BACKEND_MODEL_ERROR(
+                TRITONSERVER_ErrorNew(TRITONSERVER_ERROR_UNSUPPORTED, "turbomind is not built with FP32 support"));
+#endif
         }
     }
     else {
