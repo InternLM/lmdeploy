@@ -925,7 +925,24 @@ class TPModelAgent(AutoModelAgent):
                  world_size: int,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True) -> None:
+        import signal
+
+        def __signal_term_handler(sig, frame):
+            """sigterm handler."""
+            if hasattr(self, 'mp_context'):
+                procs = self.mp_context.processes
+                for p in procs:
+                    if p.is_alive():
+                        p.kill()
+            logger.error(f'Get signal[{sig}], kill all processes.')
+            signal.signal(sig, signal.SIG_DFL)
+            signal.raise_signal(sig)
+
         super().__init__(model_config=model_config, cache_config=cache_config)
+
+        signal.signal(signal.SIGTERM, __signal_term_handler)
+
+        self.mp_ctx = mp.get_context('spawn')
         self.world_size = world_size
 
         self._start_sub_process(model_path,
