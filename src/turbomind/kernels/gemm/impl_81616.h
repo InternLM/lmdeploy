@@ -62,8 +62,8 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     using FragC = Array<float, 4>[ITER_M][ITER_N];  // {n8,m4}, [iM,iN], (n2,m2)
                                                     //   1  2     8 16     8  1
 
-    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 32, 32, Swizzle<3, 3, 2>>;
-    using SmemLayoutB = SmemLayoutV2<CTA_N, CTA_K, 32, 32, Swizzle<3, 3, 2>>;
+    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
+    using SmemLayoutB = SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
 
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K + 8, CTA_M, CTA_K + 8, Identity>;
     // using SmemLayoutB = SmemLayoutV2<CTA_N, CTA_K + 8, CTA_M, CTA_K + 8, Identity>;
