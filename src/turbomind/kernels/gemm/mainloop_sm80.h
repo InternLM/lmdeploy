@@ -42,7 +42,6 @@ struct Mainloop_sm80 {
     __device__ void operator()(
         GmemIterA& gmem_A, GmemIterB& gmem_B, FragC& frag_C, DataIter& data_iter, int tile_iter, SharedStorage& storage)
     {
-
         Impl::SetSmem(gmem_A, gmem_B, storage);
 
         PipeIter<Stages> pipe_iter{};
@@ -73,7 +72,7 @@ struct Mainloop_sm80 {
         Wait();
 
         ++pipe_iter;
-        // printf("0 pipe = %d\n", pipe_iter.r);
+
         state_A.Load(0, pipe_iter.r);
         state_B.Load(0, pipe_iter.r);
 
@@ -89,15 +88,6 @@ struct Mainloop_sm80 {
                     ++data_iter;
                 }
             };
-
-            // ++pipe_iter;
-
-            // Wait();  // wait 0
-
-            // w2
-            // gmem_A.Prefetch(data_iter, pipe_iter.w);
-            // gmem_B.Prefetch(data_iter, pipe_iter.w);
-            // ++data_iter;
 
             // r0
             Impl::Compute(state_A, state_B, frag_C, pipe_iter.r, prefetch, [&] {

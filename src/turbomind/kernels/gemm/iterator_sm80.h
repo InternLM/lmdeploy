@@ -70,18 +70,11 @@ struct GmemIteratorSm80 {
         for (int s = begin; s < begin + count && s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                auto       dst = cast_smem_ptr_to_uint(&dst_data(offset_s_ + s * Map::kDeltaS,  //
+                auto dst = cast_smem_ptr_to_uint(&dst_data(offset_s_ + s * Map::kDeltaS,  //
                                                            offset_c_ + c * Map::kDeltaC,
                                                            pipe_iter * SmemLayout::kSize));
-                auto       src = &src_data[s * Map::kDeltaS * stride_s_ + c * Map::kDeltaC];
-                // AccessType vec;
-                // Load(vec, src_data);
-                // if (Idx == 0) {
-                //     for (int i = 0; i < vec.size(); ++i) {
-                //         printf("%d %d %d %d %f\n", (threadIdx.x % WARP_SIZE), i, offset_s_, offset_c_, (float)vec[i]);
-                //     }
-                // }
-                CpAsync(std::false_type{}, dst, (const T*)src, true);
+                auto src = &src_data[s * Map::kDeltaS * stride_s_ + c * Map::kDeltaC];
+                CpAsync(std::true_type{}, dst, (const T*)src, static_cast<bool>(iter));
             }
         }
     }
