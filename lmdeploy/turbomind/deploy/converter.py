@@ -229,6 +229,15 @@ def main(model_name: str,
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
 
+    from lmdeploy.turbomind.supported_models import (SUPPORTED_ARCHS,
+                                                     get_model_arch,
+                                                     is_supported)
+    assert is_supported(model_path), (
+        f'turbomind does not support {model_path}. '
+        'Plz try pytorch engine instead.')
+
+    arch, _ = get_model_arch(model_path)
+
     assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
 
     output_format = 'fp16'
@@ -237,7 +246,8 @@ def main(model_name: str,
     assert model_format in supported_formats, 'the model format ' \
         f'should be in {supported_formats}'
 
-    inferred_model_format = get_model_format(model_name, model_format)
+    inferred_model_format = get_model_format(SUPPORTED_ARCHS[arch],
+                                             model_format)
     if inferred_model_format not in INPUT_MODELS.module_dict.keys():
         supported_keys = list(INPUT_MODELS.module_dict.keys())
         print(f'with model name {model_name} and model formst {model_format}, '
