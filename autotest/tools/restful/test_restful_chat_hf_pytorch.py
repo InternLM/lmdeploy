@@ -77,7 +77,7 @@ def prepare_environment(request, config, worker_id):
                                 'kill_' + model.split('/')[1] + '.log')
 
         with open(kill_log, 'w') as f:
-            startRes.kill()
+            startRes.terminate()
 
     allure.attach.file(kill_log, attachment_type=allure.attachment_type.TEXT)
 

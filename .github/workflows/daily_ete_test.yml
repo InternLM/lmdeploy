@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging protobuf transformers_stream_generator transformers datasets matplotlib openai'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai'
       tools_regression:
         required: true
         description: 'Whether start a tool regression'
@@ -131,7 +131,7 @@ jobs:
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging protobuf transformers_stream_generator transformers datasets matplotlib openai'}}
+          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai'}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
@@ -262,7 +262,7 @@ jobs:
           pytest autotest --lf --lfnf none --alluredir=allure-results
       - name: Test lmdeploy - local testcase
         timeout-minutes: 30
-        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
+        if: always() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case'))
         run: |
           pytest /local_case/issue_regression --alluredir=allure-results
       - name: Generate reports
@@ -477,7 +477,7 @@ jobs:
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging protobuf transformers_stream_generator transformers datasets matplotlib openai'}}
+          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai'}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
