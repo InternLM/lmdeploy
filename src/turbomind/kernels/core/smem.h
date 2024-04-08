@@ -49,6 +49,11 @@ __inline__ __device__ void ldsm_x4_trans(Array<uint32_t, 4>& d, uint32_t smem_in
     ldsm_x4_trans(d[0], d[1], d[2], d[3], smem_int_ptr);
 }
 
+__inline__ __device__ void ldsm_x2(Array<uint32_t, 2>& d, uint32_t smem_int_ptr)
+{
+    ldmatrix_m8n8_x2_b16(d[0], d[1], smem_int_ptr);
+}
+
 __inline__ __device__ void ldsm_x4(Array<uint32_t, 4>& d, uint32_t smem_int_ptr)
 {
     ldmatrix_m8n8_x4_b16(d[0], d[1], d[2], d[3], smem_int_ptr);
