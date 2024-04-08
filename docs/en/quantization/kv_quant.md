@@ -1,60 +1,57 @@
 # KV Cache Quantization
 
-For the LLaMa-7B fp16 model with a maximum length of 2048, the server requires approximately 1030MB of GPU memory to store kv_cache for each concurrent session created. This means that even an A100 80G can only serve a limited number of users.
+The latest main branch of LMDeploy supports online key-value (KV) cache quantization with 4-bit and 8-bit precision, utilizing an asymmetric quantization method that is applied on a per-head, per-token basis. The original KV offline quantization method has been removed.
 
-To reduce runtime GPU memory usage, we have implemented PTQ quantization for kv cache, using the following formula:
+Intuitively, quantizing the KV cache is beneficial for reducing memory usage. Compared to FP16, the memory for 4-bit/8-bit KV can be reduced to 1/4 and 1/2, respectively. This means that under the same memory conditions, the system can support a significantly increased number of concurrent operations after KV quantization, thereby ultimately enhancing throughput.
 
-```bash
-zp = (min+max) / 2
-scale = (max-min) / 255
-quant: q = round( (f-zp) / scale)
-dequant: f = q * scale + zp
+However, quantization typically brings in some loss of model accuracy. We have used OpenCompass to evaluate the accuracy of several models after applying 8/4-bit KV quantization, and the results are presented in the [Evaluation](#Evaluation) section. You can refer to the information and choose wisely based on your requirements.
+
+LMDeploy inference with quantized KV supports the following NVIDIA GPU models:
+
+- Volta architecture (sm70): V100
+- Turing architecture (sm75): 20 series, T4
+- Ampere architecture (sm80, sm86): 30 series, A10, A16, A30, A100
+- Ada Lovelace architecture (sm89): 40 series
+
+In the next section, we will take `internlm2-chat-7b` model as an example, introducing the usage of kv quantization and inference of lmdeploy. But before that, please install lmdeploy from source according to the [build](../build.md) guide, because lmdeploy hasn't released this feature yet.
+
+## Usage
+
+Applying KV quantization and inference via LMDeploy is quit straightforward; simply set the `quant_policy` parameter.
+
+**LMDeploy specifies that `quant_policy=4` stands for 4-bit KV, whereas `quant_policy=8` indicates 8-bit KV.**
+
+### Offline inference
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+engine_config = TurbomindEngineConfig(quant_policy=8)
+pipe = pipeline("internlm/internlm2-chat-7b", backend_config=engine_config)
+response = pipe(["Hi, pls intro yourself", "Shanghai is"])
+print(response)
 ```
 
-## GPU Memory Test
-
-The test object is the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) model.
-Testing method:
-
-1. Use `deploy.py` to convert the model, modify the maximum concurrency in the `workspace` configuration; adjust the number of requests in `llama_config.ini`.
-2. Compile and run `bin/llama_triton_example` to obtain the GPU memory situation of the fp16 version under different batch_size.
-3. Enable quantization, re-run `bin/llama_triton_example` to obtain the GPU memory situation of the int8 version under different batch_size.
-
-Below shows the comparison of GPU memory between the two versions:
-
-| batch_size | fp16 memory(MiB) | int8 memory(MiB) | diff(MiB) |
-| :--------: | :--------------: | :--------------: | :-------: |
-|     8      |      22337       |      18241       |   -4096   |
-|     16     |      30593       |      22369       |   -8224   |
-|     32     |      47073       |      30625       |  -16448   |
-|     48     |      63553       |      38881       |  -24672   |
-
-Compared to directly quantizing Weight (such as [GPTQ-for-LLaMa](https://github.com/qwopqwop200/GPTQ-for-LLaMa/)), we have done a comparative estimation of memory growth in the 7B model for both methods, with some data from [llama.cpp](https://github.com/ggerganov/llama.cpp).
-
-![](../../../resources/batch_memory.png)
-
-As can be seen, the fp16 version requires 1030MB of GPU memory for each concurrency, so quantizing kv_cache can significantly reduce the rate of increase of runtime memory.
-
-## Accuracy Test
-
-The test object is the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) command model.
-
-Below is the result of PTQ quantization of `kCacheKVInt8` method with only 128 randomly selected data from the c4 dataset. The accuracy was tested using [opencompass](https://github.com/InternLM/opencompass) before and after quantization.
-
-|     task      |     dataset     |    metric     | int8  | fp16  | diff  |
-| :-----------: | :-------------: | :-----------: | :---: | :---: | :---: |
-|   Language    |   winogrande    |   accuracy    | 60.77 | 61.48 | -0.71 |
-|   Knowledge   |       nq        |     score     | 2.69  | 2.60  | +0.09 |
-|   Reasoning   |      gsm8k      |   accuracy    | 33.28 | 34.72 | -1.44 |
-|   Reasoning   |       bbh       | naive_average | 20.12 | 20.51 | -0.39 |
-| Understanding | openbookqa_fact |   accuracy    | 82.40 | 82.20 | +0.20 |
-| Understanding |   eprstmt-dev   |   accuracy    | 90.62 | 88.75 | +1.87 |
-|    Safety     |   crows_pairs   |   accuracy    | 32.56 | 31.43 | +1.13 |
-
-Note that both `kCacheKVInt8` and `WeightInt4` methods can be enabled at the same time.
-Please refer to [w4a16](./w4a16.md) do `WeightInt4` and then
-start chat like:
+### Serving
 
 ```shell
-lmdeploy chat ./internlm-chat-7b-4bit --model-format awq --quant-policy 4
+lmdeploy serve api_server internlm/internlm2-chat-7b --quant-policy 8
 ```
+
+## Evaluation
+
+We apply KV quantization of LMDeploy to several LLM models and utilize OpenCompass to evaluate the inference accuracy. The results are shown in the table below:
+
+| -           | -       | -             | llama2-7b-chat |         |         | internlm2-chat-7b |         |         | qwen-chat-7b |         |         |
+| ----------- | ------- | ------------- | -------------- | ------- | ------- | ----------------- | ------- | ------- | ------------ | ------- | ------- |
+| dataset     | version | metric        | fp16           | kv int8 | kv int4 | fp16              | kv int8 | kv int4 | bf16         | kv int8 | kv int4 |
+| ceval       | -       | naive_average | 28.42          | 28.07   | 28.18   | 60.45             | 60.48   | 58.91   | 59.32        | 59.59   | 59.42   |
+| mmlu        | -       | naive_average | 35.61          | 35.63   | 35.11   | 63.92             | 63.78   | 63.29   | 57.27        | 57.39   | 56.07   |
+| triviaqa    | 2121ce  | score         | 56.12          | 56.04   | 54.09   | 58.76             | 58.67   | 58.32   | 54.42        | 54.27   | 54.46   |
+| gsm8k       | 1d7fe4  | accuracy      | 28.35          | 28.05   | 25.17   | 70.58             | 70.36   | 66.34   | 53.53        | 52.69   | 53.07   |
+| race-middle | 9a54b6  | accuracy      | 41.64          | 42.13   | 45.33   | 88.93             | 88.79   | 88.86   | 83.7         | 83.57   | 82.94   |
+
+For detailed evaluation methods, please refer to [this](../benchmark/evaluate_with_opencompass.md) guide. Remember to pass `quant_policy` to the inference engine in the config file.
+
+## Performance
+
+TODO

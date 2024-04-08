@@ -21,7 +21,7 @@ LMDeploy kv 4/8 bit 量化和推理支持如下 NVIDIA 显卡型号：
 
 **LMDeploy 规定 `qant_policy=4` 表示 kv 4bit 量化，`quant_policy=8` 表示 kv 8bit 量化。**
 
-### 离线推理 pipeline
+### 离线推理
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
@@ -31,7 +31,7 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-### 在线推理服务
+### 推理服务
 
 ```shell
 lmdeploy serve api_server internlm/internlm2-chat-7b --quant-policy 8
@@ -39,7 +39,7 @@ lmdeploy serve api_server internlm/internlm2-chat-7b --quant-policy 8
 
 ## 精度评测
 
-我们使用 opencompass 评测 lmdeploy kv 量化应用在若干模型上的推理精度，结果如下表所示：
+我们把 lmdeploy 的 kv 量化应用在若干 LLM 模型上，并使用 opencompass 评测推理精度，结果如下表所示：
 
 | -           | -       | -             | llama2-7b-chat |         |         | internlm2-chat-7b |         |         | qwen-chat-7b |         |         |
 | ----------- | ------- | ------------- | -------------- | ------- | ------- | ----------------- | ------- | ------- | ------------ | ------- | ------- |
@@ -50,7 +50,7 @@ lmdeploy serve api_server internlm/internlm2-chat-7b --quant-policy 8
 | gsm8k       | 1d7fe4  | accuracy      | 28.35          | 28.05   | 25.17   | 70.58             | 70.36   | 66.34   | 53.53        | 52.69   | 53.07   |
 | race-middle | 9a54b6  | accuracy      | 41.64          | 42.13   | 45.33   | 88.93             | 88.79   | 88.86   | 83.7         | 83.57   | 82.94   |
 
-具体的评测方式可以参考[这份指南](https://lmdeploy.readthedocs.io/en/latest/benchmark/evaluate_with_opencompass.html)。评测时，请在config文件中，为推理引擎添加 `quant_policy` 参数。
+具体的评测方式可以参考[这份指南](../benchmark/evaluate_with_opencompass.md)。评测时，请在config文件中，为推理引擎添加 `quant_policy` 参数。
 
 ## 推理速度
 
