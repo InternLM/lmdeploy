@@ -9,7 +9,7 @@
 |      InternLM      |  7B - 20B  |    Yes    |   Yes   |  Yes  |
 |     InternLM2      |  7B - 20B  |    Yes    |    -    |  Yes  |
 | InternLM-XComposer |     7B     |    Yes    |   Yes   |  Yes  |
-|        QWen        |  7B - 72B  |    Yes    |   Yes   |  Yes  |
+|        QWen        | 1.8B - 72B |    Yes    |   Yes   |  Yes  |
 |      QWen1.5       | 1.8B - 72B |    Yes    |   Yes   |  Yes  |
 |      QWen-VL       |     7B     |    Yes    |   Yes   |  Yes  |
 |      Baichuan      |     7B     |    Yes    |   Yes   |  Yes  |
@@ -35,7 +35,7 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |      YI      |  6B - 34B  |    Yes    |   No    |  No  |
 |   Mistral    |     7B     |    Yes    |   No    |  No  |
 |   Mixtral    |    8x7B    |    Yes    |   No    |  No  |
-|     QWen     |  7B - 72B  |    Yes    |   No    |  No  |
+|     QWen     | 1.8B - 72B |    Yes    |   No    |  No  |
 |   QWen1.5    | 0.5B - 72B |    Yes    |   No    |  No  |
 | QWen1.5-MoE  |   A2.7B    |    Yes    |   No    |  No  |
 | DeepSeek-MoE |    16B     |    Yes    |   No    |  No  |
