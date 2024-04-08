@@ -54,6 +54,12 @@ jobs:
         with:
           repository: '${{ github.event.inputs.repo_org}}/lmdeploy'
           ref: ${{github.event.inputs.repo_ref}}
+      - name: Clone deps cutlass
+        uses: actions/checkout@v4
+        with:
+          repository: "NVIDIA/cutlass"
+          ref: "6f47420213f757831fae65c686aa471749fa8d60"
+          path: "build/_deps/repo-cutlass-src"
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
@@ -62,7 +68,7 @@ jobs:
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
-          mkdir build
+          mkdir -p build
           cd build
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \

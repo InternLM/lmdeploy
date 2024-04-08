@@ -49,16 +49,23 @@ jobs:
               libgoogle-glog-dev
           rm -rf /var/lib/apt/lists/*
       - name: Clone repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+      - name: Clone deps cutlass
+        uses: actions/checkout@v4
+        with:
+          repository: "NVIDIA/cutlass"
+          ref: "6f47420213f757831fae65c686aa471749fa8d60"
+          path: "build/_deps/repo-cutlass-src"
       - name: Install pytorch
         run: |
+          ls build/_deps
           python3 -m pip cache dir
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Build lmdeploy
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
-          mkdir build
+          mkdir -p build
           cd build
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
