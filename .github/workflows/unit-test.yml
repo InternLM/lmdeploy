@@ -58,7 +58,7 @@ jobs:
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
-          mkdir build
+          tar xzf /root/packages/lmdeploy-deps.tar
           cd build
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
