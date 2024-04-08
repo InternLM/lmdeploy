@@ -22,7 +22,8 @@ def check_llava_install():
     except ImportError:
         raise ImportError(
             'To use LlavaVLModel, please install llava by '
-            'pip install git+https://github.com/haotian-liu/LLaVA.git')
+            'pip install git+https://github.com/haotian-liu/LLaVA.git --no-deps'  # noqa: E501
+        )
 
 
 class LlavaVisionModel(VisonModel):
