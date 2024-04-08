@@ -21,7 +21,7 @@ void invoke(T* C, const T* A, const T* B, int m, int n, int k, cudaStream_t st)
     constexpr int WARP_N = 64;
     constexpr int WARP_K = 32;
     using Impl           = Impl<MMA_81616, T, T, T, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 4>;
-    using Kernel         = GemmUniversal<void, Mainloop_sm80<Impl>, TileIterator<T, CTA_K>, CtaSwizzleMap<1>>;
+    using Kernel         = GemmUniversal<void, Mainloop_sm80<Impl>, TileIterator<T, CTA_K>, CtaSwizzleMap<8>>;
 
     using Map = typename Kernel::CtaMap;
 

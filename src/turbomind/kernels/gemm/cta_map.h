@@ -27,7 +27,7 @@ template<int N>
 struct CtaSwizzleMap {
     TM_HOST_DEVICE static int3 get_tiled_shape(int m, int n, int k, int cta_m, int cta_n, int split_cnt)
     {
-        return {(m + cta_m - 1) / cta_m, (m + cta_n - 1) / cta_n, split_cnt};
+        return {(m + cta_m - 1) / cta_m, (n + cta_n - 1) / cta_n, split_cnt};
     }
 
     TM_HOST_DEVICE static int get_log_tile(int3 tiled_shape)
