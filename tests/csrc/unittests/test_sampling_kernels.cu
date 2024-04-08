@@ -298,6 +298,9 @@ public:
                                    nullptr,  // finished
                                    nullptr,  // cum_log_probs
                                    nullptr,  // output_log_probs
+                                   nullptr,  // sampled_logprobs
+                                   nullptr,  // sampled_indexes
+                                   nullptr,  // sampled_nums
                                    nullptr,  // curandstates
                                    max_top_k,
                                    nullptr,  // top_ks
@@ -352,6 +355,9 @@ public:
                                     finished,
                                     cum_lprobs,
                                     output_lprobs + step * batch_size,
+                                    nullptr,  // sampled_logprobs
+                                    nullptr,  // sampled_indexes
+                                    nullptr,  // sampled_nums
                                     curand_states,
                                     max_top_k,
                                     top_ks,
@@ -674,6 +680,9 @@ public:
                                    nullptr,      // cum_log_probs
                                    nullptr,      // output_log_probs
                                    (T*)nullptr,  // log_probs
+                                   nullptr,      // sampled_logprobs
+                                   nullptr,      // sampled_indexes
+                                   nullptr,      // sampled_nums
                                    topp_id_vals_buf,
                                    end_offsets,
                                    begin_offsets,
@@ -718,6 +727,9 @@ public:
                                        // provided. It's because the sampling layer already
                                        // preprocesses log_prob_buf when those are provided.
                                        probs,
+                                       nullptr,  // sampled_logprobs
+                                       nullptr,  // sampled_indexes
+                                       nullptr,  // sampled_nums
                                        topp_id_vals_buf,
                                        end_offsets,
                                        begin_offsets,
