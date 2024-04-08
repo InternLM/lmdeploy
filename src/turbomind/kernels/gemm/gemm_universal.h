@@ -35,13 +35,16 @@ struct GemmUniversal {
         int      m;
         int      n;
         int      k;
+        int      log_tile;
     };
 
     __device__ void operator()(const Param& param, const CtaMap& cta_map, char* smem_buf)
     {
-        const int m_idx = cta_map.m_idx() * CTA_M;
-        const int n_idx = cta_map.n_idx() * CTA_N;
-        const int k_idx = cta_map.k_idx() * CTA_K;
+        const auto tile_offset = CtaMap::get_tile_offset(param.log_tile);
+
+        const int m_idx = tile_offset.x * CTA_M;
+        const int n_idx = tile_offset.y * CTA_N;
+        const int k_idx = tile_offset.z * CTA_K;
 
         SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 

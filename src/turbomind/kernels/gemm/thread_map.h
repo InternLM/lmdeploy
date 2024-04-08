@@ -44,11 +44,11 @@ struct ThreadMap {
     static constexpr int kFootprintC = kWarpAccessC * kIterC;
     static constexpr int kFootprintS = kWarpAccessS * kIterS;
 
-    // static constexpr int kDeltaC = kWarpAccessC;
-    // static constexpr int kDeltaS = kWarpAccessS;
+    static constexpr int kDeltaC = kWarpAccessC;
+    static constexpr int kDeltaS = kWarpAccessS;
 
-    static constexpr int kDeltaC = kWarpAccessC * kWarpC;
-    static constexpr int kDeltaS = kWarpAccessS * kWarpS;
+    // static constexpr int kDeltaC = kWarpAccessC * kWarpC;
+    // static constexpr int kDeltaS = kWarpAccessS * kWarpS;
 
     __device__ static int2 get_offset(int warp_id, int lane_id)
     {
@@ -58,11 +58,11 @@ struct ThreadMap {
         int warp_thread_offset_c = lane_id % kWarpThreadC;
         int warp_thread_offset_s = lane_id / kWarpThreadC;
 
-        // int cta_thread_offset_c = kFootprintC * warp_offset_c + warp_thread_offset_c * kAccessC;
-        // int cta_thread_offset_s = kFootprintS * warp_offset_s + warp_thread_offset_s;
+        int cta_thread_offset_c = kFootprintC * warp_offset_c + warp_thread_offset_c * kAccessC;
+        int cta_thread_offset_s = kFootprintS * warp_offset_s + warp_thread_offset_s;
 
-        int cta_thread_offset_c = kWarpAccessC * warp_offset_c + warp_thread_offset_c * kAccessC;
-        int cta_thread_offset_s = kWarpAccessS * warp_offset_s + warp_thread_offset_s;
+        // int cta_thread_offset_c = kWarpAccessC * warp_offset_c + warp_thread_offset_c * kAccessC;
+        // int cta_thread_offset_s = kWarpAccessS * warp_offset_s + warp_thread_offset_s;
 
         return {cta_thread_offset_c, cta_thread_offset_s};
     }
