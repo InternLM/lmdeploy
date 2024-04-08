@@ -101,7 +101,7 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 
 ### kv int8 开关
 
-`quant_policy`是 KV-int8 推理开关。具体使用方法，请参考 [kv int8](../quantization/kv_int8.md) 部署文档
+`quant_policy`是 KV-int8 推理开关。具体使用方法，请参考 [kv int8](../quantization/kv_quant.md) 部署文档
 
 ### 外推能力开关
 
@@ -189,7 +189,7 @@ TurboMind 根据 `session_len`、 `cache_chunk_size` 和 `cache_max_entry_count`
 
 ### kv int8 开关
 
-当启动 8bit k/v 推理时，需要修改参数 `quant_policy` 和 `use_context_fmha`。详细内容请查阅 [kv int8](../quantization/kv_int8.md) 部署文档。
+当启动 8bit k/v 推理时，需要修改参数 `quant_policy` 和 `use_context_fmha`。详细内容请查阅 [kv int8](../quantization/kv_quant.md) 部署文档。
 
 ### 外推能力开关
 

@@ -1,4 +1,4 @@
-# KV Cache Quantization and Test Results
+# KV Cache Quantization
 
 For the LLaMa-7B fp16 model with a maximum length of 2048, the server requires approximately 1030MB of GPU memory to store kv_cache for each concurrent session created. This means that even an A100 80G can only serve a limited number of users.
 
@@ -9,32 +9,6 @@ zp = (min+max) / 2
 scale = (max-min) / 255
 quant: q = round( (f-zp) / scale)
 dequant: f = q * scale + zp
-```
-
-## How to Enable KV Cache INT8
-
-### **Step One**
-
-Get the quantization parameters and save them to the original HF model directory:
-
-```bash
-# get minmax
-export HF_MODEL=internlm/internlm-chat-7b
-
-lmdeploy lite calibrate \
-  $HF_MODEL \
-  --calib-dataset 'ptb' \
-  --calib-samples 128 \
-  --calib-seqlen 2048 \
-  --work-dir $HF_MODEL
-```
-
-### **Step Two**
-
-Test the chat performance. Note that setting `--quant-policy 4` would set to KV Cache int8 mode.
-
-```bash
-lmdeploy chat $HF_MODEL --model-format hf --quant-policy 4
 ```
 
 ## GPU Memory Test

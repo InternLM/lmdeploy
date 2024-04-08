@@ -99,7 +99,7 @@ The `cache_chunk_size` indicates the size of the k/v cache chunk to be allocated
 
 ### kv int8 switch
 
-When initiating 8bit k/v inference, set `quant_policy = 4`. Please refer to [kv int8](../quantization/kv_int8.md) for a guide.
+When initiating 8bit k/v inference, set `quant_policy = 4`. Please refer to [kv int8](../quantization/kv_quant.md) for a guide.
 
 ### long context switch
 
@@ -187,7 +187,7 @@ TurboMind allocates k/v cache memory based on `session_len`, `cache_chunk_size`,
 
 ### kv int8 switch
 
-When initiating 8bit k/v inference, change `quant_policy = 4` and `use_context_fmha = 0`. Please refer to [kv int8](../quantization/kv_int8.md) for a guide.
+When initiating 8bit k/v inference, change `quant_policy = 4` and `use_context_fmha = 0`. Please refer to [kv int8](../quantization/kv_quant.md) for a guide.
 
 ### long context switch
 

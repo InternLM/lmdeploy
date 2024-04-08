@@ -40,7 +40,7 @@ LMDeploy 提供了多种部署模型推理服务的方式，总有一款适合�
 ## 模型量化
 
 - [INT4 权重量化](quantization/w4a16.md)
-- [K/V 量化](quantization/kv_int8.md)
+- [K/V 量化](quantization/kv_quant.md)
 - [W8A8 量化](quantization/w8a8.md)
 
 ## 好用的工具
