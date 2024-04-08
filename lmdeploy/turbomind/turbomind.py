@@ -258,7 +258,7 @@ class TurboMind:
 
         assert is_supported(model_path), (
             f'turbomind does not support {model_path}. '
-            f'Plz try pytorch engine instead.')
+            'Plz try pytorch engine instead.')
 
         # convert transformers model into turbomind model format
         model_arch, _ = get_model_arch(model_path)

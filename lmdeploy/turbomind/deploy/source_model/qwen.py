@@ -137,8 +137,7 @@ class Qwen2Reader(LlamaReader):
             result.append(tensor)
 
         tensor = self.params.get(f'model.layers.{i}.self_attn.o_proj.weight')
-        dummy_oproj_bias = torch.zeros(tensor.shape[-1],
-                                       dtype=torch.bfloat16).to(tensor.device)
+        dummy_oproj_bias = tensor.new_zeros(tensor.shape[-1])
         result.append(dummy_oproj_bias)
         return (*result, )
 
@@ -157,7 +156,7 @@ class Qwen2Model(LlamaModel):
         https://huggingface.co/Qwen/Qwen1.5.
 
         -7B-Chat/blob/main/generation_config.json.
-        """ # noqa
+        """ # noqa E501
         n_words = 152064
         bos_id = 151643
         eos_id = 151645
