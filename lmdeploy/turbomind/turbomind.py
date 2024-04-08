@@ -256,11 +256,11 @@ class TurboMind:
                 engine_config.model_format is None:
             engine_config.model_format = 'awq'
 
-        if not is_supported(model_path):
-            logger.fatal(f'turbomind does not support f{model_path}. '
-                         f'Please try pytorch engine instead')
+        assert is_supported(model_path), (
+            f'turbomind does not support {model_path}. '
+            f'Plz try pytorch engine instead.')
 
-        # when convert model, use architectures in config.json
+        # convert transformers model into turbomind model format
         model_arch, _ = get_model_arch(model_path)
         data_type = 'fp16'
         output_format = 'fp16'

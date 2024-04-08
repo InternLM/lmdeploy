@@ -115,6 +115,12 @@ class QwenModel(LlamaModel):
 
 
 class Qwen2Reader(LlamaReader):
+    """read qwen2 model weights.
+
+    The weight name of qwen2 model is similar to llama, except its attention
+    bias doesn't include o_proj bias. Therefore, we make a dummy zero o_proj
+    bias to make it comply the definition of turbomind llama format
+    """
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict):
@@ -147,27 +153,12 @@ class Qwen2Model(LlamaModel):
         super().__init__(model_path, tokenizer_path, **kwargs)
 
     def tokenizer_info(self):
-        """Read tokenizer info."""
+        """set tokenizer info, referring to
+        https://huggingface.co/Qwen/Qwen1.5.
+
+        -7B-Chat/blob/main/generation_config.json.
+        """ # noqa
         n_words = 152064
         bos_id = 151643
         eos_id = 151645
         return n_words, bos_id, eos_id
-
-    def model_info(self):
-        """Read model info."""
-        params_path = osp.join(self.model_path, 'config.json')
-        with open(params_path) as f:
-            config = json.load(f)
-            num_layer = config['num_hidden_layers']
-            norm_eps = config['layer_norm_epsilon']
-            rope_theta = float(config.get('rotary_emb_base', 10000.0))
-            if 'num_key_value_heads' in config:
-                kv_head_num = config['num_key_value_heads']
-            else:
-                kv_head_num = config['num_attention_heads']
-            seq_length = config['max_position_embeddings']
-        return dict(num_layer=num_layer,
-                    norm_eps=norm_eps,
-                    kv_head_num=kv_head_num,
-                    rope_theta=rope_theta,
-                    max_position_embeddings=seq_length)
