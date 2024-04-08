@@ -64,8 +64,6 @@ struct Mainloop_sm80 {
             ++data_iter;
         }
 
-        // w0,w1
-
         typename Impl::StateA state_A{storage};
         typename Impl::StateB state_B{storage};
 
@@ -88,8 +86,6 @@ struct Mainloop_sm80 {
                     ++data_iter;
                 }
             };
-
-            // r0
             Impl::Compute(state_A, state_B, frag_C, pipe_iter.r, prefetch, [&] {
                 Wait();
                 ++pipe_iter;
