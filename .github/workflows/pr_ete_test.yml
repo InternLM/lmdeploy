@@ -48,13 +48,7 @@ jobs:
               libgoogle-glog-dev libgl1 openjdk-8-jre-headless
           rm -rf /var/lib/apt/lists/*
       - name: Clone repository
-        uses: actions/checkout@v4
-      - name: Clone deps cutlass
-        uses: actions/checkout@v4
-        with:
-          repository: "NVIDIA/cutlass"
-          ref: "6f47420213f757831fae65c686aa471749fa8d60"
-          path: "build/_deps/repo-cutlass-src"
+        uses: actions/checkout@v2
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
@@ -63,7 +57,7 @@ jobs:
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
-          mkdir -p build
+          mkdir build
           cd build
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
