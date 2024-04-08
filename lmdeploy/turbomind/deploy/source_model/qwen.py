@@ -152,11 +152,10 @@ class Qwen2Model(LlamaModel):
         super().__init__(model_path, tokenizer_path, **kwargs)
 
     def tokenizer_info(self):
-        """set tokenizer info, referring to
-        https://huggingface.co/Qwen/Qwen1.5.
+        """set tokenizer info.
 
-        -7B-Chat/blob/main/generation_config.json.
-        """ # noqa E501
+        Refer to https://huggingface.co/Qwen/Qwen1.5-7B-Chat/blob/main/generation_config.json
+        """  # noqa: E501
         n_words = 152064
         bos_id = 151643
         eos_id = 151645
