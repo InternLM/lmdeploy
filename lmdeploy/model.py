@@ -1031,7 +1031,7 @@ class DbrxInstruct(BaseChatTemplate):
             return 'dbrx'
 
 
-@MODELS.register_module(name=['llava-v1_6-34b'])
+@MODELS.register_module(name=['llava-chatml'])
 class ChatmlDirect(BaseChatTemplate):
 
     def __init__(self,
@@ -1065,7 +1065,7 @@ class ChatmlDirect(BaseChatTemplate):
         """
         path = model_path.lower()
         if 'llava' in path and 'v1.6-34b' in path:
-            return 'llava-v1_6-34b'
+            return 'llava-chatml'
 
 
 def best_match_model(query: str) -> Optional[str]:
