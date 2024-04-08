@@ -121,7 +121,7 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
     """Update output format according to model info."""
     TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16'}
     MODEL_NAME_MAP = {'qwen': 'bf16', 'llama': 'half'}
-    model_name = model_format.split('-')[0]
+    model_name = model_name.split('-')[0]
 
     def _fix_device_support(output_format):
         """fix device support."""
