@@ -62,7 +62,7 @@ struct GmemIteratorSm80 {
     template<class Iter>
     __device__ void Prefetch(const Iter& iter, int begin, int count, int pipe_iter)
     {
-        auto src_data = iter.OffsetPtr<Idx>(src_offset_);
+        auto src_data = iter.OffsetPtr<Idx>(0);
 
         SmemAccessor<T, SmemLayout> dst_data{smem_};
 
@@ -74,7 +74,7 @@ struct GmemIteratorSm80 {
                                                            offset_c_ + c * Map::kDeltaC,
                                                            pipe_iter * SmemLayout::kSize));
                 auto src = &src_data[s * Map::kDeltaS * stride_s_ + c * Map::kDeltaC];
-                CpAsync(std::true_type{}, dst, (const T*)src, static_cast<bool>(iter));
+                CpAsync(std::true_type{}, dst, (const T*)src + src_offset_, static_cast<bool>(iter));
             }
         }
     }
