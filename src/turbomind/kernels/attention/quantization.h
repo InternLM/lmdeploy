@@ -578,15 +578,15 @@ struct ConvertKvCache<uint4_t, float> {
 #else
     static __device__ Array<half, 8> cvt_f16x8_u4_biased(const Array<uint4_t, 8>& vi)
     {
-        Array<half, 8>            result;
-        uint32_t*                 h           = reinterpret_cast<uint32_t*>(&result);
-        uint32_t const&           i4s         = reinterpret_cast<uint32_t const&>(vi);
-        static constexpr uint32_t immLut      = (0xf0 & 0xcc) | 0xaa;
-        static constexpr uint32_t BOT_MASK    = 0x000f000f;
-        static constexpr uint32_t TOP_MASK    = 0x00f000f0;
+        Array<half, 8> result;
+        uint32_t* h = reinterpret_cast<uint32_t*>(&result);
+        uint32_t const& i4s = reinterpret_cast<uint32_t const&>(vi);
+        static constexpr uint32_t immLut = (0xf0 & 0xcc) | 0xaa;
+        static constexpr uint32_t BOT_MASK = 0x000f000f;
+        static constexpr uint32_t TOP_MASK = 0x00f000f0;
         static constexpr uint32_t MAGIC_NUM_1 = 0x54005400;        // `64`
         static constexpr uint32_t MAGIC_NUM_2 = MAGIC_NUM_1 >> 4;  // `64` >> 4
-        const uint32_t            top_i4s     = i4s >> 8;
+        const uint32_t top_i4s = i4s >> 8;
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[0]) : "r"(i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[1]) : "r"(i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[2]) : "r"(top_i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
@@ -595,12 +595,12 @@ struct ConvertKvCache<uint4_t, float> {
         h[2] <<= 4;
         return result;
     }
-    float      scale_;
-    float      zero_;
+    float scale_;
+    float zero_;
     __device__ ConvertKvCache(float scale, float zero)
     {
         scale_ = scale;
-        zero_  = zero - scale * 64.f;
+        zero_ = zero - scale * 64.f;
     }
     template<int N>
     __device__ auto operator()(const Array<uint4_t, N>& vi) const
