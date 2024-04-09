@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging protobuf transformers_stream_generator transformers datasets matplotlib'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib'
       default_tp:
         required: true
         description: 'Default tp value'
@@ -162,7 +162,7 @@ jobs:
           mkdir ${result_dir}
           export CUDA_VISIBLE_DEVICES=6,7
           python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 1 --csv ${result_dir}/generation_batch1.csv > ${result_dir}/generation_batch1.log
-          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 16 -ct 128 -pt 2048 --csv ${result_dir}/generation_batch16.csv > ${result_dir}/generation_batch16.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 16 -ct 2048 -pt 2048 --csv ${result_dir}/generation_batch16.csv > ${result_dir}/generation_batch16.log
           python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 32 -ct 128 2048 -pt 2048 128 --csv ${result_dir}/generation_batch32.csv > ${result_dir}/generation_batch32.log
           python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 64 -ct 128 -pt 128 --csv ${result_dir}/generation_batch64.csv > ${result_dir}/generation_batch64.log
       - name: Run generation benchmark - pytorch
@@ -496,6 +496,7 @@ jobs:
       - name: Build lmdeploy from source
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
+          docker exec $CONTAINER_ID sed -i 's/https:\/\/github.com\/NVIDIA\/cutlass.git/https:\/\/521github.com\/extdomains\/github.com\/NVIDIA\/cutlass.git/g' CMakeLists.txt
           docker exec $CONTAINER_ID mkdir build
           docker exec --workdir /__w/lmdeploy/lmdeploy/build \
             --env http_proxy=${{secrets.PROXY}} \
@@ -611,3 +612,21 @@ jobs:
           cd ..
           rm -rf $workdir
           mkdir $workdir
+
+
+  get_result_overview:
+    if: always()
+    needs: [generation_benchmark, throughput_benchmark, restful_benchmark, triton_benchmark]
+    timeout-minutes: 5
+    runs-on: [self-hosted, linux-a100]
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Pkgs
+        run: pip install pandas
+      - name: Get overview
+        run: |
+          python3 .github/scripts/get_benchmark_summary.py generate_report $REPORT_DIR
