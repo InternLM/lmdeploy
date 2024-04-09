@@ -418,13 +418,13 @@ jobs:
           # print triton server log file
           cat run.log
           python3 -c 'import os; assert not os.path.exists("finish.txt"), "Failed to start tritonserver"'
-      - name: Test interface testcase server
+      - name: Test triton server - chatbot
         run: |
           docker exec \
             --env no_proxy="localhost,127.0.0.1" \
             --env NO_PROXY="localhost,127.0.0.1" \
             $CONTAINER_ID pytest autotest/interface/triton/test_triton_server_func.py -n 10
-      - name: Test triton server
+      - name: Test triton server - chat cli
         run: |
           docker exec \
             --env no_proxy="localhost,127.0.0.1" \
