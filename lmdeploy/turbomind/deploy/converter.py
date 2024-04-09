@@ -17,6 +17,7 @@ from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 supported_formats = ['llama', 'hf', 'awq', None]
 special_input_model_map = {
     'qwen': 'qwen',
+    'qwen2': 'qwen2',
     'baichuan': 'baichuan',
     'baichuan2': 'baichuan2',
     'internlm2': 'internlm2',
@@ -28,21 +29,6 @@ def get_package_root_path():
     """Get lmdeploy root path."""
     import lmdeploy
     return Path(lmdeploy.__file__).parent
-
-
-def get_tokenizer_path(model_path: str, tokenizer_path: str):
-    """Get tokenizer path if not given."""
-    if tokenizer_path is not None:
-        assert osp.exists(tokenizer_path), f'{tokenizer_path} does not exists.'
-        return tokenizer_path
-    candidate = ['tokenizer.model', 'qwen.tiktoken']
-    for name in candidate:
-        tmp_path = osp.join(model_path, name)
-        if osp.exists(tmp_path):
-            tokenizer_path = tmp_path
-            break
-    assert tokenizer_path, 'please supply tokenizer path by --tokenizer-path'
-    return tokenizer_path
 
 
 def get_model_format(model_name: str, model_format: str):
@@ -101,10 +87,30 @@ def copy_triton_model_templates(_path: str):
 def copy_tokenizer(model_path: str, tokenizer_path: str,
                    triton_models_path: str):
     """Copy tokenizer."""
-    shutil.copy(
-        tokenizer_path,
-        osp.join(triton_models_path,
-                 osp.join('tokenizer', osp.basename(tokenizer_path))))
+    if tokenizer_path is not None:
+        assert osp.exists(tokenizer_path), f'{tokenizer_path} does not exists.'
+
+        shutil.copy(
+            tokenizer_path,
+            osp.join(triton_models_path,
+                     osp.join('tokenizer', osp.basename(tokenizer_path))))
+    else:
+        from transformers import AutoTokenizer
+        try:
+            _ = AutoTokenizer.from_pretrained(model_path)
+        except Exception:
+            assert 0, (
+                f'Failed to load tokenizer model from path {model_path}.'
+                'please specify tokenizer path by --tokenizer-path')
+
+    # move tokenizer model to the target path
+    candidate = ['tokenizer.model', 'qwen.tiktoken']
+    for name in candidate:
+        tmp_path = osp.join(model_path, name)
+        if osp.exists(tmp_path):
+            shutil.copy(tmp_path,
+                        osp.join(triton_models_path, 'tokenizer', name))
+    # move py/json files that are related to tokenizer to the target path
     for _file in os.listdir(model_path):
         if _file.endswith('.json') or _file.endswith('.py'):
             json_path = osp.join(model_path, _file)
@@ -228,6 +234,15 @@ def main(model_name: str,
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
 
+    from lmdeploy.turbomind.supported_models import (SUPPORTED_ARCHS,
+                                                     get_model_arch,
+                                                     is_supported)
+    assert is_supported(model_path), (
+        f'turbomind does not support {model_path}. '
+        'Plz try pytorch engine instead.')
+
+    arch, _ = get_model_arch(model_path)
+
     assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
 
     output_format = 'fp16'
@@ -236,7 +251,8 @@ def main(model_name: str,
     assert model_format in supported_formats, 'the model format ' \
         f'should be in {supported_formats}'
 
-    inferred_model_format = get_model_format(model_name, model_format)
+    inferred_model_format = get_model_format(SUPPORTED_ARCHS[arch],
+                                             model_format)
     if inferred_model_format not in INPUT_MODELS.module_dict.keys():
         supported_keys = list(INPUT_MODELS.module_dict.keys())
         print(f'with model name {model_name} and model formst {model_format}, '
@@ -249,9 +265,6 @@ def main(model_name: str,
               'try to download from huggingface')
         model_path = get_model(model_path)
         print(f'load model from {model_path}')
-
-    # get tokenizer path
-    tokenizer_path = get_tokenizer_path(model_path, tokenizer_path)
 
     # create workspace
     create_workspace(dst_path)

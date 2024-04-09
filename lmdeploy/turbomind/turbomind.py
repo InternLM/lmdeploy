@@ -25,7 +25,8 @@ from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
-from .utils import ModelSource, get_model_from_config, get_model_source
+from .supported_models import SUPPORTED_ARCHS, get_model_arch, is_supported
+from .utils import ModelSource, get_model_source
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -255,11 +256,15 @@ class TurboMind:
                 engine_config.model_format is None:
             engine_config.model_format = 'awq'
 
-        # when convert model, use architectures in config.json
-        model_arch = get_model_from_config(model_path)
+        assert is_supported(model_path), (
+            f'turbomind does not support {model_path}. '
+            'Plz try pytorch engine instead.')
+
+        # convert transformers model into turbomind model format
+        model_arch, _ = get_model_arch(model_path)
         data_type = 'fp16'
         output_format = 'fp16'
-        inferred_model_format = get_model_format(model_arch,
+        inferred_model_format = get_model_format(SUPPORTED_ARCHS[model_arch],
                                                  engine_config.model_format)
         cfg = TurbomindModelConfig.from_engine_config(engine_config)
         match_name = best_match_model(model_path)
