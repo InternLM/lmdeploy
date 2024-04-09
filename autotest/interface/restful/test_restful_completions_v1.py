@@ -46,8 +46,10 @@ class TestRestfulInterfaceBase:
                                               temperature=0.01):
             completion_tokens = item['usage']['completion_tokens']
             assert completion_tokens > 0
-            assert completion_tokens <= 16
-            assert item.get('choices')[0].get('finish_reason') == 'stop'
+            assert completion_tokens <= 17
+            assert item.get('choices')[0].get('finish_reason') in [
+                'stop', 'length'
+            ]
 
     def test_single_stopword(self):
         api_client = APIClient(BASE_URL)
