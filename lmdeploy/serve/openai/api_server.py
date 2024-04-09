@@ -20,12 +20,13 @@ from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionRequestQos, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse, ChatMessage, CompletionRequest,
-    CompletionRequestQos, CompletionResponse, CompletionResponseChoice,
+    ChatCompletionStreamResponse, ChatCompletionTokenLogprob, ChatMessage,
+    ChoiceLogprobs, CompletionRequest, CompletionRequestQos,
+    CompletionResponse, CompletionResponseChoice,
     CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
     EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
     GenerateRequest, GenerateRequestQos, GenerateResponse, LogProbs, ModelCard,
-    ModelList, ModelPermission, UsageInfo)
+    ModelList, ModelPermission, TopLogprob, UsageInfo)
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
@@ -117,16 +118,17 @@ async def check_request(request) -> Optional[JSONResponse]:
     return ret
 
 
-def _create_logprobs(tokenizer: Tokenizer,
-                     token_ids: List[int] = None,
-                     logprobs: List[Dict[int, float]] = None,
-                     skip_special_tokens: bool = True,
-                     offset: int = 0,
-                     all_token_ids: List[int] = None,
-                     state: DetokenizeState = None):
-    """create openai LogProbs.
+def _create_completion_logprobs(tokenizer: Tokenizer,
+                                token_ids: List[int] = None,
+                                logprobs: List[Dict[int, float]] = None,
+                                skip_special_tokens: bool = True,
+                                offset: int = 0,
+                                all_token_ids: List[int] = None,
+                                state: DetokenizeState = None):
+    """create openai LogProbs for completion.
 
     Args:
+        tokenizer (Tokenizer): tokenizer.
         token_ids (List[int]): output token ids.
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
@@ -168,6 +170,46 @@ def _create_logprobs(tokenizer: Tokenizer,
         all_token_ids.append(token_id)
 
     return out_logprobs, offset, all_token_ids, state
+
+
+def _create_chat_completion_logprobs(tokenizer: Tokenizer,
+                                     token_ids: List[int] = None,
+                                     logprobs: List[Dict[int, float]] = None):
+    """create openai LogProbs for chat.completion.
+
+    Args:
+        tokenizer (Tokenizer): tokenizer.
+        token_ids (List[int]): output token ids.
+        logprobs (List[Dict[int, float]]): the top logprobs for each output
+            position.
+    Returns:
+        ChoiceLogprobs: logprob result.
+    """
+    if token_ids is None or logprobs is None:
+        return None
+
+    content: List[ChatCompletionTokenLogprob] = []
+    for token_id, tops in zip(token_ids, logprobs):
+        item = ChatCompletionTokenLogprob(token='',
+                                          bytes=[],
+                                          logprob=0.0,
+                                          top_logprobs=[])
+        for top_id, prob in tops.items():
+            token = tokenizer.model.model.convert_ids_to_tokens(top_id)
+            if isinstance(token, bytes):
+                _bytes = list(token)
+                token = token.decode('utf-8', errors='backslashreplace')
+            else:
+                _bytes = list(token.encode())  # token is str
+            if top_id == token_id:
+                item.token = token
+                item.bytes = _bytes
+                item.logprob = prob
+            else:
+                item.top_logprobs.append(
+                    TopLogprob(token=token, bytes=_bytes, logprob=prob))
+        content.append(item)
+    return ChoiceLogprobs(content=content)
 
 
 @app.post('/v1/chat/completions_qos')
@@ -427,16 +469,12 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             data = chunk.model_dump_json(exclude_unset=True)
             yield f'data: {data}\n\n'
 
-        offset = 0
-        all_token_ids = []
-        state = DetokenizeState()
         async for res in result_generator:
             logprobs = None
             if gen_logprobs and res.logprobs:
-                logprobs, offset, all_token_ids, state = _create_logprobs(
+                logprobs = _create_chat_completion_logprobs(
                     VariableInterface.async_engine.tokenizer, res.token_ids,
-                    res.logprobs, gen_config.skip_special_tokens, offset,
-                    all_token_ids, state)
+                    res.logprobs)
 
             response_json = create_stream_response_json(
                 index=0,
@@ -472,9 +510,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
-        logprobs, _, _, _ = _create_logprobs(
+        logprobs = _create_chat_completion_logprobs(
             VariableInterface.async_engine.tokenizer, final_token_ids,
-            final_logprobs, gen_config.skip_special_tokens)
+            final_logprobs)
 
     assert final_res is not None
     choices = []
@@ -772,7 +810,7 @@ async def completions_v1(request: CompletionRequest,
             async for res in generator:
                 logprobs = None
                 if request.logprobs and res.logprobs:
-                    logprobs, offset, all_token_ids, state = _create_logprobs(
+                    logprobs, offset, all_token_ids, state = _create_completion_logprobs(  # noqa E501
                         VariableInterface.async_engine.tokenizer,
                         res.token_ids, res.logprobs,
                         gen_config.skip_special_tokens, offset, all_token_ids,
@@ -815,7 +853,7 @@ async def completions_v1(request: CompletionRequest,
 
         logprobs = None
         if request.logprobs and len(final_logprobs):
-            logprobs, _, _, _ = _create_logprobs(
+            logprobs, _, _, _ = _create_completion_logprobs(
                 VariableInterface.async_engine.tokenizer, final_token_ids,
                 final_logprobs, gen_config.skip_special_tokens)
 

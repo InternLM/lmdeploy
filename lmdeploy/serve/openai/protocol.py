@@ -116,11 +116,28 @@ class LogProbs(BaseModel):
     top_logprobs: Optional[List[Optional[Dict[str, float]]]] = None
 
 
+class TopLogprob(BaseModel):
+    token: str
+    bytes: Optional[List[int]] = None
+    logprob: float
+
+
+class ChatCompletionTokenLogprob(BaseModel):
+    token: str
+    bytes: Optional[List[int]] = None
+    logprob: float
+    top_logprobs: List[TopLogprob]
+
+
+class ChoiceLogprobs(BaseModel):
+    content: Optional[List[ChatCompletionTokenLogprob]] = None
+
+
 class ChatCompletionResponseChoice(BaseModel):
     """Chat completion response choices."""
     index: int
     message: ChatMessage
-    logprobs: Optional[LogProbs] = None
+    logprobs: Optional[ChoiceLogprobs] = None
     finish_reason: Optional[Literal['stop', 'length']] = None
 
 
@@ -144,7 +161,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     """Chat completion response stream choice."""
     index: int
     delta: DeltaMessage
-    logprobs: Optional[LogProbs] = None
+    logprobs: Optional[ChoiceLogprobs] = None
     finish_reason: Optional[Literal['stop', 'length']] = None
 
 
