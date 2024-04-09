@@ -11,14 +11,11 @@ class Engine:
                                      log_level=self.log_level,
                                      **kv_args)
         self.triton_obj = triton_obj
-        print('init end')
 
     def triton_cancel(self, seq_id):
         try:
-            print(f'cancel req start, seq_id:{seq_id}, type: {type(seq_id)}')
             triton_obj = self.triton_obj
             end_rs = triton_obj.cancel(seq_id)
-            (f'cancel req end, seq_id:{seq_id}, end_rs: {end_rs}')
             return end_rs
         except Exception as e:
             print(f'Unknown error: {e}')
@@ -26,10 +23,8 @@ class Engine:
 
     def triton_end(self, seq_id):
         try:
-            print(f'stop start, seq_id:{seq_id}, type: {type(seq_id)}')
             triton_obj = self.triton_obj
             end_rs = triton_obj.end(seq_id)
-            print(f'stop end, seq_id:{seq_id}, end_rs: {end_rs}')
             return end_rs
         except Exception as e:
             print(f'Unknown error: {e}')
@@ -37,10 +32,8 @@ class Engine:
 
     def triton_resume(self, seq_id):
         try:
-            print(f'resume start, seq_id:{seq_id}, type: {type(seq_id)}')
             triton_obj = self.triton_obj
             status = triton_obj.resume(seq_id)
-            print(f'resume end, seq_id:{seq_id}, end_rs: {status}')
             return status
         except Exception as e:
             print(f'Unknown error: {e}')
@@ -55,7 +48,6 @@ class Engine:
                      sequence_end: bool = False,
                      **kv_args):
         try:
-            print(f'triton_infer start, seq_id:{seq_id}')
             status = None
             res = ''
             tokens = 0
@@ -68,10 +60,8 @@ class Engine:
                     sequence_start=sequence_start,
                     sequence_end=sequence_end,
                     **kv_args):
-                tmp_status = status
-                if status == chatbot.StatusCode.TRITON_STREAM_END:
-                    tmp_status = chatbot.StatusCode.TRITON_STREAM_ING
-            print(f'triton_infer end, seq_id:{seq_id}, status: {tmp_status}')
+                continue
+
             return status, res, tokens
         except Exception as e:
             print(f'Unknown error: {e}')
@@ -84,7 +74,6 @@ class Engine:
                 triton_obj.session = None
             else:
                 triton_obj.session = Session(session_id=session_id)
-            print('triton set session_id: ' + str(session_id))
         except Exception as e:
             print(f'Unknown error: {e}')
         return
