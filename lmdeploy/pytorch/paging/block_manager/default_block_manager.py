@@ -26,13 +26,14 @@ class DefaultBlockManager(BaseBlockManager):
     """
 
     @classmethod
-    def num_required_blocks(cls, obj: Union[SchedulerSequence,
-                                            SchedulerAdapter]):
+    def num_required_blocks(cls,
+                            obj: Union[SchedulerSequence, SchedulerAdapter],
+                            prealloc_size: int = 0):
         """get num required blocks."""
         if isinstance(obj, SchedulerSequence):
-            num_tokens = obj.num_all_tokens()
+            num_tokens = obj.num_all_tokens() + prealloc_size
             num_all_blocks = _div_up(num_tokens, obj.block_size)
-            return num_all_blocks - len(obj.logical_blocks)
+            return max(0, num_all_blocks - len(obj.logical_blocks))
         else:
             if obj.is_actived():
                 return 0
@@ -49,20 +50,20 @@ class DefaultBlockManager(BaseBlockManager):
             return seq.block_size
         return seq.history_len % seq.block_size
 
-    def can_allocate(self, msg: SchedulerSequence):
+    def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return if physical block can be allocated for given message."""
-        num_required_blocks = self.num_required_blocks(msg)
+        num_required_blocks = self.num_required_blocks(msg, prealloc_size)
         num_free_phy = self.get_num_free_gpu_blocks()
         if msg.adapter_name is not None:
             adapter = ADAPTER_MANAGER.get_adapter(msg.adapter_name)
             num_required_blocks += self.num_required_blocks(adapter)
         return num_required_blocks <= num_free_phy
 
-    def allocate_msg(self, msg: SchedulerSequence):
+    def allocate_msg(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Allocate physical blocks for given message according to logical
         blocks."""
         logical_blocks = msg.logical_blocks
-        num_required_blocks = self.num_required_blocks(msg)
+        num_required_blocks = self.num_required_blocks(msg, prealloc_size)
         if num_required_blocks > 0:
             blocks = self.allocator.allocate(num_required_blocks, 'gpu')
             logical_blocks.append(blocks)
@@ -79,13 +80,13 @@ class DefaultBlockManager(BaseBlockManager):
         self.allocator.free(msg.logical_blocks.get_real_blocks())
         msg.logical_blocks.reset()
 
-    def can_append_slot(self, msg: SchedulerSequence):
+    def can_append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return true if the message can append new slot."""
-        return self.can_allocate(msg)
+        return self.can_allocate(msg, prealloc_size)
 
-    def append_slot(self, msg: SchedulerSequence):
+    def append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Append new slot to message."""
-        return self.allocate(msg)
+        return self.allocate(msg, prealloc_size)
 
     def can_fork(self, from_msg: SchedulerSequence):
         """Return true if blocks can be folked."""

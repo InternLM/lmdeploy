@@ -13,17 +13,19 @@ def _get_torch_dtype(config: Any, default: str = 'float16'):
         default (str): default device type.
     """
 
-    def __hack_qwen(hf_config: Any):
-        if hf_config.model_type == 'qwen' and hf_config.torch_dtype is None:
-            torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
-            ) else 'float16'
-            if hf_config.bf16:
-                torch_dtype = 'bfloat16'
-            elif hf_config.fp16:
-                torch_dtype = 'float16'
-            setattr(hf_config, 'torch_dtype', torch_dtype)
+    def __hack_qwen():
+        """hack qwen."""
+        torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
+        ) else 'float16'
+        if config.bf16:
+            torch_dtype = 'bfloat16'
+        elif config.fp16:
+            torch_dtype = 'float16'
+        setattr(config, 'torch_dtype', torch_dtype)
 
-    __hack_qwen(config)
+    if config.model_type == 'qwen' and config.torch_dtype is None:
+        __hack_qwen()
+
     torch_dtype = getattr(config, 'torch_dtype', default)
     # torch_dtype in config could be none
     torch_dtype = torch_dtype or default

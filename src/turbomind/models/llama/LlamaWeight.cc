@@ -90,7 +90,7 @@ template<typename T>
 void LlamaWeight<T>::loadModel(std::string dir_path)
 {
     FtCudaDataType model_file_type = FtCudaDataType::FP16;
-    if(weight_type_ == WeightType::kBF16){
+    if (weight_type_ == WeightType::kBF16) {
         model_file_type = FtCudaDataType::BF16;
     }
     dir_path += '/';
@@ -141,7 +141,9 @@ TensorMap LlamaWeight<T>::getParams()
     return output;
 }
 
+#ifdef ENABLE_FP32
 template struct LlamaWeight<float>;
+#endif
 template struct LlamaWeight<half>;
 #ifdef ENABLE_BF16
 template struct LlamaWeight<__nv_bfloat16>;

@@ -1629,7 +1629,9 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 }
 
 template class LlamaBatch<half>;
+#ifdef ENABLE_FP32
 template class LlamaBatch<float>;
+#endif
 #ifdef ENABLE_BF16
 template class LlamaBatch<__nv_bfloat16>;
 #endif

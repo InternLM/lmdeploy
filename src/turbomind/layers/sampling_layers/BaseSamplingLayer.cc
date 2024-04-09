@@ -343,6 +343,6 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
 }
 
 template class BaseSamplingLayer<float>;
-template class BaseSamplingLayer<half>;
+// template class BaseSamplingLayer<half>;
 
 }  // namespace turbomind

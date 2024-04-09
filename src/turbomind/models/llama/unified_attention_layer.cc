@@ -270,7 +270,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     sync_check_cuda_error();
 }
 
+#ifdef ENABLE_FP32
 template class UnifiedAttentionLayer<float>;
+#endif
 template class UnifiedAttentionLayer<half>;
 #ifdef ENABLE_BF16
 template class UnifiedAttentionLayer<__nv_bfloat16>;

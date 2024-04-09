@@ -499,7 +499,9 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
 }
 
 template class LlamaV2<half>;
+#ifdef ENABLE_FP32
 template class LlamaV2<float>;
+#endif
 #ifdef ENABLE_BF16
 template class LlamaV2<__nv_bfloat16>;
 #endif

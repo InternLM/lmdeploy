@@ -14,7 +14,7 @@ SUPPORTED_TASKS = {'llm': AsyncEngine, 'vlm': VLAsyncEngine}
 logger = get_logger('lmdeploy')
 
 
-def autoget_backend(model_path: str) -> Union[Literal['turbomind', 'pytorch']]:
+def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
     """Get backend type in auto backend mode.
 
     Args:
@@ -117,6 +117,8 @@ def check_vl_llm(config: dict) -> bool:
     if arch == 'LlavaLlamaForCausalLM':
         return True
     elif arch == 'QWenLMHeadModel' and 'visual' in config:
+        return True
+    elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
     return False
 

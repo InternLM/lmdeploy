@@ -2,12 +2,11 @@
 import asyncio
 import os
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List
 
 import torch
 import torch.distributed as dist
 from torch import multiprocessing as mp
-from torch.distributed._tensor import DeviceMesh, Replicate, distribute_tensor
 from transformers import AutoModelForCausalLM
 
 from lmdeploy.pytorch.accel import LoadNoInit
@@ -23,11 +22,6 @@ from .cache_engine import CacheEngine
 logger = get_logger('lmdeploy')
 
 _PATCH_ARG_NAMES = ['context', 'use_origin']
-
-
-def _div_up(a, b):
-    """div up."""
-    return (a + b - 1) // b
 
 
 def _infer_block_size(model: torch.nn.Module,
@@ -120,49 +114,27 @@ class ModelInputs:
     """Input of the model."""
     input_ids: torch.LongTensor
     seq_length: torch.LongTensor
-    attention_mask: torch.Tensor
+    history_lengths: torch.LongTensor
     block_offsets: torch.LongTensor
-    position_ids: torch.LongTensor
-    q_start_loc: torch.LongTensor
-    history_lengths: List[int]
+    max_q_seq_length: int
+    max_history_length: int
     is_decoding: bool
-    num_blocks: torch.LongTensor
+    num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
     global_adapter_ids: torch.LongTensor = None
     adapter_offsets: torch.LongTensor = None
     max_rank: int = 0
     meta: Any = None
 
-    def slice(self, start: int, end: int):
-        """select by indices."""
-        sli = slice(start, end)
-
-        start_loc = self.q_start_loc[sli]
-        seq_length = self.seq_length[sli]
-        end_loc = start_loc[-1] + seq_length[-1]
-        input_ids = self.input_ids[:, start_loc[0]:end_loc]
-        start_loc = start_loc - start_loc[0]
-
-        history_lengths = self.history_lengths[sli]
-
-        local_adapter_ids = self.local_adapter_ids
-        if local_adapter_ids is not None:
-            local_adapter_ids = local_adapter_ids[sli]
-
-        return ModelInputs(input_ids=input_ids,
-                           seq_length=seq_length,
-                           attention_mask=self.attention_mask[sli],
-                           block_offsets=self.block_offsets[sli],
-                           position_ids=self.position_ids[sli],
-                           q_start_loc=start_loc,
-                           history_lengths=history_lengths,
-                           is_decoding=self.is_decoding,
-                           num_blocks=self.num_blocks[sli],
-                           local_adapter_ids=local_adapter_ids,
-                           global_adapter_ids=self.global_adapter_ids,
-                           adapter_offsets=self.adapter_offsets,
-                           max_rank=self.max_rank,
-                           meta=self.meta)
+    def update(self, input_ids: torch.LongTensor):
+        """update input ids."""
+        assert self.is_decoding
+        self.history_lengths = self.history_lengths + 1
+        self.max_history_length = self.max_history_length + 1
+        if input_ids.dim() == 1:
+            input_ids = input_ids[None, :]
+        self.input_ids = input_ids
+        return self
 
     def split(self, split_size: int, block_size: int):
         """split inputs."""
@@ -180,7 +152,6 @@ class ModelInputs:
         max_seq_len = self.seq_length[0].item()
         ret = []
         block_start = 0
-        history_len = self.history_lengths[0]
         for i in range(0, max_seq_len, split_size):
             start = i
             end = min(max_seq_len, i + split_size)
@@ -193,18 +164,15 @@ class ModelInputs:
                 local_adapter_ids = local_adapter_ids[:, start:end]
 
             block_offsets = self.block_offsets[:, :block_end]
-            out_num_blocks = self.num_blocks.new_tensor(
-                [block_offsets.size(1)])
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
-                attention_mask=self.attention_mask[:, start:end],
                 block_offsets=block_offsets,
-                position_ids=self.position_ids[:, start:end],
-                q_start_loc=input_ids.new_zeros(1),
-                history_lengths=[history_len + start],
+                history_lengths=self.history_lengths + start,
+                max_q_seq_length=input_ids.new_tensor(end - start),
+                max_history_length=self.max_history_length + start,
                 is_decoding=self.is_decoding,
-                num_blocks=out_num_blocks,
+                num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=local_adapter_ids,
                 global_adapter_ids=self.global_adapter_ids,
                 adapter_offsets=self.adapter_offsets,
@@ -240,6 +208,7 @@ class StepContext:
     position_ids: torch.LongTensor
     position_ids_1d: torch.LongTensor
     q_start_loc: torch.LongTensor
+    attention_mask: torch.LongTensor
     history_lengths: torch.LongTensor
     q_seq_length: torch.LongTensor
     kv_seq_length: torch.LongTensor
@@ -273,32 +242,42 @@ class StepContext:
             world_size (int): The distribution world size.
             device (str): The device of the tensors.
         """
+        q_seq_length = inputs.seq_length
+        max_q_seq_length = inputs.max_q_seq_length
+        history_lengths = inputs.history_lengths
+        batch_size = len(q_seq_length)
+        device = q_seq_length.device
 
-        position_ids = inputs.position_ids
-        max_q_seq_length = position_ids.size(-1)
-
-        # seq_len + history_length
-        kv_seq_length = position_ids[..., -1] + 1
+        # q_start_loc and kv_seq_length
+        if inputs.is_decoding:
+            q_start_loc = torch.arange(0, batch_size, device=device)
+            attention_mask = torch.ones_like(q_seq_length)[:, None]
+            position_ids = history_lengths.unsqueeze(-1)
+        else:
+            q_start_loc = q_seq_length.cumsum(0) - q_seq_length
+            mask_range = torch.arange(max_q_seq_length, device=device)[None, :]
+            attention_mask = (mask_range < q_seq_length[:, None]).long()
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids += history_lengths.unsqueeze(-1)
 
         # position ids 1d
-        q_seq_length = inputs.seq_length
         position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
                                                   device)
 
-        max_kv_seq_length = max_q_seq_length + max(inputs.history_lengths)
+        # seq_len + history_length
+        kv_seq_length = q_seq_length + history_lengths
+        max_kv_seq_length = max_q_seq_length + inputs.max_history_length
 
         window_size = getattr(cache_config, 'window_size', 0)
         if window_size > 0:
-            block_size = cache_config.block_size
-            expected_num_blocks = _div_up(kv_seq_length, block_size)
-            missed_num_blocks = expected_num_blocks - inputs.num_blocks
-            kv_seq_length = kv_seq_length - missed_num_blocks * block_size
+            kv_seq_length -= inputs.num_ignored_history
 
         ret = StepContext(inputs=inputs,
                           block_offsets=inputs.block_offsets,
-                          position_ids=inputs.position_ids,
+                          position_ids=position_ids,
                           position_ids_1d=position_ids_1d,
-                          q_start_loc=inputs.q_start_loc,
+                          attention_mask=attention_mask,
+                          q_start_loc=q_start_loc,
                           history_lengths=inputs.history_lengths,
                           q_seq_length=inputs.seq_length,
                           kv_seq_length=kv_seq_length,
@@ -315,23 +294,6 @@ class StepContext:
         return ret
 
     @classmethod
-    def tensorlize_block_offsets(cls, block_offsets, device):
-        """tensorlize block_offsets."""
-        import numpy as np
-        offset_len = [len(offset) for offset in block_offsets]
-        max_offsets_len = max(offset_len)
-        batch_size = len(offset_len)
-        pad_block_offsets = np.zeros((batch_size, max_offsets_len),
-                                     dtype=np.int64)
-
-        for pad_offset, offset, off_len in zip(pad_block_offsets,
-                                               block_offsets, offset_len):
-            pad_offset[:off_len] = offset
-
-        block_offsets = torch.from_numpy(pad_block_offsets).to(device)
-        return block_offsets
-
-    @classmethod
     def get_position_ids_1d(cls,
                             position_ids: torch.LongTensor,
                             seq_length: torch.LongTensor,
@@ -345,10 +307,6 @@ class StepContext:
             ]
             position_ids_1d = torch.cat(position_ids_1d).to(device)
         return position_ids_1d
-
-    def get_block_offsets(self):
-        """return block offsets."""
-        return self.block_offsets
 
     def set_output(self, key, value):
         """set output."""
@@ -400,8 +358,8 @@ def model_forward(
         )
         output = patched_model.patched_forward(
             input_ids=inputs.input_ids,
-            position_ids=inputs.position_ids,
-            attention_mask=inputs.attention_mask,
+            position_ids=context.position_ids,
+            attention_mask=context.attention_mask,
             past_key_values=cache_engine.gpu_cache,
             return_dict=True,
             output_attentions=False,
@@ -630,43 +588,6 @@ class BaseModelAgent(AutoModelAgent):
         return output
 
 
-@dataclass
-class TPResponse:
-    ret_code: int
-    error: Union[Exception, List[Exception]] = None
-    data: Any = None
-
-    def gather_error(self):
-        """gather error."""
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
-
-        # gather errors
-        error_count = torch.tensor(self.ret_code).cuda(rank)
-        dist.all_reduce(error_count)
-        if error_count.item() > 0:
-            all_errors = [None] * world_size
-            dist.all_gather_object(all_errors, self.error)
-            self.ret_code = 1
-            self.error = all_errors
-
-    def raise_error(self, default_error: Exception):
-        """raise error."""
-        if self.error is None:
-            raise default_error
-        elif isinstance(self.error, Exception):
-            raise self.error
-        else:
-            assert isinstance(self.error, List), ('expect error type list, '
-                                                  f'got {type(self.error)}')
-            rank = dist.get_rank()
-            err = self.error[rank]
-            if err is None:
-                raise default_error
-            else:
-                raise err
-
-
 def _get_model_memory_usage(model: torch.nn.Module) -> int:
     """get model memory usage."""
     size = 0
@@ -686,31 +607,29 @@ def _create_device_map(model: torch.nn.Module,
     if device_map is None:
         device_map = dict()
     for name, param in model.named_parameters():
-        device_id = free_mems.argmin().item()
+        device_id = free_mems.argmax().item()
         device_map[name] = device_id
-        free_mems[device_id] += param.numel() * param.element_size()
+        free_mems[device_id] -= param.numel() * param.element_size()
     for name, param in model.named_buffers():
-        device_id = free_mems.argmin().item()
+        device_id = free_mems.argmax().item()
         device_map[name] = device_id
-        free_mems[device_id] += param.numel() * param.element_size()
+        free_mems[device_id] -= param.numel() * param.element_size()
     return device_map
 
 
+@torch.inference_mode()
 def _tp_build_model(
     rank: int,
     model_path: str,
     model_config: ModelConfig,
     cache_config: CacheConfig,
     adapters: Dict[str, str],
-    out_que: mp.Queue,
     world_size: int,
     trust_remote_code=True,
 ):
     """build tensor parallel model."""
     from accelerate import init_empty_weights
 
-    error_code = 0
-    error_type = None
     patched_model = None
     cache_engine = None
 
@@ -822,79 +741,36 @@ def _tp_build_model(
                                    rank=rank,
                                    world_size=world_size)
     except Exception as e:
-        logger.error(f'rank[{rank}] failed with error: {e}')
-        error_code = 1
-        error_type = e
+        raise e
 
-    # response
-    resp = TPResponse(error_code, error_type, cache_config)
-    resp.gather_error()
-    if rank == 0:
-        out_que.put(resp)
-    if resp.ret_code != 0:
-        resp.raise_error(RuntimeError('failed to init model.'))
-
-    return patched_model, cache_engine
+    return patched_model, cache_engine, cache_config
 
 
-def _tp_get_input(rank: int, in_que: mp.Queue, world_size: int):
+def _broadcast_inputs(rank: int, inputs: Any, stream: torch.cuda.Stream):
     """get input tensor parallel."""
-    device_mesh = DeviceMesh('cuda', list(range(world_size)))
-
     # broadcast meta info
-    if rank == 0:
-        inputs, swap_in_map, swap_out_map = in_que.get()
-        inputs = asdict(inputs)
-        input_tensors = dict(
-            (k, v) for k, v in inputs.items() if isinstance(v, torch.Tensor))
-        tensor_metas = dict(
-            (name, (t.shape, t.dtype)) for name, t in input_tensors.items())
-        other_metas = dict((k, v) for k, v in inputs.items()
-                           if not isinstance(v, torch.Tensor))
-        input_metas = (tensor_metas, other_metas)
-        objs = [input_metas, swap_in_map, swap_out_map]
-    else:
-        objs = [None, None, None]
-
-    dist.broadcast_object_list(objs)
-
     if rank != 0:
-        input_metas = objs[0]
-        tensor_metas, other_metas = input_metas
-        input_tensors = dict((name, torch.empty(meta[0], dtype=meta[1]))
-                             for name, meta in tensor_metas.items())
+        inputs = [None, None, None]
 
-    updated_inputs = dict()
-    for name, t in input_tensors.items():
-        updated_inputs[name] = distribute_tensor(t,
-                                                 device_mesh=device_mesh,
-                                                 placements=[Replicate()
-                                                             ]).to_local()
-    torch.cuda.synchronize()
-
-    inputs = updated_inputs
-    inputs.update(other_metas)
-    inputs = ModelInputs(**inputs)
-
-    swap_in_map = objs[1]
-    swap_out_map = objs[2]
-    return inputs, swap_in_map, swap_out_map
+    with torch.cuda.stream(stream):
+        dist.broadcast_object_list(inputs)
+    return inputs
 
 
+@torch.inference_mode()
 def _tp_paging_adapters(
     rank: int,
     patched_model: torch.nn.Module,
     cache_engine: CacheEngine,
-    in_que: mp.Queue,
-    out_que: mp.Queue,
+    weight_map: AdapterWeightMap = None,
 ):
     """tp paging adapters."""
 
     def __get_weight_map():
         """get weight map."""
         if rank == 0:
-            weight_maps = in_que.get()
-            dist_obj = [weight_maps]
+            assert weight_map is not None
+            dist_obj = [weight_map]
         else:
             dist_obj = [None]
         dist.broadcast_object_list(dist_obj)
@@ -914,21 +790,10 @@ def _tp_paging_adapters(
 
     weight_maps = __get_weight_map()
 
-    resp = TPResponse(0)
-    try:
-        if rank == 0:
-            logger.info('tp paging adapters.')
-        if len(weight_maps) > 0:
-            __paging(weight_maps)
-    except Exception as e:
-        resp.ret_code = 1
-        resp.error = e
-
-    resp.gather_error()
     if rank == 0:
-        out_que.put(resp)
-    if resp.ret_code != 0:
-        resp.raise_error(RuntimeError('tp paging adapters failed.'))
+        logger.info('tp paging adapters.')
+    if len(weight_maps) > 0:
+        __paging(weight_maps)
 
 
 def _tp_model_loop(
@@ -937,8 +802,6 @@ def _tp_model_loop(
     model_config: ModelConfig,
     cache_config: CacheConfig,
     adapters: Dict[str, str],
-    in_que: mp.Queue,
-    out_que: mp.Queue,
     world_size: int,
     trust_remote_code=True,
 ):
@@ -955,13 +818,12 @@ def _tp_model_loop(
         world_size (int): The distribution world size.
     """
     stream = torch.cuda.Stream()
-    patched_model, cache_engine = _tp_build_model(
+    patched_model, cache_engine, _ = _tp_build_model(
         rank,
         model_path,
         model_config,
         cache_config,
         adapters,
-        out_que=out_que,
         world_size=world_size,
         trust_remote_code=trust_remote_code)
 
@@ -969,18 +831,17 @@ def _tp_model_loop(
         _tp_paging_adapters(rank,
                             patched_model,
                             cache_engine=cache_engine,
-                            in_que=in_que,
-                            out_que=out_que)
+                            weight_map=None)
 
     while True:
-        inputs, swap_in_map, swap_out_map = _tp_get_input(
-            rank, in_que, world_size)
+        inputs, swap_in_map, swap_out_map = _broadcast_inputs(
+            rank, None, stream)
 
         cache_swapping(cache_engine,
                        swap_in_map=swap_in_map,
                        swap_out_map=swap_out_map)
 
-        output = model_forward(
+        model_forward(
             patched_model,
             inputs,
             cache_engine,
@@ -988,18 +849,13 @@ def _tp_model_loop(
             world_size=world_size,
             stream=stream,
         )
-        stream.synchronize()
-        if rank == 0:
-            resp_output = output
-            out_que.put(TPResponse(0, None, resp_output))
 
 
-def _start_tp_process(rank: int,
+def _start_tp_process(proc_id: int,
                       world_size: int,
                       func: Callable,
                       args: List = None,
-                      kwargs: Dict = None,
-                      port: int = 29500):
+                      kwargs: Dict = None):
     """Start the tensor parallel process.
 
     Args:
@@ -1009,12 +865,10 @@ def _start_tp_process(rank: int,
         args (List): The arguments of the func.
         kwargs (Dict): The keyword arguments of the func.
     """
+    rank = proc_id + 1
     try:
-        os.environ['MASTER_ADDR'] = '127.0.0.1'
-        os.environ['MASTER_PORT'] = str(port)
         dist.init_process_group('nccl', rank=rank, world_size=world_size)
-
-        with torch.cuda.device(rank), torch.no_grad():
+        with torch.cuda.device(rank), torch.inference_mode():
             args = args or tuple()
             kwargs = kwargs or dict()
             func(rank, *args, **kwargs)
@@ -1022,48 +876,34 @@ def _start_tp_process(rank: int,
         from traceback import print_exc
         logger.error(f'Rank[{rank}] failed.')
         print_exc()
+        if dist.is_initialized():
+            dist.destroy_process_group()
         raise e
 
 
 def _check_context_alive(mp_context: mp.ProcessContext):
     """check context alive."""
-    procs = mp_context.processes
-    for idx, p in enumerate(procs):
-        if not p.is_alive():
-            raise RuntimeError(f'Rank[{idx}] failed.')
+    procs: List[mp.Process] = mp_context.processes
+    failed_ranks = list(idx for idx, p in enumerate(procs) if not p.is_alive())
+    if len(failed_ranks) > 0:
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
+            else:
+                p.close()
+        logger.error(f'TP process Rank{failed_ranks} failed.')
+        exit(1)
 
 
-def _queue_get_response(que: mp.Queue,
-                        mp_context: mp.ProcessContext,
-                        interval: float = 1.0):
-    """get response."""
-    from multiprocessing.queues import Empty
+def _find_available_port() -> bool:
+    """find available port."""
+    import socket
+    port = 29500
     while True:
-        try:
-            return que.get(timeout=interval)
-        except Empty:
-            _check_context_alive(mp_context)
-
-
-async def _async_queue_get_response(que: mp.Queue,
-                                    mp_context: mp.ProcessContext,
-                                    interval: float = 1.0):
-    """get response."""
-    from multiprocessing.queues import Empty
-
-    def __try_que_get():
-        """try que get."""
-        try:
-            return que.get(timeout=interval)
-        except Empty:
-            return None
-
-    while True:
-        ret = await asyncio.get_event_loop().run_in_executor(
-            None, __try_que_get)
-        if ret is not None:
-            return ret
-        _check_context_alive(mp_context)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(('localhost', port)) != 0:
+                return port
+            port += 1
 
 
 class TPModelAgent(AutoModelAgent):
@@ -1085,48 +925,56 @@ class TPModelAgent(AutoModelAgent):
                  world_size: int,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True) -> None:
-        self.mp_ctx = mp.get_context('spawn')
+        import signal
+
+        def __signal_term_handler(sig, frame):
+            """sigterm handler."""
+            if hasattr(self, 'mp_context'):
+                procs = self.mp_context.processes
+                for p in procs:
+                    if p.is_alive():
+                        p.kill()
+            logger.error(f'Get signal[{sig}], kill all processes.')
+            signal.signal(sig, signal.SIG_DFL)
+            signal.raise_signal(sig)
+
         super().__init__(model_config=model_config, cache_config=cache_config)
+
+        signal.signal(signal.SIGTERM, __signal_term_handler)
+
+        self.mp_ctx = mp.get_context('spawn')
         self.world_size = world_size
-        self.tp_model_in_que = self.mp_ctx.Queue(10)
-        self.tp_model_out_que = self.mp_ctx.Queue(10)
 
-        self.patch_model_tp(model_path,
-                            model_config=model_config,
-                            cache_config=cache_config,
-                            adapters=adapters,
-                            in_que=self.tp_model_in_que,
-                            out_que=self.tp_model_out_que,
-                            world_size=world_size,
-                            trust_remote_code=trust_remote_code)
+        self._start_sub_process(model_path,
+                                model_config=model_config,
+                                cache_config=cache_config,
+                                adapters=adapters,
+                                world_size=world_size,
+                                trust_remote_code=trust_remote_code)
 
-    def patch_model_tp(self, model_path: str, model_config: ModelConfig,
-                       cache_config: CacheConfig, adapters: Dict[str, str],
-                       in_que: mp.Queue, out_que: mp.Queue, world_size: int,
-                       trust_remote_code: bool):
-        """Start tensor parallel sub process.
+        model, cache_engine, cache_config = self._build_model(
+            model_path=model_path,
+            model_config=model_config,
+            cache_config=cache_config,
+            adapters=adapters,
+            world_size=world_size,
+            trust_remote_code=trust_remote_code,
+        )
+        self.patched_model = model
+        self.cache_config = cache_config
+        self.cache_engine = cache_engine
+        self.stream = torch.cuda.Stream()
 
-        Args:
-            model_path (int): Path of the hugging face model.
-                Could be local or online.
-            extra_args (List[str]): The extra arguments to add to the
-                patched model.
-            model_config (ModelConfig): The config of the model.
-            cache_config (CacheConfig): The config of the cache.
-            in_que (mp.Queue): Input queue. Used to receive model input.
-            out_que (mp.Queue): Output queue. Used to send the model output.
-            world_size (int): The distribution world size.
-        """
-
-        def __find_available_port() -> bool:
-            """find available port."""
-            import socket
-            port = 29500
-            while True:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    if s.connect_ex(('localhost', port)) != 0:
-                        return port
-                    port += 1
+    def _start_sub_process(self, model_path: str, model_config: ModelConfig,
+                           cache_config: CacheConfig, adapters: Dict[str, str],
+                           world_size: int, trust_remote_code: bool):
+        """Start tensor parallel sub process."""
+        port = _find_available_port()
+        os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
+        os.environ.setdefault('MASTER_PORT', str(port))
+        addr = os.environ['MASTER_ADDR']
+        port = os.environ['MASTER_PORT']
+        logger.info(f'MASTER_ADDR={addr}, MASTER_PORT={port}')
 
         self.mp_context = mp.spawn(
             _start_tp_process,
@@ -1137,31 +985,79 @@ class TPModelAgent(AutoModelAgent):
                 dict(model_config=model_config,
                      cache_config=cache_config,
                      adapters=adapters,
-                     in_que=in_que,
-                     out_que=out_que,
                      world_size=world_size,
                      trust_remote_code=trust_remote_code),
-                __find_available_port(),
             ),
-            nprocs=world_size,
+            nprocs=world_size - 1,
             join=False,
             daemon=True,
         )
-        resp: TPResponse = _queue_get_response(out_que, self.mp_context)
-        if resp.ret_code != 0:
-            logger.error(f'Init tp model failed with error: {resp.error}')
-            raise next(err for err in resp.error if err is not None)
-        self.cache_config = resp.data
+        _check_context_alive(self.mp_context)
+
+        rank = 0
+        try:
+            dist.init_process_group('nccl', rank=rank, world_size=world_size)
+        except Exception as e:
+            from traceback import print_exc
+            logger.error(f'Rank[{rank}] failed.')
+            print_exc()
+            if dist.is_initialized():
+                dist.destroy_process_group()
+            raise e
+
+    @torch.inference_mode()
+    def _build_model(
+        self,
+        model_path: str,
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        adapters: Dict[str, str],
+        world_size: int,
+        trust_remote_code=True,
+    ):
+        """build model."""
+        _check_context_alive(self.mp_context)
+        rank = 0
+        model, cache_engine, cache_config = _tp_build_model(
+            rank,
+            model_path=model_path,
+            model_config=model_config,
+            cache_config=cache_config,
+            adapters=adapters,
+            world_size=world_size,
+            trust_remote_code=trust_remote_code,
+        )
+
+        return model, cache_engine, cache_config
 
     def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """load adapter."""
         if not weight_maps:
             return
-        self.tp_model_in_que.put(weight_maps)
-        resp: TPResponse = self.tp_model_out_que.get()
-        if resp.ret_code != 0:
-            logger.error(f'paging adapters failed with error: {resp.error}')
-            raise next(err for err in resp.error if err is not None)
+        _check_context_alive(self.mp_context)
+        rank = 0
+        _tp_paging_adapters(rank, self.patched_model, self.cache_engine,
+                            weight_maps)
+
+    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                      swap_out_map: SwapMap):
+        """forward impl."""
+        _check_context_alive(self.mp_context)
+        rank = 0
+        _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
+                          self.stream)
+        cache_swapping(self.cache_engine,
+                       swap_in_map=swap_in_map,
+                       swap_out_map=swap_out_map)
+        output = model_forward(
+            self.patched_model,
+            inputs,
+            self.cache_engine,
+            self.model_config.json_config,
+            world_size=1,
+            stream=self.stream,
+        )
+        return output
 
     def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
                 swap_out_map: SwapMap):
@@ -1169,18 +1065,14 @@ class TPModelAgent(AutoModelAgent):
 
         Args:
             inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (Dict[int, int]): Cache maps to swap in.
-            swap_out_map (Dict[int, int]): Cache maps to swap out.
+            swap_in_map (SwapMap): Cache maps to swap in.
+            swap_out_map (SwapMap): Cache maps to swap out.
         """
-        with torch.no_grad():
-            self.tp_model_in_que.put((inputs, swap_in_map, swap_out_map))
-
-        resp: TPResponse = _queue_get_response(self.tp_model_out_que,
-                                               self.mp_context)
-        if resp.ret_code != 0:
-            raise RuntimeError('tp forward failed.')
-
-        return resp.data
+        output = self._forward_impl(inputs,
+                                    swap_in_map=swap_in_map,
+                                    swap_out_map=swap_out_map)
+        self.stream.synchronize()
+        return output
 
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
                             swap_out_map: SwapMap):
@@ -1188,17 +1080,15 @@ class TPModelAgent(AutoModelAgent):
 
         Args:
             inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (Dict[int, int]): Cache maps to swap in.
-            swap_out_map (Dict[int, int]): Cache maps to swap out.
+            swap_in_map (SwapMap): Cache maps to swap in.
+            swap_out_map (SwapMap): Cache maps to swap out.
         """
-        with torch.no_grad():
-            self.tp_model_in_que.put((inputs, swap_in_map, swap_out_map))
-
-        resp: TPResponse = await _async_queue_get_response(
-            self.tp_model_out_que, self.mp_context)
-        if resp.ret_code != 0:
-            raise RuntimeError('tp forward failed.')
-        return resp.data
+        output = self._forward_impl(inputs,
+                                    swap_in_map=swap_in_map,
+                                    swap_out_map=swap_out_map)
+        await asyncio.get_event_loop().run_in_executor(None,
+                                                       self.stream.synchronize)
+        return output
 
 
 def build_model_agent(model_path: str,

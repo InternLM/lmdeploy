@@ -26,6 +26,9 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/04\] TurboMind latest upgrade boosts GQA, rocketing the [internlm2-20b](https://huggingface.co/internlm/internlm2-20b) model inference to 16+ RPS, about 1.8x faster than vLLM.
+- \[2024/04\] Support Qwen1.5-MOE and dbrx.
+- \[2024/03\] Support DeepSeek-VL offline inference pipeline and serving.
 - \[2024/03\] Support VLM offline inference pipeline and serving.
 - \[2024/02\] Support Qwen 1.5, Gemma, Mistral, Mixtral, Deepseek-MOE and so on.
 - \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](./docs/en/serving/api_server.md).
@@ -91,7 +94,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |      InternLM      |  7B - 20B  |
 |     InternLM2      |  7B - 20B  |
 | InternLM-XComposer |     7B     |
-|        QWen        |  7B - 72B  |
+|        QWen        | 1.8B - 72B |
 |      QWen1.5       | 0.5B - 72B |
 |    QWen1.5-MoE     |   A2.7B    |
 |      QWen-VL       |     7B     |
@@ -103,6 +106,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |         YI         |  6B - 34B  |
 |      Mistral       |     7B     |
 |    DeepSeek-MoE    |    16B     |
+|    DeepSeek-VL     |     7B     |
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
 |        Dbrx        |    132B    |
@@ -121,12 +125,12 @@ Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
 pip install lmdeploy
 ```
 
-The default prebuilt package is compiled on CUDA 11.8. However, if CUDA 12+ is required, you can install lmdeploy by:
+Since v0.3.0, The default prebuilt package is compiled on **CUDA 12**. However, if CUDA 11+ is required, you can install lmdeploy by:
 
 ```shell
-export LMDEPLOY_VERSION=0.2.0
+export LMDEPLOY_VERSION=0.3.0
 export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## Offline Batch Inference
@@ -170,18 +174,18 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
 
 - Deploying LLMs offline on the NVIDIA Jetson platform by LMDeploy: [LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
 
-## Contributing
+# Contributing
 
 We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the contributing guideline.
 
-## Acknowledgement
+# Acknowledgement
 
 - [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)
 - [llm-awq](https://github.com/mit-han-lab/llm-awq)
 - [vLLM](https://github.com/vllm-project/vllm)
 - [DeepSpeed-MII](https://github.com/microsoft/DeepSpeed-MII)
 
-## Citation
+# Citation
 
 ```bibtex
 @misc{2023lmdeploy,
@@ -192,6 +196,6 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
 }
 ```
 
-## License
+# License
 
 This project is released under the [Apache 2.0 license](LICENSE).

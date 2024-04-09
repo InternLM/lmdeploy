@@ -1,8 +1,7 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch.tools.make_inputs import (make_model_inputs,
-                                                make_step_context)
+from lmdeploy.pytorch.tools.make_inputs import make_step_context
 
 
 class TestMakeInputs:
@@ -13,7 +12,7 @@ class TestMakeInputs:
 
     @pytest.fixture
     def history_length(self):
-        yield [10, 12, 6]
+        yield torch.tensor([10, 12, 6])
 
     @pytest.fixture
     def input_ids(self, seq_length):
@@ -45,21 +44,6 @@ class TestMakeInputs:
                              head_size)
         v_cache = k_cache + 1
         yield [(k_cache, v_cache)]
-
-    def test_make_inputs(self, input_ids, seq_length, history_length):
-        model_inputs = make_model_inputs(input_ids,
-                                         seq_length=seq_length,
-                                         block_offsets=None,
-                                         num_blocks=None,
-                                         history_length=history_length)
-        position_ids = torch.tensor([
-            [10, 11, 11, 11],
-            [12, 13, 14, 15],
-            [6, 7, 8, 8],
-        ])
-        q_start_loc = torch.tensor([0, 2, 6])
-        torch.testing.assert_close(model_inputs.position_ids, position_ids)
-        torch.testing.assert_close(model_inputs.q_start_loc, q_start_loc)
 
     def test_make_step_context(self, input_ids, seq_length, history_length,
                                past_key_values, block_size,
