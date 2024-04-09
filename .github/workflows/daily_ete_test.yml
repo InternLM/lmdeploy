@@ -289,7 +289,7 @@ jobs:
     needs: test_tools
     timeout-minutes: 30
     env:
-      HF_MODEL: /nvme/qa_test_models/internlm2-chat-20b
+      HF_MODEL: /nvme/qa_test_models/internlm/internlm2-chat-20b
       WORKDIR: /nvme/qa_test_models/triton_workspace
       OFFLINE_PKGS: /nvme/qa_test_models/offline_pkg
       TB_MODEL: internlm2-chat-20b-fp16-tp2
