@@ -2,8 +2,9 @@ import random
 import string
 
 import pytest
-import yaml
 from utils.triton_engine import Engine
+
+from lmdeploy.serve.turbomind import chatbot
 
 SERVER_ADDR = 'localhost:33337'
 
@@ -12,6 +13,19 @@ SERVER_ADDR = 'localhost:33337'
 @pytest.mark.triton
 @pytest.mark.flaky(reruns=0)
 class TestTritonInterface:
+
+    @pytest.mark.tmp
+    def test_return_info(self):
+        dict_info = {}
+
+        engine = Engine(SERVER_ADDR, log_level='ERROR', **dict_info)
+
+        session_id = get_random_session_id()
+        status, res, tokens = engine.triton_infer(session_id, '你好，你叫什么名字',
+                                                  'req_id:', 50, True, False)
+        assert status == chatbot.StatusCode.TRITON_STREAM_END, status
+        assert len(res) > 0, res
+        assert tokens <= 51, res
 
     def test_start_stop_param(self):
         dict_info = {
@@ -129,30 +143,6 @@ class TestTritonInterface:
         engine.triton_resume(session_id)
         engine.triton_end(session_id)
 
-    # diff dict
-    def test_diff_dict(server_addr):
-        with open('autotest/gen_case_dict.yaml') as f:
-            case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-
-        try:
-            for case in case_config.keys():
-                print('dict case:' + case)
-                dict_info = case_config[case]
-                if dict_info is None:
-                    dict_info = {}
-
-                print('dict info:' + str(dict_info))
-                engine = Engine(server_addr, log_level='ERROR', **dict_info)
-
-                session_id = get_random_session_id()
-                engine.triton_infer(session_id, '你好，你叫什么名字', 'req_id:' + case,
-                                    500, True, True)
-                engine.triton_resume(session_id)
-                engine.triton_end(session_id)
-                engine.triton_set_session(None)
-        except Exception as e:
-            print(f'error: {e}')
-
     def test_history_crash_case_set(self):
         dict_info = {
             'assistant': '<|Assistant|>െ',
@@ -190,7 +180,6 @@ class TestTritonInterface:
         engine.triton_infer(session_id, '你好，你叫什么名字' + str(session_id),
                             'req_id:' + str(session_id), 200)
         for i in range(250):
-            print('round: ' + str(i))
             engine.triton_infer(session_id, '给我讲个200字的童话故事' + str(i),
                                 'req_id:' + str(i), 200)
 

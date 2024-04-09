@@ -61,14 +61,21 @@ class Engine:
             tokens = 0
             triton_obj = self.triton_obj
             for status, res, tokens in triton_obj.stream_infer(
-                    seq_id, prompt, req_id, request_output_len, **kv_args):
+                    seq_id,
+                    prompt,
+                    req_id,
+                    request_output_len,
+                    sequence_start=sequence_start,
+                    sequence_end=sequence_end,
+                    **kv_args):
                 tmp_status = status
                 if status == chatbot.StatusCode.TRITON_STREAM_END:
                     tmp_status = chatbot.StatusCode.TRITON_STREAM_ING
             print(f'triton_infer end, seq_id:{seq_id}, status: {tmp_status}')
+            return status, res, tokens
         except Exception as e:
             print(f'Unknown error: {e}')
-        return
+        return chatbot.StatusCode.TRITON_SERVER_ERR, None, None
 
     def triton_set_session(self, session_id):
         try:
