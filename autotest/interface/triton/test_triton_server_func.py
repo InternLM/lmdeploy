@@ -10,9 +10,8 @@ SERVER_ADDR = 'localhost:33337'
 
 @pytest.mark.order(8)
 @pytest.mark.triton
-@pytest.mark.chat
-@pytest.mark.flaky(reruns=2)
-class TestRestfulInterfaceChatInteractive:
+@pytest.mark.flaky(reruns=0)
+class TestTritonInterface:
 
     def test_start_stop_param(self):
         dict_info = {
