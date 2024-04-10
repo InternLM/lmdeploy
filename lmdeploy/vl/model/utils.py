@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
+from contextlib import contextmanager
 from typing import Dict, List
 
 import torch
@@ -43,3 +44,13 @@ def load_model_from_weight_files(model: nn.Module, folder: str) -> None:
         ckpt = os.path.join(folder, file_name)
         state_dict = load_weight_ckpt(ckpt)
         model.load_state_dict(state_dict, strict=False)
+
+
+@contextmanager
+def disable_transformers_logging():
+    import transformers
+    from transformers.utils import logging
+    previous_level = logging.get_verbosity()
+    logging.set_verbosity(transformers.logging.ERROR)
+    yield
+    logging.set_verbosity(previous_level)
