@@ -73,12 +73,13 @@ void Run(int m, int n, int k)
     cudaDeviceSynchronize();
 
     // ComputeRefCpu(c_cpu.data(), a.data().get(), b.data().get(), m, n, k);
-    computeRefCublas(c_ref.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
 
     if (1) {
         for (int i = 0; i < 10; ++i) {
             gemm::invoke(c.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
         }
+
+        computeRefCublas(c_ref.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
 
         cudaDeviceSynchronize();
 
@@ -94,6 +95,8 @@ void Run(int m, int n, int k)
         for (int i = 0; i < 10; ++i) {
             gemm::invoke(c.data().get(), a.data().get(), b1.data().get(), m, n, k, 0);
         }
+
+        computeRefCublas(c_ref.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
 
         cudaDeviceSynchronize();
 

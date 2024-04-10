@@ -4,7 +4,7 @@
 
 namespace turbomind {
 
-template<class T, int CTA_K>
+template<class T, int CTA_M, int CTA_N, int CTA_K>
 struct TileIterator {
     const T* ptr_A_;
     const T* ptr_B_;
