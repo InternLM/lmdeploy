@@ -31,7 +31,7 @@ def generate_report(report_path: str):
                     benchmark_type = backend_subfolder.replace(
                         sec_dir_path + '/', '')
                     print('*' * 10, benchmark_type, '*' * 10)
-                    file.writelines('*' * 10 + benchmark_type + '*' * 10 +
+                    file.writelines('-' * 10 + benchmark_type + '-' * 10 +
                                     '\n')
                     merged_csv_path = os.path.join(backend_subfolder,
                                                    'summary.csv')

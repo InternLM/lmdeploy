@@ -625,8 +625,7 @@ jobs:
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Pkgs
-        run: pip install pandas
       - name: Get overview
         run: |
+          pip install pandas
           python3 .github/scripts/get_benchmark_summary.py generate_report $REPORT_DIR
