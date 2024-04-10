@@ -65,7 +65,7 @@ struct DecodingConfig<arch::Sm75, T, Tkv, Qh, HeadDim> {
 
 template<class T, class Tkv, int Qh, int HeadDim>
 struct DecodingConfig<arch::Sm70, T, Tkv, Qh, HeadDim> {
-    // Qh >= 4 is not benificial for sm_70
+    // Qh >= 4 is not beneficial for sm_70
     static constexpr int kH = Qh % 3 == 0 ? 3 : (Qh % 2 == 0 ? 2 : 1);
 
     using Attention = Impl<MMA_SIMT, T, Tkv, kH, 1, 64, kH, 1, 16, HeadDim, 2>;
