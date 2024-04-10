@@ -15,9 +15,9 @@ def generate_report(report_path: str):
             f.path for f in os.scandir(dir_path) if f.is_dir()
         ]
         for sec_dir_path in second_subfolders:
-            print('-' * 25, sec_dir_path.replace(report_path, ''), '-' * 25)
-            file.writelines('-' * 25 + sec_dir_path.replace(report_path, '') +
-                            '-' * 25 + '\n')
+            model = sec_dir_path.replace(report_path + '/', '')
+            print('-' * 25, model, '-' * 25)
+            file.writelines('-' * 25 + model + '-' * 25 + '\n')
 
             benchmark_subfolders = [
                 f.path for f in os.scandir(sec_dir_path) if f.is_dir()
@@ -28,13 +28,11 @@ def generate_report(report_path: str):
                     if f.is_dir()
                 ]
                 for backend_subfolder in backend_subfolders:
-                    print('*' * 10,
-                          backend_subfolder.replace(sec_dir_path,
-                                                    ''), '*' * 10)
-                    file.writelines(
-                        '*' * 10 +
-                        backend_subfolder.replace(sec_dir_path, '') +
-                        '*' * 10 + '\n')
+                    benchmark_type = backend_subfolder.replace(
+                        sec_dir_path + '/', '')
+                    print('*' * 10, benchmark_type, '*' * 10)
+                    file.writelines('*' * 10 + benchmark_type + '*' * 10 +
+                                    '\n')
                     merged_csv_path = os.path.join(backend_subfolder,
                                                    'summary.csv')
                     csv_files = glob.glob(
@@ -63,9 +61,12 @@ def generate_report(report_path: str):
                             avg_df = pd.read_csv(average_csv_path)
                             merged_df = pd.concat([merged_df, avg_df],
                                                   ignore_index=True)
+                            file.write(average_values + '\n\n')
+                        else:
+                            file.write(
+                                merged_df.to_string(index=False) + '\n\n')
                         merged_df.to_csv(merged_csv_path, index=False)
                         print(merged_df)
-                        file.write(merged_df.to_string(index=False) + '\n\n')
         file.write('\n\n')
 
     file.close()

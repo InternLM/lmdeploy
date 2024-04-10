@@ -174,15 +174,15 @@ jobs:
           mkdir ${result_dir}
           export CUDA_VISIBLE_DEVICES=6,7
           python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 1 --csv ${result_dir}/generation_batch1.csv > ${result_dir}/generation_batch1.log
-          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 16 -ct 128 -pt 2048 --csv ${result_dir}/generation_batch16.csv > ${result_dir}/generation_batch16.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 16 -ct 2048 -pt 2048 --csv ${result_dir}/generation_batch16.csv > ${result_dir}/generation_batch16.log
           python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 32 -ct 128 2048 -pt 2048 128 --csv ${result_dir}/generation_batch32.csv > ${result_dir}/generation_batch32.log
           python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 64 -ct 128 -pt 128 --csv ${result_dir}/generation_batch64.csv > ${result_dir}/generation_batch64.log
       - name: Save reports
         if: always()
         run: |
           mkdir $REPORT_DIR -p && mkdir $REPORT_DIR/${{matrix.model}} -p && mkdir $REPORT_DIR/${{matrix.model}}/generation -p
-          chmod -R 777 $REPORT_DIR
           cp -r benchmark-generation-* $REPORT_DIR/${{matrix.model}}/generation && rm -rf benchmark-generation-*
+          chmod -R 777 $REPORT_DIR
           echo 'save report to $REPORT_DIR/${{matrix.model}}/generation'
       - name: Clear workfile
         if: always()
@@ -294,8 +294,8 @@ jobs:
         if: always()
         run: |
           mkdir $REPORT_DIR -p && mkdir $REPORT_DIR/${{matrix.model}} -p && mkdir $REPORT_DIR/${{matrix.model}}/throughput -p
-          chmod -R 777 $REPORT_DIR
           cp -r benchmark-throughput-* $REPORT_DIR/${{matrix.model}}/throughput && rm -rf benchmark-throughput-*
+          chmod -R 777 $REPORT_DIR
           echo 'save report to $REPORT_DIR/${{matrix.model}}/throughput'
       - name: Clear workfile
         if: always()
@@ -428,9 +428,9 @@ jobs:
         if: always()
         run: |
           mkdir $REPORT_DIR -p && mkdir $REPORT_DIR/${{matrix.model}} -p && mkdir $REPORT_DIR/${{matrix.model}}/restful -p
-          chmod -R 777 $REPORT_DIR
           cp -r benchmark-restful-* $REPORT_DIR/${{matrix.model}}/restful && rm -rf benchmark-restful-*
           mv *_run.log $REPORT_DIR/${{matrix.model}}/restful
+          chmod -R 777 $REPORT_DIR
           echo 'save report to $REPORT_DIR/${{matrix.model}}/restful'
       - name: Clear workfile
         if: always()
