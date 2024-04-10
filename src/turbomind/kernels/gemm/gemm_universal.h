@@ -54,7 +54,8 @@ struct GemmUniversal {
         DataIter data_iter{param, m_idx, n_idx, k_idx, param.k};
 
         typename Mainloop::GmemIterA gmem_A{param.k};
-        typename Mainloop::GmemIterB gmem_B{param.k};
+        // typename Mainloop::GmemIterB gmem_B{param.k};
+        typename Mainloop::GmemIterB gmem_B{CTA_K};
 
         Mainloop mainloop{};
 

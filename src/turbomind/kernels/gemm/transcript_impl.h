@@ -65,7 +65,10 @@ struct Transcript {
 
         const int cta_cnt_k = (param.k + CTA_K - 1) / CTA_K;
 
-        // printf("cta_cnt_k=%d cta_cnt_n=%d mma_cnt_k=%d mma_cnt_n=%d\n", cta_cnt_n, cta_cnt_k, MMA_CNT_K, MMA_CNT_N);
+        // if (threadIdx.x == 0) {
+        //     printf("cta_cnt_k=%d cta_cnt_n=%d mma_cnt_k=%d mma_cnt_n=%d\n", cta_cnt_k, cta_cnt_n, MMA_CNT_K,
+        //     MMA_CNT_N);
+        // }
 
         DataIter data_iter{param, 0, cta_idx_n * CTA_N, 0, param.k};
 
@@ -85,7 +88,7 @@ struct Transcript {
 
         int cta_idx_k = 0;
 
-        // printf("warp_id=%d, warp_id_n=%d\n", warp_id, warp_id_n);
+        T* cta_C = &param.C[(cta_idx_k * cta_cnt_n + cta_idx_n) * CTA_N * CTA_K];
 
         PRAGMA_NO_UNROLL
         for (; cta_idx_k < cta_cnt_k; ++cta_idx_k) {
@@ -94,9 +97,9 @@ struct Transcript {
             ++data_iter;
 
             __pipeline_wait_prior(0);
-            __syncthreads();
 
-            T* cta_C = &param.C[(cta_idx_k * cta_cnt_n + cta_idx_n) * CTA_N * CTA_K];
+            __syncthreads();  // wait for smem being written
+
             PRAGMA_UNROLL
             for (int k = 0; k < Gemm::ITER_K; ++k) {
                 state_B.Load(k, 0);
@@ -104,28 +107,17 @@ struct Transcript {
                 for (int n = 0; n < Gemm::ITER_N; ++n) {
                     const int mma_idx_k = k;
                     const int mma_idx_n = n + warp_id_n * Gemm::ITER_N;
-                    // mma fragment ptr for the warp
-                    T* C = cta_C + (mma_idx_k * MMA_CNT_N + mma_idx_n) * WARP_SIZE * FRAG_SIZE;
                     if (warp_id_m == 0) {
-                        const int frag_idx = (cta_idx_k * cta_cnt_n + cta_idx_n) * MMA_CNT_N * MMA_CNT_K
-                                             + mma_idx_k * MMA_CNT_N + mma_idx_n;
-                        // if (lane_id == 0) {
-                        //     printf("frag_idx = %6d\n", frag_idx);
-                        // }
+                        // mma fragment ptr for the warp
+                        T* C = cta_C + (mma_idx_k * MMA_CNT_N + mma_idx_n) * WARP_SIZE * FRAG_SIZE;
                         Store(&C[lane_id * FRAG_SIZE], state_B.frag_B[k][n]);
-                        // PRAGMA_UNROLL
-                        // for (int c = 0; c < state_B.frag_B[k][n].size(); ++c) {
-                        //     printf("%2d %2d %2d %2d %2d %f\n",
-                        //            (int)cta_idx_k,
-                        //            (int)cta_idx_n,
-                        //            (int)mma_idx_k,
-                        //            (int)mma_idx_n,
-                        //            (int)lane_id,
-                        //            (float)state_B.frag_B[k][n][c]);
-                        // }
                     }
                 }
             }
+
+            __syncthreads();  // wait for smem being read
+
+            cta_C += cta_cnt_n * CTA_N * CTA_K;
         }
     }
 };

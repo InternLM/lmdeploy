@@ -4,7 +4,7 @@
 
 namespace turbomind {
 
-template<class T, int CTA_M, int CTA_N, int CTA_K>
+template<class T, int CTA_M, int CTA_N, int CTA_K, int Flag>
 struct TileIterator {
     const T* ptr_A_;
     const T* ptr_B_;
@@ -12,13 +12,23 @@ struct TileIterator {
     int      ke_;
     bool     mask_{true};
 
+    int cta_cnt_n_;
+
     template<class Param>
     __device__ TileIterator(const Param& param, int mi, int ni, int ki, int ke)
     {
         ptr_A_ = param.A + mi * param.k + ki;
-        ptr_B_ = param.B + ni * param.k + ki;
-        ki_    = ki;
-        ke_    = ke;
+
+        if constexpr (!Flag) {
+            ptr_B_ = param.B + ni * param.k + ki;
+        }
+        else {
+            ptr_B_     = param.B + ni / CTA_N * (CTA_N * CTA_K);
+            cta_cnt_n_ = (param.n + CTA_N - 1) / CTA_N;
+        }
+
+        ki_ = ki;
+        ke_ = ke;
     }
 
     template<int Idx>
@@ -38,7 +48,13 @@ struct TileIterator {
     __device__ TileIterator& operator++()
     {
         ptr_A_ += CTA_K;
-        ptr_B_ += CTA_K;
+
+        if constexpr (!Flag) {
+            ptr_B_ += CTA_K;
+        }
+        else {
+            ptr_B_ += cta_cnt_n_ * CTA_N * CTA_K;
+        }
 
         ki_ += CTA_K;
         if (ki_ >= ke_) {

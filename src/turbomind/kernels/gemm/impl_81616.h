@@ -158,11 +158,12 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
 
             const int warp_idx_n    = warp_id_n(warp_id);
             const int warp_offset_n = warp_idx_n * WARP_N;
+            const int offset        = pipe_iter * SmemLayoutB::kSize;
 
             if constexpr (!Flag_) {
                 const int offset_s = lane_id % 16 + warp_offset_n;
                 const int offset_c = lane_id / 16 * 8;
-                const int offset   = pipe_iter * SmemLayoutB::kSize;
+
                 PRAGMA_UNROLL
                 for (int n = 0; n < ITER_N; ++n) {
                     const int s = n * 16 + offset_s;
@@ -174,7 +175,8 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                 PRAGMA_UNROLL
                 for (int n = 0; n < ITER_N; ++n) {
                     const int mma_idx = k * MMA_CNT_N + n + warp_idx_n * ITER_N;
-                    turbomind::Load(frag_B[k][n], &smem_B.ptr_[(mma_idx * WARP_SIZE + lane_id) * frag_B[k][n].size()]);
+                    turbomind::Load(frag_B[k][n],
+                                    &smem_B.ptr_[(mma_idx * WARP_SIZE + lane_id) * frag_B[k][n].size() + offset]);
                 }
             }
         }

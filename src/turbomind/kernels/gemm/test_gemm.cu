@@ -67,14 +67,14 @@ void Run(int m, int n, int k)
 
     RNG rng;
 
-    rng.GenerateUniform(a.data().get(), a.size(), 1, 0);
-    rng.GenerateUniform(b.data().get(), b.size(), 1, 0);
+    rng.GenerateUniform(a.data().get(), a.size(), 1, -0.5);
+    rng.GenerateUniform(b.data().get(), b.size(), 1, -0.5);
 
     cudaDeviceSynchronize();
 
     // ComputeRefCpu(c_cpu.data(), a.data().get(), b.data().get(), m, n, k);
 
-    if (1) {
+    if (0) {
         for (int i = 0; i < 10; ++i) {
             gemm::invoke(c.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
         }
@@ -84,15 +84,15 @@ void Run(int m, int n, int k)
         cudaDeviceSynchronize();
 
         // Compare(c_ref.data().get(), c_cpu.data(), n, n, m, 1);
-        Compare(c.data().get(), c_ref.data().get(), n, n, m, 1);
+        Compare(c.data().get(), c_ref.data().get(), n, n, m, 0);
     }
 
-    if (0) {
+    if (1) {
         for (int i = 0; i < 1; ++i) {
             gemm::transcript(b1.data().get(), b.data().get(), n, k, 0);
         }
 
-        for (int i = 0; i < 10; ++i) {
+        for (int i = 0; i < 1; ++i) {
             gemm::invoke(c.data().get(), a.data().get(), b1.data().get(), m, n, k, 0);
         }
 
@@ -110,6 +110,6 @@ void Run(int m, int n, int k)
 int main(int argc, char* argv[])
 {
     Run<half>(4096, 4096, 4096);
-    // Run<half>(128, 128, 32);
+    // Run<half>(128, 128, 64);
     return 0;
 }
