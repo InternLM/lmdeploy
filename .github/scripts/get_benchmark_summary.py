@@ -61,7 +61,8 @@ def generate_report(report_path: str):
                             avg_df = pd.read_csv(average_csv_path)
                             merged_df = pd.concat([merged_df, avg_df],
                                                   ignore_index=True)
-                            file.write(average_values + '\n\n')
+                            file.write(
+                                average_values.to_string(index=False) + '\n\n')
                         else:
                             file.write(
                                 merged_df.to_string(index=False) + '\n\n')
