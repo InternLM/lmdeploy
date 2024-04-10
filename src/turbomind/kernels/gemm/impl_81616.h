@@ -66,7 +66,7 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     using FragC = Array<float, 4>[ITER_M][ITER_N];  // {n8,m4}, [iM,iN], (n2,m2)
                                                     //   1  2     8 16     8  1
 
-    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
+    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 32, 32, Swizzle<2, 3, 3>>;
     using SmemLayoutB = std::conditional_t<Flag_,
                                            SmemLayoutV2<CTA_N, CTA_K, CTA_N, CTA_K, Identity>,
                                            SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>>;
@@ -100,65 +100,83 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     struct StateA {
         SmemAccessor<T, SmemLayoutA> smem_A;
         FragA                        frag_A;
+        int                          offset = 0;
+        T*                           data;
 
-        __device__ StateA(SharedStorage& storage): smem_A{storage.A} {}
+        __device__ StateA(SharedStorage& storage): smem_A{storage.A}
+        {
+            data = storage.A;
+        }
 
-        __device__ void Load(int k, int pipe_iter)
+        __device__ void Load(int k, int)
         {
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
 
             const int warp_offset_m = warp_id_m(warp_id) * WARP_M;
 
-            const int offset = pipe_iter * SmemLayoutA::kSize;
+            // const int offset = pipe_iter * SmemLayoutA::kSize;
 
             if constexpr (ITER_M == 1) {
-                const int offset_s = lane_id % 8 + warp_offset_m;
-                const int offset_c = lane_id / 8 * 8;
-                if constexpr (ITER_K % 2 == 0) {
-                    if (k % 2 == 0) {
-                        const int s = offset_s;
-                        const int c = offset_c + k * 16;
-                        ldsm_x4((Array<uint32_t, 4>&)frag_A[k][0], cast_smem_ptr_to_uint(&smem_A(s, c, offset)));
-                    }
-                }
-                else {
-                    const int s = offset_s;
-                    const int c = offset_c % 16 + k * 16;
-                    ldsm_x2((Array<uint32_t, 2>&)frag_A[k][0], cast_smem_ptr_to_uint(&smem_A(s, c, offset)));
-                }
+                // const int offset_s = lane_id % 8 + warp_offset_m;
+                // const int offset_c = lane_id / 8 * 8;
+                // if constexpr (ITER_K % 2 == 0) {
+                //     if (k % 2 == 0) {
+                //         const int s = offset_s;
+                //         const int c = offset_c + k * 16;
+                //         ldsm_x4((Array<uint32_t, 4>&)frag_A[k][0], cast_smem_ptr_to_uint(&smem_A(s, c, offset)));
+                //     }
+                // }
+                // else {
+                //     const int s = offset_s;
+                //     const int c = offset_c % 16 + k * 16;
+                //     ldsm_x2((Array<uint32_t, 2>&)frag_A[k][0], cast_smem_ptr_to_uint(&smem_A(s, c, offset)));
+                // }
             }
             else {
-                const int offset_s = lane_id % 8 + lane_id / 16 * 8 + warp_offset_m;
-                const int offset_c = lane_id / 8 * 8 % 16;
+                SmemAccessor<T, SmemLayoutA> smem{data};
+                const int                    offset_s = lane_id % 8 + lane_id / 16 * 8 + warp_offset_m;
+                const int                    offset_c = lane_id / 8 * 8 % 16;
                 static_assert(ITER_M % 2 == 0);
                 PRAGMA_UNROLL
                 for (int m = 0; m < ITER_M; m += 2) {
                     const int s = m * 8 + offset_s;
                     const int c = k * 16 + offset_c;
-                    ldsm_x4((Array<uint32_t, 4>&)frag_A[k][m], cast_smem_ptr_to_uint(&smem_A(s, c, offset)));
+                    ldsm_x4((Array<uint32_t, 4>&)frag_A[k][m], cast_smem_ptr_to_uint(&smem(s, c)));
                 }
             }
+        }
+
+        __device__ void Advance()
+        {
+            offset += SmemLayoutA::kSize;
+            if (offset == Stages * SmemLayoutA::kSize) {
+                offset = 0;
+            }
+            data = smem_A.ptr_ + offset;
         }
     };
 
     struct StateB {
         SmemAccessor<T, SmemLayoutB> smem_B;
         FragB                        frag_B;
+        int                          offset = 0;
+        T*                           data;
 
         template<class Storage>
         __device__ StateB(Storage& storage): smem_B{storage.B}
         {
+            data = storage.B;
         }
 
-        __device__ void Load(int k, int pipe_iter)
+        __device__ void Load(int k, int)
         {
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
 
             const int warp_idx_n    = warp_id_n(warp_id);
             const int warp_offset_n = warp_idx_n * WARP_N;
-            const int offset        = pipe_iter * SmemLayoutB::kSize;
+            // const int offset        = pipe_iter * SmemLayoutB::kSize;
 
             if constexpr (!Flag_) {
                 const int offset_s = lane_id % 16 + warp_offset_n;
@@ -172,13 +190,22 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                 }
             }
             else {
+                // const auto data = smem_B.ptr_ + offset;
                 PRAGMA_UNROLL
                 for (int n = 0; n < ITER_N; ++n) {
                     const int mma_idx = k * MMA_CNT_N + n + warp_idx_n * ITER_N;
-                    turbomind::Load(frag_B[k][n],
-                                    &smem_B.ptr_[(mma_idx * WARP_SIZE + lane_id) * frag_B[k][n].size() + offset]);
+                    turbomind::Load(frag_B[k][n], &data[(mma_idx * WARP_SIZE + lane_id) * frag_B[k][n].size()]);
                 }
             }
+        }
+
+        __device__ void Advance()
+        {
+            offset += SmemLayoutB::kSize;
+            if (offset == Stages * SmemLayoutB::kSize) {
+                offset = 0;
+            }
+            data = smem_B.ptr_ + offset;
         }
     };
 

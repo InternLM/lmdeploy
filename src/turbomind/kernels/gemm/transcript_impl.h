@@ -88,10 +88,12 @@ struct Transcript {
 
         int cta_idx_k = 0;
 
-        T* cta_C = &param.C[(cta_idx_k * cta_cnt_n + cta_idx_n) * CTA_N * CTA_K];
+        // T* cta_C = &param.C[(cta_idx_k * cta_cnt_n + cta_idx_n) * CTA_N * CTA_K];
+        T* cta_C = &param.C[(cta_idx_n * cta_cnt_k + cta_idx_k) * CTA_N * CTA_K];
 
         PRAGMA_NO_UNROLL
         for (; cta_idx_k < cta_cnt_k; ++cta_idx_k) {
+            gmem_B.SetTile(data_iter);
             gmem_B.Prefetch(data_iter, 0);
             __pipeline_commit();
             ++data_iter;
@@ -117,7 +119,8 @@ struct Transcript {
 
             __syncthreads();  // wait for smem being read
 
-            cta_C += cta_cnt_n * CTA_N * CTA_K;
+            // cta_C += cta_cnt_n * CTA_N * CTA_K;
+            cta_C += CTA_N * CTA_K;
         }
     }
 };

@@ -21,13 +21,16 @@ struct GmemIteratorSm80 {
     using AccessType = Array<T, Map::kAccessC>;
     using Pointer    = get_pointer_type<T>;
 
-    Pointer smem_;
+    Pointer  smem_;
+    const T* src_data_;
 
     int src_offset_;
     int offset_c_;
     int offset_s_;
 
-    int stride_s_;
+    int     stride_s_;
+    int     smem_offset_ = 0;
+    Pointer smem_data_;
 
     __device__ GmemIteratorSm80(int stride_s): stride_s_{stride_s}
     {
@@ -41,42 +44,44 @@ struct GmemIteratorSm80 {
 
     __device__ void SetSmem(Pointer smem)
     {
-        smem_ = smem;
+        smem_      = smem;
+        smem_data_ = smem;
     }
 
     __device__ void ClearSmem(int pipe_iter = 0)
     {
-        SmemAccessor<T, SmemLayout> data{smem_};
+        SmemAccessor<T, SmemLayout> data{smem_data_};
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                Store(&data(offset_s_ + s * Map::kDeltaS,  //
-                            offset_c_ + c * Map::kDeltaC,
-                            pipe_iter * SmemLayout::kSize),
-                      Array<T, Map::kAccessC>{});
+                Store(&data(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC), Array<T, Map::kAccessC>{});
             }
         }
     }
 
     template<class Iter>
-    __device__ void Prefetch(const Iter& iter, int begin, int count, int pipe_iter)
+    __device__ void Prefetch(const Iter& iter, int begin, int count, int)
     {
-        auto src_data = iter.OffsetPtr<Idx>(0);
+        // auto src_data_ = iter.OffsetPtr<Idx>(src_offset_);
 
-        SmemAccessor<T, SmemLayout> dst_data{smem_};
+        SmemAccessor<T, SmemLayout> dst_data{smem_data_};
 
         PRAGMA_UNROLL
         for (int s = begin; s < begin + count && s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
                 auto dst = cast_smem_ptr_to_uint(&dst_data(offset_s_ + s * Map::kDeltaS,  //
-                                                           offset_c_ + c * Map::kDeltaC,
-                                                           pipe_iter * SmemLayout::kSize));
-                auto src = &src_data[s * Map::kDeltaS * stride_s_ + c * Map::kDeltaC];
-                CpAsync(std::true_type{}, dst, (const T*)src + src_offset_, static_cast<bool>(iter));
+                                                           offset_c_ + c * Map::kDeltaC));
+                // auto src = &src_data_[s * Map::kDeltaS * stride_s_ + c * Map::kDeltaC];
+                // CpAsync(std::true_type{}, dst, (const T*)src, static_cast<bool>(iter));
+                CpAsync(std::true_type{}, dst, (const T*)src_data_ + src_offset_, static_cast<bool>(iter));
+                src_data_ += Map::kDeltaC;
             }
+            src_data_ -= Map::kIterC * Map::kDeltaC;
+            src_data_ += Map::kDeltaS * stride_s_;
         }
+        // src_data_ -= Map::kIterS * Map::kDeltaS * stride_s_;
     }
 
     template<class Iter>
@@ -130,6 +135,21 @@ struct GmemIteratorSm80 {
 #else
         assert(TURBOMIND_ARCH_SM80);
 #endif
+    }
+
+    __device__ void Advance(int stages)
+    {
+        smem_offset_ += SmemLayout::kSize;
+        if (smem_offset_ == stages * SmemLayout::kSize) {
+            smem_offset_ = 0;
+        }
+        smem_data_ = smem_ + smem_offset_;
+    }
+
+    template<class Iter>
+    __device__ void SetTile(const Iter& iter)
+    {
+        src_data_ = iter.OffsetPtr<Idx>(0);
     }
 };
 

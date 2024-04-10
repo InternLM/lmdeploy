@@ -92,7 +92,7 @@ void Run(int m, int n, int k)
             gemm::transcript(b1.data().get(), b.data().get(), n, k, 0);
         }
 
-        for (int i = 0; i < 1; ++i) {
+        for (int i = 0; i < 10; ++i) {
             gemm::invoke(c.data().get(), a.data().get(), b1.data().get(), m, n, k, 0);
         }
 

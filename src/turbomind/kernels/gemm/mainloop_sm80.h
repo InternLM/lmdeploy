@@ -44,23 +44,29 @@ struct Mainloop_sm80 {
     {
         Impl::SetSmem(gmem_A, gmem_B, storage);
 
-        PipeIter<Stages> pipe_iter{};
+        // PipeIter<Stages> pipe_iter{};
 
         PRAGMA_UNROLL
         for (int i = 0; i < Stages; ++i) {
-            ++pipe_iter;
-            gmem_A.ClearSmem(pipe_iter.w);
-            gmem_B.ClearSmem(pipe_iter.w);
+            // ++pipe_iter;
+            gmem_A.ClearSmem();
+            gmem_B.ClearSmem();
+            gmem_A.Advance(Stages);
+            gmem_B.Advance(Stages);
         }
 
         __syncthreads();
 
         PRAGMA_UNROLL
         for (int stage = 0; stage < Stages - 1; ++stage) {
-            ++pipe_iter;
-            gmem_A.Prefetch(data_iter, pipe_iter.w);
-            gmem_B.Prefetch(data_iter, pipe_iter.w);
+            // ++pipe_iter;
+            gmem_A.SetTile(data_iter);
+            gmem_B.SetTile(data_iter);
+            gmem_A.Prefetch(data_iter, 0);
+            gmem_B.Prefetch(data_iter, 0);
             __pipeline_commit();
+            gmem_A.Advance(Stages);
+            gmem_B.Advance(Stages);
             ++data_iter;
         }
 
@@ -69,28 +75,34 @@ struct Mainloop_sm80 {
 
         Wait();
 
-        ++pipe_iter;
+        // ++pipe_iter;
 
-        state_A.Load(0, pipe_iter.r);
-        state_B.Load(0, pipe_iter.r);
+        state_A.Load(0, 0);
+        state_B.Load(0, 0);
 
         PRAGMA_NO_UNROLL
         for (; tile_iter > 0; --tile_iter) {
-            auto prefetch = [&, pipe_iter](int k) {
+            auto prefetch = [&](int k) {
                 const int begin = k * kGmemBatch;
-                gmem_A.Prefetch(data_iter, begin, kGmemBatch, pipe_iter.w);
-                gmem_B.Prefetch(data_iter, begin, kGmemBatch, pipe_iter.w);
+                gmem_A.Prefetch(data_iter, begin, kGmemBatch, 0);
+                gmem_B.Prefetch(data_iter, begin, kGmemBatch, 0);
                 const int end = begin + kGmemBatch;
                 if (kMaxIterS <= end && end < kMaxIterS + kGmemBatch) {
                     __pipeline_commit();
                     ++data_iter;
                 }
             };
-            Impl::Compute(state_A, state_B, frag_C, pipe_iter.r, prefetch, [&] {
+            gmem_A.SetTile(data_iter);
+            gmem_B.SetTile(data_iter);
+            Impl::Compute(state_A, state_B, frag_C, 0, prefetch, [&] {
                 Wait();
-                ++pipe_iter;
-                state_A.Load(0, pipe_iter.r);
-                state_B.Load(0, pipe_iter.r);
+                // ++pipe_iter;
+                gmem_A.Advance(Stages);
+                gmem_B.Advance(Stages);
+                state_A.Advance();
+                state_B.Advance();
+                state_A.Load(0, 0);
+                state_B.Load(0, 0);
             });
         }
 

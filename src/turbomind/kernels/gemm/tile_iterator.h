@@ -13,6 +13,7 @@ struct TileIterator {
     bool     mask_{true};
 
     int cta_cnt_n_;
+    int cta_cnt_k_;
 
     template<class Param>
     __device__ TileIterator(const Param& param, int mi, int ni, int ki, int ke)
@@ -23,8 +24,10 @@ struct TileIterator {
             ptr_B_ = param.B + ni * param.k + ki;
         }
         else {
-            ptr_B_     = param.B + ni / CTA_N * (CTA_N * CTA_K);
-            cta_cnt_n_ = (param.n + CTA_N - 1) / CTA_N;
+            // ptr_B_     = param.B + ni / CTA_N * (CTA_N * CTA_K);
+            // cta_cnt_n_ = (param.n + CTA_N - 1) / CTA_N;
+            cta_cnt_k_ = (param.k + CTA_K - 1) / CTA_K;
+            ptr_B_     = param.B + ni / CTA_N * cta_cnt_k_ * CTA_N * CTA_K;
         }
 
         ki_ = ki;
@@ -53,7 +56,8 @@ struct TileIterator {
             ptr_B_ += CTA_K;
         }
         else {
-            ptr_B_ += cta_cnt_n_ * CTA_N * CTA_K;
+            // ptr_B_ += cta_cnt_n_ * CTA_N * CTA_K;
+            ptr_B_ += CTA_N * CTA_K;
         }
 
         ki_ += CTA_K;
