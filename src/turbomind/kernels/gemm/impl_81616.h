@@ -66,7 +66,8 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     using FragC = Array<float, 4>[ITER_M][ITER_N];  // {n8,m4}, [iM,iN], (n2,m2)
                                                     //   1  2     8 16     8  1
 
-    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 32, 32, Swizzle<2, 3, 3>>;
+    // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 32, 32, Swizzle<2, 3, 3>>;
+    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 64, Swizzle<3, 3, 3>>;
     using SmemLayoutB = std::conditional_t<Flag_,
                                            SmemLayoutV2<CTA_N, CTA_K, CTA_N, CTA_K, Identity>,
                                            SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>>;
@@ -137,7 +138,7 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                 SmemAccessor<T, SmemLayoutA> smem{data};
                 const int                    offset_s = lane_id % 8 + lane_id / 16 * 8 + warp_offset_m;
                 const int                    offset_c = lane_id / 8 * 8 % 16;
-                static_assert(ITER_M % 2 == 0);
+                static_assert(ITER_M % 2 == 0   );
                 PRAGMA_UNROLL
                 for (int m = 0; m < ITER_M; m += 2) {
                     const int s = m * 8 + offset_s;

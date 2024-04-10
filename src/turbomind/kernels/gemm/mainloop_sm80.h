@@ -1,7 +1,6 @@
 #pragma once
 
 #include "src/turbomind/kernels/core/common.h"
-#include "src/turbomind/kernels/core/pipe_iter.h"
 #include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include <cuda_pipeline_primitives.h>
 
@@ -30,7 +29,7 @@ struct Mainloop_sm80 {
     using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, 1>;
 
     static constexpr int kMaxIterS  = std::max(ThreadMapA::kIterS, ThreadMapB::kIterS);
-    static constexpr int kGmemBatch = (kMaxIterS + Impl::ITER_K - 1) / Impl::ITER_K;
+    static constexpr int kGmemBatch = (kMaxIterS + Impl::ITER_K - 1) / 2;  // Impl::ITER_K;
 
     __device__ void Wait()
     {
@@ -44,11 +43,8 @@ struct Mainloop_sm80 {
     {
         Impl::SetSmem(gmem_A, gmem_B, storage);
 
-        // PipeIter<Stages> pipe_iter{};
-
         PRAGMA_UNROLL
         for (int i = 0; i < Stages; ++i) {
-            // ++pipe_iter;
             gmem_A.ClearSmem();
             gmem_B.ClearSmem();
             gmem_A.Advance(Stages);
@@ -59,7 +55,6 @@ struct Mainloop_sm80 {
 
         PRAGMA_UNROLL
         for (int stage = 0; stage < Stages - 1; ++stage) {
-            // ++pipe_iter;
             gmem_A.SetTile(data_iter);
             gmem_B.SetTile(data_iter);
             gmem_A.Prefetch(data_iter, 0);
@@ -74,8 +69,6 @@ struct Mainloop_sm80 {
         typename Impl::StateB state_B{storage};
 
         Wait();
-
-        // ++pipe_iter;
 
         state_A.Load(0, 0);
         state_B.Load(0, 0);
@@ -96,7 +89,6 @@ struct Mainloop_sm80 {
             gmem_B.SetTile(data_iter);
             Impl::Compute(state_A, state_B, frag_C, 0, prefetch, [&] {
                 Wait();
-                // ++pipe_iter;
                 gmem_A.Advance(Stages);
                 gmem_B.Advance(Stages);
                 state_A.Advance();
@@ -105,7 +97,6 @@ struct Mainloop_sm80 {
                 state_B.Load(0, 0);
             });
         }
-
         __pipeline_commit();
         __pipeline_wait_prior(0);
     }
