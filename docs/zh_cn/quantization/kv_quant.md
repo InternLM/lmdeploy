@@ -12,6 +12,7 @@ LMDeploy kv 4/8 bit 量化和推理支持如下 NVIDIA 显卡型号：
 - 图灵架构（sm75）：20系列、T4
 - 安培架构（sm80,sm86）：30系列、A10、A16、A30、A100
 - Ada Lovelace架构（sm89）：40 系列
+- Hopper 架构（sm90）: H100, H200
 
 接下来，我们以 internlm2-chat-7b 模型为例，介绍 kv 量化和推理的若干应用。而在此之前，请首先参考[文档](https://lmdeploy.readthedocs.io/en/latest/build.html)，源码安装 lmdeploy，因为 kv cache 4bit/8bit 在线量化尚未发版。
 

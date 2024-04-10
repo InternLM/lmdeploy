@@ -1,25 +1,26 @@
-# KV Cache Quantization
+# kv Cache Quantization
 
-The latest main branch of LMDeploy supports online key-value (KV) cache quantization with 4-bit and 8-bit precision, utilizing an asymmetric quantization method that is applied on a per-head, per-token basis. The original KV offline quantization method has been removed.
+The latest main branch of LMDeploy supports online key-value (kv) cache quantization with 4-bit and 8-bit precision, utilizing an asymmetric quantization method that is applied on a per-head, per-token basis. The original kv offline quantization method has been removed.
 
-Intuitively, quantizing the KV cache is beneficial for reducing memory usage. Compared to FP16, the memory for 4-bit/8-bit KV can be reduced to 1/4 and 1/2, respectively. This means that under the same memory conditions, the system can support a significantly increased number of concurrent operations after KV quantization, thereby ultimately enhancing throughput.
+Intuitively, quantizing the kv cache is beneficial for reducing memory usage. Compared to FP16, the memory for 4-bit/8-bit kv can be reduced to 1/4 and 1/2, respectively. This means that under the same memory conditions, the system can support a significantly increased number of concurrent operations after kv quantization, thereby ultimately enhancing throughput.
 
-However, quantization typically brings in some loss of model accuracy. We have used OpenCompass to evaluate the accuracy of several models after applying 8/4-bit KV quantization, and the results are presented in the [Evaluation](#Evaluation) section. You can refer to the information and choose wisely based on your requirements.
+However, quantization typically brings in some loss of model accuracy. We have used OpenCompass to evaluate the accuracy of several models after applying 8/4-bit kv quantization, and the results are presented in the [Evaluation](#Evaluation) section. You can refer to the information and choose wisely based on your requirements.
 
-LMDeploy inference with quantized KV supports the following NVIDIA GPU models:
+LMDeploy inference with quantized kv supports the following NVIDIA GPU models:
 
 - Volta architecture (sm70): V100
 - Turing architecture (sm75): 20 series, T4
 - Ampere architecture (sm80, sm86): 30 series, A10, A16, A30, A100
 - Ada Lovelace architecture (sm89): 40 series
+- Hopper architecture (sm90): H100, H200
 
 In the next section, we will take `internlm2-chat-7b` model as an example, introducing the usage of kv quantization and inference of lmdeploy. But before that, please install lmdeploy from source according to the [build](../build.md) guide, because lmdeploy hasn't released this feature yet.
 
 ## Usage
 
-Applying KV quantization and inference via LMDeploy is quit straightforward; simply set the `quant_policy` parameter.
+Applying kv quantization and inference via LMDeploy is quit straightforward; simply set the `quant_policy` parameter.
 
-**LMDeploy specifies that `quant_policy=4` stands for 4-bit KV, whereas `quant_policy=8` indicates 8-bit KV.**
+**LMDeploy specifies that `quant_policy=4` stands for 4-bit kv, whereas `quant_policy=8` indicates 8-bit kv.**
 
 ### Offline inference
 
@@ -39,7 +40,7 @@ lmdeploy serve api_server internlm/internlm2-chat-7b --quant-policy 8
 
 ## Evaluation
 
-We apply KV quantization of LMDeploy to several LLM models and utilize OpenCompass to evaluate the inference accuracy. The results are shown in the table below:
+We apply kv quantization of LMDeploy to several LLM models and utilize OpenCompass to evaluate the inference accuracy. The results are shown in the table below:
 
 | -           | -       | -             | llama2-7b-chat |         |         | internlm2-chat-7b |         |         | qwen-chat-7b |         |         |
 | ----------- | ------- | ------------- | -------------- | ------- | ------- | ----------------- | ------- | ------- | ------------ | ------- | ------- |
