@@ -24,7 +24,7 @@ SequenceManager::SequenceManager(size_t             layer_num,
     block_seq_len_(block_config.block_len_), rank_(rank)
 {
     block::Layout layout{block_config};
-    dump(layout);
+    // dump(layout);
 
     size_t block_size = layout.block_size(layer_num);
 
