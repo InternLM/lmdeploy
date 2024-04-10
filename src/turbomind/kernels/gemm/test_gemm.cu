@@ -1,6 +1,7 @@
 
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/test_utils.h"
+#include "src/turbomind/kernels/gemm/transcript.h"
 #include <cublas_v2.h>
 #include <thrust/universal_vector.h>
 
@@ -60,30 +61,52 @@ void Run(int m, int n, int k)
     universal_vector<T> c(m * n);
     universal_vector<T> c_ref = c;
 
+    universal_vector<T> b1(n * k);
+
     std::vector<T> c_cpu(m * n);
 
     RNG rng;
 
-    rng.GenerateUniform(a.data().get(), a.size());
-    rng.GenerateUniform(b.data().get(), b.size());
+    rng.GenerateUniform(a.data().get(), a.size(), 1, 0);
+    rng.GenerateUniform(b.data().get(), b.size(), 1, 0);
 
     cudaDeviceSynchronize();
 
     // ComputeRefCpu(c_cpu.data(), a.data().get(), b.data().get(), m, n, k);
     computeRefCublas(c_ref.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
 
-    for (int i = 0; i < 10; ++i) {
-        gemm::invoke(c.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
+    if (1) {
+        for (int i = 0; i < 10; ++i) {
+            gemm::invoke(c.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
+        }
+
+        cudaDeviceSynchronize();
+
+        // Compare(c_ref.data().get(), c_cpu.data(), n, n, m, 1);
+        Compare(c.data().get(), c_ref.data().get(), n, n, m, 1);
+    }
+
+    if (0) {
+        for (int i = 0; i < 1; ++i) {
+            gemm::transcript(b1.data().get(), b.data().get(), n, k, 0);
+        }
+
+        for (int i = 0; i < 10; ++i) {
+            gemm::invoke(c.data().get(), a.data().get(), b1.data().get(), m, n, k, 0);
+        }
+
+        cudaDeviceSynchronize();
+
+        // Compare(c_ref.data().get(), c_cpu.data(), n, n, m, 1);
+        Compare(c.data().get(), c_ref.data().get(), n, n, m, 0);
     }
 
     cudaDeviceSynchronize();
-
-    // Compare(c_ref.data().get(), c_cpu.data(), n, n, m, 1);
-    Compare(c.data().get(), c_ref.data().get(), n, n, m, 0);
 }
 
 int main(int argc, char* argv[])
 {
     Run<half>(4096, 4096, 4096);
+    // Run<half>(128, 128, 32);
     return 0;
 }

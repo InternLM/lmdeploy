@@ -14,7 +14,8 @@ template<class Tag,
          int WARP_M,
          int WARP_N,
          int WARP_K,
-         int Stages>
+         int Stages,
+         int Flag>
 struct Impl {};
 
 }  // namespace turbomind::gemm

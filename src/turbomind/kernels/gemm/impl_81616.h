@@ -20,8 +20,9 @@ template<class T_,
          int WARP_M_,
          int WARP_N_,
          int WARP_K_,
-         int Stages_>
-struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K_, Stages_> {
+         int Stages_,
+         int Flag_>
+struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K_, Stages_, Flag_> {
 
     using T  = T_;
     using Tx = Tx_;
@@ -55,6 +56,9 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     static constexpr int ITER_N = WARP_N / OP_N;
     static constexpr int ITER_K = WARP_K / OP_K;
 
+    static constexpr int MMA_CNT_K = CTA_K / OP_K;
+    static constexpr int MMA_CNT_N = CTA_N / OP_N;
+
     using FragA = Array<T, 4>[ITER_K][ITER_M];      // {m8,k4}, [iK,iM], (k2,k2)
                                                     //   1  2    16  8     8  1
     using FragB = Array<T, 8>[ITER_K][ITER_N];      // {n8,k4}, [iK,iN], (k2,n2,k2)
@@ -63,7 +67,9 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                                                     //   1  2     8 16     8  1
 
     using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
-    using SmemLayoutB = SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
+    using SmemLayoutB = std::conditional_t<Flag_,
+                                           SmemLayoutV2<CTA_N, CTA_K, CTA_N, CTA_K, Identity>,
+                                           SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>>;
 
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K + 8, CTA_M, CTA_K + 8, Identity>;
     // using SmemLayoutB = SmemLayoutV2<CTA_N, CTA_K + 8, CTA_M, CTA_K + 8, Identity>;
@@ -82,6 +88,12 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     __device__ static void SetSmem(GmemIterA& gmem_A, GmemIterB& gmem_B, SharedStorage& storage)
     {
         gmem_A.SetSmem(storage.A);
+        gmem_B.SetSmem(storage.B);
+    }
+
+    template<class GmemIterB, class Storage>
+    __device__ static void SetSmemB(GmemIterB& gmem_B, Storage& storage)
+    {
         gmem_B.SetSmem(storage.B);
     }
 
@@ -134,23 +146,36 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
         SmemAccessor<T, SmemLayoutB> smem_B;
         FragB                        frag_B;
 
-        __device__ StateB(SharedStorage& storage): smem_B{storage.B} {}
+        template<class Storage>
+        __device__ StateB(Storage& storage): smem_B{storage.B}
+        {
+        }
 
         __device__ void Load(int k, int pipe_iter)
         {
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
 
-            const int warp_offset_n = warp_id_n(warp_id) * WARP_N;
+            const int warp_idx_n    = warp_id_n(warp_id);
+            const int warp_offset_n = warp_idx_n * WARP_N;
 
-            const int offset_s = lane_id % 16 + warp_offset_n;
-            const int offset_c = lane_id / 16 * 8;
-            const int offset   = pipe_iter * SmemLayoutB::kSize;
-            PRAGMA_UNROLL
-            for (int n = 0; n < ITER_N; ++n) {
-                const int s = n * 16 + offset_s;
-                const int c = k * 16 + offset_c;
-                ldsm_x4((Array<uint32_t, 4>&)frag_B[k][n], cast_smem_ptr_to_uint(&smem_B(s, c, offset)));
+            if constexpr (!Flag_) {
+                const int offset_s = lane_id % 16 + warp_offset_n;
+                const int offset_c = lane_id / 16 * 8;
+                const int offset   = pipe_iter * SmemLayoutB::kSize;
+                PRAGMA_UNROLL
+                for (int n = 0; n < ITER_N; ++n) {
+                    const int s = n * 16 + offset_s;
+                    const int c = k * 16 + offset_c;
+                    ldsm_x4((Array<uint32_t, 4>&)frag_B[k][n], cast_smem_ptr_to_uint(&smem_B(s, c, offset)));
+                }
+            }
+            else {
+                PRAGMA_UNROLL
+                for (int n = 0; n < ITER_N; ++n) {
+                    const int mma_idx = k * MMA_CNT_N + n + warp_idx_n * ITER_N;
+                    turbomind::Load(frag_B[k][n], &smem_B.ptr_[(mma_idx * WARP_SIZE + lane_id) * frag_B[k][n].size()]);
+                }
             }
         }
     };
