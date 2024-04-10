@@ -65,7 +65,10 @@ struct DecodingConfig<arch::Sm75, T, Tkv, Qh, HeadDim> {
 
 template<class T, class Tkv, int Qh, int HeadDim>
 struct DecodingConfig<arch::Sm70, T, Tkv, Qh, HeadDim> {
-    using Attention = Impl<MMA_SIMT, T, Tkv, 1, 1, 64, 1, 1, 16, HeadDim, 2>;
+    // Qh >= 4 is not benificial for sm_70
+    static constexpr int kH = Qh % 3 == 0 ? 3 : (Qh % 2 == 0 ? 2 : 1);
+
+    using Attention = Impl<MMA_SIMT, T, Tkv, kH, 1, 64, kH, 1, 16, HeadDim, 2>;
     using CacheIter = GetBlockIterFactory<T, Tkv, 64, HeadDim>;
     using Kernel    = AttentionUniversal<arch::Sm70, Mainloop<arch::Sm70, Attention>, CacheIter, DecodingCtaMap>;
 };
