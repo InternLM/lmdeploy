@@ -26,8 +26,9 @@ struct TileIterator {
         else {
             // ptr_B_     = param.B + ni / CTA_N * (CTA_N * CTA_K);
             // cta_cnt_n_ = (param.n + CTA_N - 1) / CTA_N;
-            cta_cnt_k_ = (param.k + CTA_K - 1) / CTA_K;
-            ptr_B_     = param.B + ni / CTA_N * cta_cnt_k_ * CTA_N * CTA_K;
+            // cta_cnt_k_ = (param.k + CTA_K - 1) / CTA_K;
+            // ptr_B_     = param.B + ni / CTA_N * cta_cnt_k_ * CTA_N * CTA_K;
+            ptr_B_ = param.B + (ni / 16) * (param.k / 16) * 32 * 8;
         }
 
         ki_ = ki;
@@ -57,7 +58,8 @@ struct TileIterator {
         }
         else {
             // ptr_B_ += cta_cnt_n_ * CTA_N * CTA_K;
-            ptr_B_ += CTA_N * CTA_K;
+            // ptr_B_ += CTA_N * CTA_K;
+            ptr_B_ += (CTA_K / 16) * 32 * 8;
         }
 
         ki_ += CTA_K;

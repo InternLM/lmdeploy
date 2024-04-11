@@ -29,7 +29,7 @@ struct Mainloop_sm80 {
     using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, 1>;
 
     static constexpr int kMaxIterS  = std::max(ThreadMapA::kIterS, ThreadMapB::kIterS);
-    static constexpr int kGmemBatch = (kMaxIterS + Impl::ITER_K - 1) / 2;  // Impl::ITER_K;
+    static constexpr int kGmemBatch = (kMaxIterS + Impl::ITER_K - 1) / Impl::ITER_K;
 
     __device__ void Wait()
     {

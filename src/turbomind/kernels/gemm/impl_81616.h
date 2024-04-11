@@ -56,8 +56,14 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     static constexpr int ITER_N = WARP_N / OP_N;
     static constexpr int ITER_K = WARP_K / OP_K;
 
+    //                               32~512   16
     static constexpr int MMA_CNT_K = CTA_K / OP_K;
+    //                               32-256   16
     static constexpr int MMA_CNT_N = CTA_N / OP_N;
+    static constexpr int CNT_NK    = MMA_CNT_N * MMA_CNT_K;
+
+    static constexpr int kPackedC = MMA_CNT_K * WARP_SIZE * 8;
+    static constexpr int kPackedS = MMA_CNT_N;
 
     using FragA = Array<T, 4>[ITER_K][ITER_M];      // {m8,k4}, [iK,iM], (k2,k2)
                                                     //   1  2    16  8     8  1
@@ -66,17 +72,23 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     using FragC = Array<float, 4>[ITER_M][ITER_N];  // {n8,m4}, [iM,iN], (n2,m2)
                                                     //   1  2     8 16     8  1
 
-    // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 32, 32, Swizzle<2, 3, 3>>;
-    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 64, Swizzle<3, 3, 3>>;
-    using SmemLayoutB = std::conditional_t<Flag_,
-                                           SmemLayoutV2<CTA_N, CTA_K, CTA_N, CTA_K, Identity>,
-                                           SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>>;
-
-    // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K + 8, CTA_M, CTA_K + 8, Identity>;
-    // using SmemLayoutB = SmemLayoutV2<CTA_N, CTA_K + 8, CTA_M, CTA_K + 8, Identity>;
-
+    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
+    // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 64, Swizzle<3, 3, 3>>;
     using ThreadMapA = gemm::ThreadMap<CTA_K, CTA_M, 8, WARP_CNT>;
-    using ThreadMapB = gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>;
+
+    using SmemLayoutB = std::conditional_t<Flag_,
+                                           SmemLayoutV2<kPackedS, kPackedC, kPackedS, kPackedC, Identity>,
+                                           SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>>;
+    using ThreadMapB  = std::conditional_t<Flag_,
+                                          gemm::ThreadMap<kPackedC, kPackedS, 8, WARP_CNT, WARP_SIZE>,
+                                          gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>>;
+
+    //   using SmemLayoutB = std::conditional_t<Flag_,
+    //                                        SmemLayoutV2<CTA_N, CTA_K, CTA_N, CTA_K, Identity>,
+    //                                        SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>>;
+    // using ThreadMapB  = std::conditional_t<Flag_,
+    //                                       gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>,
+    //                                       gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>>;
 
     union SharedStorage {
         struct {
@@ -136,9 +148,10 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             }
             else {
                 SmemAccessor<T, SmemLayoutA> smem{data};
-                const int                    offset_s = lane_id % 8 + lane_id / 16 * 8 + warp_offset_m;
-                const int                    offset_c = lane_id / 8 * 8 % 16;
-                static_assert(ITER_M % 2 == 0   );
+
+                const int offset_s = lane_id % 8 + lane_id / 16 * 8 + warp_offset_m;
+                const int offset_c = lane_id / 8 * 8 % 16;
+                static_assert(ITER_M % 2 == 0);
                 PRAGMA_UNROLL
                 for (int m = 0; m < ITER_M; m += 2) {
                     const int s = m * 8 + offset_s;
@@ -194,8 +207,10 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                 // const auto data = smem_B.ptr_ + offset;
                 PRAGMA_UNROLL
                 for (int n = 0; n < ITER_N; ++n) {
-                    const int mma_idx = k * MMA_CNT_N + n + warp_idx_n * ITER_N;
+                    // const int mma_idx = k * MMA_CNT_N + n + warp_idx_n * ITER_N;
+                    const int mma_idx = (n + warp_idx_n * ITER_N) * MMA_CNT_K + k;
                     turbomind::Load(frag_B[k][n], &data[(mma_idx * WARP_SIZE + lane_id) * frag_B[k][n].size()]);
+                    // turbomind::Load(frag_B[n][k], )
                 }
             }
         }

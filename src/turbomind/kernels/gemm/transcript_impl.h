@@ -34,6 +34,13 @@ struct Transcript {
         __align__(16) T B[Gemm::SmemLayoutB::kSize];
     };
 
+    static constexpr int MMA_CNT_K = CTA_K / Gemm::OP_K;
+    static constexpr int MMA_CNT_N = CTA_N / Gemm::OP_N;
+    static constexpr int LDS_K     = 1;
+    static constexpr int LDS_N     = 1;
+    static constexpr int CTA_SIZE  = CTA_K * CTA_N;
+    static constexpr int FRAG_SIZE = 8;
+
     // row.col.row
     struct Param {
         const T* A;  // x (m,k)
@@ -54,10 +61,7 @@ struct Transcript {
 
         // [n, k] -> [cta_cnt_k, cta_cnt_n, mma_cnt_k, mma_cnt_n, lane_id, x, fragment]
 
-        constexpr int MMA_CNT_K = CTA_K / Gemm::OP_K;
-        constexpr int MMA_CNT_N = CTA_N / Gemm::OP_N;
-        constexpr int CTA_SIZE  = CTA_K * CTA_N;
-        constexpr int FRAG_SIZE = 8;
+        // [n, k] -> [frag_cnt_n / lds_n, frag_cnt_k / lds_k, warp_size, lds_k, lds_n, fragment]
 
         static_assert(CTA_SIZE == MMA_CNT_K * MMA_CNT_N * WARP_SIZE * FRAG_SIZE);
 
@@ -65,10 +69,8 @@ struct Transcript {
 
         const int cta_cnt_k = (param.k + CTA_K - 1) / CTA_K;
 
-        // if (threadIdx.x == 0) {
-        //     printf("cta_cnt_k=%d cta_cnt_n=%d mma_cnt_k=%d mma_cnt_n=%d\n", cta_cnt_k, cta_cnt_n, MMA_CNT_K,
-        //     MMA_CNT_N);
-        // }
+        const int lds_cnt_k = cta_cnt_k * MMA_CNT_K / LDS_K;
+        const int lds_cnt_n = cta_cnt_n * MMA_CNT_N / LDS_N;
 
         DataIter data_iter{param, 0, cta_idx_n * CTA_N, 0, param.k};
 
@@ -89,7 +91,7 @@ struct Transcript {
         int cta_idx_k = 0;
 
         // T* cta_C = &param.C[(cta_idx_k * cta_cnt_n + cta_idx_n) * CTA_N * CTA_K];
-        T* cta_C = &param.C[(cta_idx_n * cta_cnt_k + cta_idx_k) * CTA_N * CTA_K];
+        // T* cta_C = &param.C[(cta_idx_n * cta_cnt_k + cta_idx_k) * CTA_N * CTA_K];
 
         PRAGMA_NO_UNROLL
         for (; cta_idx_k < cta_cnt_k; ++cta_idx_k) {
@@ -99,20 +101,35 @@ struct Transcript {
             ++data_iter;
 
             __pipeline_wait_prior(0);
-
             __syncthreads();  // wait for smem being written
 
             PRAGMA_UNROLL
-            for (int k = 0; k < Gemm::ITER_K; ++k) {
-                state_B.Load(k, 0);
+            for (int k = 0; k < Gemm::ITER_K; k += LDS_K) {
                 PRAGMA_UNROLL
-                for (int n = 0; n < Gemm::ITER_N; ++n) {
-                    const int mma_idx_k = k;
-                    const int mma_idx_n = n + warp_id_n * Gemm::ITER_N;
+                for (int lds_k = 0; lds_k < LDS_K; ++lds_k) {
+                    state_B.Load(k + lds_k, 0);
+                }
+                PRAGMA_UNROLL
+                for (int n = 0; n < Gemm::ITER_N; n += LDS_N) {
+                    const int   frag_idx_k = cta_idx_k * MMA_CNT_K + k;
+                    const int   frag_idx_n = cta_idx_n * MMA_CNT_N + n + warp_id_n * Gemm::ITER_N;
+                    const int   lds_idx_k  = frag_idx_k / LDS_K;
+                    const int   lds_idx_n  = frag_idx_n / LDS_N;
+                    Array<T, 8> data[LDS_K][LDS_N];
+                    PRAGMA_UNROLL
+                    for (int lds_k = 0; lds_k < LDS_K; ++lds_k) {
+                        PRAGMA_UNROLL
+                        for (int lds_n = 0; lds_n < LDS_N; ++lds_n) {
+                            // transform to packed data (quantization & permutation)
+                            data[lds_k][lds_n] = state_B.frag_B[k + lds_k][n + lds_n];
+                        }
+                    }
+                    constexpr int kAccessSize = 8 * LDS_K * LDS_N;
+                    static_assert(sizeof(data) <= 16);
                     if (warp_id_m == 0) {
                         // mma fragment ptr for the warp
-                        T* C = cta_C + (mma_idx_k * MMA_CNT_N + mma_idx_n) * WARP_SIZE * FRAG_SIZE;
-                        Store(&C[lane_id * FRAG_SIZE], state_B.frag_B[k][n]);
+                        T* C = param.C + ((lds_idx_n * lds_cnt_k + lds_idx_k) * WARP_SIZE + lane_id) * kAccessSize;
+                        Store(C, (Array<T, kAccessSize>&)data[0][0]);
                     }
                 }
             }
@@ -120,7 +137,7 @@ struct Transcript {
             __syncthreads();  // wait for smem being read
 
             // cta_C += cta_cnt_n * CTA_N * CTA_K;
-            cta_C += CTA_N * CTA_K;
+            // cta_C += CTA_N * CTA_K;
         }
     }
 };

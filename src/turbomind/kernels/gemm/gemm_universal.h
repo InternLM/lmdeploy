@@ -55,7 +55,7 @@ struct GemmUniversal {
 
         typename Mainloop::GmemIterA gmem_A{param.k};
         // typename Mainloop::GmemIterB gmem_B{param.k};
-        typename Mainloop::GmemIterB gmem_B{CTA_K};
+        typename Mainloop::GmemIterB gmem_B{param.k / Impl::OP_K * WARP_SIZE * 8};
 
         Mainloop mainloop{};
 

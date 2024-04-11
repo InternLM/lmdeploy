@@ -109,8 +109,8 @@ void Run(int m, int n, int k)
 
 int main(int argc, char* argv[])
 {
-    Run<half>(8192, 8192, 8192);
-    // Run<half>(4096, 4096, 4096);
-    // Run<half>(128, 128, 64);
+    // Run<half>(8192, 8192, 8192);
+    Run<half>(4096, 4096, 4096);
+    // Run<half>(256, 256, 128);
     return 0;
 }
