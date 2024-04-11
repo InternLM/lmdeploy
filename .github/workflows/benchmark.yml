@@ -628,4 +628,4 @@ jobs:
       - name: Get overview
         run: |
           pip install pandas
-          python3 .github/scripts/get_benchmark_summary.py generate_report $REPORT_DIR
+          python3 .github/scripts/action_tools.py generate_report $REPORT_DIR
