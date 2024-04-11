@@ -22,33 +22,3 @@ def get_model_source(pretrained_model_name_or_path: str,
     if os.path.exists(triton_model_path):
         return ModelSource.WORKSPACE
     return ModelSource.HF_MODEL
-
-
-def get_model_from_config(model_dir: str):
-    import json
-    config_file = os.path.join(model_dir, 'config.json')
-    default = 'llama'
-    if not os.path.exists(config_file):
-        return default
-
-    with open(config_file) as f:
-        config = json.load(f)
-
-    ARCH_MAP = {
-        'LlavaLlamaForCausalLM': default,
-        'LlamaForCausalLM': default,
-        'InternLM2ForCausalLM': 'internlm2',
-        'MultiModalityCausalLM': 'deepseekvl',
-        'InternLMForCausalLM': default,
-        'BaiChuanForCausalLM': 'baichuan',  # Baichuan-7B
-        'BaichuanForCausalLM': 'baichuan2',  # not right for Baichuan-13B-Chat
-        'QWenLMHeadModel': 'qwen',
-    }
-
-    arch = 'LlamaForCausalLM'
-    if 'auto_map' in config:
-        arch = config['auto_map']['AutoModelForCausalLM'].split('.')[-1]
-    elif 'architectures' in config:
-        arch = config['architectures'][0]
-
-    return ARCH_MAP[arch]

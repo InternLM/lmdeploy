@@ -94,7 +94,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |      InternLM      |  7B - 20B  |
 |     InternLM2      |  7B - 20B  |
 | InternLM-XComposer |     7B     |
-|        QWen        |  7B - 72B  |
+|        QWen        | 1.8B - 72B |
 |      QWen1.5       | 0.5B - 72B |
 |    QWen1.5-MoE     |   A2.7B    |
 |      QWen-VL       |     7B     |

@@ -401,6 +401,7 @@ jobs:
             internlm-chat-20b \
             /root/workspace/hf_model \
             --tp 2 \
+            --trust-remote-code \
             --dst-path /root/workspace/workdir/${TB_MODEL}
       - name: Start triton server service
         run: |

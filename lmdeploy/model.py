@@ -1031,6 +1031,43 @@ class DbrxInstruct(BaseChatTemplate):
             return 'dbrx'
 
 
+@MODELS.register_module(name=['llava-chatml'])
+class ChatmlDirect(BaseChatTemplate):
+
+    def __init__(self,
+                 system='<|im_start|>system\n',
+                 meta_instruction='Answer the questions.',
+                 eosys='<|im_end|>\n',
+                 user='<|im_start|>user\n',
+                 eoh='<|im_end|>\n',
+                 assistant='<|im_start|>assistant\n',
+                 eoa='<|im_end|>',
+                 separator='\n',
+                 session_len=4096,
+                 **kwargs):
+        super().__init__(system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         session_len=session_len,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'llava' in path and 'v1.6-34b' in path:
+            return 'llava-chatml'
+
+
 def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 

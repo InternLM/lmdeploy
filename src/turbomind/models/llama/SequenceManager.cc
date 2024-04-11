@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/kernels/attention/block.h"
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/debug_utils.h"
@@ -13,26 +14,21 @@
 
 namespace turbomind {
 
-SequenceManager::SequenceManager(size_t         layer_num,
-                                 size_t         head_num,
-                                 size_t         head_dim,
-                                 size_t         block_seq_len,
-                                 double         block_count,
-                                 int            chunk_size,
-                                 size_t         elem_bits,
-                                 int            rank,
-                                 IAllocator*    allocator,
-                                 GetFreeMemSize get_free_size):
-    block_seq_len_(block_seq_len), rank_(rank)
+SequenceManager::SequenceManager(size_t             layer_num,
+                                 const BlockConfig& block_config,
+                                 double             block_count,
+                                 int                chunk_size,
+                                 int                rank,
+                                 IAllocator*        allocator,
+                                 GetFreeMemSize     get_free_size):
+    block_seq_len_(block_config.block_len_), rank_(rank)
 {
-    constexpr int kBitsPerByte = 8;
+    block::Layout layout{block_config};
+    // dump(layout);
 
-    // [2, L, H, block_seq_len, D]
-    size_t block_size = 2UL * layer_num * head_num * block_seq_len * head_dim * elem_bits / kBitsPerByte;
+    size_t block_size = layout.block_size(layer_num);
 
     block_manager_ = std::make_unique<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
-
-    val_offset_ = block_size / 2;
 }
 
 const Sequence* SequenceManager::Create(uint64_t id)
