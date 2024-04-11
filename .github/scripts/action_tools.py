@@ -75,6 +75,7 @@ def add_summary(csv_path: str):
         for line in lines[1:]:
             line = '|' + line.strip().replace(',', '|') + '|'
             _append_summary(line)
+        _append_summary('\n')
 
 
 def _load_hf_results(test_results: dict, model_name: str):
