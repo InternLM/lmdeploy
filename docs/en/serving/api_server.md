@@ -90,7 +90,7 @@ If you want to use async functions, may try the following example:
 import asyncio
 from openai import AsyncOpenAI
 
-async def demo():
+async def main():
     client = AsyncOpenAI(api_key='YOUR_API_KEY',
                          base_url='http://0.0.0.0:23333/v1')
     model_cards = await client.models.list()._get_page()
@@ -110,7 +110,7 @@ async def demo():
         top_p=0.8)
     print(response)
 
-asyncio.run(demo())
+asyncio.run(main())
 ```
 
 You can invoke other OpenAI interfaces using similar methods. For more detailed information, please refer to the [OpenAI API guide](https://platform.openai.com/docs/guides/text-generation)
