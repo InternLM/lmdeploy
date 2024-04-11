@@ -1,4 +1,4 @@
-# KV Cache 量化
+# Key-Value(KV) Cache 量化
 
 LMDeploy 最新 main 分支支持在线 kv cache 4bit/8bit 量化，量化方式为 per-head per-token 的非对称量化。原来的 kv 离线量化方式移除。
 
