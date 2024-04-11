@@ -46,7 +46,7 @@ struct Identity {
     }
 };
 
-template<int S_, int C_, int S0_, int C0_, class Swizzle_>
+template<int S_, int C_, int S0_ = -1, int C0_ = -1, class Swizzle_ = Identity>
 struct SmemLayoutV2 {
 
     // (C0,S0),(   C1,       S1)
@@ -55,8 +55,8 @@ struct SmemLayoutV2 {
     static constexpr int S = S_;
     static constexpr int C = C_;
 
-    static constexpr int S0 = S0_;
-    static constexpr int C0 = C0_;
+    static constexpr int S0 = S0_ < 0 ? S : S0_;
+    static constexpr int C0 = C0_ < 0 ? C : C0_;;
 
     static_assert(S % S0 == 0);
     static_assert(C % C0 == 0);
@@ -70,6 +70,8 @@ struct SmemLayoutV2 {
     static constexpr int kSize1 = S1 * C1;
 
     using Swizzle = Swizzle_;
+
+    static constexpr int kIsTrivial = S == S0 && C == C0 && std::is_same_v<Swizzle, Identity>;
 
     __forceinline__ __device__ static int apply(int s, int c, int offset = 0)
     {

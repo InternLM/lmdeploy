@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/gemm/transcript.h"
 #include <cublas_v2.h>
 #include <thrust/universal_vector.h>
+#include "src/turbomind/kernels/attention/quantization.h"
 
 using namespace turbomind;
 using thrust::universal_vector;

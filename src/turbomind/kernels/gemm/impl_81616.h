@@ -73,6 +73,7 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                                                     //   1  2     8 16     8  1
 
     using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
+    // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K + 8>;
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 64, Swizzle<3, 3, 3>>;
     using ThreadMapA = gemm::ThreadMap<CTA_K, CTA_M, 8, WARP_CNT>;
 
@@ -127,8 +128,6 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             const int lane_id = threadIdx.x % WARP_SIZE;
 
             const int warp_offset_m = warp_id_m(warp_id) * WARP_M;
-
-            // const int offset = pipe_iter * SmemLayoutA::kSize;
 
             if constexpr (ITER_M == 1) {
                 // const int offset_s = lane_id % 8 + warp_offset_m;
@@ -190,7 +189,6 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
 
             const int warp_idx_n    = warp_id_n(warp_id);
             const int warp_offset_n = warp_idx_n * WARP_N;
-            // const int offset        = pipe_iter * SmemLayoutB::kSize;
 
             if constexpr (!Flag_) {
                 const int offset_s = lane_id % 16 + warp_offset_n;
@@ -207,10 +205,8 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                 // const auto data = smem_B.ptr_ + offset;
                 PRAGMA_UNROLL
                 for (int n = 0; n < ITER_N; ++n) {
-                    // const int mma_idx = k * MMA_CNT_N + n + warp_idx_n * ITER_N;
                     const int mma_idx = (n + warp_idx_n * ITER_N) * MMA_CNT_K + k;
                     turbomind::Load(frag_B[k][n], &data[(mma_idx * WARP_SIZE + lane_id) * frag_B[k][n].size()]);
-                    // turbomind::Load(frag_B[n][k], )
                 }
             }
         }
@@ -225,21 +221,15 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
         }
     };
 
-    template<class Prefetch, class Preload>
-    __device__ static void
-    Compute(StateA& state_A, StateB& state_B, FragC& frag_C, int pipe_iter, Prefetch&& prefetch, Preload&& preload)
+    template<class Prefetch>
+    __device__ static void Compute(StateA& state_A, StateB& state_B, FragC& frag_C, int pipe_iter, Prefetch&& prefetch)
     {
         static_assert(ITER_K > 1);
 
         PRAGMA_UNROLL
         for (int k = 0; k < ITER_K; ++k) {
-            if (k < ITER_K - 1) {
-                state_A.Load(k + 1, pipe_iter);
-                state_B.Load(k + 1, pipe_iter);
-            }
-            else {
-                ((Preload&&)preload)();
-            }
+            state_A.Load((k + 1) % ITER_K, pipe_iter);
+            state_B.Load((k + 1) % ITER_K, pipe_iter);
             PRAGMA_UNROLL
             for (int n = 0; n < ITER_N; ++n) {
                 PRAGMA_UNROLL
@@ -248,12 +238,14 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                     mma_m16n8k16_row_col(frag_C[mm][n], state_B.frag_B[k][n], state_A.frag_A[k][mm], frag_C[mm][n]);
                 }
             }
-            if (k < ITER_K - 1) {
-                ((Prefetch&&)prefetch)(k);
-            }
-            if (k == ITER_K - 2) {
-                ((Prefetch&&)prefetch)(ITER_K - 1);
-            }
+            ((Prefetch&&)prefetch)((k + 1) % ITER_K);
+
+            // if (k < ITER_K - 1) {
+            //     ((Prefetch&&)prefetch)(k);
+            // }
+            // if (k == ITER_K - 2) {
+            //     ((Prefetch&&)prefetch)(ITER_K - 1);
+            // }
         }
     }
 

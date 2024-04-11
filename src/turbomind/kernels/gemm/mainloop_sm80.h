@@ -28,8 +28,8 @@ struct Mainloop_sm80 {
     using GmemIterA = GmemIteratorSm80<T, ThreadMapA, SmemLayoutA, 0>;
     using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, 1>;
 
-    static constexpr int kMaxIterS  = std::max(ThreadMapA::kIterS, ThreadMapB::kIterS);
-    static constexpr int kGmemBatch = (kMaxIterS + Impl::ITER_K - 1) / Impl::ITER_K;
+    static constexpr int kBatchA = (ThreadMapA::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
+    static constexpr int kBatchB = (ThreadMapB::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
 
     __device__ void Wait()
     {
@@ -65,48 +65,56 @@ struct Mainloop_sm80 {
             ++data_iter;
         }
 
+        constexpr bool kFusePrefetch = false;
+
         typename Impl::StateA state_A{storage};
         typename Impl::StateB state_B{storage};
+
+        auto prefetch = [&](int k) {
+            if constexpr (kFusePrefetch) {
+                int batch_A = min((k + 1) * kBatchA, ThreadMapA::kIterS) - k * kBatchA;
+                int batch_B = min((k + 1) * kBatchB, ThreadMapB::kIterS) - k * kBatchB;
+                gmem_A.Prefetch(data_iter, k * kBatchA, batch_A, 0);
+                gmem_B.Prefetch(data_iter, k * kBatchB, batch_B, 0);
+            }
+            if (k == Impl::ITER_K - 1) {
+                if constexpr (kFusePrefetch) {
+                    ++data_iter;
+                    __pipeline_commit();
+                }
+                Wait();
+                gmem_A.smem_data_ = state_A.data;
+                gmem_B.smem_data_ = state_B.data;
+                state_A.Advance();
+                state_B.Advance();
+                gmem_A.SetTile(data_iter);
+                gmem_B.SetTile(data_iter);
+            }
+        };
 
         Wait();
 
         state_A.Load(0, 0);
         state_B.Load(0, 0);
 
-        constexpr bool kFusePrefetch = false;
+        gmem_A.SetTile(data_iter);
+        gmem_B.SetTile(data_iter);
+
+        if constexpr (kFusePrefetch) {
+            prefetch(0);
+        }
 
         PRAGMA_NO_UNROLL
         for (; tile_iter > 0; --tile_iter) {
-            auto prefetch = [&](int k) {
-                if constexpr (kFusePrefetch) {
-                    const int begin = k * kGmemBatch;
-                    gmem_A.Prefetch(data_iter, begin, kGmemBatch, 0);
-                    gmem_B.Prefetch(data_iter, begin, kGmemBatch, 0);
-                    const int end = begin + kGmemBatch;
-                    if (kMaxIterS <= end && end < kMaxIterS + kGmemBatch) {
-                        __pipeline_commit();
-                        ++data_iter;
-                    }
-                }
-            };
-            gmem_A.SetTile(data_iter);
-            gmem_B.SetTile(data_iter);
             if constexpr (!kFusePrefetch) {
                 gmem_A.Prefetch(data_iter, 0);
                 gmem_B.Prefetch(data_iter, 0);
-                __pipeline_commit();
                 ++data_iter;
+                __pipeline_commit();
             }
-            Impl::Compute(state_A, state_B, frag_C, 0, prefetch, [&] {
-                Wait();
-                gmem_A.smem_data_ = state_A.data;
-                gmem_B.smem_data_ = state_B.data;
-                state_A.Advance();
-                state_B.Advance();
-                state_A.Load(0, 0);
-                state_B.Load(0, 0);
-            });
+            Impl::Compute(state_A, state_B, frag_C, 0, prefetch);
         }
+
         __pipeline_commit();
         __pipeline_wait_prior(0);
     }
