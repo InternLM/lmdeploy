@@ -42,17 +42,30 @@ lmdeploy serve api_server internlm/internlm2-chat-7b --quant-policy 8
 
 我们把 lmdeploy 的 kv 量化应用在若干 LLM 模型上，并使用 opencompass 评测推理精度，结果如下表所示：
 
-| -           | -       | -             | llama2-7b-chat |         |         | internlm2-chat-7b |         |         | qwen-chat-7b |         |         |
+| -           | -       | -             | llama2-7b-chat | -       | -       | internlm2-chat-7b | -       | -       | qwen-chat-7b | -       | -       |
 | ----------- | ------- | ------------- | -------------- | ------- | ------- | ----------------- | ------- | ------- | ------------ | ------- | ------- |
-| dataset     | version | metric        | fp16           | kv int8 | kv int4 | fp16              | kv int8 | kv int4 | bf16         | kv int8 | kv int4 |
-| ceval       | -       | naive_average | 28.42          | 28.07   | 28.18   | 60.45             | 60.48   | 58.91   | 59.32        | 59.59   | 59.42   |
-| mmlu        | -       | naive_average | 35.61          | 35.63   | 35.11   | 63.92             | 63.78   | 63.29   | 57.27        | 57.39   | 56.07   |
-| triviaqa    | 2121ce  | score         | 56.12          | 56.04   | 54.09   | 58.76             | 58.67   | 58.32   | 54.42        | 54.27   | 54.46   |
-| gsm8k       | 1d7fe4  | accuracy      | 28.35          | 28.05   | 25.17   | 70.58             | 70.36   | 66.34   | 53.53        | 52.69   | 53.07   |
-| race-middle | 9a54b6  | accuracy      | 41.64          | 42.13   | 45.33   | 88.93             | 88.79   | 88.86   | 83.7         | 83.57   | 82.94   |
+| dataset     | version | metric        | fp16           | kv int8 | kv int4 | fp16              | kv int8 | kv int4 | fp16         | kv int8 | kv int4 |
+| ceval       | -       | naive_average | 28.42          | 28.38   | 27.18   | 60.45             | 60.71   | 59.8    | 59.34        | 60.05   | 60.77   |
+| mmlu        | -       | naive_average | 35.58          | 35.58   | 34.94   | 63.92             | 64      | 62.63   | 57.45        | 57.41   | 56.39   |
+| triviaqa    | 2121ce  | score         | 56.13          | 56.08   | 53.79   | 58.74             | 58.69   | 57.87   | 54.07        | 54.05   | 53.64   |
+| gsm8k       | 1d7fe4  | accuracy      | 28.28          | 28.43   | 26.54   | 70.58             | 69.75   | 68.08   | 53.53        | 53.22   | 52.69   |
+| race-middle | 9a54b6  | accuracy      | 41.64          | 41.78   | 42.41   | 88.93             | 88.86   | 89.28   | 83.15        | 83.08   | 83.29   |
+| race-high   | 9a54b6  | accuracy      | 39.65          | 39.51   | 40.65   | 85.28             | 85.31   | 84.05   | 76.67        | 76.76   | 77.36   |
 
 具体的评测方式可以参考[这份指南](../benchmark/evaluate_with_opencompass.md)。评测时，请在config文件中，为推理引擎添加 `quant_policy` 参数。
 
 ## 推理速度
 
-TODO
+| model             | kv type | test settings                         | RPS   | v.s. kv fp16 |
+| ----------------- | ------- | ------------------------------------- | ----- | ------------ |
+| llama2-chat-7b    | fp16    | tp1/ratio 0.8 / bs 256/ prompts 10000 | 14.98 | 1.0          |
+| -                 | kv8     | tp1/ratio 0.8 / bs 256/ prompts 10000 | 19.01 | 1.27         |
+| -                 | kv4     | tp1/ratio 0.8 / bs 256/ prompts 10000 | 20.81 | 1.39         |
+| llama2-chat-13b   | fp16    | tp1/ratio 0.9 / bs 128/ prompts 10000 | 8.55  | 1.0          |
+| -                 | kv8     | tp1/ratio 0.9 / bs 128/ prompts 10000 | 9.87  | 1.15         |
+| -                 | kv4     | tp1/ratio 0.9 / bs 128/ prompts 10000 | 10.65 | 1.25         |
+| internlm2-chat-7b | fp16    | tp1/ratio 0.8 / bs 256/ prompts 10000 | 24.13 | 1.0          |
+| -                 | kv8     | tp1/ratio 0.8 / bs 256/ prompts 10000 | 25.28 | 1.05         |
+| -                 | kv4     | tp1/ratio 0.8 / bs 256/ prompts 10000 | 25.80 | 1.07         |
+
+上述结果使用的测试脚本是 `benchmark/profile_throughput.py`
