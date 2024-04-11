@@ -204,20 +204,6 @@ class TurboMind:
         for t in threads:
             t.join()
 
-    def _load_kv_qparams(self, model_path, tm_params, **kwargs):
-        """Load kv qparams when loading from hf."""
-        if self.config.quant_policy:
-            logger.warning('loading kv_cache quant scale')
-            from lmdeploy.lite.apis.kv_qparams import main as kv_loader
-            kv_sym = kwargs.get('kv_sym', False)
-            kv_bits = kwargs.get('kv_bits', 8)
-            tp = self.config.tensor_para_size
-            kv_loader(model_path, model_path, kv_bits, kv_sym, tp, tm_params)
-        else:
-            for key in list(tm_params.keys()):
-                if 'past_kv_scale' in key:
-                    tm_params.pop(key)
-
     def _get_model_params(self, model_comm, tm_params):
         """Get turbomind model params when loading from hf."""
 
@@ -313,10 +299,6 @@ class TurboMind:
         self._get_model_params(model_comm, tm_params)
         logger.warning(f'get {len(tm_params)} model params')
         output_model.export()
-
-        # load kv qparams
-        self._load_kv_qparams(model_path, tm_params, kv_sym=False, kv_bits=8)
-        assert len(tm_params) == 0, f'missing {tm_params.keys()}'
 
         return model_comm
 

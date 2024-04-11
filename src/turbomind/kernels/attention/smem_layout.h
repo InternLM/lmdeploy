@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/attention/data_type.h"
 namespace turbomind {
 
 template<int Bits, int Base, int Shift>
@@ -105,10 +106,11 @@ struct Offset {
 
 template<class T, class Layout>
 struct SmemAccessor {
-    T*     ptr_;
-    Layout layout_;
+    using Pointer = get_pointer_type<T>;
+    Pointer ptr_;
+    Layout  layout_;
 
-    __device__ SmemAccessor(T* ptr): ptr_{ptr} {}
+    __device__ SmemAccessor(Pointer ptr): ptr_{ptr} {}
 
     __device__ T& operator()(int s, int c)
     {
