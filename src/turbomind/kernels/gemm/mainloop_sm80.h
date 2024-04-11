@@ -73,24 +73,34 @@ struct Mainloop_sm80 {
         state_A.Load(0, 0);
         state_B.Load(0, 0);
 
+        constexpr bool kFusePrefetch = false;
+
         PRAGMA_NO_UNROLL
         for (; tile_iter > 0; --tile_iter) {
             auto prefetch = [&](int k) {
-                const int begin = k * kGmemBatch;
-                gmem_A.Prefetch(data_iter, begin, kGmemBatch, 0);
-                gmem_B.Prefetch(data_iter, begin, kGmemBatch, 0);
-                const int end = begin + kGmemBatch;
-                if (kMaxIterS <= end && end < kMaxIterS + kGmemBatch) {
-                    __pipeline_commit();
-                    ++data_iter;
+                if constexpr (kFusePrefetch) {
+                    const int begin = k * kGmemBatch;
+                    gmem_A.Prefetch(data_iter, begin, kGmemBatch, 0);
+                    gmem_B.Prefetch(data_iter, begin, kGmemBatch, 0);
+                    const int end = begin + kGmemBatch;
+                    if (kMaxIterS <= end && end < kMaxIterS + kGmemBatch) {
+                        __pipeline_commit();
+                        ++data_iter;
+                    }
                 }
             };
             gmem_A.SetTile(data_iter);
             gmem_B.SetTile(data_iter);
+            if constexpr (!kFusePrefetch) {
+                gmem_A.Prefetch(data_iter, 0);
+                gmem_B.Prefetch(data_iter, 0);
+                __pipeline_commit();
+                ++data_iter;
+            }
             Impl::Compute(state_A, state_B, frag_C, 0, prefetch, [&] {
                 Wait();
-                gmem_A.Advance(Stages);
-                gmem_B.Advance(Stages);
+                gmem_A.smem_data_ = state_A.data;
+                gmem_B.smem_data_ = state_B.data;
                 state_A.Advance();
                 state_B.Advance();
                 state_A.Load(0, 0);
