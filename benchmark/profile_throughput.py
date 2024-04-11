@@ -291,6 +291,7 @@ def parse_args():
     tb_group._group_actions.append(cache_count_act)
     tb_group._group_actions.append(cache_block_seq_len_act)
     ArgumentHelper.model_format(tb_group, default='hf')
+    ArgumentHelper.quant_policy(tb_group, default=0)
 
     args = parser.parse_args()
     return args
@@ -307,7 +308,8 @@ def main():
             tp=args.tp,
             cache_max_entry_count=args.cache_max_entry_count,
             cache_block_seq_len=args.cache_block_seq_len,
-            model_format=args.model_format)
+            model_format=args.model_format,
+            quant_policy=args.quant_policy)
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
             session_len=args.session_len,

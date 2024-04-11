@@ -62,6 +62,9 @@ class CLI(object):
             default=0,
             help='A parameter used in awq to quantize fp16 weights '
             'to 4 bits')
+        parser.add_argument('--trust-remote-code',
+                            action='store_true',
+                            help='trust remote code from huggingface')
 
         parser.set_defaults(run=CLI.convert)
 

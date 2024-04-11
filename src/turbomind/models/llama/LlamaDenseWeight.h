@@ -67,7 +67,6 @@ template<typename T>
 struct LlamaAttentionWeight {
     LlamaDenseWeight<T> qkv;
     LlamaDenseWeight<T> output;
-    std::vector<float>  past_kv_scale;
 };
 
 template<typename T>

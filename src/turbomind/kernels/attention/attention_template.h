@@ -14,11 +14,13 @@ void invokeAttention(const typename Kernel::ParamType& params)
 {
     static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
-    if constexpr (0) {
+    if constexpr (1) {
+
         [[maybe_unused]] static const int _ = [&] {
-            std::cout << "GmemMap:\n";
-            Print(typename Kernel::Impl::ThreadMapKV{});
-            std::cout << "\nDynamic smem size: " << kSmemSize << "\n";
+            // std::cout << __PRETTY_FUNCTION__ << std::endl;
+            // std::cout << "GmemMap:\n";
+            // Print(typename Kernel::Impl::ThreadMapKV{});
+            // std::cout << "\nDynamic smem size: " << kSmemSize << "\n";
             return 0;
         }();
     }
@@ -58,7 +60,9 @@ void invokeAttention(const typename Kernel::ParamType& params)
     cta_map.set_split_cnt(split_cnt);
     grid = cta_map.get_grid_shape();
 
-    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cta_map);
+    auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
+
+    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cache_iter_factory, cta_map);
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
         std::cout << cudaGetErrorString(err) << "\n";
