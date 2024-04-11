@@ -237,7 +237,7 @@ def create_model_links(src_dir: str, dst_dir: str):
             logging.warning(f'Model_path exists: {dst}')
 
 
-def generate_report(report_path: str):
+def generate_benchmark_report(report_path: str):
     # write to github action summary
     _append_summary('## Evaluation Results Start')
     subfolders = [f.path for f in os.scandir(report_path) if f.is_dir()]
