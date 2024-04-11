@@ -1,4 +1,4 @@
-# kv Cache Quantization
+# Key-Value(KV) Cache Quantization
 
 The latest main branch of LMDeploy supports online key-value (kv) cache quantization with 4-bit and 8-bit precision, utilizing an asymmetric quantization method that is applied on a per-head, per-token basis. The original kv offline quantization method has been removed.
 
@@ -18,7 +18,7 @@ In the next section, we will take `internlm2-chat-7b` model as an example, intro
 
 ## Usage
 
-Applying kv quantization and inference via LMDeploy is quit straightforward; simply set the `quant_policy` parameter.
+Applying kv quantization and inference via LMDeploy is quit straightforward. Simply set the `quant_policy` parameter.
 
 **LMDeploy specifies that `quant_policy=4` stands for 4-bit kv, whereas `quant_policy=8` indicates 8-bit kv.**
 
