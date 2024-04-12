@@ -22,9 +22,9 @@ struct GmemIteratorSm80 {
     using AccessType = Array<T, Map::kAccessC>;
     using Pointer    = get_pointer_type<T>;
 
-    Pointer     smem_;
     const char* src_data_;
-    int         src_delta_;
+    const char* src_ptr_;
+    // int         src_delta_;
 
     int src_offset_;
     int dst_offset_;
@@ -32,39 +32,44 @@ struct GmemIteratorSm80 {
     int offset_c_;
     int offset_s_;
 
-    int iter_c_{};
-    int iter_s_{};
+    // int iter_c_{};
+    // int iter_s_{};
 
     int src_step_c_;
     int src_step_s_;
     int src_step_k_;
 
     int stride_s_;
-    int smem_offset_ = 0;
+    int stride_k_;
+    // int smem_offset_ = 0;
 
     SmemAccessor<T, SmemLayout> smem_data_;
 
-    __device__ GmemIteratorSm80(int stride_s): stride_s_{stride_s}, smem_data_{nullptr}
+    __device__ GmemIteratorSm80(const T* data, int stride_s, int stride_k): smem_data_{nullptr}
     {
-        int  warp_id = threadIdx.x / WARP_SIZE;
-        int  lane_id = threadIdx.x % WARP_SIZE;
-        int2 offsets = Map::get_offset(warp_id, lane_id);
-        src_offset_  = offsets.x + offsets.y * stride_s_;
-        offset_c_    = offsets.x;
-        offset_s_    = offsets.y;
-        dst_offset_  = SmemLayout::apply(offset_s_, offset_c_);
+        int warp_id = threadIdx.x / WARP_SIZE;
+        int lane_id = threadIdx.x % WARP_SIZE;
 
-        src_offset_ *= sizeof(T);
-        stride_s_ *= sizeof(T);
+        int2 offsets = Map::get_offset(warp_id, lane_id);
+        src_offset_  = offsets.x + offsets.y * stride_s;
+
+        offset_c_ = offsets.x;
+        offset_s_ = offsets.y;
+        // dst_offset_ = SmemLayout::apply(offset_s_, offset_c_);
+
+        src_ptr_ = reinterpret_cast<const char*>(data);
+
+        stride_s_   = stride_s * sizeof(T);
+        stride_k_   = stride_k * sizeof(T);
+        src_offset_ = src_offset_ * sizeof(T);
 
         src_step_c_ = sizeof(T) * Map::kDeltaC;
         src_step_s_ = Map::kDeltaS * stride_s_ - sizeof(T) * Map::kIterC * Map::kDeltaC;
-    }
+        src_step_k_ = stride_k_ - Map::kIterS * Map::kDeltaS * stride_s_;
 
-    __device__ void SetSmem(Pointer smem)
-    {
-        smem_      = smem;
-        smem_data_ = smem;
+        // initialize for the first tile
+        src_data_ = src_ptr_ + src_offset_;
+        src_ptr_ += stride_k_;
     }
 
     __device__ void ClearSmem(int pipe_iter = 0)
@@ -79,8 +84,7 @@ struct GmemIteratorSm80 {
         }
     }
 
-    template<class Iter>
-    __device__ void Prefetch(const Iter& iter, int begin, int count, int)
+    __device__ void Prefetch(int begin, int count, bool tile_mask)
     {
         // if constexpr (SmemLayout::kIsTrivial) {
         //     if (begin == 0) {
@@ -96,7 +100,7 @@ struct GmemIteratorSm80 {
                 //     dst = smem_data_.ptr_;
                 //     smem_data_.ptr_ += Map::kDeltaC;
                 // }
-                CpAsync(std::true_type{}, dst, src_data_, static_cast<bool>(iter));
+                CpAsync(std::true_type{}, dst, src_data_, static_cast<bool>(tile_mask));
                 src_data_ += src_step_c_;
             }
             // if constexpr (SmemLayout::kIsTrivial) {
@@ -104,15 +108,28 @@ struct GmemIteratorSm80 {
             // }
             src_data_ += src_step_s_;
         }
-        // advancing to next stage in a parallel data path is faster
-        // src_data_ += src_step_k_;
     }
 
-    template<class Iter>
-    __device__ void Prefetch(const Iter& iter)
+    __device__ void Prefetch(bool tile_mask)
+    {
+        Prefetch(0, Map::kIterS, tile_mask);
+    }
+
+    __device__ void Advance()
+    {
+        // src_ptr_ += stride_k_;
+        // src_data_ = src_ptr_ + src_offset_;
+
+        src_data_ = src_ptr_ + src_offset_;
+        src_ptr_ += stride_k_;
+    }
+
+#if 0
+    // generates almost the same binary as batch version above
+    __device__ void Prefetch(bool tile_mask)
     {
         auto dst = &smem_data_(offset_s_ + iter_s_ * Map::kDeltaS, offset_c_ + iter_c_ * Map::kDeltaC);
-        CpAsync(std::true_type{}, dst, src_data_, static_cast<bool>(iter));
+        CpAsync(std::true_type{}, dst, src_data_, tile_mask);
 
         src_data_ += src_step_c_;
         ++iter_c_;
@@ -134,12 +151,7 @@ struct GmemIteratorSm80 {
         // advancing to next stage in a parallel data path is faster
         // src_data_ += src_step_k_;
     }
-
-    template<class Iter>
-    __device__ void Prefetch(const Iter& iter, int pipe_iter)
-    {
-        Prefetch(iter, 0, Map::kIterS, pipe_iter);
-    }
+#endif
 
     __device__ void CpAsync(std::true_type, T* dst, const char* __restrict__ src, bool mask)
     {
@@ -188,23 +200,6 @@ struct GmemIteratorSm80 {
 #else
         assert(TURBOMIND_ARCH_SM80);
 #endif
-    }
-
-    __device__ void Advance(int stages)
-    {
-        smem_offset_ += SmemLayout::kSize;
-        if (smem_offset_ == stages * SmemLayout::kSize) {
-            smem_offset_ = 0;
-        }
-        smem_data_ = smem_ + smem_offset_;
-    }
-
-    template<class Iter>
-    __device__ void SetTile(const Iter& iter)
-    {
-        src_data_   = reinterpret_cast<const char*>(iter.OffsetPtr<Idx>(0)) + src_offset_;
-        src_step_k_ = iter.template step<Idx>() - Map::kIterS * Map::kDeltaS * stride_s_;
-        // src_delta_ = 0;
     }
 };
 

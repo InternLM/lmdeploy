@@ -11,7 +11,7 @@
 
 namespace turbomind::gemm {
 
-template<class Arch_, class Gemm, class DataIter, class CtaMap_>
+template<class Arch_, class Gemm, class CtaMap_>
 struct Transcript {
 
     using T = typename Gemm::T;
@@ -36,10 +36,14 @@ struct Transcript {
 
     static constexpr int MMA_CNT_K = CTA_K / Gemm::OP_K;
     static constexpr int MMA_CNT_N = CTA_N / Gemm::OP_N;
-    static constexpr int LDS_K     = 1;
-    static constexpr int LDS_N     = 1;
+
+    static constexpr int P_N = Gemm::P_N;
+    static constexpr int P_K = Gemm::P_K;
+
     static constexpr int CTA_SIZE  = CTA_K * CTA_N;
     static constexpr int FRAG_SIZE = 8;
+
+    static_assert(CTA_SIZE == MMA_CNT_K * MMA_CNT_N * WARP_SIZE * FRAG_SIZE);
 
     // row.col.row
     struct Param {
@@ -59,28 +63,21 @@ struct Transcript {
         const auto [cta_cnt_m, cta_cnt_n, split_cnt] =
             CtaMap::get_tiled_shape(param.m, param.n, param.k, CTA_M, CTA_N, 1);
 
-        // [n, k] -> [cta_cnt_k, cta_cnt_n, mma_cnt_k, mma_cnt_n, lane_id, x, fragment]
+        const int cta_cnt_k = (param.k + CTA_K - 1) / CTA_K;
 
-        // [n, k] -> [frag_cnt_n / lds_n, frag_cnt_k / lds_k, warp_size, lds_k, lds_n, fragment]
-
-        static_assert(CTA_SIZE == MMA_CNT_K * MMA_CNT_N * WARP_SIZE * FRAG_SIZE);
+        // [n, k] -> [packed_n, packed_k, warp_size, p_k, p_n, fragment]
 
         SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
-        const int cta_cnt_k = (param.k + CTA_K - 1) / CTA_K;
+        const int                  packed_k = cta_cnt_k * MMA_CNT_K / P_K;
+        [[maybe_unused]] const int packed_n = cta_cnt_n * MMA_CNT_N / P_N;
 
-        const int lds_cnt_k = cta_cnt_k * MMA_CNT_K / LDS_K;
-        const int lds_cnt_n = cta_cnt_n * MMA_CNT_N / LDS_N;
-
-        DataIter data_iter{param, 0, cta_idx_n * CTA_N, 0, param.k};
-
-        GmemIterB gmem_B{param.k};
-
-        Gemm::SetSmemB(gmem_B, storage);
-
-        gmem_B.ClearSmem(0);
+        GmemIterB gmem_B{param.B + cta_idx_n * CTA_N * param.k, param.k, CTA_K};
 
         typename Gemm::StateB state_B{storage};
+
+        gmem_B.smem_data_ = state_B.data;
+        gmem_B.ClearSmem();
 
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
@@ -90,54 +87,47 @@ struct Transcript {
 
         int cta_idx_k = 0;
 
-        // T* cta_C = &param.C[(cta_idx_k * cta_cnt_n + cta_idx_n) * CTA_N * CTA_K];
-        // T* cta_C = &param.C[(cta_idx_n * cta_cnt_k + cta_idx_k) * CTA_N * CTA_K];
-
         PRAGMA_NO_UNROLL
         for (; cta_idx_k < cta_cnt_k; ++cta_idx_k) {
-            gmem_B.SetTile(data_iter);
-            gmem_B.Prefetch(data_iter, 0);
+            gmem_B.Prefetch(true);
+            gmem_B.Advance();
             __pipeline_commit();
-            ++data_iter;
 
             __pipeline_wait_prior(0);
             __syncthreads();  // wait for smem being written
 
             PRAGMA_UNROLL
-            for (int k = 0; k < Gemm::ITER_K; k += LDS_K) {
+            for (int k = 0; k < Gemm::ITER_K; k += P_K) {
                 PRAGMA_UNROLL
-                for (int lds_k = 0; lds_k < LDS_K; ++lds_k) {
-                    state_B.Load(k + lds_k, 0);
+                for (int p_k = 0; p_k < P_K; ++p_k) {
+                    state_B.Load(k + p_k, 0);
                 }
                 PRAGMA_UNROLL
-                for (int n = 0; n < Gemm::ITER_N; n += LDS_N) {
+                for (int n = 0; n < Gemm::ITER_N; n += P_N) {
                     const int   frag_idx_k = cta_idx_k * MMA_CNT_K + k;
                     const int   frag_idx_n = cta_idx_n * MMA_CNT_N + n + warp_id_n * Gemm::ITER_N;
-                    const int   lds_idx_k  = frag_idx_k / LDS_K;
-                    const int   lds_idx_n  = frag_idx_n / LDS_N;
-                    Array<T, 8> data[LDS_K][LDS_N];
+                    const int   pack_idx_k = frag_idx_k / P_K;
+                    const int   pack_idx_n = frag_idx_n / P_N;
+                    Array<T, 8> data[P_K][P_N];
                     PRAGMA_UNROLL
-                    for (int lds_k = 0; lds_k < LDS_K; ++lds_k) {
+                    for (int p_k = 0; p_k < P_K; ++p_k) {
                         PRAGMA_UNROLL
-                        for (int lds_n = 0; lds_n < LDS_N; ++lds_n) {
+                        for (int p_n = 0; p_n < P_N; ++p_n) {
                             // transform to packed data (quantization & permutation)
-                            data[lds_k][lds_n] = state_B.frag_B[k + lds_k][n + lds_n];
+                            data[p_k][p_n] = state_B.frag_B[k + p_k][n + p_n];
                         }
                     }
-                    constexpr int kAccessSize = 8 * LDS_K * LDS_N;
+                    constexpr int kAccessSize = 8 * P_K * P_N;
                     static_assert(sizeof(data) <= 16);
                     if (warp_id_m == 0) {
                         // mma fragment ptr for the warp
-                        T* C = param.C + ((lds_idx_n * lds_cnt_k + lds_idx_k) * WARP_SIZE + lane_id) * kAccessSize;
-                        Store(C, (Array<T, kAccessSize>&)data[0][0]);
+                        T* C = param.C + ((pack_idx_n * packed_k + pack_idx_k) * WARP_SIZE + lane_id) * kAccessSize;
+                        Store(C, (Array<T, kAccessSize>&)data);
                     }
                 }
             }
 
             __syncthreads();  // wait for smem being read
-
-            // cta_C += cta_cnt_n * CTA_N * CTA_K;
-            // cta_C += CTA_N * CTA_K;
         }
     }
 };

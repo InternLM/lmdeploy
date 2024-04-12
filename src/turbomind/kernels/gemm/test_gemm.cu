@@ -1,10 +1,10 @@
 
+#include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/test_utils.h"
 #include "src/turbomind/kernels/gemm/transcript.h"
 #include <cublas_v2.h>
 #include <thrust/universal_vector.h>
-#include "src/turbomind/kernels/attention/quantization.h"
 
 using namespace turbomind;
 using thrust::universal_vector;
@@ -54,7 +54,7 @@ void computeRefCublas(half* C, const half* A, const half* B, int m, int n, int k
                  CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
 
-template<class T>
+template<class T, class Tb>
 void Run(int m, int n, int k)
 {
     universal_vector<T> a(m * k);
@@ -62,14 +62,25 @@ void Run(int m, int n, int k)
     universal_vector<T> c(m * n);
     universal_vector<T> c_ref = c;
 
-    universal_vector<T> b1(n * k);
+    universal_vector<short> b0(n * k);
+    universal_vector<Tb>    b1(n * k);
 
     std::vector<T> c_cpu(m * n);
 
     RNG rng;
 
     rng.GenerateUniform(a.data().get(), a.size(), 1, -0.5);
-    rng.GenerateUniform(b.data().get(), b.size(), 1, -0.5);
+    if constexpr (!std::is_same_v<Tb, T>) {
+        rng.GenerateUInt((uint*)b0.data().get(), b0.size() / 2);
+        cudaDeviceSynchronize();
+        for (int i = 0; i < b0.size(); ++i) {
+            b0[i] %= (1 << bitsof<Tb>);  // constraint it's range
+            b[i] = T(b0[i]);             // convert to floating type
+        }
+    }
+    else {
+        rng.GenerateUniform(b.data().get(), b.size(), 1, -0.5);
+    }
 
     cudaDeviceSynchronize();
 
@@ -111,7 +122,7 @@ void Run(int m, int n, int k)
 int main(int argc, char* argv[])
 {
     // Run<half>(8192, 8192, 8192);
-    Run<half>(4096, 4096, 4096);
-    // Run<half>(256, 256, 128);
+    Run<half, half>(4096, 4096, 4096);
+    // Run<half, half>(128, 128, 32);
     return 0;
 }

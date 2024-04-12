@@ -37,68 +37,79 @@ struct Mainloop_sm80 {
         __syncthreads();
     }
 
-    template<class DataIter>
-    __device__ void operator()(
-        GmemIterA& gmem_A, GmemIterB& gmem_B, FragC& frag_C, DataIter& data_iter, int tile_iter, SharedStorage& storage)
+    template<class GmemIter, class SmemIter>
+    __device__ void AdvanceSmemStage(GmemIter& gmem_iter, SmemIter& smem_iter)
     {
-        Impl::SetSmem(gmem_A, gmem_B, storage);
+        gmem_iter.smem_data_ = smem_iter.data;
+        smem_iter.Advance();
+    }
+
+    __device__ void
+    operator()(GmemIterA& gmem_A, GmemIterB& gmem_B, FragC& frag_C, int tile_iter, SharedStorage& storage)
+    {
+        typename Impl::StateA state_A{storage};
+        typename Impl::StateB state_B{storage};
+
+        // a separate counter tends to generate better code
+        int gmem_iter = tile_iter;
+        int gmem_mask = true;
 
         PRAGMA_UNROLL
         for (int i = 0; i < Stages; ++i) {
+            AdvanceSmemStage(gmem_A, state_A);
+            AdvanceSmemStage(gmem_B, state_B);
             gmem_A.ClearSmem();
             gmem_B.ClearSmem();
-            gmem_A.Advance(Stages);
-            gmem_B.Advance(Stages);
         }
+        // r: 0, w:s-1
 
         __syncthreads();
 
         PRAGMA_UNROLL
         for (int stage = 0; stage < Stages - 1; ++stage) {
-            gmem_A.SetTile(data_iter);
-            gmem_B.SetTile(data_iter);
-            gmem_A.Prefetch(data_iter, 0);
-            gmem_B.Prefetch(data_iter, 0);
+            AdvanceSmemStage(gmem_A, state_A);
+            AdvanceSmemStage(gmem_B, state_B);
+            gmem_A.Prefetch(gmem_mask);
+            gmem_B.Prefetch(gmem_mask);
             __pipeline_commit();
-            gmem_A.Advance(Stages);
-            gmem_B.Advance(Stages);
-            ++data_iter;
+            gmem_A.Advance();
+            gmem_B.Advance();
+            if (--gmem_iter == 0) {
+                gmem_mask = false;
+            }
         }
+        // r:-1, w:-2
 
         constexpr bool kFusePrefetch = false;
-
-        typename Impl::StateA state_A{storage};
-        typename Impl::StateB state_B{storage};
 
         auto prefetch = [&](int k) {
             if constexpr (kFusePrefetch) {
                 int batch_A = min((k + 1) * kBatchA, ThreadMapA::kIterS) - k * kBatchA;
                 int batch_B = min((k + 1) * kBatchB, ThreadMapB::kIterS) - k * kBatchB;
-                gmem_A.Prefetch(data_iter, k * kBatchA, batch_A, 0);
-                gmem_B.Prefetch(data_iter, k * kBatchB, batch_B, 0);
-            }
-            if (k == Impl::ITER_K - 1) {
-                if constexpr (kFusePrefetch) {
-                    ++data_iter;
+                gmem_A.Prefetch(k * kBatchA, batch_A, gmem_mask);
+                gmem_B.Prefetch(k * kBatchB, batch_B, gmem_mask);
+                if (k == Impl::ITER_K - 1) {
                     __pipeline_commit();
+                    gmem_A.Advance();
+                    gmem_B.Advance();
+                    if (--gmem_iter == 0) {
+                        gmem_mask = false;
+                    }
                 }
-                Wait();
-                gmem_A.smem_data_ = state_A.data;
-                gmem_B.smem_data_ = state_B.data;
-                state_A.Advance();
-                state_B.Advance();
-                gmem_A.SetTile(data_iter);
-                gmem_B.SetTile(data_iter);
             }
         };
 
-        Wait();
+        auto advance_and_wait_smem_stage = [&] {
+            Wait();
+            AdvanceSmemStage(gmem_A, state_A);
+            AdvanceSmemStage(gmem_B, state_B);
+        };
+
+        advance_and_wait_smem_stage();
+        // r: 0, w:-1
 
         state_A.Load(0, 0);
         state_B.Load(0, 0);
-
-        gmem_A.SetTile(data_iter);
-        gmem_B.SetTile(data_iter);
 
         if constexpr (kFusePrefetch) {
             prefetch(0);
@@ -107,12 +118,16 @@ struct Mainloop_sm80 {
         PRAGMA_NO_UNROLL
         for (; tile_iter > 0; --tile_iter) {
             if constexpr (!kFusePrefetch) {
-                gmem_A.Prefetch(data_iter, 0);
-                gmem_B.Prefetch(data_iter, 0);
-                ++data_iter;
+                gmem_A.Prefetch(gmem_mask);
+                gmem_B.Prefetch(gmem_mask);
                 __pipeline_commit();
+                gmem_A.Advance();
+                gmem_B.Advance();
+                if (--gmem_iter == 0) {
+                    gmem_mask = false;
+                }
             }
-            Impl::Compute(state_A, state_B, frag_C, 0, prefetch);
+            Impl::Compute(state_A, state_B, frag_C, 0, prefetch, advance_and_wait_smem_stage);
         }
 
         __pipeline_commit();

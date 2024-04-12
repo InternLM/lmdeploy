@@ -8,7 +8,7 @@
 
 namespace turbomind::gemm {
 
-template<class Arch_, class Mainloop, class DataIter, class CtaMap_>
+template<class Arch_, class Mainloop, class CtaMap_>
 struct GemmUniversal {
 
     using T    = typename Mainloop::T;
@@ -50,16 +50,18 @@ struct GemmUniversal {
 
         FragC frag_C{};
 
-        int      tile_iter = (param.k + CTA_K - 1) / CTA_K;
-        DataIter data_iter{param, m_idx, n_idx, k_idx, param.k};
+        int tile_iter = (param.k + CTA_K - 1) / CTA_K;
 
-        typename Mainloop::GmemIterA gmem_A{param.k};
-        // typename Mainloop::GmemIterB gmem_B{param.k};
-        typename Mainloop::GmemIterB gmem_B{param.k / Impl::OP_K * WARP_SIZE * 8};
+        typename Mainloop::GmemIterA gmem_A{param.A + m_idx * param.k,  // ptr
+                                            param.k,                    // stride s
+                                            CTA_K};                     // stride k
+        typename Mainloop::GmemIterB gmem_B{param.B + n_idx * param.k,  // ptr
+                                            param.k * Impl::kPackedN,   // stride s
+                                            CTA_K * Impl::kPackedN};    // stride k
 
         Mainloop mainloop{};
 
-        mainloop(gmem_A, gmem_B, frag_C, data_iter, tile_iter, storage);
+        mainloop(gmem_A, gmem_B, frag_C, tile_iter, storage);
 
         StoreC(frag_C, m_idx, n_idx, param);
     }

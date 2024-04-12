@@ -8,8 +8,8 @@
 
 namespace turbomind::gemm {
 
-template<class T>
-void transcript(T* dst, const T* src, int n, int k, cudaStream_t st)
+template<class T, class Tb>
+void transcript(Tb* dst, const T* src, int n, int k, cudaStream_t st)
 {
     constexpr int CTA_M  = 128;
     constexpr int CTA_N  = 128;
@@ -25,8 +25,8 @@ void transcript(T* dst, const T* src, int n, int k, cudaStream_t st)
     // constexpr int WARP_N = 64;
     // constexpr int WARP_K = 64;
 
-    using Gemm   = Impl<MMA_81616, T, T, T, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
-    using Kernel = Transcript<void, Gemm, TileIterator<T, CTA_M, CTA_N, CTA_K, 0>, CtaSwizzleMap<0>>;
+    using Gemm   = Impl<MMA_81616, T, Tb, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Kernel = Transcript<void, Gemm, CtaSwizzleMap<0>>;
 
     static constexpr int kSmemSize = sizeof(typename Kernel::SharedStorage);
     if constexpr (kSmemSize > (48 << 10)) {

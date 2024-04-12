@@ -12,8 +12,7 @@
 namespace turbomind::gemm {
 
 template<class T_,
-         class Tx_,
-         class Tw_,
+         class Tb_,
          int CTA_M_,
          int CTA_N_,
          int CTA_K_,
@@ -22,11 +21,10 @@ template<class T_,
          int WARP_K_,
          int Stages_,
          int Flag_>
-struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K_, Stages_, Flag_> {
+struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K_, Stages_, Flag_> {
 
     using T  = T_;
-    using Tx = Tx_;
-    using Tw = Tw_;
+    using Tb = Tb_;
 
     static constexpr int CTA_M = CTA_M_;
     static constexpr int CTA_N = CTA_N_;
@@ -62,15 +60,24 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     static constexpr int MMA_CNT_N = CTA_N / OP_N;
     static constexpr int CNT_NK    = MMA_CNT_N * MMA_CNT_K;
 
-    static constexpr int kPackedC = MMA_CNT_K * WARP_SIZE * 8;
+    // static constexpr int kPackedC = MMA_CNT_K * WARP_SIZE * 8;
+    static constexpr int kPackedC = MMA_CNT_K * OP_N * OP_K;
     static constexpr int kPackedS = MMA_CNT_N;
+
+    static constexpr int P   = 16 / bitsof<Tb>;
+    static constexpr int P_N = P >= 2 ? 2 : 1;
+    static constexpr int P_K = P / P_N;
+
+    static constexpr int kPackedN = Flag_ ? P_N * OP_N : 1;
 
     using FragA = Array<T, 4>[ITER_K][ITER_M];      // {m8,k4}, [iK,iM], (k2,k2)
                                                     //   1  2    16  8     8  1
     using FragB = Array<T, 8>[ITER_K][ITER_N];      // {n8,k4}, [iK,iN], (k2,n2,k2)
                                                     //   1  2    16 16     8  8  1
     using FragC = Array<float, 4>[ITER_M][ITER_N];  // {n8,m4}, [iM,iN], (n2,m2)
-                                                    //   1  2     8 16     8  1
+                                                    //   1  2     8 16     8
+
+    using DataB = Array<Tb, 8 * P>[ITER_K][ITER_M];
 
     using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K + 8>;
@@ -81,15 +88,8 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                                            SmemLayoutV2<kPackedS, kPackedC, kPackedS, kPackedC, Identity>,
                                            SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>>;
     using ThreadMapB  = std::conditional_t<Flag_,
-                                          gemm::ThreadMap<kPackedC, kPackedS, 8, WARP_CNT, WARP_SIZE>,
+                                          gemm::ThreadMap<kPackedC, kPackedS, 128 / bitsof<Tb>, WARP_CNT, WARP_SIZE>,
                                           gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>>;
-
-    //   using SmemLayoutB = std::conditional_t<Flag_,
-    //                                        SmemLayoutV2<CTA_N, CTA_K, CTA_N, CTA_K, Identity>,
-    //                                        SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>>;
-    // using ThreadMapB  = std::conditional_t<Flag_,
-    //                                       gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>,
-    //                                       gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>>;
 
     union SharedStorage {
         struct {
@@ -97,19 +97,6 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             __align__(16) T B[Stages_ * SmemLayoutB::kSize];
         };
     };
-
-    template<class GmemIterA, class GmemIterB>
-    __device__ static void SetSmem(GmemIterA& gmem_A, GmemIterB& gmem_B, SharedStorage& storage)
-    {
-        gmem_A.SetSmem(storage.A);
-        gmem_B.SetSmem(storage.B);
-    }
-
-    template<class GmemIterB, class Storage>
-    __device__ static void SetSmemB(GmemIterB& gmem_B, Storage& storage)
-    {
-        gmem_B.SetSmem(storage.B);
-    }
 
     struct StateA {
         SmemAccessor<T, SmemLayoutA> smem_A;
@@ -211,6 +198,8 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             }
         }
 
+        __device__ void Transform(int k) {}
+
         __device__ void Advance()
         {
             offset += SmemLayoutB::kSize;
@@ -221,8 +210,9 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
         }
     };
 
-    template<class Prefetch>
-    __device__ static void Compute(StateA& state_A, StateB& state_B, FragC& frag_C, int pipe_iter, Prefetch&& prefetch)
+    template<class Prefetch, class Advance>
+    __device__ static void
+    Compute(StateA& state_A, StateB& state_B, FragC& frag_C, int pipe_iter, Prefetch&& prefetch, Advance&& advance)
     {
         static_assert(ITER_K > 1);
 
@@ -239,7 +229,9 @@ struct Impl<MMA_81616, T_, Tx_, Tw_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                 }
             }
             ((Prefetch&&)prefetch)((k + 1) % ITER_K);
-
+            if (k + 1 == ITER_K - 1) {
+                ((Advance&&)advance)();
+            }
             // if (k < ITER_K - 1) {
             //     ((Prefetch&&)prefetch)(k);
             // }
