@@ -54,7 +54,7 @@ class TestMultinomialSampling:
                              [torch.float32, torch.half, torch.bfloat16])
     @pytest.mark.parametrize(['num_tokens', 'select_ids'], [
         (8, (4, 2) * 30),
-        (200, (50, 150)),
+        (2000, (500, 1500)),
     ],
                              indirect=True)
     def test_multinomial_sampling(self, scores, seeds, offsets, indices, gt):
