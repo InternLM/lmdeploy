@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .base import INPUT_MODELS
-from .llama_awq import ensure_fp16orint32
-from .qwen import QwenModel, QwenReader
+from .llama_awq import LlamaAwqReader, ensure_fp16orint32
+from .qwen import Qwen2Model, QwenModel, QwenReader
 
 
 class QwenAwqReader(QwenReader):
@@ -47,6 +47,46 @@ class QwenAwqModel(QwenModel):
     """Qwen awq model in hf format."""
 
     Reader = QwenAwqReader
+
+    def __init__(self,
+                 model_path: str,
+                 tokenizer_path: str,
+                 ckpt_path: str = None,
+                 **kwargs):
+        super().__init__(model_path,
+                         tokenizer_path,
+                         ckpt_path=ckpt_path,
+                         **kwargs)
+
+
+class Qwen2AwqReader(LlamaAwqReader):
+    """read qwen2 awq model weights."""
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
+
+    def attn_bias(self, i: int):
+        """Get q, k, v, o bias for layer i."""
+        result = []
+
+        for key in ['q', 'k', 'v']:
+            tensor = self.params.get(
+                f'model.layers.{i}.self_attn.{key}_proj.bias')
+            assert tensor is not None
+            result.append(tensor)
+
+        tensor = self.params.get(f'model.layers.{i}.self_attn.o_proj.qweight')
+        dummy_oproj_bias = tensor.new_zeros(tensor.shape[0])
+        result.append(dummy_oproj_bias)
+        return ensure_fp16orint32(result)
+
+
+@INPUT_MODELS.register_module(name='qwen2-awq')
+class Qwen2AwqModel(Qwen2Model):
+    """Qwen2 awq model in hf format."""
+
+    Reader = Qwen2AwqReader
 
     def __init__(self,
                  model_path: str,
