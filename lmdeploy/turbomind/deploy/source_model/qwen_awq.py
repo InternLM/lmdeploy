@@ -76,8 +76,8 @@ class Qwen2AwqReader(LlamaAwqReader):
             assert tensor is not None
             result.append(tensor)
 
-        tensor = self.params.get(f'model.layers.{i}.self_attn.o_proj.qweight')
-        dummy_oproj_bias = tensor.new_zeros(tensor.shape[0])
+        ref_tensor = result[0]
+        dummy_oproj_bias = ref_tensor.new_zeros(ref_tensor.shape)
         result.append(dummy_oproj_bias)
         return ensure_fp16orint32(result)
 
