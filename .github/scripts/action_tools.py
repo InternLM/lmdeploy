@@ -287,7 +287,10 @@ def generate_benchmark_report(report_path: str):
 
                         grouped_df = merged_df.groupby(merged_df.columns[0])
                         if 'generation' not in benchmark_subfolder:
-                            average_values = grouped_df.pipe((lambda group: {'mean': group.mean().round(decimals=3)}))['mean']
+                            average_values = grouped_df.pipe(
+                                (lambda group: {
+                                    'mean': group.mean().round(decimals=3)
+                                }))['mean']
                             average_values.to_csv(average_csv_path, index=True)
                             avg_df = pd.read_csv(average_csv_path)
                             merged_df = pd.concat([merged_df, avg_df],
