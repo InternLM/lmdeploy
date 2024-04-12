@@ -18,7 +18,7 @@ In the next section, we will take `internlm2-chat-7b` model as an example, intro
 
 ## Usage
 
-Applying kv quantization and inference via LMDeploy is quit straightforward. Simply set the `quant_policy` parameter.
+Applying kv quantization and inference via LMDeploy is quite straightforward. Simply set the `quant_policy` parameter.
 
 **LMDeploy specifies that `quant_policy=4` stands for 4-bit kv, whereas `quant_policy=8` indicates 8-bit kv.**
 
