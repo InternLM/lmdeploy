@@ -159,21 +159,17 @@ class ModelInputs:
             if overlap:
                 block_end += 1
 
-            local_adapter_ids = self.local_adapter_ids
-            if local_adapter_ids is not None:
-                local_adapter_ids = local_adapter_ids[:, start:end]
-
             block_offsets = self.block_offsets[:, :block_end]
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
                 block_offsets=block_offsets,
                 history_lengths=self.history_lengths + start,
-                max_q_seq_length=input_ids.new_tensor(end - start),
+                max_q_seq_length=end - start,
                 max_history_length=self.max_history_length + start,
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
-                local_adapter_ids=local_adapter_ids,
+                local_adapter_ids=self.local_adapter_ids,
                 global_adapter_ids=self.global_adapter_ids,
                 adapter_offsets=self.adapter_offsets,
                 max_rank=self.max_rank,

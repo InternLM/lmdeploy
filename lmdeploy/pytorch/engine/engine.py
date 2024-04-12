@@ -121,7 +121,8 @@ class Engine:
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
             cache_max_entry_count=engine_config.cache_max_entry_count,
-            max_prefill_token_num=engine_config.max_prefill_token_num)
+            max_prefill_token_num=engine_config.max_prefill_token_num,
+            prefix_caching=engine_config.prefix_caching)
 
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,
@@ -321,7 +322,8 @@ class Engine:
 
     @logging_timer('CreateModelInputs', logger)
     @torch.inference_mode()
-    def create_model_inputs(self, messages: SeqList, adapters: AdapterList):
+    def create_model_inputs(self, messages: SeqList, adapters: AdapterList,
+                            is_prefill: bool):
         """create model inputs from messages.
 
         Args:
@@ -341,7 +343,7 @@ class Engine:
         batch_size = len(messages)
         input_ids = torch.from_numpy(np.concatenate(token_ids))
 
-        is_decoding = input_ids.size(0) == batch_size
+        is_decoding = not is_prefill
         if not is_decoding:
             seq_length = [len(tokens) for tokens in token_ids]
             seq_length = torch.tensor(seq_length, dtype=torch.long)
@@ -675,7 +677,8 @@ class Engine:
                     raise NoRunningSeqs()
 
                 # create inputs
-                inputs = self.create_model_inputs(running, adapters)
+                inputs = self.create_model_inputs(running, adapters,
+                                                  is_prefill)
                 sampling_inputs = SamplingInputs.from_sampling_params(running)
                 history_ids = __gather_history(running, sampling_inputs)
                 num_appendable_ids = __get_num_appendable_ids(running)
