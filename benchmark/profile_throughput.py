@@ -292,6 +292,8 @@ def parse_args():
     tb_group._group_actions.append(cache_block_seq_len_act)
     ArgumentHelper.model_format(tb_group, default='hf')
     ArgumentHelper.quant_policy(tb_group, default=0)
+    ArgumentHelper.num_tokens_per_iter(tb_group)
+    ArgumentHelper.max_prefill_iters(tb_group)
 
     args = parser.parse_args()
     return args
