@@ -387,17 +387,17 @@ class ArgumentHelper:
             'be ignored')
 
     @staticmethod
-    def num_tokens_per_iter(parser, default=0):
+    def num_tokens_per_iter(parser):
         return parser.add_argument(
             '--num-tokens-per-iter',
             type=int,
-            default=default,
+            default=0,
             help='the number of tokens processed in a forward pass')
 
     @staticmethod
-    def max_prefill_iters(parser, default=1):
+    def max_prefill_iters(parser):
         return parser.add_argument(
             '--max-prefill-iters',
             type=int,
-            default=default,
+            default=1,
             help='the max number of forward passes in prefill stage')
