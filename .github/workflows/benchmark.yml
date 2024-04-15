@@ -160,7 +160,7 @@ jobs:
           rm -rf ${result_dir}
           mkdir ${result_dir}
           export CUDA_VISIBLE_DEVICES=6,7
-          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 128 128 2048 -ct 128 2048 128 -pt 128 --csv ${result_dir}/generation_batch64.csv > ${result_dir}/generation_batch64.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation_batch64.csv > ${result_dir}/generation_batch64.log
       - name: Run generation benchmark - pytorch
         if: (! contains( matrix.model, 'w4a16') && !contains( matrix.model, '4bit')) && contains(fromJSON(github.event.inputs.backend), 'pytorch')
         env:
@@ -169,7 +169,7 @@ jobs:
           rm -rf ${result_dir}
           mkdir ${result_dir}
           export CUDA_VISIBLE_DEVICES=6,7
-          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 128 128 2048 -ct 128 2048 128 --csv ${result_dir}/generation_batch64.csv > ${result_dir}/generation_batch64.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation_batch64.csv > ${result_dir}/generation_batch64.log
       - name: Save reports
         if: always()
         run: |
