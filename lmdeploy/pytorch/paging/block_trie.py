@@ -11,6 +11,7 @@ from .block_manager import BaseBlockManager
 
 
 class Node:
+    """node of block trie."""
 
     def __init__(self,
                  hash_key: int,
@@ -45,6 +46,7 @@ class Node:
 
 
 class BlockTrie:
+    """block trie for prefix caching."""
 
     def __init__(self, cache_config: CacheConfig,
                  block_manager: BaseBlockManager):
@@ -52,18 +54,20 @@ class BlockTrie:
         self.cache_config = cache_config
         self.allocator = self.block_manager.allocator
         self.block_size = cache_config.block_size
-        self.enable = self.cache_config.prefix_caching
+        self.enable = self.cache_config.enable_prefix_caching
 
         # caches with different adapter should not be shared.
         self._roots: Dict[str, Node] = dict()
         self.leaves: Set[Node] = set()
 
     def get_root(self, adapter_name: str):
+        """get root by adapter name."""
         if adapter_name not in self._roots:
             self._roots[adapter_name] = Node(-1, -1, None)
         return self._roots[adapter_name]
 
     def match(self, seq: SchedulerSequence):
+        """match sequence and cache."""
         if not self.enable:
             return
 
@@ -105,9 +109,8 @@ class BlockTrie:
 
         seq.logical_blocks.last_shared_node = curr
 
-    def allocate(self, seq: SchedulerSequence, prealloc_size: int = 0):
-        self.block_manager.allocate(seq, prealloc_size)
-
+    def allocate(self, seq: SchedulerSequence):
+        """allocate."""
         if not self.enable:
             return
 
@@ -163,11 +166,8 @@ class BlockTrie:
         if len(free_blocks) > 0:
             self.allocator.free(np.array(free_blocks))
 
-    def free(self, seq: SchedulerSequence):
-        self.block_manager.free(seq)
-        seq.set_step(0)
-
     def evict(self, max_num_blocks: int):
+        """evict."""
         if not self.enable:
             return 0
 

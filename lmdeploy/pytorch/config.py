@@ -54,16 +54,16 @@ class CacheConfig:
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 4096
-    prefix_caching: bool = False
+    enable_prefix_caching: bool = False
 
     def __post_init__(self):
         """post init."""
         from lmdeploy.utils import get_logger
         logger = get_logger('lmdeploy')
-        if self.window_size > 1 and self.prefix_caching:
+        if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning(
                 'Shared cache is not available for window attention.')
-            self.prefix_caching = False
+            self.enable_prefix_caching = False
 
 
 @dataclass

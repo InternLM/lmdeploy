@@ -122,7 +122,8 @@ class Engine:
             num_gpu_blocks=engine_config.num_gpu_blocks,
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
-            prefix_caching=engine_config.prefix_caching)
+            enable_prefix_caching=engine_config.enable_prefix_caching,
+        )
 
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,

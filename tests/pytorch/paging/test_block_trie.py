@@ -26,7 +26,7 @@ class TestBlockTire:
         yield CacheConfig(block_size=block_size,
                           num_cpu_blocks=num_cpu_blocks,
                           num_gpu_blocks=num_gpu_blocks,
-                          prefix_caching=True)
+                          enable_prefix_caching=True)
 
     @pytest.fixture
     def block_mgr(self, cache_config):
@@ -36,7 +36,7 @@ class TestBlockTire:
     def block_trie(self, cache_config, block_mgr):
         yield BlockTrie(cache_config, block_mgr)
 
-    def test_allocate(self, block_trie, block_size):
+    def test_allocate(self, block_trie, block_mgr, block_size):
         allocator = block_trie.allocator
         sess = SchedulerSession(0, block_size)
         token_ids = ([1] * block_size + [2] * block_size)
@@ -44,6 +44,7 @@ class TestBlockTire:
         seq = sess.add_sequence(token_ids)
 
         # first allocate
+        block_mgr.allocate(seq)
         block_trie.allocate(seq)
         logical_blocks = seq.logical_blocks
         assert len(logical_blocks) == 3
@@ -59,6 +60,7 @@ class TestBlockTire:
 
         # append
         seq.update_token_ids([4] * block_size)
+        block_mgr.allocate(seq)
         block_trie.allocate(seq)
         logical_blocks = seq.logical_blocks
         assert len(logical_blocks) == 4
@@ -72,7 +74,7 @@ class TestBlockTire:
         assert node in block_trie.leaves
         assert len(block_trie.leaves) == 1
 
-    def test_match(self, block_trie, block_size):
+    def test_match(self, block_trie, block_mgr, block_size):
         allocator = block_trie.allocator
         sess = SchedulerSession(0, block_size)
 
@@ -80,6 +82,7 @@ class TestBlockTire:
         token_ids = ([1] * block_size + [2] * block_size)
         token_ids += [3] * (block_size // 2)
         seq = sess.add_sequence(token_ids)
+        block_mgr.allocate(seq)
         block_trie.allocate(seq)
 
         # test1
@@ -94,6 +97,7 @@ class TestBlockTire:
         assert node is not None
         assert node.num_matched == block_size
         assert np.array_equal(node.tokens, [1] * block_size)
+        block_mgr.allocate(seq)
         block_trie.allocate(seq)
         assert len(block_trie.leaves) == 2
 
@@ -113,11 +117,13 @@ class TestBlockTire:
         token_ids = ([1] * block_size * (num_gpu_blocks - 1))
         token_ids += [2] * (block_size // 2)
         seq = sess.add_sequence(token_ids)
+        block_mgr.allocate(seq)
         block_trie.allocate(seq)
         assert block_mgr.get_num_free_gpu_blocks() == 0
 
         # test free
-        block_trie.free(seq)
+        block_mgr.free(seq)
+        seq.set_step(0)
         assert block_mgr.get_num_free_gpu_blocks() == 1
 
         # test evict

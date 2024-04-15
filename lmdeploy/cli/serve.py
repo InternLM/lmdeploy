@@ -50,6 +50,8 @@ class SubCliServe:
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
+        ArgumentHelper.enable_prefix_caching(pt_group)
+
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
         model_name_act = ArgumentHelper.model_name(pt_group)
@@ -136,6 +138,8 @@ class SubCliServe:
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
+        ArgumentHelper.enable_prefix_caching(pt_group)
+
         ArgumentHelper.adapters(pt_group)
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
@@ -214,7 +218,9 @@ class SubCliServe:
                 max_batch_size=args.max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
-                session_len=args.session_len)
+                session_len=args.session_len,
+                enable_prefix_caching=args.enable_prefix_caching,
+            )
         else:
             backend_config = TurbomindEngineConfig(
                 model_name=args.model_name,
@@ -261,7 +267,9 @@ class SubCliServe:
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
                 session_len=args.session_len,
-                adapters=adapters)
+                adapters=adapters,
+                enable_prefix_caching=args.enable_prefix_caching,
+            )
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(

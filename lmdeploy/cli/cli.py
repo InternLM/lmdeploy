@@ -107,6 +107,7 @@ class CLI(object):
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
         ArgumentHelper.adapters(pt_group)
+        ArgumentHelper.enable_prefix_caching(pt_group)
 
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
@@ -236,7 +237,9 @@ class CLI(object):
                 tp=args.tp,
                 session_len=args.session_len,
                 cache_max_entry_count=args.cache_max_entry_count,
-                adapters=adapters)
+                adapters=adapters,
+                enable_prefix_caching=args.enable_prefix_caching,
+            )
             run_chat(args.model_path,
                      engine_config,
                      trust_remote_code=args.trust_remote_code)

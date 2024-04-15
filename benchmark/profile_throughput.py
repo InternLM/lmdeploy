@@ -283,6 +283,7 @@ def parse_args():
     session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
+    ArgumentHelper.enable_prefix_caching(pt_group)
 
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
@@ -315,7 +316,9 @@ def main():
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
-            thread_safe=True)
+            thread_safe=True,
+            enable_prefix_caching=args.enable_prefix_caching,
+        )
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)
 

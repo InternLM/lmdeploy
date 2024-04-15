@@ -212,6 +212,7 @@ class Scheduler:
                 break
 
             # allocate session memory
+            self.block_manager.allocate(seq)
             self.block_trie.allocate(seq)
             _active_adapter(seq.adapter_name)
             _to_running(seq)
@@ -254,14 +255,16 @@ class Scheduler:
                                f'sequence[{seq.seq_id}] '
                                'reach max gpu size.')
                 self._set_message_status(seq, MessageStatus.ABORTED)
-                self.block_trie.free(seq)
+                self.block_manager.free(seq)
+                seq.set_step(0)
                 continue
 
             if not __evict_for_seq(seq):
                 self._set_message_status(seq, MessageStatus.WAITING)
                 continue
 
-            self.block_trie.allocate(seq, prealloc_size)
+            self.block_manager.allocate(seq, prealloc_size)
+            self.block_trie.allocate(seq)
 
         return self.running, swap_in_map, swap_out_map, copy_map
 
@@ -315,7 +318,8 @@ class Scheduler:
         Args:
             seq (SchedulerSequence): sequence to remove
         """
-        self.block_trie.free(seq)
+        self.block_manager.free(seq)
+        seq.set_step(0)
         seq.session.remove_sequence(seq)
 
     def end_session(self, session_id: int):
