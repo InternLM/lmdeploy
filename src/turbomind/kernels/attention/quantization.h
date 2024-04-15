@@ -480,7 +480,8 @@ struct ConvertKvCache<uint4_t, half> {
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 8) {
             auto& v = (Array<half, 8>&)vo[i];
-            v       = cvt_f16x8_u4_biased((Array<uint4_t, 8>&)vi[i]);
+            // v       = cvt_f16x8_u4_biased((Array<uint4_t, 8>&)vi[i]);
+            v       = cvt_f16x8_u4((Array<uint4_t, 8>&)vi[i]);
         }
         return vo;
     }
@@ -636,7 +637,7 @@ inline __device__ void StoreQuantParam(T* dst, Array<T, 2> src)
 template<>
 inline __device__ void StoreQuantParam<uint4_t, half>(half* dst, Array<half, 2> src)
 {
-    src[1] = src[1] - src[0] * __ushort_as_half(0x5400);
+    // src[1] = src[1] - src[0] * __ushort_as_half(0x5400);
     Store(dst, src);
 }
 

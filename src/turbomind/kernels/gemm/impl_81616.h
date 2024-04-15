@@ -62,8 +62,9 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
     static constexpr int MMA_CNT_N = CTA_N / OP_N;
     // static constexpr int CNT_NK    = MMA_CNT_N * MMA_CNT_K;
 
-    static constexpr int P   = 16 / bitsof<Tb>;
-    static constexpr int P_N = P >= 2 ? 2 : 1;
+    static constexpr int P = 16 / bitsof<Tb>;
+    // static constexpr int P_N = P >= 2 ? 2 : 1;
+    static constexpr int P_N = P;
     static constexpr int P_K = P / P_N;
 
     // cta
@@ -179,6 +180,7 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
 
+            const int warp_idx_k    = 0;
             const int warp_idx_n    = warp_id_n(warp_id);
             const int warp_offset_n = warp_idx_n * WARP_N;
 
@@ -194,21 +196,29 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                 }
             }
             else {
-                // PRAGMA_UNROLL
-                // for (int n = 0; n < ITER_N; ++n) {
-                //     const int mma_idx = (n + warp_idx_n * ITER_N) * MMA_CNT_K + k;
-                //     turbomind::Load(frag_B[k][n], &data[(mma_idx * WARP_SIZE + lane_id) * frag_B[k][n].size()]);
-                // }
                 if (k % P_K == 0) {
+
+                    Tb* lo = (Tb*)data;
+                    Tb* hi = (Tb*)(data + SmemLayoutB::kSize);
+
+                    static_assert(ITER_N % P_N == 0);
                     static constexpr int kAccessSize = 8 * P_N * P_K;
                     PRAGMA_UNROLL
                     for (int n = 0; n < ITER_N; n += P_N) {
-                        const int pack_idx_k = k / P_K;
+                        const int pack_idx_k = (k + warp_idx_k * ITER_K) / P_K;
                         const int pack_idx_n = (n + warp_idx_n * ITER_N) / P_N;
-                        const int pack_idx   = pack_idx_n * (MMA_CNT_K / P_K) + pack_idx_k;
-                        // const int mma_idx = (n + warp_idx_n * ITER_N) * MMA_CNT_K + k;
-                        turbomind::Load((Array<uint32_t, 4>&)data_B[k / P_K][n / P_N],
-                                        (const uint32_t*)&data[(pack_idx * WARP_SIZE + lane_id) * kAccessSize]);
+
+                        constexpr int PACKED_K = MMA_CNT_K / P_K;
+
+                        static_assert(WARP_SIZE * kAccessSize == P_K * P_N * OP_K * OP_N);
+
+                        // auto ptr =
+                        //     (Tb*)(data + ((pack_idx_n * PACKED_K + pack_idx_k) * WARP_SIZE + lane_id) * kAccessSize);
+
+                        auto ptr = (Tb*)(data + (pack_idx_n * PACKED_K + pack_idx_k) * P_K * P_N * OP_K * OP_N
+                                         + lane_id * kAccessSize);
+
+                        Lds(data_B[k / P_K][n / P_N], ptr);
                     }
                 }
             }
@@ -216,13 +226,13 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
 
         __device__ void Transform(int k)
         {
+            const int p_k = k % P_K;
             PRAGMA_UNROLL
             for (int n = 0; n < ITER_N; n += P_N) {
                 PRAGMA_UNROLL
                 for (int p_n = 0; p_n < P_N; ++p_n) {
-                    ConvertKvCache<Tb, T> converter(1.f, 0.f);
-                    frag_B[k][n + p_n] =
-                        converter((Array<Tb, 8>&)data_B[k / P_K][n / P_N][((k % P_K) * P_N + p_n) * 8]);
+                    ConvertKvCache<Tb, T> converter(1, 0);
+                    frag_B[k][n + p_n] = converter((Array<Tb, 8>&)data_B[k / P_K][n / P_N][(p_k * P_N + p_n) * 8]);
                 }
             }
         }
@@ -247,8 +257,7 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
         for (int k = 0; k < ITER_K; ++k) {
             state_A.Load((k + 1) % ITER_K, pipe_iter);
             state_B.Load((k + 1) % ITER_K, pipe_iter);
-            // state_A.Transform(k);
-            state_B.Transform(k);
+
             PRAGMA_UNROLL
             for (int n = 0; n < ITER_N; ++n) {
                 PRAGMA_UNROLL
@@ -266,7 +275,11 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
             // }
             // if (k == ITER_K - 2) {
             //     ((Prefetch&&)prefetch)(ITER_K - 1);
+            //     ((Advance&&)advance)();
             // }
+
+            // ! Transform of k must come before prefetching k + 1
+            state_B.Transform((k + 1) % ITER_K);
         }
     }
 

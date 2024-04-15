@@ -27,8 +27,9 @@ struct ThreadMap {
     static constexpr int kWarpIterC = (kDimC + kWarpAccessC - 1) / kWarpAccessC;
     static constexpr int kWarpIterS = kDimS / kWarpAccessS;
 
-    static constexpr int kWarpC = 1;
-    static constexpr int kWarpS = kWarpCount;
+    // Partition warps along the strided axis first to reduce strided iters
+    static constexpr int kWarpS = kWarpIterS >= kWarpCount ? kWarpCount : kWarpIterS;
+    static constexpr int kWarpC = kWarpCount > kWarpIterS ? kWarpCount / kWarpS : 1;
 
     static constexpr int kIterC = kWarpIterC / kWarpC;
     static constexpr int kIterS = std::max(kWarpIterS / kWarpS, 1);

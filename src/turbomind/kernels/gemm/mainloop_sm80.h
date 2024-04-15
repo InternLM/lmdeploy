@@ -81,7 +81,7 @@ struct Mainloop_sm80 {
         }
         // r:-1, w:-2
 
-        constexpr bool kFusePrefetch = false;
+        constexpr bool kFusePrefetch = true;
 
         auto prefetch = [&](int k) {
             if constexpr (kFusePrefetch) {
@@ -111,6 +111,7 @@ struct Mainloop_sm80 {
 
         state_A.Load(0, 0);
         state_B.Load(0, 0);
+        state_B.Transform(0);
 
         if constexpr (kFusePrefetch) {
             prefetch(0);

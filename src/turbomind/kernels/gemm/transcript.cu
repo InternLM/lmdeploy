@@ -55,10 +55,13 @@ void transcript(Tb* dst, const T* src, int n, int k, cudaStream_t st)
     auto grid  = Map::get_grid_shape(tiles);
     auto block = Gemm::WARP_CNT * WARP_SIZE;
 
+    std::cout << "P_K: " << Gemm1::P_K << ", P_N: " << Gemm1::P_N << std::endl;
+
     transcript_kernel<Kernel><<<grid, block, kSmemSize, st>>>({nullptr, src, detail::cast(dst), CTA_M, n, k});
 }
 
 template void transcript(half* dst, const half* src, int n, int k, cudaStream_t st);
 template void transcript(uint4_t* dst, const half* src, int n, int k, cudaStream_t st);
+template void transcript(uint8_t* dst, const half* src, int n, int k, cudaStream_t st);
 
 }  // namespace turbomind::gemm

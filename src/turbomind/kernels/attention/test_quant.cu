@@ -61,8 +61,8 @@ int main(int argc, char* argv[])
     round_trip_test<nv_bfloat16, uint8_t, 4>(1 << 20);
 #endif
 
-    round_trip_test<float, uint4_t, 8>(1 << 20, 1, 0, 1, -64);
-    round_trip_test<half, uint4_t, 8>(1 << 20, 1, 0, 1, -64);
+    round_trip_test<float, uint4_t, 8>(1 << 20, 1, 0, 1, 0);
+    round_trip_test<half, uint4_t, 8>(1 << 20, 1, 0, 1, 0);
 #if ENABLE_BF16
     round_trip_test<nv_bfloat16, uint4_t, 8>(1 << 20, 1, 0, 1, 0);
 #endif

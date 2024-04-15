@@ -30,17 +30,15 @@ struct GemmUniversal {
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
-    using PointerB = get_pointer_type<Tb>;
-
     // row.col.row
     struct Param {
-        T*       A;  // x (m,k)
-        PointerB B;  // W (n,k)
-        T*       C;  //   (m,n)
-        int      m;
-        int      n;
-        int      k;
-        int      log_tile;
+        T*                   A;  // x (m,k)
+        get_pointer_type<Tb> B;  // W (n,k)
+        T*                   C;  //   (m,n)
+        int                  m;
+        int                  n;
+        int                  k;
+        int                  log_tile;
     };
 
     __device__ void operator()(const Param& param, const CtaMap& cta_map, char* smem_buf)

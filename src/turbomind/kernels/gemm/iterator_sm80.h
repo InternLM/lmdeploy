@@ -37,7 +37,7 @@ struct GmemIteratorSm80 {
 
     int src_step_c_;
     int src_step_s_;
-    int src_step_k_;
+    // int src_step_k_;
 
     int stride_s_;
     int stride_k_;
@@ -55,7 +55,6 @@ struct GmemIteratorSm80 {
 
         offset_c_ = offsets.x;
         offset_s_ = offsets.y;
-        // dst_offset_ = SmemLayout::apply(offset_s_, offset_c_);
 
         src_ptr_ = reinterpret_cast<const char*>((T*)data);
 
@@ -65,7 +64,7 @@ struct GmemIteratorSm80 {
 
         src_step_c_ = Map::kDeltaC * bitsof<T> / bitsof<char>;
         src_step_s_ = Map::kDeltaS * stride_s_ - Map::kIterC * Map::kDeltaC * bitsof<T> / bitsof<char>;
-        src_step_k_ = stride_k_ - Map::kIterS * Map::kDeltaS * stride_s_;
+        // src_step_k_ = stride_k_ - Map::kIterS * Map::kDeltaS * stride_s_;
 
         // initialize for the first tile
         src_data_ = src_ptr_ + src_offset_;
@@ -100,7 +99,13 @@ struct GmemIteratorSm80 {
                 //     dst = smem_data_.ptr_;
                 //     smem_data_.ptr_ += Map::kDeltaC;
                 // }
-                CpAsync(std::true_type{}, dst, src_data_, static_cast<bool>(tile_mask));
+
+                CpAsync(std::true_type{}, dst, src_data_, tile_mask);
+
+                // if (tile_mask) {
+                //     static_assert(sizeof(AccessType) == sizeof(uint4));
+                //     *(uint4*)dst = __ldg((const uint4*)src_data_);
+                // }
                 src_data_ += src_step_c_;
             }
             // if constexpr (SmemLayout::kIsTrivial) {
@@ -108,6 +113,20 @@ struct GmemIteratorSm80 {
             // }
             src_data_ += src_step_s_;
         }
+
+        // PRAGMA_UNROLL
+        // for (int s = 0; s < Map::kIterS; ++s) {
+        //     PRAGMA_UNROLL
+        //     for (int c = 0; c < Map::kIterC; ++c) {
+        //         auto dst = &smem_data_(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
+        //         if (tile_mask) {
+        //             auto tmp = *(uint4*)dst;
+        //             if (Idx == 1) {
+        //                 printf("%08x %08x %08x %08x\n", tmp.x, tmp.y, tmp.z, tmp.w);
+        //             }
+        //         }
+        //     }
+        // }
     }
 
     __device__ void Prefetch(bool tile_mask)

@@ -62,8 +62,8 @@ void Run(int m, int n, int k)
     universal_vector<T> c(m * n);
     universal_vector<T> c_ref = c;
 
-    universal_vector<short> b0(n * k);
-    universal_vector<Tb>    b1(n * k);
+    universal_vector<unsigned short> b0(n * k);
+    universal_vector<Array<Tb, 8>>   b1(n * k / 8);
 
     std::vector<T> c_cpu(m * n);
 
@@ -71,11 +71,14 @@ void Run(int m, int n, int k)
 
     rng.GenerateUniform(a.data().get(), a.size(), 1, -0.5);
     if constexpr (!std::is_same_v<Tb, T>) {
+        // generate random bytes for 16-bit width
         rng.GenerateUInt((uint*)b0.data().get(), b0.size() / 2);
         cudaDeviceSynchronize();
         for (int i = 0; i < b0.size(); ++i) {
             b0[i] %= (1 << bitsof<Tb>);  // constraint it's range
-            b[i] = T(b0[i]);             // convert to floating type
+            // b0[i] = (b0[i] % 15) + 1;
+            // b0[i] = 15;
+            b[i] = T(b0[i]);  // convert to floating type
         }
     }
     else {
@@ -100,12 +103,19 @@ void Run(int m, int n, int k)
     }
 
     if (1) {
+        auto B1 = (Tb*)b1.data().get();
+
         for (int i = 0; i < 1; ++i) {
-            gemm::transcript(b1.data().get(), b.data().get(), n, k, 0);
+            gemm::transcript(B1, b.data().get(), n, k, 0);
         }
 
+        cudaDeviceSynchronize();
+        // for (int i = 0; i < b1.size(); ++i) {
+        //     printf("%d %08x\n", i, (uint32_t&)b1[i]);
+        // }
+
         for (int i = 0; i < 10; ++i) {
-            gemm::invoke(c.data().get(), a.data().get(), b1.data().get(), m, n, k, 0);
+            gemm::invoke(c.data().get(), a.data().get(), B1, m, n, k, 0);
         }
 
         computeRefCublas(c_ref.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
@@ -123,6 +133,6 @@ int main(int argc, char* argv[])
 {
     // Run<half>(8192, 8192, 8192);
     Run<half, half>(4096, 4096, 4096);
-    // Run<half, half>(128, 128, 32);
+    // Run<half, uint4_t>(128, 128, 32);
     return 0;
 }

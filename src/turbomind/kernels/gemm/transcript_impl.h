@@ -30,7 +30,7 @@ struct Transcript {
     using ThreadMapB  = typename Gemm::ThreadMapB;
     using SmemLayoutB = typename Gemm::SmemLayoutB;
 
-    using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, 1>;
+    using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, 100>;
 
     struct SharedStorage {
         __align__(16) Array<T, Gemm::SmemLayoutB::kSize> B;
@@ -117,10 +117,11 @@ struct Transcript {
                             // transform to packed data (quantization & permutation)
                             ConvertKvCache<T, T1> converter(1, 0);
                             data[p_k][p_n] = converter(state_B.frag_B[k + p_k][n + p_n]);
+                            // printf("%08x\n", (uint32_t&)data[p_k][p_n]);
                         }
                     }
                     constexpr int kAccessSize = 8 * P_K * P_N;
-                    static_assert(sizeof(data) <= 16);
+                    static_assert(sizeof(data) == 16);
                     if (warp_id_m == 0) {
                         // mma fragment ptr for the warp
                         auto C = param.C + ((pack_idx_n * packed_k + pack_idx_k) * WARP_SIZE + lane_id) * kAccessSize;
