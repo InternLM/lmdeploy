@@ -119,6 +119,7 @@ class BlockTrie:
         node: Node = getattr(logical_blocks, 'last_shared_node', None)
         if node is None:
             node = self.get_root(seq.adapter_name)
+            logical_blocks.last_shared_node = node
 
         num_matched = node.num_matched
         num_all_ids = seq.num_all_ids
@@ -153,7 +154,7 @@ class BlockTrie:
                             tokens=curr_tokens,
                             num_matched=num_matched + block_size)
                 node.parent = parent
-            blocks.append(block)
+            blocks.append(node.block)
             num_matched += block_size
             block_id += 1
 
