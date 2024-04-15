@@ -8,6 +8,21 @@
 
 namespace turbomind::gemm {
 
+namespace detail {
+
+template<class T>
+auto cast(T* p)
+{
+    if constexpr (bitsof<T> % 8 == 0) {
+        return p;
+    }
+    else {
+        return (char*)p;
+    }
+}
+
+}  // namespace detail
+
 template<class T, class Tb>
 void transcript(Tb* dst, const T* src, int n, int k, cudaStream_t st)
 {
@@ -25,8 +40,9 @@ void transcript(Tb* dst, const T* src, int n, int k, cudaStream_t st)
     // constexpr int WARP_N = 64;
     // constexpr int WARP_K = 64;
 
-    using Gemm   = Impl<MMA_81616, T, Tb, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
-    using Kernel = Transcript<void, Gemm, CtaSwizzleMap<0>>;
+    using Gemm   = Impl<MMA_81616, T, T, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Gemm1  = Impl<MMA_81616, T, Tb, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Kernel = Transcript<void, Gemm, Gemm1, CtaSwizzleMap<0>>;
 
     static constexpr int kSmemSize = sizeof(typename Kernel::SharedStorage);
     if constexpr (kSmemSize > (48 << 10)) {
@@ -39,9 +55,10 @@ void transcript(Tb* dst, const T* src, int n, int k, cudaStream_t st)
     auto grid  = Map::get_grid_shape(tiles);
     auto block = Gemm::WARP_CNT * WARP_SIZE;
 
-    transcript_kernel<Kernel><<<grid, block, kSmemSize, st>>>({nullptr, src, dst, CTA_M, n, k});
+    transcript_kernel<Kernel><<<grid, block, kSmemSize, st>>>({nullptr, src, detail::cast(dst), CTA_M, n, k});
 }
 
 template void transcript(half* dst, const half* src, int n, int k, cudaStream_t st);
+template void transcript(uint4_t* dst, const half* src, int n, int k, cudaStream_t st);
 
 }  // namespace turbomind::gemm

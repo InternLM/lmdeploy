@@ -45,7 +45,7 @@ struct GmemIteratorSm80 {
 
     SmemAccessor<T, SmemLayout> smem_data_;
 
-    __device__ GmemIteratorSm80(const T* data, int stride_s, int stride_k): smem_data_{nullptr}
+    __device__ GmemIteratorSm80(Pointer data, int stride_s, int stride_k): smem_data_{Pointer{nullptr}}
     {
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
@@ -57,14 +57,14 @@ struct GmemIteratorSm80 {
         offset_s_ = offsets.y;
         // dst_offset_ = SmemLayout::apply(offset_s_, offset_c_);
 
-        src_ptr_ = reinterpret_cast<const char*>(data);
+        src_ptr_ = reinterpret_cast<const char*>((T*)data);
 
-        stride_s_   = stride_s * sizeof(T);
-        stride_k_   = stride_k * sizeof(T);
-        src_offset_ = src_offset_ * sizeof(T);
+        stride_s_   = stride_s * bitsof<T> / bitsof<char>;
+        stride_k_   = stride_k * bitsof<T> / bitsof<char>;
+        src_offset_ = src_offset_ * bitsof<T> / bitsof<char>;
 
-        src_step_c_ = sizeof(T) * Map::kDeltaC;
-        src_step_s_ = Map::kDeltaS * stride_s_ - sizeof(T) * Map::kIterC * Map::kDeltaC;
+        src_step_c_ = Map::kDeltaC * bitsof<T> / bitsof<char>;
+        src_step_s_ = Map::kDeltaS * stride_s_ - Map::kIterC * Map::kDeltaC * bitsof<T> / bitsof<char>;
         src_step_k_ = stride_k_ - Map::kIterS * Map::kDeltaS * stride_s_;
 
         // initialize for the first tile

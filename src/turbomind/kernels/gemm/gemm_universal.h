@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/sync.h"
 
@@ -11,8 +12,10 @@ namespace turbomind::gemm {
 template<class Arch_, class Mainloop, class CtaMap_>
 struct GemmUniversal {
 
-    using T    = typename Mainloop::T;
     using Impl = typename Mainloop::Impl;
+
+    using T  = typename Impl::T;
+    using Tb = typename Impl::Tb;
 
     using Arch   = Arch_;
     using CtaMap = CtaMap_;
@@ -27,10 +30,12 @@ struct GemmUniversal {
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
+    using PointerB = get_pointer_type<Tb>;
+
     // row.col.row
     struct Param {
-        const T* A;  // x (m,k)
-        const T* B;  // W (n,k)
+        T*       A;  // x (m,k)
+        PointerB B;  // W (n,k)
         T*       C;  //   (m,n)
         int      m;
         int      n;

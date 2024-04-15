@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/layout.h"
@@ -11,10 +12,11 @@
 
 namespace turbomind::gemm {
 
-template<class Arch_, class Gemm, class CtaMap_>
+template<class Arch_, class Gemm, class Gemm1, class CtaMap_>
 struct Transcript {
 
-    using T = typename Gemm::T;
+    using T  = typename Gemm::Tb;
+    using T1 = typename Gemm1::Tb;
 
     using Arch   = Arch_;
     using CtaMap = CtaMap_;
@@ -31,28 +33,27 @@ struct Transcript {
     using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, 1>;
 
     struct SharedStorage {
-        __align__(16) T B[Gemm::SmemLayoutB::kSize];
+        __align__(16) Array<T, Gemm::SmemLayoutB::kSize> B;
     };
 
     static constexpr int MMA_CNT_K = CTA_K / Gemm::OP_K;
     static constexpr int MMA_CNT_N = CTA_N / Gemm::OP_N;
 
-    static constexpr int P_N = Gemm::P_N;
-    static constexpr int P_K = Gemm::P_K;
+    static constexpr int P_N = Gemm1::P_N;
+    static constexpr int P_K = Gemm1::P_K;
 
-    static constexpr int CTA_SIZE  = CTA_K * CTA_N;
     static constexpr int FRAG_SIZE = 8;
 
-    static_assert(CTA_SIZE == MMA_CNT_K * MMA_CNT_N * WARP_SIZE * FRAG_SIZE);
+    static_assert(CTA_K * CTA_N == MMA_CNT_K * MMA_CNT_N * WARP_SIZE * FRAG_SIZE);
 
     // row.col.row
     struct Param {
-        const T* A;  // x (m,k)
-        const T* B;  // W (n,k)
-        T*       C;
-        int      m;
-        int      n;
-        int      k;
+        const T*             A;
+        const T*             B;
+        get_pointer_type<T1> C;
+        int                  m;
+        int                  n;
+        int                  k;
     };
 
     __device__ void operator()(const Param& param, char* smem_buf)
@@ -72,7 +73,7 @@ struct Transcript {
         const int                  packed_k = cta_cnt_k * MMA_CNT_K / P_K;
         [[maybe_unused]] const int packed_n = cta_cnt_n * MMA_CNT_N / P_N;
 
-        GmemIterB gmem_B{param.B + cta_idx_n * CTA_N * param.k, param.k, CTA_K};
+        GmemIterB gmem_B{(T*)param.B + cta_idx_n * CTA_N * param.k, param.k, CTA_K};
 
         typename Gemm::StateB state_B{storage};
 
@@ -104,25 +105,26 @@ struct Transcript {
                 }
                 PRAGMA_UNROLL
                 for (int n = 0; n < Gemm::ITER_N; n += P_N) {
-                    const int   frag_idx_k = cta_idx_k * MMA_CNT_K + k;
-                    const int   frag_idx_n = cta_idx_n * MMA_CNT_N + n + warp_id_n * Gemm::ITER_N;
-                    const int   pack_idx_k = frag_idx_k / P_K;
-                    const int   pack_idx_n = frag_idx_n / P_N;
-                    Array<T, 8> data[P_K][P_N];
+                    const int    frag_idx_k = cta_idx_k * MMA_CNT_K + k;
+                    const int    frag_idx_n = cta_idx_n * MMA_CNT_N + n + warp_id_n * Gemm::ITER_N;
+                    const int    pack_idx_k = frag_idx_k / P_K;
+                    const int    pack_idx_n = frag_idx_n / P_N;
+                    Array<T1, 8> data[P_K][P_N];
                     PRAGMA_UNROLL
                     for (int p_k = 0; p_k < P_K; ++p_k) {
                         PRAGMA_UNROLL
                         for (int p_n = 0; p_n < P_N; ++p_n) {
                             // transform to packed data (quantization & permutation)
-                            data[p_k][p_n] = state_B.frag_B[k + p_k][n + p_n];
+                            ConvertKvCache<T, T1> converter(1, 0);
+                            data[p_k][p_n] = converter(state_B.frag_B[k + p_k][n + p_n]);
                         }
                     }
                     constexpr int kAccessSize = 8 * P_K * P_N;
                     static_assert(sizeof(data) <= 16);
                     if (warp_id_m == 0) {
                         // mma fragment ptr for the warp
-                        T* C = param.C + ((pack_idx_n * packed_k + pack_idx_k) * WARP_SIZE + lane_id) * kAccessSize;
-                        Store(C, (Array<T, kAccessSize>&)data);
+                        auto C = param.C + ((pack_idx_n * packed_k + pack_idx_k) * WARP_SIZE + lane_id) * kAccessSize;
+                        Store((T1*)C, (Array<T1, kAccessSize>&)data);
                     }
                 }
             }

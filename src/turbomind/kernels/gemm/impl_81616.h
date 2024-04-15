@@ -2,7 +2,9 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/mma.h"
 #include "src/turbomind/kernels/core/smem.h"
@@ -58,15 +60,17 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
     static constexpr int MMA_CNT_K = CTA_K / OP_K;
     //                               32-256   16
     static constexpr int MMA_CNT_N = CTA_N / OP_N;
-    static constexpr int CNT_NK    = MMA_CNT_N * MMA_CNT_K;
-
-    // static constexpr int kPackedC = MMA_CNT_K * WARP_SIZE * 8;
-    static constexpr int kPackedC = MMA_CNT_K * OP_N * OP_K;
-    static constexpr int kPackedS = MMA_CNT_N;
+    // static constexpr int CNT_NK    = MMA_CNT_N * MMA_CNT_K;
 
     static constexpr int P   = 16 / bitsof<Tb>;
     static constexpr int P_N = P >= 2 ? 2 : 1;
     static constexpr int P_K = P / P_N;
+
+    // cta
+    static constexpr int kPackedC = MMA_CNT_K * P_N * OP_N * OP_K;
+    static constexpr int kPackedS = MMA_CNT_N / P_N;
+
+    static_assert(P == P_N * P_K);
 
     static constexpr int kPackedN = Flag_ ? P_N * OP_N : 1;
 
@@ -77,7 +81,7 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
     using FragC = Array<float, 4>[ITER_M][ITER_N];  // {n8,m4}, [iM,iN], (n2,m2)
                                                     //   1  2     8 16     8
 
-    using DataB = Array<Tb, 8 * P>[ITER_K][ITER_M];
+    using DataB = Array<Tb, 8 * P>[ITER_K / P_K][ITER_N / P_N];
 
     using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K + 8>;
@@ -94,7 +98,7 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
     union SharedStorage {
         struct {
             __align__(16) T A[Stages_ * SmemLayoutA::kSize];
-            __align__(16) T B[Stages_ * SmemLayoutB::kSize];
+            __align__(16) Array<Tb, Stages_ * SmemLayoutB::kSize> B;
         };
     };
 
@@ -158,15 +162,16 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
     };
 
     struct StateB {
-        SmemAccessor<T, SmemLayoutB> smem_B;
-        FragB                        frag_B;
-        int                          offset = 0;
-        T*                           data;
+        SmemAccessor<Tb, SmemLayoutB> smem_B;
+        DataB                         data_B;
+        FragB                         frag_B;
+        int                           offset = 0;
+        get_pointer_type<Tb>          data;
 
         template<class Storage>
-        __device__ StateB(Storage& storage): smem_B{storage.B}
+        __device__ StateB(Storage& storage): smem_B{storage.B.data()}
         {
-            data = storage.B;
+            data = storage.B.data();
         }
 
         __device__ void Load(int k, int)
@@ -189,16 +194,38 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                 }
             }
             else {
-                // const auto data = smem_B.ptr_ + offset;
-                PRAGMA_UNROLL
-                for (int n = 0; n < ITER_N; ++n) {
-                    const int mma_idx = (n + warp_idx_n * ITER_N) * MMA_CNT_K + k;
-                    turbomind::Load(frag_B[k][n], &data[(mma_idx * WARP_SIZE + lane_id) * frag_B[k][n].size()]);
+                // PRAGMA_UNROLL
+                // for (int n = 0; n < ITER_N; ++n) {
+                //     const int mma_idx = (n + warp_idx_n * ITER_N) * MMA_CNT_K + k;
+                //     turbomind::Load(frag_B[k][n], &data[(mma_idx * WARP_SIZE + lane_id) * frag_B[k][n].size()]);
+                // }
+                if (k % P_K == 0) {
+                    static constexpr int kAccessSize = 8 * P_N * P_K;
+                    PRAGMA_UNROLL
+                    for (int n = 0; n < ITER_N; n += P_N) {
+                        const int pack_idx_k = k / P_K;
+                        const int pack_idx_n = (n + warp_idx_n * ITER_N) / P_N;
+                        const int pack_idx   = pack_idx_n * (MMA_CNT_K / P_K) + pack_idx_k;
+                        // const int mma_idx = (n + warp_idx_n * ITER_N) * MMA_CNT_K + k;
+                        turbomind::Load((Array<uint32_t, 4>&)data_B[k / P_K][n / P_N],
+                                        (const uint32_t*)&data[(pack_idx * WARP_SIZE + lane_id) * kAccessSize]);
+                    }
                 }
             }
         }
 
-        __device__ void Transform(int k) {}
+        __device__ void Transform(int k)
+        {
+            PRAGMA_UNROLL
+            for (int n = 0; n < ITER_N; n += P_N) {
+                PRAGMA_UNROLL
+                for (int p_n = 0; p_n < P_N; ++p_n) {
+                    ConvertKvCache<Tb, T> converter(1.f, 0.f);
+                    frag_B[k][n + p_n] =
+                        converter((Array<Tb, 8>&)data_B[k / P_K][n / P_N][((k % P_K) * P_N + p_n) * 8]);
+                }
+            }
+        }
 
         __device__ void Advance()
         {
@@ -220,6 +247,8 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
         for (int k = 0; k < ITER_K; ++k) {
             state_A.Load((k + 1) % ITER_K, pipe_iter);
             state_B.Load((k + 1) % ITER_K, pipe_iter);
+            // state_A.Transform(k);
+            state_B.Transform(k);
             PRAGMA_UNROLL
             for (int n = 0; n < ITER_N; ++n) {
                 PRAGMA_UNROLL

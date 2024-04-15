@@ -11,8 +11,23 @@
 
 namespace turbomind::gemm {
 
+namespace detail {
+
 template<class T>
-void invoke(T* C, const T* A, const T* B, int m, int n, int k, cudaStream_t st)
+auto cast(T* p)
+{
+    if constexpr (bitsof<T> % 8 == 0) {
+        return p;
+    }
+    else {
+        return (char*)p;
+    }
+}
+
+}  // namespace detail
+
+template<class T, class Tb>
+void invoke(T* C, const T* A, const Tb* B, int m, int n, int k, cudaStream_t st)
 {
     constexpr int CTA_M  = 128;
     constexpr int CTA_N  = 128;
@@ -28,7 +43,7 @@ void invoke(T* C, const T* A, const T* B, int m, int n, int k, cudaStream_t st)
     // constexpr int WARP_N = 64;
     // constexpr int WARP_K = 64;
 
-    using Impl   = Impl<MMA_81616, T, T, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 4, 1>;
+    using Impl   = Impl<MMA_81616, T, Tb, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 4, 1>;
     using Kernel = GemmUniversal<void, Mainloop_sm80<Impl>, CtaSwizzleMap<8>>;
 
     using Map = typename Kernel::CtaMap;
@@ -54,8 +69,8 @@ void invoke(T* C, const T* A, const T* B, int m, int n, int k, cudaStream_t st)
         cudaFuncSetAttribute(gemm_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
     }
 
-    gemm_kernel<Kernel>
-        <<<grid, block, kSmemSize, st>>>(typename Kernel::Param{A, B, C, m, n, k, log_tile}, typename Kernel::CtaMap{});
+    gemm_kernel<Kernel><<<grid, block, kSmemSize, st>>>(
+        typename Kernel::Param{(T*)A, detail::cast((Tb*)B), C, m, n, k, log_tile}, typename Kernel::CtaMap{});
 }
 
 }  // namespace turbomind::gemm

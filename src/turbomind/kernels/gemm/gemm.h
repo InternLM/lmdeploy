@@ -4,7 +4,7 @@
 
 namespace turbomind::gemm {
 
-template<class T>
-void invoke(T* C, const T* A, const T* B, int m, int n, int k, cudaStream_t st);
+template<class T, class Tb>
+void invoke(T* C, const T* A, const Tb* B, int m, int n, int k, cudaStream_t st);
 
 }

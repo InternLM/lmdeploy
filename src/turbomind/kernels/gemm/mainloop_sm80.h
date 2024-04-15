@@ -11,7 +11,8 @@ struct Mainloop_sm80 {
 
     using Impl = Impl_;
 
-    using T = typename Impl::T;
+    using T  = typename Impl::T;
+    using Tb = typename Impl::Tb;
 
     using FragC = typename Impl::FragC;
 
@@ -26,7 +27,7 @@ struct Mainloop_sm80 {
     using SmemLayoutB = typename Impl::SmemLayoutB;
 
     using GmemIterA = GmemIteratorSm80<T, ThreadMapA, SmemLayoutA, 0>;
-    using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, 1>;
+    using GmemIterB = GmemIteratorSm80<Tb, ThreadMapB, SmemLayoutB, 1>;
 
     static constexpr int kBatchA = (ThreadMapA::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
     static constexpr int kBatchB = (ThreadMapB::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;

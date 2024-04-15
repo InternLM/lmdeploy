@@ -67,6 +67,10 @@ struct __uint4_t {
 template<class T>
 struct SubBytePtr {
 
+    constexpr SubBytePtr() = default;
+
+    constexpr __host__ __device__ SubBytePtr(char* ptr): ptr_(ptr) {}
+
     __device__ T& operator[](int i)
     {
         return *reinterpret_cast<T*>(ptr_ + i * bitsof<T> / bitsof<char>);
