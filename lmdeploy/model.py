@@ -224,6 +224,42 @@ class BaseChatTemplate(BaseModel):
         return ret
 
 
+@MODELS.register_module(name='cogvlm')
+class CogVLM(BaseChatTemplate):
+    """Chat template of vicuna model."""
+
+    def __init__(self,
+                 meta_instruction='',
+                 eosys='',
+                 user='Question: ',
+                 separator='\n',
+                 eoh=' ',
+                 assistant='Answer:',
+                 eoa='</s>',
+                 stop_words=['</s>'],
+                 **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         separator=separator,
+                         assistant=assistant,
+                         eoa=eoa,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'cogvlm' in path:
+            return 'cogvlm'
+
+
 @MODELS.register_module(name='wizardlm')
 @MODELS.register_module(name='vicuna')
 class Vicuna(BaseChatTemplate):
@@ -255,9 +291,10 @@ class Vicuna(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'vicuna' in model_path.lower():
+        path = model_path.lower()
+        if 'vicuna' in path:
             return 'vicuna'
-        if 'wizardlm' in model_path.lower():
+        if 'wizardlm' in path:
             return 'wizardlm'
 
 

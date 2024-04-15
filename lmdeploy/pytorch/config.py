@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 import torch
+
+from lmdeploy.archs import check_vl_llm
 
 
 def _get_torch_dtype(config: Any, default: str = 'float16'):
@@ -74,6 +76,8 @@ class ModelConfig:
     json_config: dict = field(default_factory=dict)
     hf_config: Any = None
     init_kwargs: Dict[str, Any] = field(default_factory=dict)
+    task_type: Literal['llm', 'vlm'] = 'llm'
+    model_arch: str = None
 
     def get_head_size(self):
         """get head size."""
@@ -205,4 +209,8 @@ class ModelConfig:
 
         model_config.hf_config = hf_config
         model_config.json_config = hf_config.to_dict()
+        model_config.task_type = 'vlm' if check_vl_llm(
+            model_config.json_config) else 'llm'
+        model_config.model_arch = model_config.json_config.get(
+            'architectures', [None])[0]
         return model_config

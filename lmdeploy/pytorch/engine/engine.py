@@ -93,7 +93,9 @@ class Engine:
     def __init__(self,
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
-                 trust_remote_code: bool = True) -> None:
+                 trust_remote_code: bool = True,
+                 tokenizer_path: str = None,
+                 **kwargs) -> None:
         check_env()
         check_model(model_path, trust_remote_code)
         if engine_config is None:
@@ -127,6 +129,7 @@ class Engine:
             model_path = get_model(model_path, engine_config.download_dir,
                                    engine_config.revision)
         self.model_path = model_path
+        self.tokenizer_path = tokenizer_path or model_path
 
         self.model_agent = AutoModelAgent.from_pretrained(
             model_path,
@@ -187,7 +190,11 @@ class Engine:
         """create tokenizer."""
         from lmdeploy.tokenizer import Tokenizer
         if not hasattr(self, '_tokenizer'):
-            self._tokenizer = Tokenizer(self.model_path)
+            # TODO move this out
+            if 'cogvlm' in self.model_path.lower():
+                self._tokenizer = Tokenizer('lmsys/vicuna-7b-v1.5')
+            else:
+                self._tokenizer = Tokenizer(self.model_path)
         return self._tokenizer
 
     def _create_buffers(self):
@@ -288,18 +295,21 @@ class Engine:
             if len(sess.sequences) == 0:
                 assert len(
                     req.data['token_ids']) > 0, ('Empty input is not allowed.')
-                sess.add_sequence(req.data['token_ids'],
-                                  sampling_param=req.data['sampling_param'],
-                                  adapter_name=req.data['adapter_name'],
-                                  return_logits=req.data.get(
-                                      'return_logits', False))
+                sess.add_sequence(
+                    req.data['token_ids'],
+                    sampling_param=req.data['sampling_param'],
+                    adapter_name=req.data['adapter_name'],
+                    return_logits=req.data.get('return_logits', False),
+                    input_embeddings=req.data.get('input_embeddings'),
+                )
                 msg = next(iter(sess.sequences.values()))
                 __update_bad_words(msg)
                 __update_max_new_tokens(msg)
                 self.scheduler.add_sequence(msg)
             else:
                 msg = next(iter(sess.sequences.values()))
-                msg.update_token_ids(req.data['token_ids'])
+                msg.update_token_ids(req.data['token_ids'],
+                                     req.data.get('input_embeddings'))
                 msg.num_new_tokens = 0
                 msg.sampling_param = req.data['sampling_param']
                 msg.return_logits = req.data.get('return_logits', False)
@@ -333,6 +343,44 @@ class Engine:
 
         token_ids = [msg.token_ids for msg in messages]
 
+        is_vllm = self.model_agent.model_config.task_type == 'vlm'
+        is_cogvlm = self.model_agent.model_config.model_arch == 'CogVLMForCausalLM'  # noqa: E501
+
+        def __get_vlm_inputs(messages: SeqList):
+            """get input_embeddings and ranges for vlm."""
+            input_embeddings = []
+            emb_ranges = []
+            pre_len = 0
+            for msg in messages:
+                for emb in msg.input_embeddings:
+                    emb_ranges.append([pre_len + emb.start, pre_len + emb.end])
+                    input_embeddings.append(torch.from_numpy(emb.embeddings))
+                pre_len += msg.num_all_ids
+            emb_ranges = torch.LongTensor(emb_ranges)
+            return input_embeddings, emb_ranges
+
+        def __get_cogvlm_inputs(messages: SeqList,
+                                history_position_lengths: torch.LongTensor):
+            token_type_ids = []
+            position_ids = []
+            for idx, msg in enumerate(messages):
+                cur_token_type_ids = torch.zeros(msg.num_token_ids,
+                                                 dtype=torch.long)
+                cur_position_mask = torch.ones(msg.num_token_ids,
+                                               dtype=torch.long)
+                for emb in msg.input_embeddings:
+                    # vision token_types
+                    cur_token_type_ids[emb.start:emb.end] = 1
+                    cur_position_mask[emb.start + 2:emb.end - 1] = 0
+
+                cur_position_ids = cur_position_mask.cumsum(
+                    0) - 1 + history_position_lengths[idx]
+                position_ids.append(cur_position_ids)
+                token_type_ids.append(cur_token_type_ids)
+            position_ids = torch.cat(position_ids).unsqueeze(0)
+            token_type_ids = torch.cat(token_type_ids).unsqueeze(0)
+            return token_type_ids, position_ids
+
         meta = messages[0].meta
 
         if isinstance(token_ids[0], int):
@@ -342,11 +390,37 @@ class Engine:
         input_ids = torch.from_numpy(np.concatenate(token_ids))
 
         is_decoding = input_ids.size(0) == batch_size
+
+        # args for vlm
+        input_embeddings = None
+        input_embedding_ranges = None
+        token_type_ids = None
+        position_ids = None
+        history_position_lengths = None
+
+        if is_cogvlm:
+            # minus num of vision tokens
+            history_length_offsets = torch.tensor([
+                sum([
+                    emb.end - emb.start + 3
+                    for emb in msg.history_embeddings.get_embeddings(
+                        end=msg.history_len)
+                ]) for msg in messages
+            ])
+            history_position_lengths = history_lengths - history_length_offsets
+
         if not is_decoding:
             seq_length = [len(tokens) for tokens in token_ids]
             seq_length = torch.tensor(seq_length, dtype=torch.long)
+            if is_vllm:
+                input_embeddings, input_embedding_ranges = __get_vlm_inputs(
+                    messages)
+                if is_cogvlm:
+                    token_type_ids, position_ids = __get_cogvlm_inputs(
+                        messages, history_position_lengths)
         else:
             seq_length = self._seq_length_buf[:batch_size]
+
         max_q_seq_length = seq_length.max().item()
         max_history_length = history_lengths.max().item()
 
@@ -375,8 +449,13 @@ class Engine:
         num_ignored_history = [msg.num_ignored_history for msg in messages]
         num_ignored_history = torch.tensor(num_ignored_history)
         return ModelInputs(input_ids=input_ids,
+                           input_embeddings=input_embeddings,
+                           input_embedding_ranges=input_embedding_ranges,
+                           token_type_ids=token_type_ids,
+                           position_ids=position_ids,
                            seq_length=seq_length,
                            history_lengths=history_lengths,
+                           history_position_lengths=history_position_lengths,
                            block_offsets=block_offsets,
                            max_q_seq_length=max_q_seq_length,
                            max_history_length=max_history_length,
@@ -804,13 +883,18 @@ class Engine:
                       token_ids: List[List[int]] = None,
                       gen_config: EngineGenerationConfig = None,
                       adapter_names: List[str] = None,
-                      keep_cache: bool = False):
+                      keep_cache: bool = False,
+                      vision_embeddings=None,
+                      vision_embedding_ranges=None):
         """batched infer."""
-        return self.engine_instance.batched_infer(session_ids=session_ids,
-                                                  token_ids=token_ids,
-                                                  gen_config=gen_config,
-                                                  adapter_names=adapter_names,
-                                                  keep_cache=keep_cache)
+        return self.engine_instance.batched_infer(
+            session_ids=session_ids,
+            token_ids=token_ids,
+            gen_config=gen_config,
+            adapter_names=adapter_names,
+            vision_embeddings=vision_embeddings,
+            vision_embedding_ranges=vision_embedding_ranges,
+            keep_cache=keep_cache)
 
     async def async_add_session(self, session_id: int):
         """Add new session."""

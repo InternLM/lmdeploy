@@ -3,6 +3,7 @@ import os
 
 from lmdeploy.utils import get_hf_config_content, get_model
 
+from .cogvlm import CogVLMVisionModel
 from .deepseek import DeepSeekVisionModel
 from .llava import LlavaVisionModel
 from .qwen import QwenVisionModel
@@ -23,6 +24,9 @@ def load_vl_model(model_path: str):
             return YiVisionModel(model_path)
         else:
             return LlavaVisionModel(model_path)
-    if arch == 'MultiModalityCausalLM':
+    elif arch == 'MultiModalityCausalLM':
         return DeepSeekVisionModel(model_path)
+    elif arch == 'CogVLMForCausalLM':
+        return CogVLMVisionModel(model_path)
+
     raise ValueError(f'unsupported vl model with arch {arch}')

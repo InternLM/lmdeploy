@@ -17,6 +17,20 @@ logger = get_logger('lmdeploy')
 
 
 @dataclass
+class InputEmbeddings:
+    """InputEmbeddings."""
+    embeddings: np.ndarray
+    start: int
+    end: int
+
+    def move_position(self, offset: int = 0):
+        if offset != 0:
+            self.start += offset
+            self.end += offset
+        return self
+
+
+@dataclass
 class SamplingParam:
     """Sampling parameter."""
     top_p: float = 1.0
@@ -171,11 +185,14 @@ class SchedulerSession:
         self.sequences: SeqMap = dict()
         self.seq_manager = seq_manager
 
-    def add_sequence(self,
-                     token_ids: Tensor,
-                     sampling_param: SamplingParam = None,
-                     adapter_name: str = None,
-                     return_logits: bool = False) -> 'SchedulerSequence':
+    def add_sequence(
+        self,
+        token_ids: Tensor,
+        sampling_param: SamplingParam = None,
+        adapter_name: str = None,
+        return_logits: bool = False,
+        input_embeddings: List[InputEmbeddings] = None,
+    ) -> 'SchedulerSequence':
         """Add a new message."""
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
@@ -186,14 +203,16 @@ class SchedulerSession:
         if sampling_param is None:
             sampling_param = SamplingParam()
 
-        seq = SchedulerSequence(seq_id=_new_msg_id(),
-                                session=self,
-                                history_cache=HistoryTokenIds(token_ids),
-                                num_new_tokens=0,
-                                sampling_param=sampling_param,
-                                adapter_name=adapter_name,
-                                arrive_time=time.time(),
-                                return_logits=return_logits)
+        seq = SchedulerSequence(
+            seq_id=_new_msg_id(),
+            session=self,
+            history_cache=HistoryTokenIds(token_ids),
+            num_new_tokens=0,
+            sampling_param=sampling_param,
+            adapter_name=adapter_name,
+            arrive_time=time.time(),
+            history_embeddings=HistoryEmbeddings(input_embeddings),
+            return_logits=return_logits)
         self.sequences[seq.seq_id] = seq
         if self.seq_manager is not None:
             self.seq_manager.add_sequence(seq)
@@ -208,17 +227,19 @@ class SchedulerSession:
             sampling_param = deepcopy(seq.sampling_param)
         assert seq.session == self
 
-        new_msg = SchedulerSequence(seq_id=_new_msg_id(),
-                                    session=self,
-                                    history_cache=seq.history_cache.clone(),
-                                    num_new_tokens=0,
-                                    sampling_param=sampling_param,
-                                    logical_blocks=seq.logical_blocks.clone(),
-                                    adapter_name=seq.adapter_name,
-                                    arrive_time=time.time(),
-                                    meta=deepcopy(seq.meta),
-                                    return_logits=seq.return_logits,
-                                    random_offsets=seq.random_offsets + 1)
+        new_msg = SchedulerSequence(
+            seq_id=_new_msg_id(),
+            session=self,
+            history_cache=seq.history_cache.clone(),
+            history_embeddings=seq.history_embeddings.clone(),
+            num_new_tokens=0,
+            sampling_param=sampling_param,
+            logical_blocks=seq.logical_blocks.clone(),
+            adapter_name=seq.adapter_name,
+            arrive_time=time.time(),
+            meta=deepcopy(seq.meta),
+            return_logits=seq.return_logits,
+            random_offsets=seq.random_offsets + 1)
         new_msg._num_history_ids = seq._num_history_ids
         new_msg._num_token_ids = seq._num_token_ids
         new_msg.status = seq.status
@@ -242,6 +263,50 @@ def _div_up(x, n):
 def _round_up(x, n):
     """perform round up."""
     return _div_up(x, n) * n
+
+
+class HistoryEmbeddings:
+    """History embeddings."""
+
+    def __init__(self, embeddings: List[InputEmbeddings] = None):
+
+        self._embeddings: List[InputEmbeddings] = []
+        if embeddings is not None:
+            self._embeddings.extend(embeddings)
+
+    def append(self, embeddings: List[InputEmbeddings]):
+        self._embeddings.extend(embeddings)
+
+    def clone(self):
+        ret = HistoryEmbeddings(self._embeddings)
+        return ret
+
+    def copy(self):
+        return self.clone()
+
+    def get_embeddings(self, start: int = 0, end: int = None):
+        out_embeddings: List[InputEmbeddings] = []
+        assert start >= 0
+        if end is not None and start >= end:
+            return out_embeddings
+
+        for emb in self._embeddings:
+            if start < emb.end:
+                new_start = max(start, emb.start)
+                new_end = emb.end if end is None else min(emb.end, end)
+                new_emb = InputEmbeddings(
+                    emb.embeddings[new_start - emb.start:new_end - emb.start],
+                    new_start, new_end)
+                out_embeddings.append(new_emb)
+                if end is not None and end <= emb.end:
+                    break
+
+        return out_embeddings
+
+    @property
+    def embeddings(self):
+        """embeddings."""
+        return self._embeddings
 
 
 class HistoryTokenIds:
@@ -307,6 +372,8 @@ class SchedulerSequence:
     seq_id: int
     session: SchedulerSession
     history_cache: HistoryTokenIds = field(default_factory=HistoryTokenIds)
+    history_embeddings: HistoryEmbeddings = field(
+        default_factory=HistoryEmbeddings)
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(
@@ -324,7 +391,10 @@ class SchedulerSequence:
     def __post_init__(self):
         """post init."""
         self._num_history_ids: int = 0
+        self._history_len_offset = 0
         self._num_token_ids: int = len(self.history_cache)
+        self._input_embeddings: List[
+            InputEmbeddings] = self.history_embeddings.embeddings
 
     @property
     def block_size(self) -> int:
@@ -337,6 +407,11 @@ class SchedulerSequence:
         return self._num_history_ids
 
     @property
+    def history_len_offset(self) -> int:
+        """get history length offset for cogvlm."""
+        return self._history_len_offset
+
+    @property
     def session_id(self) -> int:
         """get session id."""
         return self.session.session_id
@@ -347,6 +422,11 @@ class SchedulerSequence:
         start = self.history_len
         end = start + self._num_token_ids
         return self.history_cache[start:end]
+
+    @property
+    def input_embeddings(self) -> List[InputEmbeddings]:
+        """get current embeddings."""
+        return self._input_embeddings
 
     @property
     def history_ids(self) -> np.ndarray:
@@ -395,9 +475,23 @@ class SchedulerSequence:
         """num all tokens."""
         return self.num_all_ids
 
-    def update_token_ids(self, token_ids: Tensor):
+    def update_token_ids(self,
+                         token_ids: Tensor,
+                         embeddings: List[InputEmbeddings] = None):
         """Update token ids, old token ids will be added to history."""
         self._num_history_ids += self._num_token_ids
+        # update history len offset for cogvlm
+        for emb in self._input_embeddings:
+            self._history_len_offset += emb.end - emb.start - 3
+
+        self._input_embeddings = []
+        if embeddings is not None:
+            new_embeddings = [
+                emb.move_position(self._num_history_ids) for emb in embeddings
+            ]
+            self._input_embeddings = new_embeddings
+            self.history_embeddings.append(new_embeddings)
+
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
         elif not isinstance(token_ids, np.ndarray):

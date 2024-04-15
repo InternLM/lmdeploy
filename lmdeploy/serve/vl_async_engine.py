@@ -45,7 +45,7 @@ class VLAsyncEngine(AsyncEngine):
         else:
             decorated = prompt
         segs = decorated.split(IMAGE_TOKEN)
-
+        print(f'input_prompt={decorated}')
         results = {}
         input_ids = []
         if len(segs) > 1:
@@ -56,6 +56,7 @@ class VLAsyncEngine(AsyncEngine):
             input_ids = []
             begins = []
             ends = []
+
             for i, seg in enumerate(segs):
                 if i > 0:
                     image_dim = features[i - 1].shape[0]

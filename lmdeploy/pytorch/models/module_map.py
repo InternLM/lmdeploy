@@ -226,3 +226,21 @@ MODULE_MAP.update({
     'modeling_dbrx.DbrxExpertGLU':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxExpertGLU'
 })
+
+# cogvlm
+MODULE_MAP.update({
+    'modeling_dbrx.RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'modeling_cogvlm.MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'modeling_cogvlm.VisionExpertMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.cogvlm.PatchedVisionExpertMLP',
+    'modeling_cogvlm.VisionExpertAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.cogvlm.PatchedVisionExpertAttention',
+    'modeling_cogvlm.CogVLMDecoderLayer':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.cogvlm.PatchedCogVLMDecoderLayer',
+    'modeling_cogvlm.CogVLMModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.cogvlm.PatchedCogVLMModel',
+    'modeling_cogvlm.CogVLMForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.cogvlm.PatchedCogVLMForCausalLM',
+})
