@@ -132,7 +132,7 @@ class BlockTrie:
         block_id = num_matched // block_size
         blocks = []
         free_blocks = []
-        while num_matched + block_size < num_all_ids:
+        while num_matched + block_size <= num_all_ids:
             curr_tokens = seq.history_cache[num_matched:num_matched +
                                             block_size]
 
