@@ -213,6 +213,7 @@ class Scheduler:
 
             # allocate session memory
             self.block_manager.allocate(seq)
+            self.block_trie.allocate(seq)
             _active_adapter(seq.adapter_name)
             _to_running(seq)
 
