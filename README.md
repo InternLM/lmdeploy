@@ -107,6 +107,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |      Mistral       |     7B     |
 |    DeepSeek-MoE    |    16B     |
 |    DeepSeek-VL     |     7B     |
+|   InternVL-Chat    |     -      |
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
 |        Dbrx        |    132B    |
