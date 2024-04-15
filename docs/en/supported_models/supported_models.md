@@ -16,6 +16,7 @@
 |     Baichuan2      |     7B     |    Yes    |   Yes   |  Yes  |
 |     Code Llama     |  7B - 34B  |    Yes    |   No    |  No   |
 |         YI         |  6B - 34B  |    Yes    |   No    |  No   |
+|   InternVL-Chat    |     -      |    Yes    |   No    |  No   |
 
 ```{note}
 The TurboMind engine doesn't support window attention. Therefore, for models that have applied window attention and have the corresponding switch "use_sliding_window" enabled, please choose the PyTorch engine for inference.

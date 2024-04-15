@@ -869,7 +869,7 @@ class Deepseek(BaseChatTemplate):
             return 'deepseek'
 
 
-@MODELS.register_module(name=['internvl_zh'])
+@MODELS.register_module(name=['internvl-zh'])
 class InternVLZH(BaseChatTemplate):
 
     def __init__(self,
@@ -901,7 +901,7 @@ class InternVLZH(BaseChatTemplate):
         """
         path = model_path.lower()
         if 'internvl-chat-chinese' in path and 'v1-1' in path:
-            return 'internvl_zh'
+            return 'internvl-zh'
 
 
 @MODELS.register_module(name=['deepseek-vl'])
@@ -1066,7 +1066,7 @@ class DbrxInstruct(BaseChatTemplate):
             return 'dbrx'
 
 
-@MODELS.register_module(name=['hermes2'])
+@MODELS.register_module(name=['internvl-zh-hermes2'])
 @MODELS.register_module(name=['llava-chatml'])
 class ChatmlDirect(BaseChatTemplate):
 
@@ -1100,10 +1100,10 @@ class ChatmlDirect(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if ('llava' in path
-                and 'v1.6-34b' in path) or ('internvl-chat-chinese' in path
-                                            and 'v1-2' in path):
+        if 'llava' in path and 'v1.6-34b' in path:
             return 'llava-chatml'
+        if 'internvl-chat-chinese' in path and 'v1-2' in path:
+            return 'internvl-zh-hermes2'
 
 
 def best_match_model(query: str) -> Optional[str]:
