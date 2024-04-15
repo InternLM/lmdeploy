@@ -46,7 +46,8 @@ def get_command_with_extra(cmd,
                            model,
                            need_tp: bool = False,
                            cuda_prefix: str = None,
-                           need_sleep: bool = True):
+                           need_sleep: bool = True,
+                           extra: str = None):
     if need_sleep:
         sleep(random.uniform(0, 5))
     if cuda_prefix is None:
@@ -57,6 +58,8 @@ def get_command_with_extra(cmd,
         cmd = ' '.join([cuda_prefix, cmd])
     if tp_config is not None and len(tp_config) > 0:
         cmd = ' '.join([cmd, tp_config])
+    if extra is not None and len(extra) > 0:
+        cmd = ' '.join([cmd, extra])
 
     torch.cuda.empty_cache()
     return cmd
@@ -80,6 +83,8 @@ def get_model_name(model):
         return model_name
     if ('llama-2' in model_name):
         return 'llama2'
+    if ('llava' in model_name):
+        return 'vicuna'
     if ('yi-vl' in model_name):
         return 'yi-vl'
     return model_name.split('-')[0]
@@ -107,14 +112,6 @@ def _simple_model_name(model):
     else:
         model_name = model
     model_name = model_name.replace('-inner-w4a16', '')
-    model_name = model_name.replace('-inner-w8a8', '')
-    model_name = model_name.replace('-inner-kvint8', '')
-    model_name = model_name.replace('-w4a16', '')
-    return model_name
-
-
-def _split_model_name(model):
-    model_name = model.split('/')[1]
     return model_name
 
 

@@ -11,7 +11,8 @@ def command_line_test(config,
                       model_case,
                       type,
                       extra: str = None,
-                      cuda_prefix: str = None):
+                      cuda_prefix: str = None,
+                      worker_id: str = ''):
     dst_path = config.get('dst_path')
 
     if type == 'api_client':
@@ -24,18 +25,16 @@ def command_line_test(config,
                                      config,
                                      model_case,
                                      cuda_prefix=cuda_prefix)
-        if 'kvint8' in model_case:
-            cmd += ' --quant-policy 4'
-            if 'w4' in model_case or '4bits' in model_case:
-                cmd += ' --model-format awq'
-            else:
-                cmd += ' --model-format hf'
-        elif 'w4' in model_case or '4bits' in model_case:
+        if 'w4' in model_case or '4bits' in model_case:
             cmd += ' --model-format awq'
-        if 'chat' not in model_case.lower():
+        if case == 'base_testcase':
             cmd += ' --cap completion'
-    return command_test(config, [cmd], model_case, case, case_info,
-                        type == 'turbomind')
+    return command_test(config, [cmd],
+                        model_case,
+                        case,
+                        case_info,
+                        type == 'turbomind',
+                        worker_id=worker_id)
 
 
 def hf_command_line_test(config,
@@ -52,19 +51,22 @@ def hf_command_line_test(config,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
-    if 'kvint8' in model_case:
-        cmd += ' --quant-policy 4'
-        if 'w4' in model_case or '4bits' in model_case:
-            cmd += ' --model-format awq'
-        else:
-            cmd += ' --model-format hf'
-    elif 'w4' in model_case or '4bits' in model_case:
+    if 'w4' in model_case or '4bits' in model_case:
         cmd += ' --model-format awq'
+
+    if case == 'base_testcase':
+        cmd += ' --cap completion'
     return command_test(config, [cmd], model_case,
                         '_'.join(['hf', type, case]), case_info, True)
 
 
-def command_test(config, cmd, model, case, case_info, need_extract_output):
+def command_test(config,
+                 cmd,
+                 model,
+                 case,
+                 case_info,
+                 need_extract_output,
+                 worker_id: str = ''):
     if 'memory_test' in case and 'chat' not in model.lower():
         return True, None, 'memory case skipped for base model'
 
@@ -76,8 +78,8 @@ def command_test(config, cmd, model, case, case_info, need_extract_output):
             chat_log = os.path.join(
                 log_path, 'chat_' + model.split('/')[1] + '_' + case + '.log')
         else:
-            chat_log = os.path.join(log_path,
-                                    'chat_' + model + '_' + case + '.log')
+            chat_log = os.path.join(
+                log_path, 'chat_' + model + worker_id + '_' + case + '.log')
 
         file = open(chat_log, 'w')
 

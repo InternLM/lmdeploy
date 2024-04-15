@@ -12,7 +12,11 @@ from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
 from lmdeploy.vl import load_image
 
 
-def run_pipeline_chat_test(config, cases_info, model_case, type):
+def run_pipeline_chat_test(config,
+                           cases_info,
+                           model_case,
+                           type,
+                           extra: object = None):
     log_path = config.get('log_path')
     tp = get_tp_num(config, model_case)
     model_name = model_name = get_model_name(model_case)
@@ -27,17 +31,17 @@ def run_pipeline_chat_test(config, cases_info, model_case, type):
 
     if 'pytorch' == type:
         backend_config = PytorchEngineConfig(tp=tp)
+    elif 'kvint' in type:
+        if 'w4' in model_case or '4bits' in model_case:
+            backend_config = TurbomindEngineConfig(
+                tp=tp,
+                model_format='awq',
+                quant_policy=extra.get('quant_policy'))
+        else:
+            backend_config = TurbomindEngineConfig(
+                tp=tp, quant_policy=extra.get('quant_policy'))
     else:
-        if 'kvint8' in model_case and ('w4' in model_case
-                                       or '4bits' in model_case):
-            backend_config = TurbomindEngineConfig(tp=tp,
-                                                   model_format='awq',
-                                                   quant_policy=4)
-        elif 'kvint8' in model_case:
-            backend_config = TurbomindEngineConfig(tp=tp,
-                                                   model_format='hf',
-                                                   quant_policy=4)
-        elif 'w4' in model_case or '4bits' in model_case:
+        if 'w4' in model_case or '4bits' in model_case:
             backend_config = TurbomindEngineConfig(tp=tp, model_format='awq')
         else:
             backend_config = TurbomindEngineConfig(tp=tp)
@@ -45,7 +49,6 @@ def run_pipeline_chat_test(config, cases_info, model_case, type):
 
     # run testcases
     gen_config = GenerationConfig(temperature=0.01)
-    gen_config = GenerationConfig()
     for case in cases_info.keys():
         if (case == 'memory_test'
                 or case == 'emoji_case') and 'chat' not in model_case.lower():
@@ -130,7 +133,7 @@ def run_pipeline_vl_chat_test(config, model_case):
     model_path = config.get('model_path')
     hf_path = model_path + '/' + model_case
 
-    if 'llava-v1.5' in model_case:
+    if 'llava' in model_case:
         backend_config = TurbomindEngineConfig(tp=tp,
                                                session_len=8192,
                                                model_name='vicuna')

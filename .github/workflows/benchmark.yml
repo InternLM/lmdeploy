@@ -160,7 +160,7 @@ jobs:
           rm -rf ${result_dir}
           mkdir ${result_dir}
           export CUDA_VISIBLE_DEVICES=6,7
-          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 128 -ct 128 128 2048 -pt 128 2048 128 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
       - name: Run generation benchmark - pytorch
         if: (! contains( matrix.model, 'w4a16') && !contains( matrix.model, '4bit')) && contains(fromJSON(github.event.inputs.backend), 'pytorch')
         env:
@@ -169,7 +169,7 @@ jobs:
           rm -rf ${result_dir}
           mkdir ${result_dir}
           export CUDA_VISIBLE_DEVICES=6,7
-          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 128 -ct 128 128 2048 -pt 128 2048 128 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
       - name: Save reports
         if: always()
         run: |
@@ -264,6 +264,38 @@ jobs:
             for ((i=1; i<=$LOOP_NUM; i++))
               do
               python3 benchmark/profile_throughput.py $DATASET_FILE $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --concurrency "$batch" --num-prompts 3000 --csv ${result_dir}/throughput_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/throughput_batch_"${batch}"_"${i}"th.log
+              done
+          done
+      - name: Run throughput benchmark - kvint4
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        env:
+          result_dir: benchmark-throughput-turbomind-kvint4
+        run: |
+          export CUDA_VISIBLE_DEVICES=4,5
+          rm -rf ${result_dir}
+          mkdir ${result_dir}
+          batches=(128 256)
+          for batch in "${batches[@]}"
+          do
+            for ((i=1; i<=$LOOP_NUM; i++))
+              do
+              python3 benchmark/profile_throughput.py $DATASET_FILE $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --concurrency "$batch" --num-prompts 3000 --quant-policy 4 --csv ${result_dir}/throughput_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/throughput_batch_"${batch}"_"${i}"th.log
+              done
+          done
+      - name: Run throughput benchmark - kvint8
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        env:
+          result_dir: benchmark-throughput-turbomind-kvint8
+        run: |
+          export CUDA_VISIBLE_DEVICES=4,5
+          rm -rf ${result_dir}
+          mkdir ${result_dir}
+          batches=(128 256)
+          for batch in "${batches[@]}"
+          do
+            for ((i=1; i<=$LOOP_NUM; i++))
+              do
+              python3 benchmark/profile_throughput.py $DATASET_FILE $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --concurrency "$batch" --num-prompts 3000 --quant-policy 8 --csv ${result_dir}/throughput_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/throughput_batch_"${batch}"_"${i}"th.log
               done
           done
       - name: Run throughput benchmark - pytorch
@@ -388,7 +420,61 @@ jobs:
         continue-on-error: true
         if: always()
         run: |
-          kill -9 "$restful_pid"
+          kill -15 "$restful_pid"
+      - name: Start restful api turbomind - kvint4
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        run: |
+          export CUDA_VISIBLE_DEVICES=4,5
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level INFO > turbomind_kvint4_run.log 2>&1 &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 180s
+      - name: Run restful benchmark -kvint4
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        env:
+          result_dir: benchmark-restful-turbomind-kvint4
+        run: |
+          rm -rf ${result_dir}
+          mkdir ${result_dir}
+          batches=(128 256)
+          for batch in "${batches[@]}"
+          do
+            for ((i=1; i<=$LOOP_NUM; i++))
+              do
+              python3 benchmark/profile_restful_api.py localhost:23333 $MODEL_PATH $DATASET_FILE --concurrency "$batch" --stream-output True --csv ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.log
+              done
+          done
+      - name: Kill restful api turbomind - kvint4
+        continue-on-error: true
+        if: always()
+        run: |
+          kill -15 "$restful_pid"
+      - name: Start restful api turbomind - kvint8
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        run: |
+          export CUDA_VISIBLE_DEVICES=4,5
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --quant-policy 8 --log-level INFO > turbomind_kvint8_run.log 2>&1 &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 180s
+      - name: Run restful benchmark -kvint8
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        env:
+          result_dir: benchmark-restful-turbomind-kvint8
+        run: |
+          rm -rf ${result_dir}
+          mkdir ${result_dir}
+          batches=(128 256)
+          for batch in "${batches[@]}"
+          do
+            for ((i=1; i<=$LOOP_NUM; i++))
+              do
+              python3 benchmark/profile_restful_api.py localhost:23333 $MODEL_PATH $DATASET_FILE --concurrency "$batch" --stream-output True --csv ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.log
+              done
+          done
+      - name: Kill restful api turbomind - kvint8
+        continue-on-error: true
+        if: always()
+        run: |
+          kill -15 "$restful_pid"
       - name: Start restful api pytorch
         if: (! contains( matrix.model, 'w4a16') && !contains( matrix.model, '4bit')) && contains(fromJSON(github.event.inputs.backend), 'pytorch')
         run: |
@@ -414,7 +500,7 @@ jobs:
       - name: Kill restful api pytorch
         if: always()
         run: |
-          kill -9 "$restful_pid"
+          kill -15 "$restful_pid"
       - name: Save reports
         if: always()
         run: |

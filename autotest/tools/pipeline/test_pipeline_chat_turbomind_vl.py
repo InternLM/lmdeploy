@@ -28,7 +28,8 @@ def test_pipeline_chat_tp1(config, model, worker_id):
 @pytest.mark.parametrize('model', get_vl_model_list(tp_num=2))
 def test_pipeline_chat_tp2(config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
+                                                                     tp_num=2)
     p = Process(target=run_pipeline_vl_chat_test, args=(config, model))
     p.start()
     p.join()

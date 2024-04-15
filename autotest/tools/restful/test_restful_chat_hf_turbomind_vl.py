@@ -1,14 +1,7 @@
-import os
-import subprocess
-from time import sleep, time
-
-import allure
 import pytest
 from openai import OpenAI
-from utils.config_utils import (get_cuda_prefix_by_workerid, get_vl_model_list,
-                                get_workerid)
-from utils.get_run_config import get_command_with_extra
-from utils.run_restful_chat import health_check
+from utils.config_utils import get_vl_model_list, get_workerid
+from utils.run_restful_chat import start_restful_api, stop_restful_api
 
 from lmdeploy.serve.openai.api_client import APIClient
 
@@ -18,69 +11,14 @@ DEFAULT_PORT = 23333
 
 @pytest.fixture(scope='function', autouse=True)
 def prepare_environment(request, config, worker_id):
-    model_path = config.get('model_path')
-    log_path = config.get('log_path')
-
     param = request.param
     model = param['model']
-    cuda_prefix = param['cuda_prefix']
-    tp_num = param['tp_num']
+    model_path = config.get('model_path') + '/' + model
 
-    if cuda_prefix is None:
-        cuda_prefix = get_cuda_prefix_by_workerid(worker_id, tp_num=tp_num)
-
-    worker_num = get_workerid(worker_id)
-    if worker_num is None:
-        port = DEFAULT_PORT
-    else:
-        port = DEFAULT_PORT + worker_num
-
-    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path +
-                                 '/' + model + ' --server-port ' + str(port),
-                                 config,
-                                 model,
-                                 need_tp=True,
-                                 cuda_prefix=cuda_prefix)
-
-    if 'llava-v1.5' in model:
-        cmd += ' --model-name vicuna'
-
-    start_log = os.path.join(log_path,
-                             'start_restful_' + model.split('/')[1] + '.log')
-
-    print('reproduce command restful: ' + cmd)
-
-    with open(start_log, 'w') as f:
-        f.writelines('reproduce command restful: ' + cmd + '\n')
-
-        startRes = subprocess.Popen([cmd],
-                                    stdout=f,
-                                    stderr=f,
-                                    shell=True,
-                                    text=True,
-                                    encoding='utf-8')
-        pid = startRes.pid
-    allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
-
-    http_url = BASE_HTTP_URL + ':' + str(port)
-    start_time = int(time())
-    sleep(5)
-    for i in range(120):
-        sleep(1)
-        end_time = int(time())
-        total_time = end_time - start_time
-        result = health_check(http_url)
-        if result or total_time >= 120:
-            break
+    pid, startRes = start_restful_api(config, param, model, model_path,
+                                      'turbomind', worker_id)
     yield
-    if pid > 0:
-        kill_log = os.path.join(log_path,
-                                'kill_' + model.split('/')[1] + '.log')
-
-        with open(kill_log, 'w') as f:
-            startRes.kill()
-
-    allure.attach.file(kill_log, attachment_type=allure.attachment_type.TEXT)
+    stop_restful_api(pid, startRes)
 
 
 def getModelList(tp_num):
