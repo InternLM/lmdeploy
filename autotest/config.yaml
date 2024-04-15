@@ -1,4 +1,4 @@
-model_path: /mnt/bigdisk/qa_test_models
+model_path: /nvme/qa_test_models
 dst_path: /nvme/qa_test_models/autotest_model
 log_path: /nvme/qa_test_models/autotest_model/log
 dataset_path: /nvme/qa_test_models/...dataset
