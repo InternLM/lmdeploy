@@ -100,7 +100,7 @@ jobs:
         model: ${{fromJSON(github.event.inputs.models)}}
     timeout-minutes: 120
     env:
-      MODEL_PATH: /mnt/bigdisk/qa_test_models/${{matrix.model}}
+      MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
@@ -108,7 +108,6 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -204,7 +203,7 @@ jobs:
         model: ${{fromJSON(github.event.inputs.models)}}
     timeout-minutes: 120
     env:
-      MODEL_PATH: /mnt/bigdisk/qa_test_models/${{matrix.model}}
+      MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
@@ -212,7 +211,6 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /nvme/qa_test_models/datasets/:/nvme/qa_test_models/datasets/
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -317,7 +315,7 @@ jobs:
         model: ${{fromJSON(github.event.inputs.models)}}
     timeout-minutes: 180
     env:
-      MODEL_PATH: /mnt/bigdisk/qa_test_models/${{matrix.model}}
+      MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
@@ -325,7 +323,6 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /nvme/qa_test_models/datasets/:/nvme/qa_test_models/datasets/
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
