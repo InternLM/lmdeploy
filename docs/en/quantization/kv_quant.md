@@ -1,10 +1,10 @@
 # Key-Value(KV) Cache Quantization
 
-The latest main branch of LMDeploy supports online key-value (kv) cache quantization with 4-bit and 8-bit precision, utilizing an asymmetric quantization method that is applied on a per-head, per-token basis. The original kv offline quantization method has been removed.
+The latest main branch of LMDeploy supports **online** key-value (kv) cache quantization with int4 and int8 numerical precision, utilizing an asymmetric quantization method that is applied on a per-head, per-token basis. The original kv offline quantization method has been removed.
 
-Intuitively, quantizing the kv cache is beneficial for reducing memory usage. Compared to FP16, the memory for 4-bit/8-bit kv can be reduced to 1/4 and 1/2, respectively. This means that under the same memory conditions, the system can support a significantly increased number of concurrent operations after kv quantization, thereby ultimately enhancing throughput.
+Intuitively, quantizing the kv cache is beneficial for reducing memory usage. Compared to FP16, the memory for int4/int8 kv can be reduced to 1/4 and 1/2, respectively. This means that under the same memory conditions, the system can support a significantly increased number of concurrent operations after kv quantization, thereby ultimately enhancing throughput.
 
-However, quantization typically brings in some loss of model accuracy. We have used OpenCompass to evaluate the accuracy of several models after applying 8/4-bit kv quantization, and the results are presented in the [Evaluation](#Evaluation) section. You can refer to the information and choose wisely based on your requirements.
+However, quantization typically brings in some loss of model accuracy. We have used OpenCompass to evaluate the accuracy of several models after applying int4/int8 quantization. int8 kv keeps the accuracy while int4 kv has slight loss. The detailed results are presented in the [Evaluation](#Evaluation) section. You can refer to the information and choose wisely based on your requirements.
 
 LMDeploy inference with quantized kv supports the following NVIDIA GPU models:
 
@@ -13,6 +13,13 @@ LMDeploy inference with quantized kv supports the following NVIDIA GPU models:
 - Ampere architecture (sm80, sm86): 30 series, A10, A16, A30, A100
 - Ada Lovelace architecture (sm89): 40 series
 - Hopper architecture (sm90): H100, H200
+
+In summary, LMDeploy kv quantization has the following advantages:
+
+1. Calibration-free quantization
+2. Supports all nvidia GPU models with Volta architecture (sm70) and above
+3. KV int8 quantization has almost lossless accuracy, and KV int4 quantization accuracy is within an acceptable range
+4. Efficient inference, with int8/int4 kv quantization applied to llama2-7b, RPS is improved by round 30% and 40% respectively compared to fp16
 
 In the next section, we will take `internlm2-chat-7b` model as an example, introducing the usage of kv quantization and inference of lmdeploy. But before that, please install lmdeploy from source according to the [build](../build.md) guide, because lmdeploy hasn't released this feature yet.
 
@@ -59,13 +66,13 @@ For detailed evaluation methods, please refer to [this](../benchmark/evaluate_wi
 | model             | kv type | test settings                            | RPS   | v.s. kv fp16 |
 | ----------------- | ------- | ---------------------------------------- | ----- | ------------ |
 | llama2-chat-7b    | fp16    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 14.98 | 1.0          |
-| -                 | kv8     | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 19.01 | 1.27         |
-| -                 | kv4     | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 20.81 | 1.39         |
+| -                 | int8    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 19.01 | 1.27         |
+| -                 | int4    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 20.81 | 1.39         |
 | llama2-chat-13b   | fp16    | tp1 / ratio 0.9 / bs 128 / prompts 10000 | 8.55  | 1.0          |
-| -                 | kv8     | tp1 / ratio 0.9 / bs 256 / prompts 10000 | 10.96 | 1.28         |
-| -                 | kv4     | tp1 / ratio 0.9 / bs 256 / prompts 10000 | 11.91 | 1.39         |
+| -                 | int8    | tp1 / ratio 0.9 / bs 256 / prompts 10000 | 10.96 | 1.28         |
+| -                 | int4    | tp1 / ratio 0.9 / bs 256 / prompts 10000 | 11.91 | 1.39         |
 | internlm2-chat-7b | fp16    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 24.13 | 1.0          |
-| -                 | kv8     | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 25.28 | 1.05         |
-| -                 | kv4     | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 25.80 | 1.07         |
+| -                 | int8    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 25.28 | 1.05         |
+| -                 | int4    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 25.80 | 1.07         |
 
 The performance data is obtained by `benchmark/profile_throughput.py`
