@@ -26,7 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/04\] TurboMind supports 8bit/4bit kv cache quantization and inference. Refer [here](docs/en/quantization/kv_quant.md) for detailed guide
+- \[2024/04\] TurboMind adds online int8/int4 KV cache quantization and inference for all supported devices. Refer [here](docs/en/quantization/kv_quant.md) for detailed guide
 - \[2024/04\] TurboMind latest upgrade boosts GQA, rocketing the [internlm2-20b](https://huggingface.co/internlm/internlm2-20b) model inference to 16+ RPS, about 1.8x faster than vLLM.
 - \[2024/04\] Support Qwen1.5-MOE and dbrx.
 - \[2024/03\] Support DeepSeek-VL offline inference pipeline and serving.
