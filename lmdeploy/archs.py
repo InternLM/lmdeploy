@@ -120,6 +120,8 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
+    elif arch == 'InternVLChatModel':
+        return True
     return False
 
 

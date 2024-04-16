@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging protobuf transformers_stream_generator transformers datasets matplotlib'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib'
       default_tp:
         required: true
         description: 'Default tp value'
@@ -100,7 +100,7 @@ jobs:
         model: ${{fromJSON(github.event.inputs.models)}}
     timeout-minutes: 120
     env:
-      MODEL_PATH: /mnt/bigdisk/qa_test_models/${{matrix.model}}
+      MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
@@ -108,7 +108,6 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -161,10 +160,7 @@ jobs:
           rm -rf ${result_dir}
           mkdir ${result_dir}
           export CUDA_VISIBLE_DEVICES=6,7
-          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 1 --csv ${result_dir}/generation_batch1.csv > ${result_dir}/generation_batch1.log
-          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 16 -ct 128 -pt 2048 --csv ${result_dir}/generation_batch16.csv > ${result_dir}/generation_batch16.log
-          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 32 -ct 128 2048 -pt 2048 128 --csv ${result_dir}/generation_batch32.csv > ${result_dir}/generation_batch32.log
-          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 64 -ct 128 -pt 128 --csv ${result_dir}/generation_batch64.csv > ${result_dir}/generation_batch64.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
       - name: Run generation benchmark - pytorch
         if: (! contains( matrix.model, 'w4a16') && !contains( matrix.model, '4bit')) && contains(fromJSON(github.event.inputs.backend), 'pytorch')
         env:
@@ -173,16 +169,13 @@ jobs:
           rm -rf ${result_dir}
           mkdir ${result_dir}
           export CUDA_VISIBLE_DEVICES=6,7
-          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 1 --csv ${result_dir}/generation_batch1.csv > ${result_dir}/generation_batch1.log
-          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 16 -ct 128 -pt 2048 --csv ${result_dir}/generation_batch16.csv > ${result_dir}/generation_batch16.log
-          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 32 -ct 128 2048 -pt 2048 128 --csv ${result_dir}/generation_batch32.csv > ${result_dir}/generation_batch32.log
-          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 64 -ct 128 -pt 128 --csv ${result_dir}/generation_batch64.csv > ${result_dir}/generation_batch64.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
       - name: Save reports
         if: always()
         run: |
           mkdir $REPORT_DIR -p && mkdir $REPORT_DIR/${{matrix.model}} -p && mkdir $REPORT_DIR/${{matrix.model}}/generation -p
-          chmod -R 777 $REPORT_DIR
           cp -r benchmark-generation-* $REPORT_DIR/${{matrix.model}}/generation && rm -rf benchmark-generation-*
+          chmod -R 777 $REPORT_DIR
           echo 'save report to $REPORT_DIR/${{matrix.model}}/generation'
       - name: Clear workfile
         if: always()
@@ -204,7 +197,7 @@ jobs:
         model: ${{fromJSON(github.event.inputs.models)}}
     timeout-minutes: 120
     env:
-      MODEL_PATH: /mnt/bigdisk/qa_test_models/${{matrix.model}}
+      MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
@@ -212,7 +205,6 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /nvme/qa_test_models/datasets/:/nvme/qa_test_models/datasets/
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -266,7 +258,7 @@ jobs:
           export CUDA_VISIBLE_DEVICES=4,5
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(64 128)
+          batches=(128 256)
           for batch in "${batches[@]}"
           do
             for ((i=1; i<=$LOOP_NUM; i++))
@@ -282,7 +274,7 @@ jobs:
           export CUDA_VISIBLE_DEVICES=4,5
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(64 128)
+          batches=(128 256)
           for batch in "${batches[@]}"
           do
             for ((i=1; i<=$LOOP_NUM; i++))
@@ -294,8 +286,8 @@ jobs:
         if: always()
         run: |
           mkdir $REPORT_DIR -p && mkdir $REPORT_DIR/${{matrix.model}} -p && mkdir $REPORT_DIR/${{matrix.model}}/throughput -p
-          chmod -R 777 $REPORT_DIR
           cp -r benchmark-throughput-* $REPORT_DIR/${{matrix.model}}/throughput && rm -rf benchmark-throughput-*
+          chmod -R 777 $REPORT_DIR
           echo 'save report to $REPORT_DIR/${{matrix.model}}/throughput'
       - name: Clear workfile
         if: always()
@@ -317,7 +309,7 @@ jobs:
         model: ${{fromJSON(github.event.inputs.models)}}
     timeout-minutes: 180
     env:
-      MODEL_PATH: /mnt/bigdisk/qa_test_models/${{matrix.model}}
+      MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
@@ -325,7 +317,6 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /nvme/qa_test_models/datasets/:/nvme/qa_test_models/datasets/
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -385,7 +376,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(64 128)
+          batches=(128 256)
           for batch in "${batches[@]}"
           do
             for ((i=1; i<=$LOOP_NUM; i++))
@@ -412,7 +403,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(64 128)
+          batches=(128 256)
           for batch in "${batches[@]}"
           do
             for ((i=1; i<=$LOOP_NUM; i++))
@@ -428,9 +419,9 @@ jobs:
         if: always()
         run: |
           mkdir $REPORT_DIR -p && mkdir $REPORT_DIR/${{matrix.model}} -p && mkdir $REPORT_DIR/${{matrix.model}}/restful -p
-          chmod -R 777 $REPORT_DIR
           cp -r benchmark-restful-* $REPORT_DIR/${{matrix.model}}/restful && rm -rf benchmark-restful-*
           mv *_run.log $REPORT_DIR/${{matrix.model}}/restful
+          chmod -R 777 $REPORT_DIR
           echo 'save report to $REPORT_DIR/${{matrix.model}}/restful'
       - name: Clear workfile
         if: always()
@@ -496,6 +487,7 @@ jobs:
       - name: Build lmdeploy from source
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
+          docker exec $CONTAINER_ID sed -i 's/https:\/\/github.com\/NVIDIA\/cutlass.git/https:\/\/521github.com\/extdomains\/github.com\/NVIDIA\/cutlass.git/g' CMakeLists.txt
           docker exec $CONTAINER_ID mkdir build
           docker exec --workdir /__w/lmdeploy/lmdeploy/build \
             --env http_proxy=${{secrets.PROXY}} \
@@ -584,7 +576,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir} -p
-          batches=(64 128)
+          batches=(128 256)
           for batch in "${batches[@]}"
           do
             for ((i=1; i<=$LOOP_NUM; i++))
@@ -611,3 +603,20 @@ jobs:
           cd ..
           rm -rf $workdir
           mkdir $workdir
+
+
+  get_result_overview:
+    if: always()
+    needs: [generation_benchmark, throughput_benchmark, restful_benchmark, triton_benchmark]
+    timeout-minutes: 5
+    runs-on: [self-hosted, linux-a100]
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Get overview
+        run: |
+          pip install pandas
+          python3 .github/scripts/action_tools.py generate_benchmark_report $REPORT_DIR

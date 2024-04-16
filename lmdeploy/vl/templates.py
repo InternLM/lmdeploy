@@ -119,6 +119,15 @@ class YiVLChatTemplateWrapper(VLChatTemplateWrapper):
     pass
 
 
+class InternVLChatTemplateWrapper(VLChatTemplateWrapper):
+    """InternVL chat template."""
+
+    def append_image_token(self, prompt, num_images: int):
+        """append image tokens to user prompt."""
+        # not sure whether support multi images.
+        return f'<img>{IMAGE_TOKEN}</img>\n' * num_images + prompt
+
+
 class DeepSeekVLChatTemplateWrapper(VLChatTemplateWrapper):
     """DeepSeek vl chat template."""
 
@@ -159,4 +168,6 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return LlavaVLChatTemplateWrapper(chat_template)
     elif arch == 'MultiModalityCausalLM':  # deepseek-vl
         return DeepSeekVLChatTemplateWrapper(chat_template)
+    elif arch == 'InternVLChatModel':
+        return InternVLChatTemplateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')
