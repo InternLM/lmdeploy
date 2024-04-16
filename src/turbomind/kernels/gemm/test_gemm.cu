@@ -106,7 +106,7 @@ void Run(int m, int n, int k)
         auto B1 = (Tb*)b1.data().get();
 
         for (int i = 0; i < 1; ++i) {
-            gemm::transcript(B1, b.data().get(), n, k, 0);
+            gemm::transcript<T>(B1, b.data().get(), n, k, 0);
         }
 
         cudaDeviceSynchronize();
@@ -132,7 +132,7 @@ void Run(int m, int n, int k)
 int main(int argc, char* argv[])
 {
     // Run<half>(8192, 8192, 8192);
-    Run<half, half>(4096, 4096, 4096);
+    Run<half, uint4_t>(4096, 4096, 4096);
     // Run<half, uint4_t>(128, 128, 32);
     return 0;
 }

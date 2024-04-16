@@ -12,7 +12,7 @@
 
 namespace turbomind::gemm {
 
-template<class Arch_, class Gemm, class Gemm1, class CtaMap_>
+template<class Arch_, class Gemm, class Gemm1, class Converter, class CtaMap_>
 struct Transcript {
 
     using T  = typename Gemm::Tb;
@@ -115,7 +115,7 @@ struct Transcript {
                         PRAGMA_UNROLL
                         for (int p_n = 0; p_n < P_N; ++p_n) {
                             // transform to packed data (quantization & permutation)
-                            ConvertKvCache<T, T1> converter(1, 0);
+                            Converter converter{};
                             data[p_k][p_n] = converter(state_B.frag_B[k + p_k][n + p_n]);
                             // printf("%08x\n", (uint32_t&)data[p_k][p_n]);
                         }
