@@ -56,16 +56,16 @@ For detailed evaluation methods, please refer to [this](../benchmark/evaluate_wi
 
 ## Performance
 
-| model             | kv type | test settings                          | RPS   | v.s. kv fp16 |
-| ----------------- | ------- | -------------------------------------- | ----- | ------------ |
-| llama2-chat-7b    | fp16    | tp1/ratio 0.8 / bs 256 / prompts 10000 | 14.98 | 1.0          |
-| -                 | kv8     | tp1/ratio 0.8 / bs 256 / prompts 10000 | 19.01 | 1.27         |
-| -                 | kv4     | tp1/ratio 0.8 / bs 256 / prompts 10000 | 20.81 | 1.39         |
-| llama2-chat-13b   | fp16    | tp1/ratio 0.9 / bs 128 / prompts 10000 | 8.55  | 1.0          |
-| -                 | kv8     | tp1/ratio 0.9 / bs 256 / prompts 10000 | 10.96 | 1.28         |
-| -                 | kv4     | tp1/ratio 0.9 / bs 256 / prompts 10000 | 11.91 | 1.39         |
-| internlm2-chat-7b | fp16    | tp1/ratio 0.8 / bs 256 / prompts 10000 | 24.13 | 1.0          |
-| -                 | kv8     | tp1/ratio 0.8 / bs 256 / prompts 10000 | 25.28 | 1.05         |
-| -                 | kv4     | tp1/ratio 0.8 / bs 256 / prompts 10000 | 25.80 | 1.07         |
+| model             | kv type | test settings                            | RPS   | v.s. kv fp16 |
+| ----------------- | ------- | ---------------------------------------- | ----- | ------------ |
+| llama2-chat-7b    | fp16    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 14.98 | 1.0          |
+| -                 | kv8     | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 19.01 | 1.27         |
+| -                 | kv4     | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 20.81 | 1.39         |
+| llama2-chat-13b   | fp16    | tp1 / ratio 0.9 / bs 128 / prompts 10000 | 8.55  | 1.0          |
+| -                 | kv8     | tp1 / ratio 0.9 / bs 256 / prompts 10000 | 10.96 | 1.28         |
+| -                 | kv4     | tp1 / ratio 0.9 / bs 256 / prompts 10000 | 11.91 | 1.39         |
+| internlm2-chat-7b | fp16    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 24.13 | 1.0          |
+| -                 | kv8     | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 25.28 | 1.05         |
+| -                 | kv4     | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 25.80 | 1.07         |
 
 The performance data is obtained by `benchmark/profile_throughput.py`
