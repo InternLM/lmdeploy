@@ -21,7 +21,8 @@ special_input_model_map = {
     'baichuan': 'baichuan',
     'baichuan2': 'baichuan2',
     'internlm2': 'internlm2',
-    'deepseekvl': 'deepseekvl'
+    'deepseekvl': 'deepseekvl',
+    'internvl': 'internvl'
 }
 
 
