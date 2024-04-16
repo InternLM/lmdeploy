@@ -16,7 +16,7 @@ LMDeploy inference with quantized kv supports the following NVIDIA GPU models:
 
 In summary, LMDeploy kv quantization has the following advantages:
 
-1. Calibration-free quantization
+1. data-free online quantization
 2. Supports all nvidia GPU models with Volta architecture (sm70) and above
 3. KV int8 quantization has almost lossless accuracy, and KV int4 quantization accuracy is within an acceptable range
 4. Efficient inference, with int8/int4 kv quantization applied to llama2-7b, RPS is improved by round 30% and 40% respectively compared to fp16

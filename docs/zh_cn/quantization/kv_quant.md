@@ -16,7 +16,7 @@ LMDeploy kv 4/8 bit 量化和推理支持如下 NVIDIA 显卡型号：
 
 总结来说，LMDeploy kv 量化具备以下优势：
 
-1. 量化不需要校准
+1. 量化不需要校准数据集
 2. 支持 volta 架构（sm70）及以上的所有显卡型号
 3. kv int8 量化精度几乎无损，kv int4 量化精度在可接受范围之内
 4. 推理高效，在 llama2-7b 上加入 int8/int4 kv 量化，RPS 相较于 fp16 分别提升近 30% 和 40%
