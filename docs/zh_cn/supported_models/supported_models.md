@@ -3,7 +3,7 @@
 ## TurboMind 支持的模型
 
 | 模型               | 模型规模   | FP16/BF16 | KV INT8   | KV INT4   | W4A16 |
-| ------------------ | ---------- | --------- |-----------|-----------| ----- |
+| ------------------ | ---------- | --------- | --------- | --------- | ----- |
 | :----------------: | :--------: | :-------: | :-------: | :-------: | :---: |
 | Llama              | 7B - 65B   | Yes       | Yes       | Yes       | Yes   |
 | Llama2             | 7B - 70B   | Yes       | Yes       | Yes       | Yes   |
@@ -11,7 +11,7 @@
 | InternLM2          | 7B - 20B   | Yes       | Yes       | Yes       | Yes   |
 | InternLM-XComposer | 7B         | Yes       | -         | -         | -     |
 | QWen               | 1.8B - 72B | Yes       | Yes       | Yes       | Yes   |
-| QWen1.5            | 1.8B - 72B | Yes       | Yes       | Yes       | -     |
+| QWen1.5            | 1.8B - 72B | Yes       | Yes       | Yes       | Yes   |
 | QWen-VL            | 7B         | Yes       | -         | -         | -     |
 | DeepSeek-VL        | 7B         | Yes       | -         | -         | -     |
 | Baichuan           | 7B         | Yes       | Yes       | Yes       | Yes   |
@@ -19,7 +19,7 @@
 | Code Llama         | 7B - 34B   | Yes       | Yes       | Yes       | No    |
 | YI                 | 6B - 34B   | Yes       | Yes       | Yes       | No    |
 | LLaVA(1.5,1.6)     | 7B - 34B   | Yes       | -         | -         | -     |
-|   InternVL-Chat    |     -      |    Yes    | -         | -         | -     |
+| InternVL-Chat      | -          | Yes       | -         | -         | -     |
 
 “-” 表示还没有验证。
 
