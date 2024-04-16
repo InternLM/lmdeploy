@@ -207,7 +207,7 @@ class BlockTrie:
             parent = __remove_leaf(leaves, evicted_blocks)
             if parent.parent is None:
                 # ignore root
-                break
+                continue
             if len(parent.children) == 0:
                 __add_leaf(leaves, parent)
 
