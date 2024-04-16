@@ -32,7 +32,8 @@ def run_pipeline_chat_test(config,
     if 'pytorch' == type:
         backend_config = PytorchEngineConfig(tp=tp)
     elif 'kvint' in type:
-        if 'w4' in model_case or '4bits' in model_case:
+        if 'w4' in model_case or ('4bits' in model_case
+                                  or 'awq' in model_case.lower()):
             backend_config = TurbomindEngineConfig(
                 tp=tp,
                 model_format='awq',
@@ -44,7 +45,8 @@ def run_pipeline_chat_test(config,
     elif 'llava' in model_case:
         backend_config = TurbomindEngineConfig(tp=tp, model_name='vicuna')
     else:
-        if 'w4' in model_case or '4bits' in model_case:
+        if 'w4' in model_case or ('4bits' in model_case
+                                  or 'awq' in model_case.lower()):
             backend_config = TurbomindEngineConfig(tp=tp, model_format='awq')
         else:
             backend_config = TurbomindEngineConfig(tp=tp)

@@ -46,7 +46,8 @@ def start_restful_api(config, param, model, model_path, backend_tpye,
                                  cuda_prefix=cuda_prefix,
                                  extra=extra)
 
-    if backend_tpye == 'turbomind' and ('w4' in model or '4bits' in model):
+    if backend_tpye == 'turbomind' and ('w4' in model or '4bits' in model
+                                        or 'awq' in model.lower()):
         cmd += ' --model-format awq'
     if backend_tpye == 'pytorch':
         cmd += ' --backend pytorch'

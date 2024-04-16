@@ -87,6 +87,8 @@ def get_model_name(model):
         return 'vicuna'
     if ('yi-vl' in model_name):
         return 'yi-vl'
+    if ('qwen1.5' in model_name):
+        return 'qwen'
     return model_name.split('-')[0]
 
 

@@ -36,6 +36,7 @@ turbomind_chat_model:
     - deepseek-ai/deepseek-vl-1.3b-chat
     - deepseek-ai/deepseek-coder-1.3b-instruct
     - codellama/CodeLlama-7b-Instruct-hf
+    - Qwen/Qwen1.5-4B-Chat-AWQ
 
 pytorch_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
@@ -92,10 +93,13 @@ quatization_case_config:
         - internlm/internlm2-chat-20b-4bits
         - Qwen/Qwen-7B-Chat
         - Qwen/Qwen-14B-Chat
+        - Qwen/Qwen1.5-7B-Chat
         - lmdeploy/llama2-chat-7b-w4
         - baichuan-inc/Baichuan2-7B-Chat
         - internlm/internlm2-1_8b
         - internlm/internlm2-20b
+        - 01-ai/Yi-6B-Chat
+        - codellama/CodeLlama-7b-Instruct-hf
     w8a8:
         - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b

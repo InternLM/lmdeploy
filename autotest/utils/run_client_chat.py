@@ -25,7 +25,8 @@ def command_line_test(config,
                                      config,
                                      model_case,
                                      cuda_prefix=cuda_prefix)
-        if 'w4' in model_case or '4bits' in model_case:
+        if 'w4' in model_case or ('4bits' in model_case
+                                  or 'awq' in model_case.lower()):
             cmd += ' --model-format awq'
         if case == 'base_testcase':
             cmd += ' --cap completion'
@@ -51,7 +52,8 @@ def hf_command_line_test(config,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
-    if 'w4' in model_case or '4bits' in model_case:
+    if 'w4' in model_case or ('4bits' in model_case
+                              or 'awq' in model_case.lower()):
         cmd += ' --model-format awq'
 
     if case == 'base_testcase':
