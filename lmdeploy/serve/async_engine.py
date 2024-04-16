@@ -49,7 +49,7 @@ def deduce_a_name(
 
     backend_config_model_name = _config_model_name(backend_config)
     chat_template_config_model_name = _config_model_name(chat_template_config)
-    model_name = model_name or chat_template_config_model_name or backend_config_model_name  # noqa
+    model_name = model_name or backend_config_model_name or chat_template_config_model_name  # noqa
     if model_name is None:
         # model maybe from workspace for turbomind
         model_name = get_model_name_from_workspace_model(model_path)
@@ -180,10 +180,14 @@ class AsyncEngine:
         self.model_name = deduce_a_name(model_path, model_name, backend_config,
                                         chat_template_config)
         # build chat template config
+        if self.model_name in MODELS.module_dict.keys():
+            chat_template_name = self.model_name
+        else:
+            chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(self.model_name)
+            chat_template_config = ChatTemplateConfig(chat_template_name)
         elif chat_template_config.model_name is None:
-            chat_template_config.model_name = self.model_name
+            chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
 
         # prevent bc

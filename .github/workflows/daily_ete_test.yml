@@ -424,6 +424,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
     strategy:
+      fail-fast: false
       matrix:
         backend: ['turbomind', 'pytorch']
     timeout-minutes: 300
@@ -505,7 +506,33 @@ jobs:
       - name: Kill api server
         if: always()
         run: |
-          kill -9 "$restful_pid"
+          kill -15 "$restful_pid"
+      - name: Start restful api turbomind - base
+        if: matrix.backend == 'turbomind'
+        run: |
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 > restful.log  2>&1  &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 120s
+      - name: Test lmdeploy restful api turbomind - base
+        if: matrix.backend == 'turbomind'
+        timeout-minutes: 40
+        run: |
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=allure-results
+      - name: Start restful api pytorch - base
+        if: matrix.backend == 'pytorch'
+        run: |
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 180s
+      - name: Test lmdeploy - restful api pytorch - base
+        if: matrix.backend == 'pytorch'
+        timeout-minutes: 40
+        run: |
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=allure-results
+      - name: Kill api server
+        if: always()
+        run: |
+          kill -15 "$restful_pid"
       - name: Generate reports
         if: always()
         run: |

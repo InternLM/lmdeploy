@@ -274,14 +274,12 @@ class SubCliServe:
                 rope_scaling_factor=args.rope_scaling_factor,
                 cache_max_entry_count=args.cache_max_entry_count,
                 cache_block_seq_len=args.cache_block_seq_len)
-        chat_template_config = ChatTemplateConfig(
-            model_name=args.model_name,
-            meta_instruction=args.meta_instruction,
-            capability=args.cap)
+        chat_template_config = None
         if args.chat_template:
             chat_template_config = ChatTemplateConfig.from_json(
                 args.chat_template)
         run_api_server(args.model_path,
+                       model_name=args.model_name,
                        backend=backend,
                        backend_config=backend_config,
                        chat_template_config=chat_template_config,
