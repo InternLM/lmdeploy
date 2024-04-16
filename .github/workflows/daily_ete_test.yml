@@ -140,6 +140,7 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl
           python3 -m pip install -r requirements/test.txt
+          python3 -m pip install transformers==4.39.3
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
@@ -466,6 +467,7 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl
           python3 -m pip install -r requirements/test.txt
+          python3 -m pip install transformers==4.39.3
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |

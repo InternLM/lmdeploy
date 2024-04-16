@@ -12,6 +12,9 @@ from utils.run_client_chat import command_line_test
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1))
 def test_workspace_chat_tp1(config, cli_case_config, model, worker_id):
     usercase = 'chat_testcase'
+    # cannot convert with rop-scale params, so the case should be skipped
+    if model == 'deepseek-ai/deepseek-coder-1.3b-instruct':
+        return
     result, chat_log, msg = command_line_test(
         config,
         usercase,

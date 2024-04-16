@@ -12,7 +12,7 @@ base_testcase:
         - len_g:
             10
     - end:
-    - 介绍相应美食#please introduce some delicious foods:
+    - 介绍它的相应美食#please introduce some delicious foods:
         - not contain:
             - urumqi
             - 乌鲁木齐
@@ -24,6 +24,7 @@ base_testcase:
             10
 chat_testcase:
     - 你好，你叫什么名字#hi, what's your name:
+    - end:
     - 介绍乌鲁木齐的景点#Introducing urumqi’s attractions:
         - contain:
             - urumqi
@@ -31,7 +32,7 @@ chat_testcase:
             - 乌市
             - xinjiang
             - 新疆
-    - 介绍相应美食#please introduce some delicious foods:
+    - 介绍它的相应美食#please introduce some delicious foods:
         - contain:
             - urumqi
             - 乌鲁木齐
@@ -46,3 +47,13 @@ chat_testcase:
             - 乌市
             - xinjiang
             - 新疆
+code_testcase:
+    - 使用python编写一个int数组的冒泡排序代码:
+        - contain:
+            - def
+            - bubble
+            - 冒泡
+    - 快速排序呢:
+        - contain:
+            - def
+            - quick

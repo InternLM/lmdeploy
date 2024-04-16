@@ -89,7 +89,7 @@ def command_test(config,
         file.writelines('reproduce command chat: ' + ' '.join(cmd) + '\n')
 
         spliter = '\n\n'
-        if 'CodeLlama-7b-Instruct-hf' in model:
+        if 'CodeLlama' in model:
             spliter = '\n!!\n'
         # join prompt together
         prompt = ''
@@ -147,7 +147,7 @@ def command_test(config,
 # 从输出中解析模型输出的对话内容
 def parse_dialogue(inputs: str, model: str):
     dialogues = inputs.strip()
-    if 'CodeLlama-7b-Instruct-hf' in model:
+    if 'CodeLlama' in model:
         sep = 'enter !! to end the input >>>'
     else:
         sep = 'double enter to end input >>>'

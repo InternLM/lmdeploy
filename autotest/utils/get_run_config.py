@@ -77,8 +77,6 @@ def get_model_name(model):
 
     if model_name in model_names:
         return model_name
-    model_name = model_name.replace('-chat', '')
-    model_name = model_name.replace('-v0.1', '')
     if model_name in model_names:
         return model_name
     if ('llama-2' in model_name):
@@ -89,10 +87,9 @@ def get_model_name(model):
         return 'yi-vl'
     if ('qwen1.5' in model_name):
         return 'qwen'
-    if (model_name.split('-')) > 2 and '-'.join(
-            model_name.split('-')[0],
-            model_name.split('-')[1]) in model_names:
-        return '-'.join(model_name.split('-')[0], model_name.split('-')[1])
+    if len(model_name.split('-')) > 2 and '-'.join(
+            model_name.split('-')[0:2]) in model_names:
+        return '-'.join(model_name.split('-')[0:2])
     return model_name.split('-')[0]
 
 
@@ -119,7 +116,3 @@ def _simple_model_name(model):
         model_name = model
     model_name = model_name.replace('-inner-4bits', '')
     return model_name
-
-
-if __name__ == '__main__':
-    print(_simple_model_name('baichuan-inc/Baichuan2-7B-Chat-inner-4bits'))

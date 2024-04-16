@@ -10,7 +10,6 @@ from utils.pipeline_chat import (assert_pipeline_vl_chat_log,
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_1
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', get_vl_model_list(tp_num=1))
 def test_pipeline_chat_tp1(config, model, worker_id):
     if 'gw' in worker_id:
@@ -24,7 +23,6 @@ def test_pipeline_chat_tp1(config, model, worker_id):
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_2
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', get_vl_model_list(tp_num=2))
 def test_pipeline_chat_tp2(config, model, worker_id):
     if 'gw' in worker_id:

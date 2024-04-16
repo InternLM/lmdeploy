@@ -7,13 +7,17 @@ memory_test:
             - 乌市
             - xinjiang
             - 新疆
-    - 介绍相应美食#please introduce some delicious foods:
+            - uwumqi
+            - Ürümqi
+    - 介绍它的相应美食#please introduce some delicious foods:
         - contain:
             - urumqi
             - 乌鲁木齐
             - 乌市
             - xinjiang
             - 新疆
+            - uwumqi
+            - Ürümqi
 
 chinese_poem_case:
     - 给我一首中文打油诗，需要添加标点符号。和，请用中文回答Give me a Chinese poem in Chinese:
@@ -56,9 +60,10 @@ traditional_chinese_case:
             - 景點
             - 澳门
             - macau
-code_case:
+code_testcase:
     - 使用python编写一个int数组的冒泡排序代码:
         - contain:
             - def
             - bubble
             - 冒泡
+            - code

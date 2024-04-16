@@ -12,6 +12,8 @@ from utils.run_client_chat import hf_command_line_test
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1))
 def test_hf_turbomind_chat_tp1(config, model, cli_case_config, worker_id):
     usercase = 'chat_testcase'
+    if 'deepseek-coder' in model:
+        usercase = 'code_testcase'
     result, chat_log, msg = hf_command_line_test(
         config,
         usercase,

@@ -12,7 +12,6 @@ tp_config:
     Qwen-VL-Chat: 2
     llava-v1.5-13b: 2
 
-# testcase support models - test chat ability
 turbomind_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm2-chat-1_8b

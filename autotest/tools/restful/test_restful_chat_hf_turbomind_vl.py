@@ -1,3 +1,6 @@
+import os
+
+import allure
 import pytest
 from openai import OpenAI
 from utils.config_utils import get_vl_model_list, get_workerid
@@ -36,11 +39,11 @@ def getModelList(tp_num):
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=1),
                          indirect=True)
-def test_restful_chat_tp1(worker_id):
+def test_restful_chat_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
-        run_all_step()
+        run_all_step(config)
     else:
-        run_all_step(port=DEFAULT_PORT + get_workerid(worker_id))
+        run_all_step(config, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 @pytest.mark.order(7)
@@ -50,22 +53,28 @@ def test_restful_chat_tp1(worker_id):
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=2),
                          indirect=True)
-def test_restful_chat_tp2(worker_id):
+def test_restful_chat_tp2(config, worker_id):
     if get_workerid(worker_id) is None:
-        run_all_step()
+        run_all_step(config)
     else:
-        run_all_step(port=DEFAULT_PORT + get_workerid(worker_id))
+        run_all_step(config, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 PIC = 'https://raw.githubusercontent.com/' + \
     'open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
 
 
-def run_all_step(port: int = DEFAULT_PORT):
+def run_all_step(config, port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
+    log_path = config.get('log_path')
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
+
+    restful_log = os.path.join(log_path,
+                               'restful_vl_' + model_name + port + '.log')
+    file = open(restful_log, 'w')
+
     response = client.chat.completions.create(
         model=model_name,
         messages=[{
@@ -83,6 +92,7 @@ def run_all_step(port: int = DEFAULT_PORT):
         }],
         temperature=0.8,
         top_p=0.8)
+    file.writelines(response + '\n')
     assert 'tiger' in str(response).lower(), response
 
     api_client = APIClient(http_url)
@@ -103,4 +113,8 @@ def run_all_step(port: int = DEFAULT_PORT):
     for item in api_client.chat_completions_v1(model=model_name,
                                                messages=messages):
         continue
+    file.writelines(str(item) + '\n')
     assert 'tiger' in str(item).lower(), item
+
+    allure.attach.file(restful_log,
+                       attachment_type=allure.attachment_type.TEXT)

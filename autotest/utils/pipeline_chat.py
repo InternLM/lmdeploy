@@ -53,8 +53,11 @@ def run_pipeline_chat_test(config,
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     # run testcases
-    gen_config = GenerationConfig(temperature=0.01)
+    gen_config = GenerationConfig(top_k=1)
     for case in cases_info.keys():
+        if ('deepseek-coder' in model_case
+                or 'CodeLlama' in model_case) and 'code' not in case:
+            continue
         case_info = cases_info.get(case)
         pipeline_chat_log = os.path.join(
             log_path,
@@ -87,6 +90,9 @@ def assert_pipeline_chat_log(config, cases_info, model_case):
     log_path = config.get('log_path')
 
     for case in cases_info.keys():
+        if ('deepseek-coder' in model_case
+                or 'CodeLlama' in model_case) and 'code' not in case:
+            continue
         msg = ''
         result = False
         with allure.step('case - ' + case):

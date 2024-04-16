@@ -48,7 +48,7 @@ def run_pipeline_chat_test(config, cases_info, model_case, tp, type):
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     # run testcases
-    gen_config = GenerationConfig(temperature=0.01)
+    gen_config = GenerationConfig(top_k=1)
     for case in cases_info.keys():
         case_info = cases_info.get(case)
 

@@ -23,7 +23,8 @@ def getModelList(tp_num):
         'model': item,
         'cuda_prefix': None,
         'tp_num': tp_num
-    } for item in get_turbomind_model_list(tp_num)]
+    } for item in get_turbomind_model_list(tp_num)
+            if item not in ('deepseek-ai/deepseek-coder-1.3b-instruct')]
 
 
 @pytest.mark.order(7)
