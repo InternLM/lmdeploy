@@ -4,8 +4,8 @@ import os
 from lmdeploy.utils import get_hf_config_content, get_model
 
 from .deepseek import DeepSeekVisionModel
-from .internvl_llava import InternVLLlavaVisionModel
 from .internvl import InternVLVisionModel
+from .internvl_llava import InternVLLlavaVisionModel
 from .llava import LlavaVisionModel
 from .qwen import QwenVisionModel
 from .yi import YiVisionModel
