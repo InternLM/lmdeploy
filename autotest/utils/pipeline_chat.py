@@ -40,6 +40,9 @@ def run_pipeline_chat_test(config,
         else:
             backend_config = TurbomindEngineConfig(
                 tp=tp, quant_policy=extra.get('quant_policy'))
+    # if llava support kvint or awq, this code should refactor
+    elif 'llava' in model_case:
+        backend_config = TurbomindEngineConfig(tp=tp, model_name='vicuna')
     else:
         if 'w4' in model_case or '4bits' in model_case:
             backend_config = TurbomindEngineConfig(tp=tp, model_format='awq')
@@ -50,10 +53,6 @@ def run_pipeline_chat_test(config,
     # run testcases
     gen_config = GenerationConfig(temperature=0.01)
     for case in cases_info.keys():
-        if (case == 'memory_test'
-                or case == 'emoji_case') and 'chat' not in model_case.lower():
-            continue
-
         case_info = cases_info.get(case)
         pipeline_chat_log = os.path.join(
             log_path,
@@ -64,22 +63,15 @@ def run_pipeline_chat_test(config,
         prompts = []
         for prompt_detail in case_info:
             prompt = list(prompt_detail.keys())[0]
-            if 'chat' not in model_case.lower():  # base model
-                prompts.append(prompt)
-            else:  # chat model
-                prompts.append({'role': 'user', 'content': prompt})
+            prompts.append({'role': 'user', 'content': prompt})
             file.writelines('prompt:' + prompt + '\n')
 
-            if 'chat' not in model_case.lower():  # base model
-                response = pipe(prompts, gen_config=gen_config)[-1].text
-            else:  # chat model
-                response = pipe([prompts], gen_config=gen_config)[0].text
+            response = pipe([prompts], gen_config=gen_config)[0].text
 
             case_result, reason = assert_result(response,
                                                 prompt_detail.values(),
                                                 model_name)
-            if 'chat' in model_case.lower():
-                prompts.append({'role': 'assistant', 'content': response})
+            prompts.append({'role': 'assistant', 'content': response})
             file.writelines('output:' + response + '\n')
             file.writelines('result:' + str(case_result) + ', reason:' +
                             reason + '\n')
@@ -93,10 +85,6 @@ def assert_pipeline_chat_log(config, cases_info, model_case):
     log_path = config.get('log_path')
 
     for case in cases_info.keys():
-        if (case == 'memory_test'
-                or case == 'emoji_case') and 'chat' not in model_case.lower():
-            continue
-
         msg = ''
         result = False
         with allure.step('case - ' + case):
@@ -183,11 +171,11 @@ def run_pipeline_vl_chat_test(config, model_case):
     prompts = [('describe this image', load_image(img_url))
                for img_url in image_urls]
     response = pipe(prompts)
-    result = 'ski' in response[0].text.lower(
-    ) and 'tiger' in response[1].text.lower()
+    result = 'ski' in response[0].text.lower() and (
+        'tiger' in response[1].text.lower() or '虎' in response[1].text.lower())
     file.writelines('result:' + str(result) +
-                    ', reason: Batch example: tiger not in ' + str(response) +
-                    '\n')
+                    ', reason: Batch example: ski or tiger not in ' +
+                    str(response) + '\n')
 
     image = load_image(PIC2)
     sess = pipe.chat(('describe this image', image))

@@ -67,9 +67,6 @@ def command_test(config,
                  case_info,
                  need_extract_output,
                  worker_id: str = ''):
-    if 'memory_test' in case and 'chat' not in model.lower():
-        return True, None, 'memory case skipped for base model'
-
     try:
         log_path = config.get('log_path')
         model_name = get_model_name(model)

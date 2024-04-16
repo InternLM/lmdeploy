@@ -23,7 +23,7 @@ def getModelList(tp_num):
         'model': item,
         'cuda_prefix': None,
         'tp_num': tp_num
-    } for item in get_torch_model_list(tp_num) if 'chat' in item.lower()]
+    } for item in get_torch_model_list(tp_num)]
 
 
 @pytest.mark.order(7)

@@ -99,10 +99,6 @@ def run_all_step(config,
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
-        if (case == 'memory_test'
-                or case == 'emoji_case') and 'chat' not in model.lower():
-            continue
-
         case_info = cases_info.get(case)
 
         with allure.step(case + ' step1 - command chat regression'):

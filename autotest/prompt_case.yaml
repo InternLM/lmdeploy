@@ -25,7 +25,7 @@ chinese_poem_case:
         - len_g:
             5
 english_poem_case:
-    - write a romantic English poem:
+    - write a romantic English poem in English:
         - contain:
             - " "
         - contain:
@@ -54,10 +54,5 @@ traditional_chinese_case:
         - contain:
             - 澳門
             - 景點
-        - llama2:
-            - contain:
-                - 澳門
-                - macau
-        - internlm2-chat-1_8b:
-            - contain:
-                - 澳门
+            - 澳门
+            - macau

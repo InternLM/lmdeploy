@@ -24,6 +24,7 @@ turbomind_chat_model:
     - internlm/internlm2-chat-20b-4bits
     - Qwen/Qwen-7B-Chat
     - Qwen/Qwen-14B-Chat
+    - Qwen/Qwen1.5-7B-Chat
     - lmdeploy/llama2-chat-7b-w4
     - baichuan-inc/Baichuan2-7B-Chat
     - 01-ai/Yi-6B-Chat
@@ -32,6 +33,9 @@ turbomind_chat_model:
     - liuhaotian/llava-v1.5-13b
     - liuhaotian/llava-v1.6-vicuna-7b
     - 01-ai/Yi-VL-6B
+    - deepseek-ai/deepseek-vl-1.3b-chat
+    - deepseek-ai/deepseek-coder-1.3b-instruct
+    - codellama/CodeLlama-7b-Instruct-hf
 
 pytorch_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
@@ -44,21 +48,21 @@ pytorch_chat_model:
     - 01-ai/Yi-6B-Chat
     - Qwen/Qwen1.5-7B-Chat
     - deepseek-ai/deepseek-moe-16b-chat
-
-turbomind_base_model:
-    - internlm/internlm2-1_8b
-    - internlm/internlm2-20b
-    - codellama/CodeLlama-7b-Instruct-hf
-
-pytorch_base_model:
-    - THUDM/chatglm2-6b
-    - tiiuae/falcon-7b
-    - internlm/internlm2-1_8b
-    - internlm/internlm2-20b
     - mistralai/Mistral-7B-Instruct-v0.1
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-7b-it
     - deepseek-ai/deepseek-coder-6.7b-instruct
+    - THUDM/chatglm2-6b
+
+turbomind_base_model:
+    - internlm/internlm2-1_8b
+    - internlm/internlm2-20b
+    - codellama/CodeLlama-7b-hf
+
+pytorch_base_model:
+    - tiiuae/falcon-7b
+    - internlm/internlm2-1_8b
+    - internlm/internlm2-20b
 
 vl_model:
     - Qwen/Qwen-VL-Chat
@@ -66,6 +70,7 @@ vl_model:
     - liuhaotian/llava-v1.5-13b
     - liuhaotian/llava-v1.6-vicuna-7b
     - 01-ai/Yi-VL-6B
+    - deepseek-ai/deepseek-vl-1.3b-chat
 
 quatization_case_config:
     w4a16:
