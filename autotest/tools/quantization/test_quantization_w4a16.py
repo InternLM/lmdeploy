@@ -12,7 +12,7 @@ from utils.quantization_utils import quantization
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize('model', get_quantization_model_list('w4a16'))
 def test_quantization_w4a16(config, model, worker_id):
-    quantization_w4a16(config, model + '-inner-w4a16', model,
+    quantization_w4a16(config, model + '-inner-4bits', model,
                        get_cuda_prefix_by_workerid(worker_id))
 
 
@@ -25,7 +25,7 @@ def test_quantization_w4a16(config, model, worker_id):
     'model, prefix',
     [('internlm/internlm2-chat-20b', 'CUDA_VISIBLE_DEVICES=5')])
 def test_quantization_w4a16_pr(config, model, prefix):
-    quantization_w4a16(config, model + '-inner-w4a16', model, prefix)
+    quantization_w4a16(config, model + '-inner-4bits', model, prefix)
 
 
 def quantization_w4a16(config, quantization_model_name, origin_model_name,

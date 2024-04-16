@@ -12,7 +12,7 @@ def get_turbomind_model_list(tp_num: int = None,
     quatization_case_config = config.get('quatization_case_config')
     for key in quatization_case_config.get('w4a16'):
         if key in case_list:
-            case_list.append(key + '-inner-w4a16')
+            case_list.append(key + '-inner-4bits')
 
     if tp_num is not None:
         return [
@@ -49,7 +49,7 @@ def get_all_model_list(tp_num: int = None, model_type: str = 'chat_model'):
     quatization_case_config = config.get('quatization_case_config')
     for key in quatization_case_config.get('w4a16'):
         if key in case_list:
-            case_list.append(key + '-inner-w4a16')
+            case_list.append(key + '-inner-4bits')
 
     if tp_num is not None:
         return [
@@ -74,7 +74,7 @@ def get_kvint_model_list(tp_num: int = None, model_type: str = 'chat_model'):
 
     for key in config.get('quatization_case_config').get('w4a16'):
         if key in case_list_base and key in case_list:
-            case_list.append(key + '-inner-w4a16')
+            case_list.append(key + '-inner-4bits')
 
     if tp_num is not None:
         return [

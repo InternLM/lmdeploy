@@ -91,7 +91,7 @@ def test_pipeline_chat_kvint_tp2(config, common_case_config, model,
 @pytest.mark.pr_test
 @pytest.mark.parametrize(
     'model',
-    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-w4a16'])
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
 def test_pipeline_chat_pr(config, common_case_config, model):
     p = Process(target=run_pipeline_chat_test,
                 args=(config, common_case_config, model, 'turbomind'))

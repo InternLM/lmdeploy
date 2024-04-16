@@ -104,7 +104,7 @@ def test_hf_turbomind_base_tp2(config, model, cli_case_config, worker_id):
 @pytest.mark.xdist_group(name='pr_test')
 @pytest.mark.parametrize(
     'model',
-    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-w4a16'])
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
 def test_hf_turbomind_chat_pr(config, model, cli_case_config):
     usercase = 'chat_testcase'
 

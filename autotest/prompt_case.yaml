@@ -56,3 +56,9 @@ traditional_chinese_case:
             - 景點
             - 澳门
             - macau
+code_case:
+    - 使用python编写一个int数组的冒泡排序代码:
+        - contain:
+            - def
+            - bubble
+            - 冒泡

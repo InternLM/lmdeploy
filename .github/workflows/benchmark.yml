@@ -42,7 +42,7 @@ on:
         required: true
         description: 'Set models run benchmark'
         type: string
-        default: "['internlm/internlm2-chat-20b','internlm/internlm2-chat-20b-inner-w4a16','meta-llama/Llama-2-7b-chat-hf','meta-llama/Llama-2-7b-chat-hf-inner-w4a16']"
+        default: "['internlm/internlm2-chat-20b','internlm/internlm2-chat-20b-inner-4bits','meta-llama/Llama-2-7b-chat-hf','meta-llama/Llama-2-7b-chat-hf-inner-4bits']"
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -162,7 +162,7 @@ jobs:
           mkdir ${result_dir}
           python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
       - name: Run generation benchmark - pytorch
-        if: (! contains( matrix.model, 'w4a16') && !contains( matrix.model, '4bit')) && contains(fromJSON(github.event.inputs.backend), 'pytorch')
+        if: ( !contains( matrix.model, '4bit') && contains(fromJSON(github.event.inputs.backend), 'pytorch'))
         env:
           result_dir: benchmark-generation-pytorch
         run: |
@@ -296,7 +296,7 @@ jobs:
               done
           done
       - name: Run throughput benchmark - pytorch
-        if: (! contains( matrix.model, 'w4a16') && !contains( matrix.model, '4bit')) && contains(fromJSON(github.event.inputs.backend), 'pytorch')
+        if: (!contains( matrix.model, '4bit') && contains(fromJSON(github.event.inputs.backend), 'pytorch'))
         env:
           result_dir: benchmark-throughput-pytorch
         run: |
@@ -470,13 +470,13 @@ jobs:
         run: |
           kill -15 "$restful_pid"
       - name: Start restful api pytorch
-        if: (! contains( matrix.model, 'w4a16') && !contains( matrix.model, '4bit')) && contains(fromJSON(github.event.inputs.backend), 'pytorch')
+        if: ( !contains( matrix.model, '4bit') && contains(fromJSON(github.event.inputs.backend), 'pytorch'))
         run: |
           lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --backend pytorch --log-level INFO > pytorch_run.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
       - name: Run restful benchmark - pytorch
-        if: (! contains( matrix.model, 'w4a16') && !contains( matrix.model, '4bit')) && contains(fromJSON(github.event.inputs.backend), 'pytorch')
+        if: (!contains( matrix.model, '4bit') && contains(fromJSON(github.event.inputs.backend), 'pytorch'))
         env:
           result_dir: benchmark-restful-pytorch
         run: |

@@ -72,7 +72,7 @@ def test_restful_chat_tp2(config, common_case_config, worker_id):
     'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
     'tp_num': 2
 }, {
-    'model': 'internlm/internlm2-chat-20b-inner-w4a16',
+    'model': 'internlm/internlm2-chat-20b-inner-4bits',
     'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
     'tp_num': 2
 }],
