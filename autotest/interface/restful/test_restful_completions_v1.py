@@ -47,8 +47,9 @@ class TestRestfulInterfaceBase:
             completion_tokens = item['usage']['completion_tokens']
             assert completion_tokens > 0
             assert completion_tokens <= 17
+            assert completion_tokens >= 16
             assert item.get('choices')[0].get('finish_reason') in [
-                'stop', 'length'
+                'length'
             ]
 
     def test_single_stopword(self):
