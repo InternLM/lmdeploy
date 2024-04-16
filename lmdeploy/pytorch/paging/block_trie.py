@@ -159,7 +159,7 @@ class BlockTrie:
             block_id += 1
 
         logical_blocks.last_shared_node = node
-        if node.parent is not None:
+        if node.parent is not None and len(node.children) == 0:
             # ignore root
             self.leaves.add(node)
         if len(blocks) > 0:
