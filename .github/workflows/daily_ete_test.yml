@@ -527,7 +527,7 @@ jobs:
       - name: Start restful api turbomind - base
         if: matrix.backend == 'turbomind'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-20b --tp 2 > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
       - name: Test lmdeploy restful api turbomind - base
@@ -538,7 +538,7 @@ jobs:
       - name: Start restful api pytorch - base
         if: matrix.backend == 'pytorch'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 --backend pytorch > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api pytorch - base
