@@ -273,7 +273,9 @@ void LlamaTritonModelInstance<T>::freeBuffer()
     std::free(h_logprob_nums_);
 }
 
+#ifdef ENABLE_FP32
 template struct LlamaTritonModelInstance<float>;
+#endif
 template struct LlamaTritonModelInstance<half>;
 #ifdef ENABLE_BF16
 template struct LlamaTritonModelInstance<__nv_bfloat16>;

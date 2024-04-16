@@ -10,7 +10,7 @@ LMDeploy提供了快速安装、模型量化、离线批处理、在线推理服
 pip install lmdeploy
 ```
 
-LMDeploy的预编译包默认是基于 CUDA 11.8 编译的。如果需要在 CUDA 12+ 下安装 LMDeploy，请执行以下命令：
+LMDeploy的预编译包默认是基于 CUDA 12 编译的。如果需要在 CUDA 11+ 下安装 LMDeploy，请执行以下命令：
 
 ```shell
 export LMDEPLOY_VERSION=0.3.0
@@ -40,7 +40,7 @@ LMDeploy 提供了多种部署模型推理服务的方式，总有一款适合�
 ## 模型量化
 
 - [INT4 权重量化](quantization/w4a16.md)
-- [K/V 量化](quantization/kv_int8.md)
+- [K/V 量化](quantization/kv_quant.md)
 - [W8A8 量化](quantization/w8a8.md)
 
 ## 好用的工具

@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/models/llama/LlamaBatch.h"
+#include "src/turbomind/kernels/attention/data_type.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/layers/constant.h"
@@ -571,11 +572,8 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
                                std::to_string(h_cu_block_counts_[i + 1]));
 
             block_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), block_ptrs, [&](int block_id) {
-                return reinterpret_cast<uintptr_t>(sequence_manager_->GetKeyPtr(block_id));
+                return reinterpret_cast<uintptr_t>(sequence_manager_->GetBlockPtr(block_id));
             });
-            // v_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), v_ptrs, [&](int block_id) {
-            //     return reinterpret_cast<uintptr_t>(sequence_manager_->GetValPtr(block_id));
-            // });
         }
 
         static_assert(sizeof(uintptr_t) == sizeof(void*));
@@ -932,19 +930,24 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
     allocator_      = model_->allocator_;
     cublas_wrapper_ = model_->cublas_wrapper_;
 
-    const size_t elem_bits = (quant_policy & QuantPolicy::kCacheKVInt8) ? 8 : sizeof(T) * 8;
+    const int elem_bits = quant_policy ? quant_policy : bitsof<T>;
 
     auto get_free_size = [&] {
         return GetSyncFreeMemSize(*model_->shared_state_->barrier, model_->shared_state_->free_size);
     };
 
+    SequenceManager::BlockConfig block_config{
+        (int)model_->size_per_head_,
+        (int)model_->local_kv_head_num_,
+        cache_block_seq_len,
+        elem_bits == bitsof<T> ? 0 : bitsof<T>,
+        elem_bits,
+    };
+
     sequence_manager_.reset(new SequenceManager{model_->num_layer_,
-                                                model_->local_kv_head_num_,
-                                                model_->size_per_head_,
-                                                (size_t)cache_block_seq_len,
+                                                block_config,
                                                 params.cache_max_block_count,
                                                 params.cache_chunk_size,
-                                                elem_bits,
                                                 model->tensor_para_.rank_,
                                                 allocator_,
                                                 get_free_size});
@@ -1690,7 +1693,9 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 }
 
 template class LlamaBatch<half>;
+#ifdef ENABLE_FP32
 template class LlamaBatch<float>;
+#endif
 #ifdef ENABLE_BF16
 template class LlamaBatch<__nv_bfloat16>;
 #endif

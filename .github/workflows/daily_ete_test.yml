@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging protobuf transformers_stream_generator transformers datasets matplotlib openai'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai'
       tools_regression:
         required: true
         description: 'Whether start a tool regression'
@@ -108,7 +108,6 @@ jobs:
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -131,7 +130,7 @@ jobs:
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging protobuf transformers_stream_generator transformers datasets matplotlib openai'}}
+          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai'}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
@@ -262,7 +261,7 @@ jobs:
           pytest autotest --lf --lfnf none --alluredir=allure-results
       - name: Test lmdeploy - local testcase
         timeout-minutes: 30
-        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
+        if: always() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case'))
         run: |
           pytest /local_case/issue_regression --alluredir=allure-results
       - name: Generate reports
@@ -401,6 +400,7 @@ jobs:
             internlm-chat-20b \
             /root/workspace/hf_model \
             --tp 2 \
+            --trust-remote-code \
             --dst-path /root/workspace/workdir/${TB_MODEL}
       - name: Start triton server service
         run: |
@@ -442,6 +442,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
     strategy:
+      fail-fast: false
       matrix:
         backend: ['turbomind', 'pytorch']
     timeout-minutes: 300
@@ -454,7 +455,6 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -477,7 +477,7 @@ jobs:
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging protobuf transformers_stream_generator transformers datasets matplotlib openai'}}
+          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai'}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
@@ -499,7 +499,7 @@ jobs:
       - name: Start restful api turbomind
         if: matrix.backend == 'turbomind'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-chat-20b --tp 2 > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-chat-20b --tp 2 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
       - name: Test lmdeploy restful api turbomind
@@ -511,7 +511,7 @@ jobs:
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-chat-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-chat-20b --tp 2 --backend pytorch > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api pytorch
@@ -523,7 +523,33 @@ jobs:
       - name: Kill api server
         if: always()
         run: |
-          kill -9 "$restful_pid"
+          kill -15 "$restful_pid"
+      - name: Start restful api turbomind - base
+        if: matrix.backend == 'turbomind'
+        run: |
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 > restful.log  2>&1  &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 120s
+      - name: Test lmdeploy restful api turbomind - base
+        if: matrix.backend == 'turbomind'
+        timeout-minutes: 40
+        run: |
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=allure-results
+      - name: Start restful api pytorch - base
+        if: matrix.backend == 'pytorch'
+        run: |
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 180s
+      - name: Test lmdeploy - restful api pytorch - base
+        if: matrix.backend == 'pytorch'
+        timeout-minutes: 40
+        run: |
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=allure-results
+      - name: Kill api server
+        if: always()
+        run: |
+          kill -15 "$restful_pid"
       - name: Generate reports
         if: always()
         run: |

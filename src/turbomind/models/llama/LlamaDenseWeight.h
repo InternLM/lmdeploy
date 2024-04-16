@@ -19,8 +19,6 @@
 
 #pragma once
 
-#include "src/turbomind/layers/FfnWeight.h"
-#include "src/turbomind/layers/attention_layers/AttentionWeight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -69,7 +67,6 @@ template<typename T>
 struct LlamaAttentionWeight {
     LlamaDenseWeight<T> qkv;
     LlamaDenseWeight<T> output;
-    std::vector<float>  past_kv_scale;
 };
 
 template<typename T>

@@ -22,7 +22,7 @@
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/attention/decoding.h"
-#include "src/turbomind/kernels/attention/kv_cache_utils.h"
+#include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -152,7 +152,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     auto CreateParams = [&](int offset, int batch_size, cudaStream_t stream) {
         AttentionParams<T> params{};
-
+#if 1
         params.out    = qkv_buf_3_;
         params.q      = (T*)qkv_buf_;
         params.k      = params.q + local_head_num_ * size_per_head_;
@@ -165,24 +165,25 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             params.v_bias = params.k_bias + local_kv_head_num_ * size_per_head_;
         }
 
-        params.kv = tmp_kv_buf_;
-
         params.token_num  = h_cu_q_len[offset + batch_size] - h_cu_q_len[offset];
         params.batch_size = batch_size;
         params.max_q_len  = *std::max_element(h_q_len + offset, h_q_len + offset + batch_size);
         params.max_k_len  = *std::max_element(h_k_len + offset, h_k_len + offset + batch_size);
 
-        params.k_cache_block_ptrs  = (void**)block_ptrs;
-        params.cu_block_cnts       = (int*)cu_block_count + offset;
-        params.kv_cache_block_size = kv_cache_block_len_;
+        params.block_iter_params = BlockIteratorParams{(char**)block_ptrs,  //
+                                                       (int*)cu_block_count + offset,
+                                                       layer_id,
+                                                       (int)kv_cache_block_len_};
+
+        const int sum_k_len       = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
+        params.linear_iter_params = LinearIteratorParams{tmp_kv_buf_,  //
+                                                         int(2 * sum_k_len * size_per_head_),
+                                                         int(sum_k_len * size_per_head_)};
 
         params.finished   = is_finished + offset;
         params.cu_q_len   = cu_q_len + offset;
         params.cu_k_len   = cu_k_len + offset;
         params.rope_theta = rope_theta + offset;
-
-        params.key_offset = layer_offset;
-        params.val_offset = params.key_offset + local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
 
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
@@ -206,9 +207,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.stream = stream;
 
         params.quant_policy = quant_policy_;
-        FT_CHECK(std::size(weights->past_kv_scale) == std::size(params.kv_quant_params));
-        std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
-
+        // FT_CHECK(std::size(weights->past_kv_scale) == std::size(params.kv_quant_params));
+        // std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
+#endif
         return params;
     };
 
@@ -226,8 +227,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         const int sum_k_len = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
         auto      params    = CreateParams(offset, pf_batch_size, pf_stream);
         if constexpr (sizeof(T) == 2) {
-            invokeProcessKV_(params);
-            invokeFlattenKV_(params, sum_k_len);
+            invokeProcessKV_v2_(params);
+            /// TODO: skip flattening for `sm_80`
+            invokeFlattenKV_v2_(params, sum_k_len);
             dispatchAttention(params);
         }
     }
@@ -268,7 +270,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     sync_check_cuda_error();
 }
 
+#ifdef ENABLE_FP32
 template class UnifiedAttentionLayer<float>;
+#endif
 template class UnifiedAttentionLayer<half>;
 #ifdef ENABLE_BF16
 template class UnifiedAttentionLayer<__nv_bfloat16>;

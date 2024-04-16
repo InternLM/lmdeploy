@@ -405,7 +405,7 @@ public:
     }
 };
 
-TYPED_TEST_SUITE(TopKSamplingKernelTest, FloatAndHalfTypes);
+TYPED_TEST_SUITE(TopKSamplingKernelTest, FloatType);
 
 TYPED_TEST(TopKSamplingKernelTest, CorrectnessGreedy)
 {
@@ -779,7 +779,7 @@ public:
     }
 };
 
-TYPED_TEST_SUITE(TopPSamplingKernelTest, FloatAndHalfTypes);
+TYPED_TEST_SUITE(TopPSamplingKernelTest, FloatType);
 
 TYPED_TEST(TopPSamplingKernelTest, CorrectnessSmallP)
 {

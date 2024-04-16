@@ -5,6 +5,20 @@
 
 namespace turbomind {
 
+// 64-bit offsets may be needed
+struct LinearIteratorParams {
+    const void* kv_cache;
+    int         stride_h;
+    int         key_to_val;
+};
+
+struct BlockIteratorParams {
+    char**     block_ptrs;
+    const int* cu_block_nums;
+    int        layer_id;
+    int        block_len;
+};
+
 template<typename T>
 struct AttentionParams {
     // token-level buffers, [B, qH + 2kvH, D] or [B, kvH, D]
@@ -19,20 +33,14 @@ struct AttentionParams {
     T* k_bias;
     T* v_bias;
 
-    const void* kv;  // tmp kv cache buffer
-
     // sequence-level buffers
     const int*   cu_q_len;
     const int*   cu_k_len;
     const bool*  finished;
     const float* rope_theta;
 
-    int key_offset;
-    int val_offset;
-
-    void** k_cache_block_ptrs;  // S/s,[L,2,H,s,D]
-    int*   cu_block_cnts;       // [B+1]
-    int    kv_cache_block_size;
+    LinearIteratorParams linear_iter_params;
+    BlockIteratorParams  block_iter_params;
 
     // batch-level params
     int token_num;
@@ -55,8 +63,7 @@ struct AttentionParams {
     // log(n) attention
     bool use_logn_attn;
 
-    int   quant_policy;
-    float kv_quant_params[4];
+    int quant_policy;
 
     int    max_split_k;
     int*   split_cnt;
@@ -71,6 +78,19 @@ struct AttentionParams {
     // debug
     float* qk;
     T*     pr;
+};
+
+template<class CacheIterFactory, class SFINAE = void>
+struct CreateCacheIterFactory {
+    template<class Param>
+    static CacheIterFactory apply(const Param& param)
+    {
+        using Tkv = typename CacheIterFactory::Tkv;
+        return {(const Tkv*)param.linear_iter_params.kv_cache,
+                param.cu_k_len,
+                param.linear_iter_params.stride_h,
+                param.linear_iter_params.key_to_val};
+    }
 };
 
 }  // namespace turbomind

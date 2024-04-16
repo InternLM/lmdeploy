@@ -328,6 +328,6 @@ TopKSamplingLayer<T>::~TopKSamplingLayer()
 }
 
 template class TopKSamplingLayer<float>;
-template class TopKSamplingLayer<half>;
+// template class TopKSamplingLayer<half>;
 
 }  // namespace turbomind

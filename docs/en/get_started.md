@@ -10,7 +10,7 @@ Install lmdeploy with pip (python 3.8+) or [from source](./build.md)
 pip install lmdeploy
 ```
 
-The default prebuilt package is compiled on CUDA 11.8. However, if CUDA 12+ is required, you can install lmdeploy by:
+The default prebuilt package is compiled on **CUDA 12**. However, if CUDA 11+ is required, you can install lmdeploy by:
 
 ```shell
 export LMDEPLOY_VERSION=0.3.0
@@ -42,7 +42,7 @@ LMDeploy offers various serving methods, choosing one that best meet your requir
 LMDeploy provides the following quantization methods. Please visit the following links for the detailed guide
 
 - [4bit weight-only quantization](quantization/w4a16.md)
-- [k/v quantization](quantization/kv_int8.md)
+- [k/v quantization](quantization/kv_quant.md)
 - [w8a8 quantization](quantization/w8a8.md)
 
 ## Useful Tools

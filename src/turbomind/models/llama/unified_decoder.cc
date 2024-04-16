@@ -1,7 +1,7 @@
 
 #include "src/turbomind/models/llama/unified_decoder.h"
-#include "src/turbomind/kernels/bert_preprocess_kernels.h"
-#include "src/turbomind/kernels/gpt_kernels.h"
+// #include "src/turbomind/kernels/bert_preprocess_kernels.h"
+// #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
@@ -223,7 +223,9 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     }
 }
 
+#ifdef ENABLE_FP32
 template class UnifiedDecoder<float>;
+#endif
 template class UnifiedDecoder<half>;
 #ifdef ENABLE_BF16
 template class UnifiedDecoder<__nv_bfloat16>;

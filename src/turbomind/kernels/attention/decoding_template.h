@@ -10,15 +10,16 @@
 namespace turbomind {
 
 template<class Kernel>
-void invokeDecoding(const typename Kernel::ParamType& params)
+bool invokeDecoding(const typename Kernel::ParamType& params)
 {
     static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
-    if constexpr (0) {
+    if constexpr (1) {
         [[maybe_unused]] static const int _ = [&] {
-            std::cout << "GmemMap:\n";
-            Print(typename Kernel::Impl::ThreadMapKV{});
-            std::cout << "\nDynamic smem size: " << kSmemSize << "\n";
+            // std::cout << __PRETTY_FUNCTION__ << std::endl;
+            // std::cout << "GmemMap:\n";
+            // Print(typename Kernel::Impl::ThreadMapKV{});
+            // std::cout << "\nDynamic smem size: " << kSmemSize << "\n";
             return 0;
         }();
     }
@@ -33,6 +34,11 @@ void invokeDecoding(const typename Kernel::ParamType& params)
     auto kernel_func = &attention_kernel<Kernel>;
 
     thread_local const int2 caps = [&] {
+        auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
+        if (err) {
+            std::cout << cudaGetErrorString(err) << "\n";
+            std::abort();
+        }
         int device_id{};
         cudaGetDevice(&device_id);
         int sm_count{};
@@ -55,7 +61,11 @@ void invokeDecoding(const typename Kernel::ParamType& params)
         std::abort();
     }
 
-    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, CtaMap{});
+    // Print(typename Kernel::Impl::ThreadMapKVp{});
+
+    auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
+
+    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cache_iter_factory, CtaMap{});
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
         std::cout << cudaGetErrorString(err) << "\n";
@@ -75,6 +85,8 @@ void invokeDecoding(const typename Kernel::ParamType& params)
                                                     params.inv_sqrt_dh,
                                                     params.stream);
     }
+
+    return true;
 }
 
 }  // namespace turbomind

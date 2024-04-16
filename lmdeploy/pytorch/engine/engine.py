@@ -194,8 +194,6 @@ class Engine:
         max_batches = self.scheduler_config.max_batches
 
         # buffers to create inputs
-        self._q_start_loc_buf = torch.arange(max_batches)
-        self._attention_mask_buf = torch.ones(max_batches, 1, dtype=torch.long)
         self._seq_length_buf = torch.ones(max_batches, dtype=torch.long)
 
     def _bind_request_manager(self):
@@ -331,6 +329,7 @@ class Engine:
             adapters (AdapterList): Adapters.
         """
         history_lengths = [msg.history_len for msg in messages]
+        history_lengths = torch.tensor(history_lengths)
 
         token_ids = [msg.token_ids for msg in messages]
 
@@ -346,19 +345,10 @@ class Engine:
         if not is_decoding:
             seq_length = [len(tokens) for tokens in token_ids]
             seq_length = torch.tensor(seq_length, dtype=torch.long)
-            max_seq_len = max(seq_length)
-            q_start_loc = seq_length.cumsum(0) - seq_length
-            mask_range = torch.arange(max_seq_len)[None, :]
-            attention_mask = (mask_range < seq_length[:, None]).long()
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids += position_ids.new_tensor(history_lengths).unsqueeze(
-                -1)
         else:
-            q_start_loc = self._q_start_loc_buf[:batch_size]
-            attention_mask = self._attention_mask_buf[:batch_size]
             seq_length = self._seq_length_buf[:batch_size]
-            position_ids = q_start_loc.new_tensor(history_lengths).unsqueeze(
-                -1)
+        max_q_seq_length = seq_length.max().item()
+        max_history_length = history_lengths.max().item()
 
         # TODO: get block offsets is slow when block_size = 1
         block_offsets = self.scheduler.get_block_tables(messages)
@@ -386,11 +376,10 @@ class Engine:
         num_ignored_history = torch.tensor(num_ignored_history)
         return ModelInputs(input_ids=input_ids,
                            seq_length=seq_length,
-                           attention_mask=attention_mask,
-                           block_offsets=block_offsets,
-                           position_ids=position_ids,
-                           q_start_loc=q_start_loc,
                            history_lengths=history_lengths,
+                           block_offsets=block_offsets,
+                           max_q_seq_length=max_q_seq_length,
+                           max_history_length=max_history_length,
                            is_decoding=is_decoding,
                            num_ignored_history=num_ignored_history,
                            local_adapter_ids=local_adapter_ids,
@@ -535,11 +524,21 @@ class Engine:
                 return []
             return [token.item()]
 
+        def __get_q_start_loc():
+            inputs = self._inputs
+            seq_length = inputs.seq_length
+            batch_size = len(seq_length)
+            if inputs.is_decoding:
+                return torch.arange(0, batch_size)
+            else:
+                return seq_length.cumsum(0) - seq_length
+
         running = self._running
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
         self.update_running(running, next_token_ids, stopped)
 
         # generate output
+        q_start_loc = __get_q_start_loc()
         outputs: Dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
             if not is_run[idx]:
@@ -556,7 +555,7 @@ class Engine:
 
             if msg.return_logits:
                 inputs = self._inputs
-                start = inputs.q_start_loc[idx]
+                start = q_start_loc[idx]
                 seqlen = inputs.seq_length[idx]
                 outputs[session_id].logits = logits[start:start + seqlen]
         return outputs
