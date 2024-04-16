@@ -232,6 +232,7 @@ class BaseChatTemplate(BaseModel):
 
 @MODELS.register_module(name='wizardlm')
 @MODELS.register_module(name='vicuna')
+@MODELS.register_module(name='mini-gemini-vicuna')
 class Vicuna(BaseChatTemplate):
     """Chat template of vicuna model."""
 
@@ -261,10 +262,13 @@ class Vicuna(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'vicuna' in model_path.lower():
+        path = model_path.lower()
+        if 'vicuna' in path:
             return 'vicuna'
-        if 'wizardlm' in model_path.lower():
+        if 'wizardlm' in path:
             return 'wizardlm'
+        if 'mini-gemini-7b' in path or 'mini-gemini-13b' in path:
+            return 'mini-gemini-vicuna'
 
 
 @MODELS.register_module(name='internlm-chat')
