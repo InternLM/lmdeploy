@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
 import json
+import uuid
 from abc import abstractmethod
 from typing import List, Literal, Optional
 
@@ -10,6 +11,11 @@ from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 MODELS = Registry('model', locations=['lmdeploy.model'])
+
+
+def random_uuid() -> str:
+    """Return a random uuid."""
+    return str(uuid.uuid4().hex)
 
 
 @dataclasses.dataclass
@@ -85,8 +91,8 @@ class ChatTemplateConfig:
             raise ValueError(
                 'Invalid input. Must be a file path or a valid JSON string.')
         json_data = json.loads(json_data)
-        assert json_data.get('model_name', None) is not None, \
-            'model_name is a must for json chat template.'
+        if json_data.get('model_name', None) is None:
+            json_data['model_name'] = random_uuid()
         if json_data['model_name'] not in MODELS.module_dict.keys():
             MODELS.register_module(json_data['model_name'],
                                    module=BaseChatTemplate)
