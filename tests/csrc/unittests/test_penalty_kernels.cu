@@ -270,7 +270,7 @@ public:
 // we carefully suppress a compile warning message.
 #pragma nv_diag_suppress 177
 
-TYPED_TEST_SUITE(TemperaturePenaltyTest, FloatAndHalfTypes);
+TYPED_TEST_SUITE(TemperaturePenaltyTest, FloatType);
 
 TYPED_TEST(TemperaturePenaltyTest, NoPenalty)
 {
@@ -583,7 +583,7 @@ public:
     }
 };
 
-TYPED_TEST_SUITE(RepetitionPenaltyTest, FloatAndHalfTypes);
+TYPED_TEST_SUITE(RepetitionPenaltyTest, FloatType);
 
 TYPED_TEST(RepetitionPenaltyTest, NoPenalty)
 {

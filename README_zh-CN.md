@@ -95,7 +95,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |      InternLM      |  7B - 20B  |
 |     InternLM2      |  7B - 20B  |
 | InternLM-XComposer |     7B     |
-|        QWen        |  7B - 72B  |
+|        QWen        | 1.8B - 72B |
 |      QWen-VL       |     7B     |
 |      QWen1.5       | 0.5B - 72B |
 |    QWen1.5-MoE     |   A2.7B    |
@@ -108,6 +108,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |      Mistral       |     7B     |
 |    DeepSeek-MoE    |    16B     |
 |    DeepSeek-VL     |     7B     |
+|   InternVL-Chat    |     -      |
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
 |        Dbrx        |    132B    |

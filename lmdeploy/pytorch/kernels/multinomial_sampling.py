@@ -2,7 +2,6 @@
 import torch
 import triton
 import triton.language as tl
-from triton.runtime.jit import get_cuda_stream
 
 
 @triton.jit
@@ -30,9 +29,10 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
         scores = tl.load(Scores + off[:, None] * stride_sb +
                          s_off[None, :] * stride_st,
                          mask=s_mask,
-                         other=0.0).to(acc.dtype)
-        cum_scores = acc[:, None] + tl.cumsum(scores, 1)
-        acc += tl.sum(scores, 1)
+                         other=0.0).to(tl.float32)
+        c_scores = tl.cumsum(scores, 1)
+        cum_scores = acc[:, None] + c_scores
+        acc += tl.max(c_scores, 1)
 
         pre_cum_scores = cum_scores - scores
         valid_mask = (samp > pre_cum_scores) & (samp <= cum_scores)
@@ -55,6 +55,7 @@ def multinomial_sampling(scores: torch.Tensor,
 
     def __kernel_meta():
         """kernel meta."""
+        from triton.runtime.jit import get_cuda_stream
         device = scores.device
         device_idx = device.index
         device_type = device.type

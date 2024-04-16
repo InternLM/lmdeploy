@@ -49,7 +49,7 @@ def deduce_a_name(
 
     backend_config_model_name = _config_model_name(backend_config)
     chat_template_config_model_name = _config_model_name(chat_template_config)
-    model_name = model_name or chat_template_config_model_name or backend_config_model_name  # noqa
+    model_name = model_name or backend_config_model_name or chat_template_config_model_name  # noqa
     if model_name is None:
         # model maybe from workspace for turbomind
         model_name = get_model_name_from_workspace_model(model_path)
@@ -123,6 +123,18 @@ class Session:
         return res
 
 
+def _get_event_loop():
+    """get event loop."""
+    try:
+        event_loop = asyncio.get_event_loop()
+    except Exception:
+        logger.warning('Can not found event loop in current thread.'
+                       ' Create a new event loop.')
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
+    return event_loop
+
+
 class AsyncEngine:
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
@@ -168,10 +180,14 @@ class AsyncEngine:
         self.model_name = deduce_a_name(model_path, model_name, backend_config,
                                         chat_template_config)
         # build chat template config
+        if self.model_name in MODELS.module_dict.keys():
+            chat_template_name = self.model_name
+        else:
+            chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(self.model_name)
+            chat_template_config = ChatTemplateConfig(chat_template_name)
         elif chat_template_config.model_name is None:
-            chat_template_config.model_name = self.model_name
+            chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
 
         # prevent bc
@@ -210,7 +226,6 @@ class AsyncEngine:
         self.tokenizer = self.engine.tokenizer
         self.id2step = {}
         self.id2generator = {}
-        self.loop = asyncio.get_event_loop()
         self.running_session_ids = set()
         self.gens_set = set()
         for i in range(self.instance_num):
@@ -415,7 +430,7 @@ class AsyncEngine:
                     for i in range(len(batch_prompts))
                 ])
 
-            self.loop.run_until_complete(gather())
+            _get_event_loop().run_until_complete(gather())
         outputs = outputs[0] if need_list_wrap else outputs
         return outputs
 
@@ -485,7 +500,7 @@ class AsyncEngine:
                 outputs.put(None)
 
             proc = Thread(
-                target=lambda: self.loop.run_until_complete(gather()))
+                target=lambda: _get_event_loop().run_until_complete(gather()))
             proc.start()
 
             while True:

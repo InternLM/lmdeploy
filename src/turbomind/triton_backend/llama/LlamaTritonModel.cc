@@ -60,11 +60,16 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
 #endif
     }
     else {
+#ifdef ENABLE_FP32
         return std::make_shared<LlamaTritonModel<float>>(
             reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
             model_dir);
+#else
+        TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF32");
+        ft::FT_CHECK(false);
+#endif
     }
 }
 
@@ -272,9 +277,11 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     if (std::is_same<T, half>::value) {
         cublas_wrapper->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
     }
+#ifdef ENABLE_FP32
     else if (std::is_same<T, float>::value) {
         cublas_wrapper->setFP32GemmConfig();
     }
+#endif
 #ifdef ENABLE_BF16
     else if (std::is_same<T, __nv_bfloat16>::value) {
         cublas_wrapper->setBF16GemmConfig();
@@ -467,7 +474,9 @@ int LlamaTritonModel<T>::getPipelineParaSize()
     return pipeline_para_size_;
 }
 
+#ifdef ENABLE_FP32
 template struct LlamaTritonModel<float>;
+#endif
 template struct LlamaTritonModel<half>;
 #ifdef ENABLE_BF16
 template struct LlamaTritonModel<__nv_bfloat16>;
