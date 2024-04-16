@@ -42,7 +42,7 @@ LMDeploy offers various serving methods, choosing one that best meet your requir
 LMDeploy provides the following quantization methods. Please visit the following links for the detailed guide
 
 - [4bit weight-only quantization](quantization/w4a16.md)
-- [k/v quantization](quantization/kv_int8.md)
+- [k/v quantization](quantization/kv_quant.md)
 - [w8a8 quantization](quantization/w8a8.md)
 
 ## Useful Tools
