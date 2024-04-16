@@ -15,6 +15,7 @@ from .base import INPUT_MODELS, BaseInputModel, BaseReader
 class LlamaReader(BaseReader):
     """LlamaReader."""
 
+    attn_layer_prefix = 'model.layers'
     attn_layer_patten = r'model.layers.([0-9]+).'
     tok_embeddings_key = 'model.embed_tokens.weight'
     norm_weight_key = 'model.norm.weight'
@@ -64,7 +65,7 @@ class LlamaReader(BaseReader):
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params.get(
-                f'model.layers.{i}.self_attn.{key}_proj.{kind}')
+                f'{self.attn_layer_prefix}.{i}.self_attn.{key}_proj.{kind}')
             if not allow_none:
                 assert tensor is not None
             result.append(tensor)
@@ -88,13 +89,15 @@ class LlamaReader(BaseReader):
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
-        return self.params[f'model.layers.{i}.input_layernorm.weight']
+        return self.params[
+            f'{self.attn_layer_prefix}.{i}.input_layernorm.weight']
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         result = []
         for key in ['gate', 'down', 'up']:
-            tensor = self.params[f'model.layers.{i}.mlp.{key}_proj.{kind}']
+            tensor = self.params[
+                f'{self.attn_layer_prefix}.{i}.mlp.{key}_proj.{kind}']
             result.append(tensor)
         return (*result, )
 
@@ -112,7 +115,8 @@ class LlamaReader(BaseReader):
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
-        return self.params[f'model.layers.{i}.post_attention_layernorm.weight']
+        return self.params[
+            f'{self.attn_layer_prefix}.{i}.post_attention_layernorm.weight']
 
 
 @INPUT_MODELS.register_module(name='hf')

@@ -67,7 +67,7 @@ struct RakedThreadMap {
     static constexpr int kWarpAccessC = kWarpThreadC * kAccessC;
     static constexpr int kWarpAccessS = kWarpThreadS;
 
-    static constexpr int kWarpIterC = kDimC / kWarpAccessC;
+    static constexpr int kWarpIterC = (kDimC + kWarpAccessC - 1) / kWarpAccessC;
     static constexpr int kWarpIterS = kDimS / kWarpAccessS;
 
     static constexpr int kWarpC = 1;
@@ -76,8 +76,13 @@ struct RakedThreadMap {
     static constexpr int kIterC = kWarpIterC / kWarpC;
     static constexpr int kIterS = std::max(kWarpIterS / kWarpS, 1);
 
+    // Allow partial tile when there is ONLY 1 iteration
+    static_assert(kDimC % kWarpAccessC == 0 || kIterC == 1);
+
     static_assert(kIterC > 0);
     static_assert(kIterS > 0);
+
+    static constexpr bool kPartialC = kDimC % kWarpAccessC != 0;
 
     static constexpr int kFootprintC = kWarpAccessC * kIterC;
     static constexpr int kFootprintS = kWarpAccessS * kIterS;
@@ -121,6 +126,7 @@ void Print(TMap)
     std::cout << "      iter: (" << TMap::kIterC << ", " << TMap::kIterS << ")\n";
     std::cout << " footprint: (" << TMap::kFootprintC << ", " << TMap::kFootprintS << ")\n";
     std::cout << "     delta: (" << TMap::kDeltaC << ", " << TMap::kDeltaS << ")\n";
+    std::cout << "  partialC: " << TMap::kPartialC << "\n";
 }
 
 }  // namespace

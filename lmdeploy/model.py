@@ -875,6 +875,41 @@ class Deepseek(BaseChatTemplate):
             return 'deepseek'
 
 
+@MODELS.register_module(name=['internvl-zh'])
+class InternVLZH(BaseChatTemplate):
+
+    def __init__(self,
+                 user='<human>: ',
+                 eoh=' ',
+                 assistant='<bot>: ',
+                 eoa='</s>',
+                 session_len=4096,
+                 **kwargs):
+        super().__init__(user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         session_len=session_len,
+                         **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'internvl-chat-chinese' in path and 'v1-1' in path:
+            return 'internvl-zh'
+
+
 @MODELS.register_module(name=['deepseek-vl'])
 class DeepseekVL(BaseChatTemplate):
 
@@ -1035,6 +1070,46 @@ class DbrxInstruct(BaseChatTemplate):
         path = model_path.lower()
         if 'dbrx' in path:
             return 'dbrx'
+
+
+@MODELS.register_module(name=['internvl-zh-hermes2'])
+@MODELS.register_module(name=['llava-chatml'])
+class ChatmlDirect(BaseChatTemplate):
+
+    def __init__(self,
+                 system='<|im_start|>system\n',
+                 meta_instruction='Answer the questions.',
+                 eosys='<|im_end|>\n',
+                 user='<|im_start|>user\n',
+                 eoh='<|im_end|>\n',
+                 assistant='<|im_start|>assistant\n',
+                 eoa='<|im_end|>',
+                 separator='\n',
+                 session_len=4096,
+                 **kwargs):
+        super().__init__(system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         session_len=session_len,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'llava' in path and 'v1.6-34b' in path:
+            return 'llava-chatml'
+        if 'internvl-chat-chinese' in path and 'v1-2' in path:
+            return 'internvl-zh-hermes2'
 
 
 def best_match_model(query: str) -> Optional[str]:

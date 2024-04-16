@@ -5,11 +5,17 @@ from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
 
 
 class SubCliChat(object):
-    _help = 'Chat with pytorch or turbomind engine.'
-    _desc = _help
-    parser = CLI.subparsers.add_parser('chat', help=_help, description=_desc)
-    subparsers = parser.add_subparsers(
-        title='Commands', description='This group has the following commands:')
+
+    @staticmethod
+    def _init_cli():
+        _help = 'Chat with pytorch or turbomind engine.'
+        _desc = _help
+        parser = CLI.subparsers.add_parser('chat',
+                                           help=_help,
+                                           description=_desc)
+        SubCliChat.subparsers = parser.add_subparsers(
+            title='Commands',
+            description='This group has the following commands:')
 
     @staticmethod
     def add_parser_torch():
@@ -127,5 +133,6 @@ class SubCliChat(object):
     @staticmethod
     def add_parsers():
         """Add all parsers."""
+        SubCliChat._init_cli()
         SubCliChat.add_parser_torch()
         SubCliChat.add_parser_turbomind()
