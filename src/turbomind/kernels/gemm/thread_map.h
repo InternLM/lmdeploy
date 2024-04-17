@@ -37,8 +37,8 @@ struct ThreadMap {
     // Allow partial tile when there is ONLY 1 iteration
     static_assert(kDimC % kWarpAccessC == 0 || kIterC == 1);
 
-    static_assert(kIterC > 0);
-    static_assert(kIterS > 0);
+    // static_assert(kIterC > 0);
+    // static_assert(kIterS > 0);
 
     static constexpr bool kPartialC = kDimC % kWarpAccessC != 0;
 

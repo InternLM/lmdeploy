@@ -32,9 +32,10 @@ struct GemmUniversal {
 
     // row.col.row
     struct Param {
-        T*                   A;  // x (m,k)
-        get_pointer_type<Tb> B;  // W (n,k)
-        T*                   C;  //   (m,n)
+        T*                   A;  // x (m  ,k)
+        get_pointer_type<Tb> B;  // W (n  ,k)
+        T*                   Q;  //   (k/g,n, 2)
+        T*                   C;  //   (m  ,n)
         int                  m;
         int                  n;
         int                  k;
@@ -61,10 +62,11 @@ struct GemmUniversal {
         typename Mainloop::GmemIterB gmem_B{param.B + n_idx * param.k,  // ptr
                                             param.k * Impl::kPackedN,   // stride s
                                             CTA_K * Impl::kPackedN};    // stride k
+        typename Mainloop::GmemIterQ gmem_Q{param.Q + n_idx, param.n, (CTA_K + 127) / 128 * param.n};
 
         Mainloop mainloop{};
 
-        mainloop(gmem_A, gmem_B, frag_C, tile_iter, storage);
+        mainloop(gmem_A, gmem_B, gmem_Q, frag_C, tile_iter, storage);
 
         StoreC(frag_C, m_idx, n_idx, param);
     }

@@ -27,7 +27,7 @@ auto cast(T* p)
 }  // namespace detail
 
 template<class T, class Tb>
-void invoke(T* C, const T* A, const Tb* B, int m, int n, int k, cudaStream_t st)
+void invoke(T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, cudaStream_t st)
 {
     constexpr int CTA_M  = 128;
     constexpr int CTA_N  = 128;
@@ -58,8 +58,12 @@ void invoke(T* C, const T* A, const Tb* B, int m, int n, int k, cudaStream_t st)
     auto block = Impl::WARP_CNT * WARP_SIZE;
 
     [[maybe_unused]] static const int _ = [] {
+        std::cout << "A:\n";
         Print(typename Impl::ThreadMapA{});
+        std::cout << "\nB:\n";
         Print(typename Impl::ThreadMapB{});
+        std::cout << "\nQ:\n";
+        Print(typename Impl::ThreadMapQ{});
         printf("warp count: %d\n", Impl::WARP_CNT);
         return 0;
     }();
@@ -70,7 +74,7 @@ void invoke(T* C, const T* A, const Tb* B, int m, int n, int k, cudaStream_t st)
     }
 
     gemm_kernel<Kernel><<<grid, block, kSmemSize, st>>>(
-        typename Kernel::Param{(T*)A, detail::cast((Tb*)B), C, m, n, k, log_tile}, typename Kernel::CtaMap{});
+        typename Kernel::Param{(T*)A, detail::cast((Tb*)B), (T*)Q, C, m, n, k, log_tile}, typename Kernel::CtaMap{});
 }
 
 }  // namespace turbomind::gemm

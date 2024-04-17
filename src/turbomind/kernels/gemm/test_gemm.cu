@@ -65,6 +65,8 @@ void Run(int m, int n, int k)
     universal_vector<unsigned short> b0(n * k);
     universal_vector<Array<Tb, 8>>   b1(n * k / 8);
 
+    universal_vector<T> q((k + 127) / 128 * n * 2);
+
     std::vector<T> c_cpu(m * n);
 
     RNG rng;
@@ -80,6 +82,10 @@ void Run(int m, int n, int k)
             // b0[i] = 15;
             b[i] = T(b0[i]);  // convert to floating type
         }
+        for (int i = 0; i < q.size(); i += 2) {
+            q[i]     = T(1);
+            q[i + 1] = T(0);
+        }
     }
     else {
         rng.GenerateUniform(b.data().get(), b.size(), 1, -0.5);
@@ -90,8 +96,8 @@ void Run(int m, int n, int k)
     // ComputeRefCpu(c_cpu.data(), a.data().get(), b.data().get(), m, n, k);
 
     if (0) {
-        for (int i = 0; i < 10; ++i) {
-            gemm::invoke(c.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
+        for (int i = 0; i < 1; ++i) {
+            gemm::invoke(c.data().get(), a.data().get(), b.data().get(), (T*)nullptr, m, n, k, 0);
         }
 
         computeRefCublas(c_ref.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
@@ -106,7 +112,12 @@ void Run(int m, int n, int k)
         auto B1 = (Tb*)b1.data().get();
 
         for (int i = 0; i < 1; ++i) {
-            gemm::transcript<T>(B1, b.data().get(), n, k, 0);
+            if constexpr (std::is_same_v<T, Tb>) {
+                gemm::transcript<T>(B1, b.data().get(), n, k, 0);
+            }
+            else {
+                gemm::transcript<T>(B1, b0.data().get(), n, k, 0);
+            }
         }
 
         cudaDeviceSynchronize();
@@ -115,7 +126,7 @@ void Run(int m, int n, int k)
         // }
 
         for (int i = 0; i < 10; ++i) {
-            gemm::invoke(c.data().get(), a.data().get(), B1, m, n, k, 0);
+            gemm::invoke(c.data().get(), a.data().get(), B1, q.data().get(), m, n, k, 0);
         }
 
         computeRefCublas(c_ref.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
@@ -131,8 +142,9 @@ void Run(int m, int n, int k)
 
 int main(int argc, char* argv[])
 {
-    // Run<half>(8192, 8192, 8192);
-    Run<half, uint4_t>(4096, 4096, 4096);
+    Run<half, uint4_t>(8192, 8192, 8192);
+    // Run<half, uint4_t>(4096, 4096, 4096);
     // Run<half, uint4_t>(128, 128, 32);
+    // Run<half, uint4_t>(128, 128, 128);
     return 0;
 }

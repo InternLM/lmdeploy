@@ -34,6 +34,7 @@ struct Transcript {
 
     struct SharedStorage {
         __align__(16) Array<T, Gemm::SmemLayoutB::kSize> B;
+        Array<T, 1> Q;
     };
 
     static constexpr int MMA_CNT_K = CTA_K / Gemm::OP_K;
@@ -42,9 +43,7 @@ struct Transcript {
     static constexpr int P_N = Gemm1::P_N;
     static constexpr int P_K = Gemm1::P_K;
 
-    static constexpr int FRAG_SIZE = 8;
-
-    static_assert(CTA_K * CTA_N == MMA_CNT_K * MMA_CNT_N * WARP_SIZE * FRAG_SIZE);
+    static_assert(CTA_K * CTA_N == MMA_CNT_K * MMA_CNT_N * WARP_SIZE * 8);
 
     // row.col.row
     struct Param {
@@ -117,7 +116,6 @@ struct Transcript {
                             // transform to packed data (quantization & permutation)
                             Converter converter{};
                             data[p_k][p_n] = converter(state_B.frag_B[k + p_k][n + p_n]);
-                            // printf("%08x\n", (uint32_t&)data[p_k][p_n]);
                         }
                     }
                     constexpr int kAccessSize = 8 * P_K * P_N;

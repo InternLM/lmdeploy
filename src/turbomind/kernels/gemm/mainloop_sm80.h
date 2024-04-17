@@ -22,15 +22,23 @@ struct Mainloop_sm80 {
 
     using ThreadMapA = typename Impl::ThreadMapA;
     using ThreadMapB = typename Impl::ThreadMapB;
+    using ThreadMapQ = typename Impl::ThreadMapQ;
 
     using SmemLayoutA = typename Impl::SmemLayoutA;
     using SmemLayoutB = typename Impl::SmemLayoutB;
+    using SmemLayoutQ = typename Impl::SmemLayoutQ;
 
     using GmemIterA = GmemIteratorSm80<T, ThreadMapA, SmemLayoutA, 0>;
     using GmemIterB = GmemIteratorSm80<Tb, ThreadMapB, SmemLayoutB, 1>;
+    using GmemIterQ = GmemIteratorSm80<T, ThreadMapQ, SmemLayoutQ, 2, Impl::G_CTA, std::is_same_v<T, Tb>>;
+
+    static constexpr bool kUseGmemQ = !std::is_same_v<T, Tb>;
 
     static constexpr int kBatchA = (ThreadMapA::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
     static constexpr int kBatchB = (ThreadMapB::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
+    static constexpr int kBatchQ = (ThreadMapB::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
+
+    static constexpr int G_CTA = Impl::G_CTA;
 
     __device__ void Wait()
     {
@@ -45,22 +53,41 @@ struct Mainloop_sm80 {
         smem_iter.Advance();
     }
 
-    __device__ void
-    operator()(GmemIterA& gmem_A, GmemIterB& gmem_B, FragC& frag_C, int tile_iter, SharedStorage& storage)
+    __device__ void operator()(
+        GmemIterA& gmem_A, GmemIterB& gmem_B, GmemIterQ& gmem_Q, FragC& frag_C, int tile_iter, SharedStorage& storage)
     {
         typename Impl::StateA state_A{storage};
+        typename Impl::StateQ state_Q{storage};
         typename Impl::StateB state_B{storage};
+
+        state_B.state_Q = &state_Q;
+
+        const int iter_count = tile_iter;
 
         // a separate counter tends to generate better code
         int gmem_iter = tile_iter;
         int gmem_mask = true;
 
+        // w: 012345678
+        // r:    012345
+
+        //    012345678
+        // w: 0___0___0___0
+        // r:    0___0___0
+
+        // w: 0___1___2___3
+        // r:    0___1___2
+        // w: 0_2_0_2_0_2
+        // r:    0_2_0_2_0_2
+
         PRAGMA_UNROLL
         for (int i = 0; i < Stages; ++i) {
             AdvanceSmemStage(gmem_A, state_A);
             AdvanceSmemStage(gmem_B, state_B);
+            AdvanceSmemStage(gmem_Q, state_Q);
             gmem_A.ClearSmem();
             gmem_B.ClearSmem();
+            gmem_Q.ClearSmem();
         }
         // r: 0, w:s-1
 
@@ -70,11 +97,14 @@ struct Mainloop_sm80 {
         for (int stage = 0; stage < Stages - 1; ++stage) {
             AdvanceSmemStage(gmem_A, state_A);
             AdvanceSmemStage(gmem_B, state_B);
+            AdvanceSmemStage(gmem_Q, state_Q);
             gmem_A.Prefetch(gmem_mask);
             gmem_B.Prefetch(gmem_mask);
+            gmem_Q.Prefetch(gmem_Q.g_counter_ / G_CTA < iter_count);
             __pipeline_commit();
             gmem_A.Advance();
             gmem_B.Advance();
+            gmem_Q.Advance();
             if (--gmem_iter == 0) {
                 gmem_mask = false;
             }
@@ -87,12 +117,15 @@ struct Mainloop_sm80 {
             if constexpr (kFusePrefetch) {
                 int batch_A = min((k + 1) * kBatchA, ThreadMapA::kIterS) - k * kBatchA;
                 int batch_B = min((k + 1) * kBatchB, ThreadMapB::kIterS) - k * kBatchB;
+                int batch_Q = min((k + 1) * kBatchQ, ThreadMapB::kIterS) - k * kBatchQ;
                 gmem_A.Prefetch(k * kBatchA, batch_A, gmem_mask);
                 gmem_B.Prefetch(k * kBatchB, batch_B, gmem_mask);
+                gmem_Q.Prefetch(k * kBatchQ, batch_Q, gmem_Q.g_counter_ / G_CTA < iter_count);
                 if (k == Impl::ITER_K - 1) {
                     __pipeline_commit();
                     gmem_A.Advance();
                     gmem_B.Advance();
+                    gmem_Q.Advance();
                     if (--gmem_iter == 0) {
                         gmem_mask = false;
                     }
@@ -104,6 +137,7 @@ struct Mainloop_sm80 {
             Wait();
             AdvanceSmemStage(gmem_A, state_A);
             AdvanceSmemStage(gmem_B, state_B);
+            AdvanceSmemStage(gmem_Q, state_Q);
         };
 
         advance_and_wait_smem_stage();
@@ -122,9 +156,11 @@ struct Mainloop_sm80 {
             if constexpr (!kFusePrefetch) {
                 gmem_A.Prefetch(gmem_mask);
                 gmem_B.Prefetch(gmem_mask);
+                gmem_Q.Prefetch(gmem_Q.g_counter_ / G_CTA < iter_count);
                 __pipeline_commit();
                 gmem_A.Advance();
                 gmem_B.Advance();
+                gmem_Q.Advance();
                 if (--gmem_iter == 0) {
                     gmem_mask = false;
                 }

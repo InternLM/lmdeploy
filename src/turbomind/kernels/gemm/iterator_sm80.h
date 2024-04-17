@@ -16,7 +16,7 @@ namespace turbomind::gemm {
 #define L2_CACHEHINT(size)
 #endif
 
-template<class T, class Map, class SmemLayout, int Idx>
+template<class T, class Map, class SmemLayout, int Idx, int G_CTA = 1, bool Disable = false>
 struct GmemIteratorSm80 {
 
     using AccessType = Array<T, Map::kAccessC>;
@@ -43,10 +43,17 @@ struct GmemIteratorSm80 {
     int stride_k_;
     // int smem_offset_ = 0;
 
+    int  g_counter_{};
+    bool g_mask_{true};
+
     SmemAccessor<T, SmemLayout> smem_data_;
 
     __device__ GmemIteratorSm80(Pointer data, int stride_s, int stride_k): smem_data_{Pointer{nullptr}}
     {
+        if constexpr (Disable) {
+            return;
+        }
+
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
 
@@ -73,6 +80,9 @@ struct GmemIteratorSm80 {
 
     __device__ void ClearSmem(int pipe_iter = 0)
     {
+        if constexpr (Disable) {
+            return;
+        }
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
@@ -85,11 +95,19 @@ struct GmemIteratorSm80 {
 
     __device__ void Prefetch(int begin, int count, bool tile_mask)
     {
+        if constexpr (Disable) {
+            return;
+        }
         // if constexpr (SmemLayout::kIsTrivial) {
         //     if (begin == 0) {
         //         smem_data_.ptr_ += dst_offset_;
         //     }
         // }
+
+        // if (G_CTA > 1 && begin == 0 && threadIdx.x == 0 && blockIdx.x == 0) {
+        //     printf("[prefetch] counter=%d, g_mask=%d, t_mask=%d\n", g_counter_, (int)g_mask_, (int)tile_mask);
+        // }
+
         PRAGMA_UNROLL
         for (int s = begin; s < begin + count && s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
@@ -100,7 +118,7 @@ struct GmemIteratorSm80 {
                 //     smem_data_.ptr_ += Map::kDeltaC;
                 // }
 
-                CpAsync(std::true_type{}, dst, src_data_, tile_mask);
+                CpAsync(std::true_type{}, dst, src_data_, g_mask_ && tile_mask);
 
                 // if (tile_mask) {
                 //     static_assert(sizeof(AccessType) == sizeof(uint4));
@@ -136,11 +154,35 @@ struct GmemIteratorSm80 {
 
     __device__ void Advance()
     {
+        if constexpr (Disable) {
+            return;
+        }
         // src_ptr_ += stride_k_;
         // src_data_ = src_ptr_ + src_offset_;
 
-        src_data_ = src_ptr_ + src_offset_;
-        src_ptr_ += stride_k_;
+        // if (G_CTA > 1 && threadIdx.x == 0 && blockIdx.x == 0) {
+        //     printf("[advance]  counter=%d, g_mask=%d\n", g_counter_, (int)g_mask_);
+        // }
+
+        if (g_mask_) {
+            src_data_ = src_ptr_ + src_offset_;
+            src_ptr_ += stride_k_;
+        }
+
+        ++g_counter_;
+        g_mask_ = g_counter_ % G_CTA == 0;
+        // ++g_counter_;
+        // if constexpr (Idx == 2) {
+        //     if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+        //         printf("%d\n", g_counter_);
+        //     }
+        // }
+        // if (g_counter_ % G_CTA == 0 && G_CTA == 1) {
+        //     src_ptr_ += stride_k_;
+        //     // if constexpr (Idx == 2) {
+        //     //     printf("%p\n", src_ptr_);
+        //     // }
+        // }
     }
 
 #if 0

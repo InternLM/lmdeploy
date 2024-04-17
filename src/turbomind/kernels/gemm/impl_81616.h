@@ -84,6 +84,8 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
 
     using DataB = Array<Tb, 8 * P>[ITER_K / P_K][ITER_N / P_N];
 
+    using DataQ = Array<T, 4>[ITER_K][ITER_N];
+
     using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K + 8>;
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 64, Swizzle<3, 3, 3>>;
@@ -96,10 +98,20 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                                           gemm::ThreadMap<kPackedC, kPackedS, 128 / bitsof<Tb>, WARP_CNT, WARP_SIZE>,
                                           gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>>;
 
+    static constexpr int G = 128;
+
+    static constexpr int CTA_G = (CTA_K + G - 1) / G;
+    static constexpr int G_CTA = (G + CTA_K - 1) / CTA_K;
+
+    // [CTA_K / G, CTA_N]
+    using SmemLayoutQ = SmemLayoutV2<CTA_G, CTA_N * 2>;
+    using ThreadMapQ  = gemm::ThreadMap<CTA_N * 2, CTA_G, 2, WARP_CNT, 32>;
+
     union SharedStorage {
         struct {
             __align__(16) T A[Stages_ * SmemLayoutA::kSize];
             __align__(16) Array<Tb, Stages_ * SmemLayoutB::kSize> B;
+            __align__(16) Array<T, Stages_ * SmemLayoutQ::kSize> Q;
         };
     };
 
@@ -162,12 +174,81 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
         }
     };
 
+    struct StateQ {
+        SmemAccessor<T, SmemLayoutQ> smem_Q;
+        DataQ                        rmem_Q;
+        int                          offset = 0;
+        T*                           data;
+        int                          g_counter = 0;
+        bool                         g_mask    = true;
+
+        template<class Storage>
+        __device__ StateQ(Storage& storage): smem_Q{storage.Q.data()}
+        {
+            data = storage.Q.data();
+        }
+
+        __device__ void Load(int k, int)
+        {
+            if constexpr (std::is_same_v<T, Tb>) {
+                return;
+            }
+
+            const int warp_id = threadIdx.x / WARP_SIZE;
+            const int lane_id = threadIdx.x % WARP_SIZE;
+
+            const int warp_idx_n    = warp_id_n(warp_id);
+            const int warp_offset_n = warp_idx_n * WARP_N;
+
+            // if (threadIdx.x == 0 && k == 0) {
+            //     printf("[load]     counter=%d, g_mask=%d\n", g_counter, g_mask);
+            // }
+
+            PRAGMA_UNROLL
+            for (int n = 0; n < ITER_N; ++n) {
+                PRAGMA_UNROLL
+                for (int i = 0; i < 2; ++i) {
+                    //              16        1            8          WARP_N
+                    const int c = n * 16 + lane_id / 4 + i * 8 + warp_offset_n;
+                    const int s = 0;  // k
+                    if (g_mask) {
+                        Lds((Array<T, 2>&)rmem_Q[k][n][i * 2], data + SmemLayoutQ::apply(s, c * 2));
+                    }
+                    // printf("%f %f\n", (float)rmem_Q[k][n][i * 2], (float)rmem_Q[k][n][i * 2 + 1]);
+                }
+                // rmem_Q[k][n][0] = 1;
+                // rmem_Q[k][n][1] = 0;
+                // rmem_Q[k][n][2] = 1;
+                // rmem_Q[k][n][3] = 0;
+            }
+        }
+
+        __device__ void Advance()
+        {
+            if constexpr (std::is_same_v<T, Tb>) {
+                return;
+            }
+
+            offset += SmemLayoutQ::kSize;
+            if (offset == Stages * SmemLayoutQ::kSize) {
+                offset = 0;
+            }
+            data = smem_Q.ptr_ + offset;
+            ++g_counter;
+            g_mask = g_counter % G_CTA == 0;
+            // if (threadIdx.x == 0) {
+            //     printf("[q]        counter=%d, g_mask=%d\n", g_counter, g_mask);
+            // }
+        }
+    };
+
     struct StateB {
         SmemAccessor<Tb, SmemLayoutB> smem_B;
         DataB                         data_B;
         FragB                         frag_B;
         int                           offset = 0;
         get_pointer_type<Tb>          data;
+        StateQ*                       state_Q;
 
         template<class Storage>
         __device__ StateB(Storage& storage): smem_B{storage.B.data()}
@@ -197,7 +278,6 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
             }
             else {
                 if (k % P_K == 0) {
-
                     Tb* lo = (Tb*)data;
                     Tb* hi = (Tb*)(data + SmemLayoutB::kSize);
 
@@ -221,18 +301,43 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                         Lds(data_B[k / P_K][n / P_N], ptr);
                     }
                 }
+                state_Q->Load(k, 0);
             }
         }
 
         __device__ void Transform(int k)
         {
             const int p_k = k % P_K;
-            PRAGMA_UNROLL
-            for (int n = 0; n < ITER_N; n += P_N) {
+            if constexpr (std::is_same_v<T, Tb>) {
                 PRAGMA_UNROLL
-                for (int p_n = 0; p_n < P_N; ++p_n) {
-                    ConvertKvCache<Tb, T> converter(1, 0);
-                    frag_B[k][n + p_n] = converter((Array<Tb, 8>&)data_B[k / P_K][n / P_N][(p_k * P_N + p_n) * 8]);
+                for (int n = 0; n < ITER_N; n += P_N) {
+                    PRAGMA_UNROLL
+                    for (int p_n = 0; p_n < P_N; ++p_n) {
+                        frag_B[k][n + p_n] = (Array<Tb, 8>&)data_B[k / P_K][n / P_N][(p_k * P_N + p_n) * 8];
+                    }
+                }
+            }
+            else {
+                using Converter = ConvertKvCache<Tb, T>;
+                auto& rmem_Q    = state_Q->rmem_Q;
+                PRAGMA_UNROLL
+                for (int n = 0; n < ITER_N; n += P_N) {
+                    PRAGMA_UNROLL
+                    for (int p_n = 0; p_n < P_N; ++p_n) {
+                        auto& frag = frag_B[k][n + p_n];
+                        frag       = Converter::convert((Array<Tb, 8>&)data_B[k / P_K][n / P_N][(p_k * P_N + p_n) * 8]);
+                        PRAGMA_UNROLL
+                        for (int c = 0; c < 2; ++c) {
+                            PRAGMA_UNROLL
+                            for (int s = 0; s < 2; ++s) {
+                                auto& k2 = (Array<T, 2>&)frag[c * 4 + s * 2];
+                                PRAGMA_UNROLL
+                                for (int i = 0; i < 2; ++i) {
+                                    k2[i] = __hfma(k2[i], rmem_Q[k][n][s * 2], rmem_Q[k][n][s * 2 + 1]);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
