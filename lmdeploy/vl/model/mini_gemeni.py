@@ -58,10 +58,8 @@ class MiniGeminiVisionModel(VisonModel):
         model.get_model().initialize_uni_modules(model.config, for_eval=True)
 
         self.model = model
-        self.vision_tower = model.model.vision_tower
-        self.mm_projector = model.model.mm_projector
 
-        image_processor = self.vision_tower.image_processor
+        image_processor = model.model.vision_tower.image_processor
         if hasattr(model.config, 'image_size_aux'):
             if not hasattr(image_processor, 'image_size_raw'):
                 image_processor.image_size_raw = image_processor.crop_size.copy(  # noqa

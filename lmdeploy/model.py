@@ -232,7 +232,6 @@ class BaseChatTemplate(BaseModel):
 
 @MODELS.register_module(name='wizardlm')
 @MODELS.register_module(name='vicuna')
-@MODELS.register_module(name='mini-gemini-vicuna')
 class Vicuna(BaseChatTemplate):
     """Chat template of vicuna model."""
 
@@ -267,6 +266,26 @@ class Vicuna(BaseChatTemplate):
             return 'vicuna'
         if 'wizardlm' in path:
             return 'wizardlm'
+
+
+@MODELS.register_module(name='mini-gemini-vicuna')
+class MiniGemini(Vicuna):
+    """Chat template of vicuna model."""
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
         if 'mini-gemini-7b' in path or 'mini-gemini-13b' in path:
             return 'mini-gemini-vicuna'
 
