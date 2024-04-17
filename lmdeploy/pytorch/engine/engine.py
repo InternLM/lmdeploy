@@ -136,7 +136,7 @@ class Engine:
             tp=tp)
 
         cache_config = self.model_agent.cache_config
-        self.adapter_manager = self._build_adapter_manager()
+        self.adapter_manager = self._build_adapter_manager(adapters)
         self.scheduler = Scheduler(scheduler_config, cache_config,
                                    self.adapter_manager)
 
@@ -198,8 +198,11 @@ class Engine:
         # buffers to create inputs
         self._seq_length_buf = torch.ones(max_batches, dtype=torch.long)
 
-    def _build_adapter_manager(self):
-        linear_info = self.model_agent.get_loralinear_info()
+    def _build_adapter_manager(self, adapters):
+        if adapters is not None and len(adapters) > 0:
+            linear_info = self.model_agent.get_loralinear_info()
+        else:
+            linear_info = dict()
         block_numel = self.model_agent.get_block_numel()
         return AdapterManager(linear_info, block_numel)
 

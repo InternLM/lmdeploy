@@ -61,7 +61,7 @@ def get_indexed_lora_linears(model: torch.nn.Module):
     named_linears = _get_named_loralinears(model)
 
     config = None
-    peft_config = getattr(model, 'peft_config', dict)
+    peft_config = getattr(model, 'peft_config', dict())
     if len(peft_config) > 0:
         config = next(iter(peft_config.values()))
 
@@ -173,7 +173,10 @@ class LoRALinearInfo:
 
 def get_loralinear_info(model: torch.nn.Module):
     """get loralinear info."""
-    lora_linears = get_indexed_lora_linears(model)[0]
+    indexed_lora_linears = get_indexed_lora_linears(model)
+    if len(indexed_lora_linears) == 0:
+        return dict()
+    lora_linears = indexed_lora_linears[0]
     infos = dict()
     for target_name, linear in lora_linears.items():
         infos[target_name] = LoRALinearInfo.from_loralinear(linear)
