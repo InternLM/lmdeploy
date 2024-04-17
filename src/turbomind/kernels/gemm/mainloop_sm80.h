@@ -62,8 +62,6 @@ struct Mainloop_sm80 {
 
         state_B.state_Q = &state_Q;
 
-        const int iter_count = tile_iter;
-
         // a separate counter tends to generate better code
         int gmem_iter = tile_iter;
         int gmem_mask = true;
@@ -71,6 +69,7 @@ struct Mainloop_sm80 {
         // w: 012345678
         // r:    012345
 
+        // 4-stage
         //    012345678
         // w: 0___0___0___0
         // r:    0___0___0
@@ -79,6 +78,11 @@ struct Mainloop_sm80 {
         // r:    0___1___2
         // w: 0_2_0_2_0_2
         // r:    0_2_0_2_0_2
+
+        // 3-stage
+        // k: 012345678
+        // w: 0___1___2
+        // r:   0___1___2
 
         PRAGMA_UNROLL
         for (int i = 0; i < Stages; ++i) {
@@ -100,7 +104,7 @@ struct Mainloop_sm80 {
             AdvanceSmemStage(gmem_Q, state_Q);
             gmem_A.Prefetch(gmem_mask);
             gmem_B.Prefetch(gmem_mask);
-            gmem_Q.Prefetch(gmem_Q.g_counter_ / G_CTA < iter_count);
+            gmem_Q.Prefetch(gmem_mask);
             __pipeline_commit();
             gmem_A.Advance();
             gmem_B.Advance();
@@ -120,7 +124,7 @@ struct Mainloop_sm80 {
                 int batch_Q = min((k + 1) * kBatchQ, ThreadMapB::kIterS) - k * kBatchQ;
                 gmem_A.Prefetch(k * kBatchA, batch_A, gmem_mask);
                 gmem_B.Prefetch(k * kBatchB, batch_B, gmem_mask);
-                gmem_Q.Prefetch(k * kBatchQ, batch_Q, gmem_Q.g_counter_ / G_CTA < iter_count);
+                gmem_Q.Prefetch(k * kBatchB, batch_Q, gmem_mask);
                 if (k == Impl::ITER_K - 1) {
                     __pipeline_commit();
                     gmem_A.Advance();
@@ -143,6 +147,9 @@ struct Mainloop_sm80 {
         advance_and_wait_smem_stage();
         // r: 0, w:-1
 
+        // start counting Q iters
+        state_Q.counting = true;
+
         state_A.Load(0, 0);
         state_B.Load(0, 0);
         state_B.Transform(0);
@@ -156,7 +163,7 @@ struct Mainloop_sm80 {
             if constexpr (!kFusePrefetch) {
                 gmem_A.Prefetch(gmem_mask);
                 gmem_B.Prefetch(gmem_mask);
-                gmem_Q.Prefetch(gmem_Q.g_counter_ / G_CTA < iter_count);
+                gmem_Q.Prefetch(gmem_mask);
                 __pipeline_commit();
                 gmem_A.Advance();
                 gmem_B.Advance();

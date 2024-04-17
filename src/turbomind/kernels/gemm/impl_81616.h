@@ -179,6 +179,7 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
         DataQ                        rmem_Q;
         int                          offset = 0;
         T*                           data;
+        int                          counting  = false;
         int                          g_counter = 0;
         bool                         g_mask    = true;
 
@@ -234,8 +235,11 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                 offset = 0;
             }
             data = smem_Q.ptr_ + offset;
-            ++g_counter;
-            g_mask = g_counter % G_CTA == 0;
+            
+            if (counting) {
+                ++g_counter;
+                g_mask = g_counter % G_CTA == 0;
+            }
             // if (threadIdx.x == 0) {
             //     printf("[q]        counter=%d, g_mask=%d\n", g_counter, g_mask);
             // }

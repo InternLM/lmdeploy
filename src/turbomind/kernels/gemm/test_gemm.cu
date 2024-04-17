@@ -129,7 +129,9 @@ void Run(int m, int n, int k)
             gemm::invoke(c.data().get(), a.data().get(), B1, q.data().get(), m, n, k, 0);
         }
 
-        computeRefCublas(c_ref.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
+        for (int i = 0; i < 5; ++i) {
+            computeRefCublas(c_ref.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
+        }
 
         cudaDeviceSynchronize();
 
@@ -142,8 +144,8 @@ void Run(int m, int n, int k)
 
 int main(int argc, char* argv[])
 {
-    Run<half, uint4_t>(8192, 8192, 8192);
-    // Run<half, uint4_t>(4096, 4096, 4096);
+    // Run<half, uint4_t>(8192, 8192, 8192);
+    Run<half, uint4_t>(4096, 4096, 4096);
     // Run<half, uint4_t>(128, 128, 32);
     // Run<half, uint4_t>(128, 128, 128);
     return 0;
