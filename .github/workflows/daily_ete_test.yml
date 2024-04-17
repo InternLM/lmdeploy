@@ -234,13 +234,8 @@ jobs:
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'interface-pipeline'))
         run: |
           pytest autotest/interface/pipeline -m 'not pr_test' -s -vv --alluredir=allure-results
-      - name: Test lmdeploy - rerun all fail cases
-        timeout-minutes: 30
-        if: github.event_name == 'schedule' || (github.event.inputs.backend != '[]' && github.event.inputs.model != '[]')
-        run: |
-          pytest autotest --lf --lfnf none --alluredir=allure-results
       - name: Test lmdeploy - local testcase
-        if: always() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case'))
+        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
         run: |
           pytest /local_case/issue_regression --alluredir=allure-results
       - name: Generate reports

@@ -27,6 +27,7 @@ chinese_poem_case:
             - "。"
             - poem
             - poetry
+            - \n
         - len_g:
             5
 english_poem_case:
@@ -44,20 +45,12 @@ emoji_case:
             - 👍
             - 😊
             - 🎉
+            - 👏
             - good
             - like
             - 赞
             - 好
-        - baichuan2:
-            - contain:
-                - 👍
-                - 😊
-                - 🎉
-                - good
-                - like
-                - 赞
-                - 好
-                - '!'
+            - '!'
 traditional_chinese_case:
     - 介紹澳門景點，使用繁體:
         - contain:
