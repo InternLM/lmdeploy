@@ -170,7 +170,8 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
             file.writelines('result:' + str(case_result) + ',reason:' +
                             reason + '\n')
             if result is False:
-                msg += reason
+                msg = reason
+                print(reason)
             result = result & case_result
     file.close()
     return result, restful_log, msg
@@ -214,7 +215,8 @@ def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
             file.writelines('result:' + str(case_result) + ',reason:' +
                             reason + '\n')
             if result is False:
-                msg += reason
+                msg = reason
+                print(reason)
             result = result & case_result
     file.close()
     return result, interactive_log, msg

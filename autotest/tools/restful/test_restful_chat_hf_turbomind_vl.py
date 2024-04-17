@@ -72,7 +72,7 @@ def run_all_step(config, port: int = DEFAULT_PORT):
     model_name = client.models.list().data[0].id
 
     restful_log = os.path.join(log_path,
-                               'restful_vl_' + model_name + port + '.log')
+                               'restful_vl_' + model_name + str(port) + '.log')
     file = open(restful_log, 'w')
 
     response = client.chat.completions.create(

@@ -1,5 +1,6 @@
-memory_test:
+identity:
     - 你好，你叫什么名字#hi, what's your name:
+memory_test:
     - 介绍乌鲁木齐的景点#Introducing urumqi’s attractions:
         - contain:
             - urumqi
@@ -45,14 +46,8 @@ emoji_case:
         - contain:
             - 👍
             - 😊
-        - baichuan2-7b:
-            - contain:
-                - 👍
-                - 😊
-                - \u2714
-                - 赞
-                - emoji
-                - '!'
+            - good
+            - like
 traditional_chinese_case:
     - 介紹澳門景點，使用繁體:
         - contain:

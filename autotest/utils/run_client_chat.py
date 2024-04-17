@@ -75,7 +75,8 @@ def command_test(config,
 
         if '/' in model:
             chat_log = os.path.join(
-                log_path, 'chat_' + model.split('/')[1] + '_' + case + '.log')
+                log_path, 'chat_' + model.split('/')[1] + worker_id + '_' +
+                case + '.log')
         else:
             chat_log = os.path.join(
                 log_path, 'chat_' + model + worker_id + '_' + case + '.log')
