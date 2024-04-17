@@ -4,7 +4,7 @@ from typing import Dict, Union
 
 import numpy as np
 
-from ...adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
+from ...adapter.adapter import SchedulerAdapter
 from ...messages import SchedulerSequence
 from .base_block_manager import BaseBlockManager
 
@@ -38,7 +38,7 @@ class DefaultBlockManager(BaseBlockManager):
             if obj.is_actived():
                 return 0
             else:
-                return obj.rank * len(obj.target_modules)
+                return obj.num_required_blocks
 
     @classmethod
     def last_block_size(cls, seq: SchedulerSequence) -> int:
@@ -55,7 +55,7 @@ class DefaultBlockManager(BaseBlockManager):
         num_required_blocks = self.num_required_blocks(msg, prealloc_size)
         num_free_phy = self.get_num_free_gpu_blocks()
         if msg.adapter_name is not None:
-            adapter = ADAPTER_MANAGER.get_adapter(msg.adapter_name)
+            adapter = self.adapter_manager.get_adapter(msg.adapter_name)
             num_required_blocks += self.num_required_blocks(adapter)
         return num_required_blocks <= num_free_phy
 
