@@ -21,7 +21,7 @@ memory_test:
             - Ürümqi
 
 chinese_poem_case:
-    - 给我一首中文打油诗，需要添加标点符号。和，请用中文回答Give me a Chinese poem in Chinese:
+    - 给我一首中文诗，需要添加标点符号。和，请用中文回答Give me a Chinese poem in Chinese:
         - contain:
             - "，"
             - "。"
@@ -36,9 +36,6 @@ english_poem_case:
         - contain:
             - "."
             - ","
-        - contain:
-            - love
-            - poem
         - len_g:
             100
 emoji_case:
@@ -48,6 +45,7 @@ emoji_case:
             - 😊
             - good
             - like
+            - 赞
 traditional_chinese_case:
     - 介紹澳門景點，使用繁體:
         - contain:

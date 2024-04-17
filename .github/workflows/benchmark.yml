@@ -685,7 +685,7 @@ jobs:
 
 
   get_result_overview:
-    if: always()
+    if: always() && !cancelled()
     needs: [generation_benchmark, throughput_benchmark, restful_benchmark, triton_benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]

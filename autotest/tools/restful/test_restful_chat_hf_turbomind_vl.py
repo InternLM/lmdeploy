@@ -92,7 +92,7 @@ def run_all_step(config, port: int = DEFAULT_PORT):
         }],
         temperature=0.8,
         top_p=0.8)
-    file.writelines(response + '\n')
+    file.writelines(str(response).lower() + '\n')
     assert 'tiger' in str(response).lower(), response
 
     api_client = APIClient(http_url)
