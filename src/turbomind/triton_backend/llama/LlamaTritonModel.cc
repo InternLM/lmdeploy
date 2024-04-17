@@ -204,6 +204,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
 
     engine_params_.cache_max_block_count = reader.GetFloat("llama", "cache_max_entry_count", 0);
     engine_params_.cache_chunk_size      = reader.GetInteger("llama", "cache_chunk_size", 0);
+    engine_params_.enable_prefix_caching = reader.GetBoolean("llama", "enable_prefix_caching", false);
 
     engine_params_.num_tokens_per_iter   = reader.GetInteger("llama", "num_tokens_per_iter", 0);
     engine_params_.extra_tokens_per_iter = reader.GetInteger("llama", "extra_tokens_per_iter", 0);
@@ -409,6 +410,7 @@ std::string LlamaTritonModel<T>::toString()
        << "\nsession_len: " << engine_params_.session_len << "\nstep_length: " << engine_params_.step_length
        << "\ncache_max_entry_count: " << engine_params_.cache_max_block_count
        << "\ncache_block_seq_len: " << cache_block_seq_len_ << "\ncache_chunk_size: " << engine_params_.cache_chunk_size
+       << "\nenable_prefix_caching: " << engine_params_.enable_prefix_caching
        << "\nuse_context_fmha: " << use_context_fmha_ << "\nstart_id: " << start_id_
        << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
        << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_

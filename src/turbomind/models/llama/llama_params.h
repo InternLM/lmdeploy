@@ -22,6 +22,7 @@ struct EngineParams {
     // cache params
     float cache_max_block_count;
     int   cache_chunk_size;
+    bool  enable_prefix_caching;
 
     // chunking params
     int max_context_token_num;

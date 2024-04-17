@@ -58,6 +58,7 @@ class TurbomindModelConfig:
     cache_max_entry_count: float = 0.8
     cache_block_seq_len: int = 64
     cache_chunk_size: int = -1
+    enable_prefix_caching: bool = False
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
     extra_tokens_per_iter: int = 0

@@ -18,6 +18,7 @@ SequenceManager::SequenceManager(size_t             layer_num,
                                  const BlockConfig& block_config,
                                  double             block_count,
                                  int                chunk_size,
+                                 bool               enable_prefix_caching,
                                  int                rank,
                                  IAllocator*        allocator,
                                  GetFreeMemSize     get_free_size):
@@ -28,7 +29,8 @@ SequenceManager::SequenceManager(size_t             layer_num,
 
     size_t block_size = layout.block_size(layer_num);
 
-    block_manager_ = std::make_unique<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
+    block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
+    block_trie_ = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_, enable_prefix_caching);
 }
 
 const Sequence* SequenceManager::Create(uint64_t id)
@@ -68,7 +70,10 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
     else {
         UpdateAndSetUnlock(seq);
     }
-    freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
+    // if prefix cache enabled, blocks will be shared by sequences, cannot be freed immediately
+    if (!block_trie_->enabled()) {
+        freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
+    }
     it = sequences_.erase(it);
 }
 
@@ -79,6 +84,12 @@ bool SequenceManager::Erase(uint64_t id)
         return true;
     }
     return false;
+}
+
+void SequenceManager::CacheIfEnabled(const Sequence& sequence) {
+    if (block_trie_->enabled()) {
+        block_trie_->cache(sequence);
+    }
 }
 
 void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
@@ -138,6 +149,8 @@ struct Schedule {
 
     int input_count1;
     int input_count2;
+
+    int cu_block_count_{};
 
     Sequences        active;
     std::vector<int> block_counts;
@@ -202,20 +215,31 @@ struct Transaction {
     int allocate_{};
     int evict_{};
     int preempt_{};
+    int cache_evict_{};
+
+    int max_block_count_;
 
     Sequences victims_;
 
     const Sequences& sequences_;
     Schedule&        schedule_;
 
-    explicit Transaction(const Sequences& sequences, int index, int block_count, int input_count, Schedule& sched):
-        sequences_(sequences), schedule_(sched), index_(index), block_count_(block_count), input_count_(input_count)
+    std::shared_ptr<BlockTrie> block_trie_;
+
+    explicit Transaction(const Sequences& sequences,
+                        int index,
+                        int block_count,
+                        int input_count,
+                        Schedule& sched,
+                        std::shared_ptr<BlockTrie>& block_trie,
+                        int max_block_count):
+        sequences_(sequences), schedule_(sched), index_(index), block_count_(block_count), input_count_(input_count), block_trie_(block_trie), max_block_count_(max_block_count)
     {
     }
 
     void Process()
     {
-        if (schedule_.input_count1 > 0) {
+        if (schedule_.input_count1 > 0 && (schedule_.cu_block_count_ + sequences_[index_]->blocks.size()+block_count_) <= max_block_count_) {
             int count = block_count_;
 
             int tmp = std::min(schedule_.free, count);
@@ -225,6 +249,13 @@ struct Transaction {
             tmp = std::min(schedule_.cached, count);
             count -= tmp;
             evict_ += tmp;
+
+            // evict from block trie
+            if (block_trie_->enabled()) {
+                cache_evict_ = block_trie_->evict(count);
+                count -= cache_evict_;
+                evict_ += cache_evict_;
+            }
 
             for (int vidx = schedule_.last - 1; count && vidx > index_; --vidx) {
                 if (sequences_[vidx]->status == Sequence::kCached) {
@@ -241,6 +272,7 @@ struct Transaction {
                 }
             }
             if (count == 0) {
+                schedule_.cu_block_count_ += (sequences_[index_]->blocks.size()+block_count_);
                 return Commit();
             }
         }
@@ -254,6 +286,7 @@ struct Transaction {
         // update available resources
         schedule_.free -= allocate_;
         FT_CHECK(schedule_.free >= 0);
+        schedule_.cached += cache_evict_;
         schedule_.cached += preempt_;
         schedule_.cached -= evict_;
         FT_CHECK(schedule_.cached >= 0);
@@ -377,6 +410,18 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // the blocks can still be preempted later
     VerifyAndLockCached(sequences);
 
+    // match prefix cache
+    if (block_trie_->enabled()) {
+        for (int i = 0; i < sequences.size(); i++) {
+            if (sequences[i]->blocks.size() == 0) {
+                auto& seq = const_cast<Sequence&>(*sequences[i]);
+                seq.last_matched_node = nullptr; // for history cache evicted case
+                block_trie_->match(seq);
+                seq.cache_len = seq.last_matched_node->num_matched;
+            }
+        }
+    }
+
     auto [input_count1, input_count2] = adjust(sequences, context_lengths);
 
     std::vector<int> required = CountRequiredBlocks(sequences, context_lengths, step_length);
@@ -387,7 +432,7 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // `schedule.last` is decreasing in the loop
     for (int i = 0; i < schedule.last; ++i) {
         const int input_length = context_lengths[i] - sequences[i]->cache_len;
-        Transaction{sequences, i, required[i], input_length, schedule}.Process();
+        Transaction{sequences, i, required[i], input_length, schedule, block_trie_, max_block_count()}.Process();
     }
 
     // mark remaining sequences invalid

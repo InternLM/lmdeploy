@@ -260,6 +260,8 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             }
         }
 
+        const int history_length = seq.tokens.size();
+
         const int  input_length = r->inputs[rank_].getVal<int>("input_lengths");
         const int* input_ids    = r->inputs[rank_].getPtr<int>("input_ids");
 
@@ -267,14 +269,14 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         const auto output_ids_base = state.output_ids + session_len_ * idx;
         auto       output_ids      = output_ids_base;
 
-        // copy history tokens
-        if (!seq.tokens.empty()) {
-            output_ids = Copy(seq.tokens.data(), seq.tokens.size(), output_ids);
+        if (input_length) {
+            // update tokens in sequence
+            seq.tokens.resize(history_length+input_length);
+            std::copy_n(input_ids, input_length, &seq.tokens[history_length]);
         }
 
-        // copy input tokens
-        if (input_length) {
-            output_ids = Copy(input_ids, input_length, output_ids);
+        if (history_length || input_length) {
+            output_ids = Copy(seq.tokens.data(), history_length+input_length, output_ids);
         }
 
         // copy input embeddings
@@ -948,6 +950,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
                                                 block_config,
                                                 params.cache_max_block_count,
                                                 params.cache_chunk_size,
+                                                params.enable_prefix_caching,
                                                 model->tensor_para_.rank_,
                                                 allocator_,
                                                 get_free_size});
@@ -1260,6 +1263,15 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
             sampled_logprobs_ptr += kMaxLogProb;
             sampled_indexes_ptr += kMaxLogProb;
             sampled_nums_ptr++;
+        }
+    }
+
+    // Cache computed blocks to block trie
+    for (int i = 0; i < batch_size; ++i) {
+        auto& seq = *state_->sequences[i];
+        // only cache prompt blocks
+        if (seq.input_length > 1) {
+            sequence_manager_->CacheIfEnabled(seq);
         }
     }
 

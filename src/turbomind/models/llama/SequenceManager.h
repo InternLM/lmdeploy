@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/BlockManager.h"
+#include "src/turbomind/models/llama/BlockTrie.h"
 #include <functional>
 
 namespace turbomind {
@@ -36,6 +37,9 @@ struct Sequence {
     // embedding data
     mutable std::vector<std::vector<std::byte>> input_embeddings;
     mutable std::vector<std::pair<int, int>>    input_embedding_ranges;
+
+    // last matched node in block trie
+    mutable std::shared_ptr<TrieNode> last_matched_node = nullptr;
 
     explicit Sequence(uint64_t _id): id(_id) {}
 
@@ -73,6 +77,7 @@ public:
                              const BlockConfig& block_config,
                              double             block_count,
                              int                chunk_size,
+                             bool               enable_prefix_caching,
                              int                rank,
                              IAllocator*        allocator,
                              GetFreeMemSize     get_free_size);
@@ -104,6 +109,8 @@ public:
                                       int                          step_length,
                                       AdjustInputCount             adjust);
 
+    void CacheIfEnabled(const Sequence& sequence);
+
     [[nodiscard]] void* GetBlockPtr(int block_id)
     {
         return block_manager_->block(block_id).data;
@@ -111,6 +118,10 @@ public:
 
     int max_block_count() const noexcept
     {
+        if (block_trie_->enabled()) {
+            // if enable prefix caching, the max_block_count in batch can be larger
+            return block_manager_->max_block_count() * 2;
+        }
         return block_manager_->max_block_count();
     }
 
@@ -141,7 +152,8 @@ private:
     // Use `std::map` to avoid reference invalidation
     std::map<uint64_t, Sequence> sequences_;
 
-    std::unique_ptr<BlockManager> block_manager_;
+    std::shared_ptr<BlockManager> block_manager_;
+    std::shared_ptr<BlockTrie>    block_trie_;
 
     BlockIds unlocked_;
     BlockIds freed_;
