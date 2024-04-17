@@ -854,7 +854,7 @@ class Deepseek(BaseChatTemplate):
     def __init__(self,
                  user='User: ',
                  eoh='\n\n',
-                 assistant='Assistant:',
+                 assistant='Assistant: ',
                  eoa='<｜end▁of▁sentence｜>',
                  **kwargs):
         super().__init__(user=user,
@@ -862,6 +862,12 @@ class Deepseek(BaseChatTemplate):
                          assistant=assistant,
                          eoa=eoa,
                          **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
