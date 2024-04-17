@@ -854,7 +854,7 @@ class Deepseek(BaseChatTemplate):
     def __init__(self,
                  user='User: ',
                  eoh='\n\n',
-                 assistant='Assistant: ',
+                 assistant='Assistant:',
                  eoa='<｜end▁of▁sentence｜>',
                  **kwargs):
         super().__init__(user=user,
