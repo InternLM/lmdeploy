@@ -25,6 +25,8 @@ SUPPORTED_ARCHS = dict(
     Qwen2ForCausalLM='qwen2',
     # llava
     LlavaLlamaForCausalLM='llama',
+    # internvl
+    InternVLChatModel='internvl',
     # deepseek-vl
     MultiModalityCausalLM='deepseekvl')
 
