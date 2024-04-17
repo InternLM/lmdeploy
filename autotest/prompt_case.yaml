@@ -43,9 +43,21 @@ emoji_case:
         - contain:
             - 👍
             - 😊
+            - 🎉
             - good
             - like
             - 赞
+            - 好
+        - baichuan2:
+            - contain:
+                - 👍
+                - 😊
+                - 🎉
+                - good
+                - like
+                - 赞
+                - 好
+                - !
 traditional_chinese_case:
     - 介紹澳門景點，使用繁體:
         - contain:
@@ -60,3 +72,7 @@ code_testcase:
             - bubble
             - 冒泡
             - code
+        - llama2:
+            - contain:
+                - assist
+                - however
