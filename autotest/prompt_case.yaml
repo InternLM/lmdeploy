@@ -57,7 +57,7 @@ emoji_case:
                 - like
                 - 赞
                 - 好
-                - !
+                - '!'
 traditional_chinese_case:
     - 介紹澳門景點，使用繁體:
         - contain:
@@ -74,5 +74,9 @@ code_testcase:
             - code
         - llama2:
             - contain:
+                - def
+                - bubble
+                - 冒泡
+                - code
                 - assist
                 - however
