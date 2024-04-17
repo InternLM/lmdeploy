@@ -7,6 +7,8 @@ import torch.nn as nn
 
 from lmdeploy.vl.model.llava import LlavaVisionModel, check_llava_install
 
+from .utils import disable_transformers_logging
+
 _model_path = None
 
 
@@ -95,16 +97,6 @@ def init_yi_model():
     yield
     _set_function(_build_vision_projector, old_projector)
     _set_function(_build_vision_tower, old_vision_tower)
-
-
-@contextmanager
-def disable_transformers_logging():
-    import transformers
-    from transformers.utils import logging
-    previous_level = logging.get_verbosity()
-    logging.set_verbosity(transformers.logging.ERROR)
-    yield
-    logging.set_verbosity(previous_level)
 
 
 class YiVisionModel(LlavaVisionModel):
