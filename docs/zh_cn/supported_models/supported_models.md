@@ -17,6 +17,7 @@
 |     Code Llama     |  7B - 34B  |    Yes    |   No    |  No   |
 |         YI         |  6B - 34B  |    Yes    |   No    |  No   |
 |   InternVL-Chat    |     -      |    Yes    |   No    |  No   |
+|  MiniGeminiLlama   |     7B     |    Yes    |   No    |  No   |
 
 ```{note}
 turbomind 引擎不支持 window attention。所以，对于应用了 window attention，并开启了对应的开关"use_sliding_window"的模型，在推理时，请选择 pytorch engine
