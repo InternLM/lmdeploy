@@ -184,8 +184,6 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     uint* runtime_top_ks = new uint[batch_size];
     cudaAutoCpy(runtime_top_ks, runtime_top_k_buf_, batch_size, stream_);
     runtime_max_top_k_ = static_cast<int>(*std::max_element(runtime_top_ks, runtime_top_ks + batch_size));
-    {
-    }
     delete[] runtime_top_ks;
 }
 
