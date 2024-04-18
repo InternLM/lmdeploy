@@ -17,6 +17,11 @@ struct Sequence {
         kActive
     };
 
+    enum Stage {
+        kPrefill,
+        kDecoding
+    };
+
     uint64_t id;
     Status   status = kCached;
 
@@ -33,6 +38,12 @@ struct Sequence {
     mutable std::vector<std::byte> random_state;  // update by user
 
     mutable float rope_theta = 0.f;
+
+    // interact count in stateful inference
+    mutable int interact_count = 0;
+
+    // sequence inference stage
+    mutable Stage stage = kPrefill;
 
     // embedding data
     mutable std::vector<std::vector<std::byte>> input_embeddings;

@@ -140,9 +140,9 @@ int BlockTrie::evict(const int num)
     int num_evicted = 0;
     BlockIds evicted_blocks;
 
-    auto compare = [&](std::shared_ptr<TrieNode> a, std::shared_ptr<TrieNode> b) -> bool {
-        Block& block_a = block_manager_->block(a->block_id);
-        Block& block_b = block_manager_->block(b->block_id);
+    auto compare = [&](const std::shared_ptr<TrieNode>& a, const std::shared_ptr<TrieNode>& b) -> bool {
+        const Block& block_a = block_manager_->block(a->block_id);
+        const Block& block_b = block_manager_->block(b->block_id);
         if (block_a.use_count != block_b.use_count) {
             return block_a.use_count > block_b.use_count;
         }
@@ -160,7 +160,7 @@ int BlockTrie::evict(const int num)
         }
 
         auto top = leaves_queue.top();
-        Block& block = block_manager_->block(top->block_id);
+        const Block& block = block_manager_->block(top->block_id);
         if (block.use_count > 1) {
             break;
         }

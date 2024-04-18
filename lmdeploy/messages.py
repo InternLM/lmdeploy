@@ -116,7 +116,7 @@ class TurbomindEngineConfig:
             For versions of lmdeploy between `v0.2.0` and `v0.2.1`, it defaults to 0.5, depicting the percentage of TOTAL GPU memory to be allocated to the k/v cache.
             For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8, signifying the percentage of FREE GPU memory to be reserved for the k/v cache
         cache_block_seq_len (int): the length of the token sequence in a k/v block, default to 64
-        enable_prefix_caching (bool): enable cache and reuse blocks with prefix matching, default to False
+        enable_prefix_caching (bool): enable cache prompts for block reuse, default to False
         quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
         use_logn_attn (bool): whether or not to use log attn: default to False

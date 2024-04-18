@@ -260,6 +260,10 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             }
         }
 
+        // update stage and interact count for stateful inference
+        seq.stage = Sequence::kPrefill;
+        seq.interact_count++;
+
         const int history_length = seq.tokens.size();
 
         const int  input_length = r->inputs[rank_].getVal<int>("input_lengths");
@@ -1270,8 +1274,9 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
     for (int i = 0; i < batch_size; ++i) {
         auto& seq = *state_->sequences[i];
         // only cache prompt blocks
-        if (seq.input_length > 1) {
+        if (seq.stage == Sequence::kPrefill && seq.interact_count == 1) {
             sequence_manager_->CacheIfEnabled(seq);
+            seq.stage = Sequence::kDecoding;
         }
     }
 
