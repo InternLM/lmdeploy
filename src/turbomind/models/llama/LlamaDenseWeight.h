@@ -57,6 +57,11 @@ struct LlamaDenseWeight {
     size_t     input_dims;
     size_t     output_dims;
     void*      kernel;
+    int        lora_policy;
+    size_t     lora_r;
+    void*      lora_a;
+    void*      lora_b;
+    float      lora_scale;
     WeightType type;
     T*         bias;
     T*         scales_and_zeros;

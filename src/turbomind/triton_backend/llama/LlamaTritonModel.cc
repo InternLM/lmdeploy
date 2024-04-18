@@ -74,6 +74,21 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
 }
 
 template<typename T>
+std::map<std::string, T> getLoraPattern(std::string pattern, T (*func)(const std::string& s))
+{
+    std::map<std::string, T> res;
+    std::stringstream        ss(pattern);
+    std::string              kv;
+    while (std::getline(ss, kv, ',')) {
+        auto pos = kv.rfind(":");
+        auto k   = kv.substr(0, pos);
+        auto v   = func(kv.substr(pos + 1));
+        res.emplace(k, v);
+    }
+    return res;
+}
+
+template<typename T>
 void LlamaTritonModel<T>::handleMissingParams()
 {
     if (kv_head_num_ == 0) {
@@ -209,6 +224,13 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_params_.extra_tokens_per_iter = reader.GetInteger("llama", "extra_tokens_per_iter", 0);
     engine_params_.max_prefill_iters     = reader.GetInteger("llama", "max_prefill_iters", 1);
 
+    lora_params_.policy        = reader.GetInteger("llama", "lora_policy", 0);
+    lora_params_.r             = reader.GetInteger("llama", "lora_r", 0);
+    lora_params_.scale         = reader.GetInteger("llama", "lora_scale", 0);
+    lora_params_.rank_pattern  = getLoraPattern<int>(reader.Get("llama", "lora_rank_pattern", ""),
+                                                    [](const std::string& s) { return std::stoi(s); });
+    lora_params_.scale_pattern = getLoraPattern<float>(reader.Get("llama", "lora_scale_pattern", ""),
+                                                       [](const std::string& s) { return std::stof(s); });
     handleMissingParams();
 
     shared_state_          = std::make_shared<typename ft::LlamaV2<T>::SharedState>();
@@ -308,6 +330,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   quant_policy_,
                                                   use_context_fmha_,
                                                   engine_params_,
+                                                  lora_params_,
                                                   shared_state_,
                                                   shared_weights_[device_id].get(),
                                                   tensor_para,
@@ -374,6 +397,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                       attn_bias_,
                                                                       weight_type_,
                                                                       group_size_,
+                                                                      lora_params_,
                                                                       tensor_para_size_,
                                                                       tensor_para_rank);
     // model inited with model_dir

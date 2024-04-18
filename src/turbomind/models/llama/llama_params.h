@@ -2,6 +2,9 @@
 
 #pragma once
 
+#include <map>
+#include <string>
+
 namespace turbomind {
 
 struct LlamaAttentionParams {
@@ -28,6 +31,14 @@ struct EngineParams {
     int num_tokens_per_iter;
     int extra_tokens_per_iter;
     int max_prefill_iters;
+};
+
+struct LoraParams {
+    int                          r;
+    int                          scale;
+    int                          policy;
+    std::map<std::string, int>   rank_pattern;
+    std::map<std::string, float> scale_pattern;
 };
 
 }  // namespace turbomind

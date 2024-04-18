@@ -702,10 +702,18 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
     // +1 padding, BlockIterator does not use predicate
     const size_t max_block_count = sequence_manager_->max_block_count() + 1;
 
+    if (model_->lora_params_.policy == 1) {
+        lora_mask_buf_ = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_context_token_num_, false);
+        size_t sz      = sizeof(T) * max_context_token_num_ * hidden_units * 3;
+        context_decoder_output_buf_ = (T*)allocator_->reMalloc(context_decoder_output_buf_, sz, false);
+    }
+    else {
+        context_decoder_output_buf_ = (T*)allocator_->reMalloc(
+            context_decoder_output_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
+    }
+
     context_decoder_input_buf_ =
         (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
-    context_decoder_output_buf_ =
-        (T*)allocator_->reMalloc(context_decoder_output_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
     context_decoder_ids_buf_ =
         (int*)allocator_->reMalloc(context_decoder_ids_buf_, sizeof(int) * max_context_token_num_, false);
 
@@ -824,6 +832,7 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&context_decoder_input_buf_);
         allocator_->free((void**)&context_decoder_output_buf_);
         allocator_->free((void**)&context_decoder_ids_buf_);
+        allocator_->free((void**)&lora_mask_buf_);
 
         allocator_->free((void**)&decoder_input_buf_);
         allocator_->free((void**)&decoder_output_buf_);
@@ -1559,6 +1568,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
                                token_count,
                                dc_batch_size,
                                pf_batch_size,
+                               lora_mask_buf_,
                                sequences.data());
 
         if (iter == 0) {

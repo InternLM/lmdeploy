@@ -188,13 +188,58 @@ void invokeFusedAddBiasResidualRMSNorm(
         residual, in_out, bias, scale, eps, batch_size, n_dims);
 }
 
+template<typename T>
+__global__ void maskAddTwoLinearOutput2(T* output1, T* output2, const float scale, const int* mask, int dim)
+{
+    int batch_idx = blockIdx.x;
+    output1 += dim * batch_idx;
+    output2 += dim * batch_idx;
+    if (!mask[batch_idx]) {
+        return;
+    }
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        output1[i] += output2[i] * static_cast<T>(scale);
+    }
+}
+
+#ifdef ENABLE_BF16
+template<>
+__global__ void
+maskAddTwoLinearOutput2(__nv_bfloat16* output1, __nv_bfloat16* output2, const float scale, const int* mask, int dim)
+{
+    int batch_idx = blockIdx.x;
+    output1 += dim * batch_idx;
+    output2 += dim * batch_idx;
+    if (!mask[batch_idx]) {
+        return;
+    }
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+        output1[i] = __float2bfloat16(__bfloat162float(output1[i]) + __bfloat162float(output2[i]) * scale);
+#else
+        output1[i] = __hadd(output1[i], __hmul(output2[i], __float2bfloat16(scale)));
+#endif
+    }
+}
+#endif
+
+template<typename T>
+void invokeMaskAddTwoLinearOutput2(
+    T* output1, T* output2, const float scale, const int* mask, int batch_size, int dim, cudaStream_t stream)
+{
+    maskAddTwoLinearOutput2<<<batch_size, 1024, 0, stream>>>(output1, output2, scale, mask, dim);
+}
+
 #ifdef ENABLE_FP32
 template void
 invokeFusedAddBiasResidualRMSNorm(float*, float*, const float*, const float*, float, int, int, cudaStream_t);
+template void invokeMaskAddTwoLinearOutput2(float*, float* float, const int*, int, int, cudaStream_t);
 #endif
 template void invokeFusedAddBiasResidualRMSNorm(half*, half*, const half*, const half*, float, int, int, cudaStream_t);
+template void invokeMaskAddTwoLinearOutput2(half*, half*, float, const int*, int, int, cudaStream_t);
 #ifdef ENABLE_BF16
 template void invokeFusedAddBiasResidualRMSNorm(
     __nv_bfloat16*, __nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
+template void invokeMaskAddTwoLinearOutput2(__nv_bfloat16*, __nv_bfloat16*, float, const int*, int, int, cudaStream_t);
 #endif
 }  // namespace turbomind
