@@ -97,6 +97,13 @@ class TestRestfulInterfaceIssue:
             for response in tqdm(executor.map(process_one, ['你是谁'] * 500)):
                 continue
 
+    def test_issue1324_illegal_topk(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_interactive_v1(
+                prompt='Hi, pls intro yourself', top_k=-1):
+            continue
+        assert_chat_interactive_batch_return(output)
+
 
 @pytest.mark.order(8)
 @pytest.mark.turbomind
@@ -263,7 +270,7 @@ class TestRestfulInterfaceChatCompletions:
         assert '<|action_start|><|interpreter|>' not in output.get(
             'choices')[0].get('message').get('content')
 
-    def test_chat_completions_repetition_penalty_batch(self):
+    def test_chat_completions_repetition_penalty_min_batch(self):
         api_client = APIClient(BASE_URL)
         for output in api_client.chat_completions_v1(model=MODEL_NAME,
                                                      messages='Shanghai is',
@@ -275,6 +282,36 @@ class TestRestfulInterfaceChatCompletions:
         assert ' is is' * 5 in output.get('choices')[0].get('message').get(
             'content') or ' a a' * 5 in output.get('choices')[0].get(
                 'message').get('content')
+
+    def test_chat_completions_repetition_penalty_max_batch(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Shanghai is',
+                                                     repetition_penalty=1.2,
+                                                     temperature=0.01,
+                                                     max_tokens=200):
+            continue
+        assert_chat_completions_batch_return(output, MODEL_NAME)
+
+    def test_chat_completions_repetition_penalty_max_stream(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for output in api_client.chat_completions_v1(
+                model=MODEL_NAME,
+                messages='Hi, pls intro yourself',
+                stream=True,
+                repetition_penalty=1.2,
+                temperature=0.01,
+                max_tokens=200):
+            outputList.append(output)
+        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
+                                              False)
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
+                                              False, True)
+        for index in range(1, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index],
+                                                  MODEL_NAME)
+            continue
 
     def test_chat_completions_topp_min_batch(self):
         api_client = APIClient(BASE_URL)
@@ -570,6 +607,76 @@ class TestRestfulInterfaceChatInteractive:
             responseList.append(response)
         assert responseList[0] == responseList[1]
         assert responseList[1] == responseList[2]
+
+    def test_chat_interactive_topk_min_batch(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for i in range(3):
+            for output in api_client.chat_interactive_v1(
+                    prompt='Shanghai is', top_k=1, request_output_len=10):
+                continue
+            assert_chat_interactive_batch_return(output)
+            outputList.append(output)
+        assert outputList[0] == outputList[1]
+        assert outputList[1] == outputList[2]
+
+    def test_chat_interactive_topk_min_stream(self):
+        api_client = APIClient(BASE_URL)
+        responseList = []
+        for i in range(3):
+            outputList = []
+            response = ''
+            for output in api_client.chat_interactive_v1(
+                    model=MODEL_NAME,
+                    prompt='Hi, pls intro yourself',
+                    stream=True,
+                    top_k=1,
+                    request_output_len=10):
+                outputList.append(output)
+            assert_chat_interactive_stream_return(outputList[-1],
+                                                  True,
+                                                  index=len(outputList) - 2)
+            for index in range(0, len(outputList) - 1):
+                assert_chat_interactive_stream_return(outputList[index],
+                                                      index=index)
+                response += outputList[index].get('text')
+            responseList.append(response)
+        assert responseList[0] == responseList[1]
+        assert responseList[1] == responseList[2]
+
+    def test_chat_interactive_output_not_same_batch(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for i in range(3):
+            for output in api_client.chat_interactive_v1(
+                    prompt='Shanghai is', request_output_len=100):
+                continue
+            assert_chat_interactive_batch_return(output)
+            outputList.append(output)
+        assert outputList[0] != outputList[1] or outputList[1] != outputList[2]
+
+    def test_chat_interactive_output_not_same_stream(self):
+        api_client = APIClient(BASE_URL)
+        responseList = []
+        for i in range(3):
+            outputList = []
+            response = ''
+            for output in api_client.chat_interactive_v1(
+                    model=MODEL_NAME,
+                    prompt='Hi, pls intro yourself',
+                    stream=True,
+                    request_output_len=100):
+                outputList.append(output)
+            assert_chat_interactive_stream_return(outputList[-1],
+                                                  True,
+                                                  index=len(outputList) - 2)
+            for index in range(0, len(outputList) - 1):
+                assert_chat_interactive_stream_return(outputList[index],
+                                                      index=index)
+                response += outputList[index].get('text')
+            responseList.append(response)
+        assert responseList[0] != responseList[1] or responseList[
+            1] != responseList[2]
 
     def test_chat_interactive_longinput_batch(self):
         api_client = APIClient(BASE_URL)
