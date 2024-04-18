@@ -46,6 +46,7 @@ emoji_case:
             - 😊
             - 🎉
             - 👏
+            - 👌
             - good
             - like
             - 赞
@@ -65,11 +66,13 @@ code_testcase:
             - bubble
             - 冒泡
             - code
+            - python
         - llama2:
             - contain:
                 - def
                 - bubble
                 - 冒泡
                 - code
+                - python
                 - assist
                 - however
