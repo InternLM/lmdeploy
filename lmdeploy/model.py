@@ -420,7 +420,7 @@ class InternLMXComposer2Chat7B(InternLMChat7B):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'internlm' in path and 'xcomposer2' in path:
+        if 'internlm' in path and 'xcomposer2' in path and '4khd' not in path:
             return 'internlm-xcomposer2'
 
 

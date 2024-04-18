@@ -268,6 +268,8 @@ class TurboMind:
                                                  model_path, output_format)
             data_type = output_format
             update_config_weight_type(output_format, cfg)
+        if inferred_model_format == 'xcomposer2':
+            output_format = 'plora'
 
         input_model = INPUT_MODELS.get(inferred_model_format)(
             model_path=model_path, tokenizer_path=model_path, ckpt_path=None)
@@ -299,6 +301,13 @@ class TurboMind:
         self._get_model_params(model_comm, tm_params)
         logger.warning(f'get {len(tm_params)} model params')
         output_model.export()
+        # there should be no left turbomind params.
+        if len(tm_params) > 0:
+            uninitialized = list(tm_params.keys())
+            logger.warning(
+                'the model may not be loaded successfully '
+                f'with {len(tm_params)} uninitialized params:\n{uninitialized}'
+            )
 
         return model_comm
 
