@@ -5,7 +5,7 @@ then
     exit 1
 fi
 
-if [[ $1 == *"w4a16" ]] || [[ $1 == *"4bit"* ]]
+if [[ $1 == *"w4a16" ]] || [[ $1 == *"4bit"* ]] || [[ $1 == *"awq"* ]] || [[ $1 == *"AWQ"* ]]
 then
     echo "MODEL_FORMAT=--model-format awq" >> "$GITHUB_ENV"
 fi
