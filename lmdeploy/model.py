@@ -272,6 +272,9 @@ class Vicuna(BaseChatTemplate):
 class MiniGemini(Vicuna):
     """Chat template of vicuna model."""
 
+    def __init__(self, session_len=4096, **kwargs):
+        super().__init__(session_len=session_len, **kwargs)
+
     def get_prompt(self, prompt, sequence_start=True):
         return super().get_prompt(prompt, sequence_start)[:-1]
 
