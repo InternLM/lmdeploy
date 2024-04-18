@@ -7,7 +7,8 @@ import torch
 from PIL.Image import Image
 
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import load_model_from_weight_files
+from lmdeploy.vl.model.utils import (disable_transformers_logging,
+                                     load_model_from_weight_files)
 
 
 def check_mini_gemini_install():
@@ -35,7 +36,7 @@ class MiniGeminiVisionModel(VisonModel):
         from accelerate import init_empty_weights
         from minigemini.mm_utils import process_images
         from minigemini.model import MiniGeminiLlamaForCausalLM
-        with init_empty_weights():
+        with init_empty_weights(), disable_transformers_logging():
             warnings.simplefilter('ignore')
             model = MiniGeminiLlamaForCausalLM.from_pretrained(self.model_path)
             del model.lm_head
