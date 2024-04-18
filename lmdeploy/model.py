@@ -210,6 +210,75 @@ class BaseChatTemplate(BaseModel):
         Returns:
             str: the concatenated prompt
         """
+
+        def _format_begin(message):
+
+            roles_cfg = dict(
+                system=dict(
+                    begin=dict(
+                        with_name='<|im_start|>system name={name}\n',
+                        without_name='<|im_start|>system\n',
+                        name={
+                            'interpreter': '<|interpreter|>',
+                            'plugin': '<|plugin|>',
+                        }),
+                    end='<|im_end|>\n',
+                ),
+                user=dict(
+                    begin=dict(
+                        with_name='<|im_start|>user name={name}\n',
+                        without_name='<|im_start|>user\n',
+                    ),
+                    end='<|im_end|>\n'),
+                assistant=dict(
+                    begin=dict(
+                        with_name='<|im_start|>assistant name={name}\n',
+                        without_name='<|im_start|>assistant\n',
+                        name={
+                            'interpreter': '<|interpreter|>',
+                            'plugin': '<|plugin|>',
+                        }),
+                    end='<|im_end|>\n'),
+                environment=dict(
+                    begin=dict(
+                        with_name='<|im_start|>environment name={name}\n',
+                        without_name='<|im_start|>environment\n',
+                        name={
+                            'interpreter': '<|interpreter|>',
+                            'plugin': '<|plugin|>',
+                        }),
+                    end='<|im_end|>\n'),
+                tool=dict(
+                    begin=dict(
+                        with_name='<|action_start|>{name}\n',
+                        name={
+                            'interpreter': '<|interpreter|>',
+                            'plugin': '<|plugin|>',
+                        }),
+                    belong='assistant',
+                    end='<|action_end|>\n',
+                ),
+                thought=dict(
+                    begin=dict(without_name=''),
+                    end='',
+                    belong='assistant',
+                )
+            )
+            role_cfg = roles_cfg[message['role']]
+            name = message.get('name', None)
+            if name is not None:
+                begin = role_cfg['begin'].get('with_name', '')
+                if name in role_cfg['begin'].get('name', {}):
+                    begin = begin.format(name=role_cfg['begin']['name'][name])
+                else:
+                    begin = begin.format(name=name)
+            else:
+                if isinstance(role_cfg.get('begin', ''), str):
+                    begin = role_cfg.get('begin', '')
+                elif isinstance(role_cfg['begin'], dict):
+                    begin = role_cfg['begin'].get('without_name', '')
+            return begin
+
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         box_map = dict(user=self.user,
@@ -225,7 +294,11 @@ class BaseChatTemplate(BaseModel):
         for message in messages:
             role = message['role']
             content = message['content']
-            ret += f'{box_map[role]}{content}{eox_map[role]}'
+            if 'name' in message:
+                begin = _format_begin(message)
+            else:
+                begin = box_map[role]
+            ret += f'{begin}{content}{eox_map[role]}'
         ret += f'{self.assistant}'
         return ret
 
