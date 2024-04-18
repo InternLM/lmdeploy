@@ -58,3 +58,13 @@ def disable_transformers_logging():
     logging.set_verbosity(transformers.logging.ERROR)
     yield
     logging.set_verbosity(previous_level)
+
+
+@contextmanager
+def hack_import_with(src: List, dst: str = 'torch'):
+    import sys
+    for item in src:
+        sys.modules[item] = __import__(dst)
+    yield
+    for item in src:
+        sys.modules.pop(item, None)

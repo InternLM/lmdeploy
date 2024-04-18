@@ -8,13 +8,15 @@ from PIL.Image import Image
 
 from lmdeploy.vl.model.base import VisonModel
 from lmdeploy.vl.model.utils import (disable_transformers_logging,
+                                     hack_import_with,
                                      load_model_from_weight_files)
 
 
 def check_mini_gemini_install():
     """check mini gemini install."""
     try:
-        import minigemini  # noqa: F401
+        with hack_import_with(['deepspeed']):
+            import minigemini  # noqa: F401
     except ImportError:
         raise ImportError(
             'To use MiniGeminiVisionModel, please install minigemini by '
@@ -36,7 +38,8 @@ class MiniGeminiVisionModel(VisonModel):
         from accelerate import init_empty_weights
         from minigemini.mm_utils import process_images
         from minigemini.model import MiniGeminiLlamaForCausalLM
-        with init_empty_weights(), disable_transformers_logging():
+        with init_empty_weights(), disable_transformers_logging(
+        ), hack_import_with(['deepspeed']):
             warnings.simplefilter('ignore')
             model = MiniGeminiLlamaForCausalLM.from_pretrained(self.model_path)
             del model.lm_head
