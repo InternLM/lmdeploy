@@ -75,6 +75,8 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
 
     static constexpr int kPackedN = Flag_ ? P_N * OP_N : 1;
 
+    static constexpr int G = 128;
+
     using FragA = Array<T, 4>[ITER_K][ITER_M];      // {m8,k4}, [iK,iM], (k2,k2)
                                                     //   1  2    16  8     8  1
     using FragB = Array<T, 8>[ITER_K][ITER_N];      // {n8,k4}, [iK,iN], (k2,n2,k2)
@@ -83,6 +85,8 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                                                     //   1  2     8 16     8
 
     using DataB = Array<Tb, 8 * P>[ITER_K / P_K][ITER_N / P_N];
+
+    // static constexpr int ITER_G = (WARP_K + G - 1) / G;
 
     using DataQ = Array<T, 4>[ITER_K][ITER_N];
 
@@ -97,8 +101,6 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
     using ThreadMapB  = std::conditional_t<Flag_,
                                           gemm::ThreadMap<kPackedC, kPackedS, 128 / bitsof<Tb>, WARP_CNT, WARP_SIZE>,
                                           gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>>;
-
-    static constexpr int G = 128;
 
     static constexpr int CTA_G = (CTA_K + G - 1) / G;
     static constexpr int G_CTA = (G + CTA_K - 1) / CTA_K;
@@ -211,7 +213,7 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                 for (int i = 0; i < 2; ++i) {
                     //              16        1            8          WARP_N
                     const int c = n * 16 + lane_id / 4 + i * 8 + warp_offset_n;
-                    const int s = 0;  // k
+                    const int s = k * 16 / G;
                     if (g_mask) {
                         Lds((Array<T, 2>&)rmem_Q[k][n][i * 2], data + SmemLayoutQ::apply(s, c * 2));
                     }
@@ -235,7 +237,7 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                 offset = 0;
             }
             data = smem_Q.ptr_ + offset;
-            
+
             if (counting) {
                 ++g_counter;
                 g_mask = g_counter % G_CTA == 0;
