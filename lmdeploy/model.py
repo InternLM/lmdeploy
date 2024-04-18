@@ -210,7 +210,6 @@ class BaseChatTemplate(BaseModel):
         Returns:
             str: the concatenated prompt
         """
-
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         box_map = dict(user=self.user,
