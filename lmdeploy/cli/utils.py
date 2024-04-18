@@ -123,13 +123,15 @@ class ArgumentHelper:
                                    help='Maximum batch size')
 
     @staticmethod
-    def quant_policy(parser):
+    def quant_policy(parser, default: int = 0):
         """Add argument quant_policy to parser."""
 
-        return parser.add_argument('--quant-policy',
-                                   type=int,
-                                   default=0,
-                                   help='Whether to use kv int8')
+        return parser.add_argument(
+            '--quant-policy',
+            type=int,
+            default=0,
+            choices=[0, 4, 8],
+            help='Quantize kv or not. 0: no quant; 4: 4bit kv; 8: 8bit kv')
 
     @staticmethod
     def rope_scaling_factor(parser):
@@ -392,3 +394,19 @@ class ArgumentHelper:
                                    action='store_true',
                                    default=False,
                                    help='Enable cache and match prefix')
+
+    @staticmethod
+    def num_tokens_per_iter(parser):
+        return parser.add_argument(
+            '--num-tokens-per-iter',
+            type=int,
+            default=0,
+            help='the number of tokens processed in a forward pass')
+
+    @staticmethod
+    def max_prefill_iters(parser):
+        return parser.add_argument(
+            '--max-prefill-iters',
+            type=int,
+            default=1,
+            help='the max number of forward passes in prefill stage')

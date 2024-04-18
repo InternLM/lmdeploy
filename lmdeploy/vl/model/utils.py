@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
+from contextlib import contextmanager
 from typing import Dict, List
 
 import torch
 import torch.nn as nn
 from safetensors.torch import load_file
-from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, WEIGHTS_INDEX_NAME
+from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME,
+                                WEIGHTS_INDEX_NAME, is_safetensors_available)
 from transformers.utils.hub import get_checkpoint_shard_files
 
 
@@ -26,6 +28,9 @@ def get_used_weight_files(folder: str,
         index_file = _index_file
     elif os.path.exists(_safe_index_file):
         index_file = _safe_index_file
+    elif is_safetensors_available() and os.path.isfile(
+            os.path.join(folder, SAFE_WEIGHTS_NAME)):  # Single safetensor file
+        return [os.path.join(folder, SAFE_WEIGHTS_NAME)]
     else:
         raise FileNotFoundError
     _, sharded_metadata = get_checkpoint_shard_files(folder, index_file)
@@ -43,3 +48,13 @@ def load_model_from_weight_files(model: nn.Module, folder: str) -> None:
         ckpt = os.path.join(folder, file_name)
         state_dict = load_weight_ckpt(ckpt)
         model.load_state_dict(state_dict, strict=False)
+
+
+@contextmanager
+def disable_transformers_logging():
+    import transformers
+    from transformers.utils import logging
+    previous_level = logging.get_verbosity()
+    logging.set_verbosity(transformers.logging.ERROR)
+    yield
+    logging.set_verbosity(previous_level)

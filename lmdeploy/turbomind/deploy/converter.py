@@ -21,7 +21,8 @@ special_input_model_map = {
     'baichuan': 'baichuan',
     'baichuan2': 'baichuan2',
     'internlm2': 'internlm2',
-    'deepseekvl': 'deepseekvl'
+    'deepseekvl': 'deepseekvl',
+    'internvl': 'internvl'
 }
 
 
@@ -85,7 +86,7 @@ def copy_triton_model_templates(_path: str):
 
 
 def copy_tokenizer(model_path: str, tokenizer_path: str,
-                   triton_models_path: str):
+                   triton_models_path: str, trust_remote_code: bool):
     """Copy tokenizer."""
     if tokenizer_path is not None:
         assert osp.exists(tokenizer_path), f'{tokenizer_path} does not exists.'
@@ -97,7 +98,8 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
     else:
         from transformers import AutoTokenizer
         try:
-            _ = AutoTokenizer.from_pretrained(model_path)
+            _ = AutoTokenizer.from_pretrained(
+                model_path, trust_remote_code=trust_remote_code)
         except Exception:
             assert 0, (
                 f'Failed to load tokenizer model from path {model_path}.'
@@ -208,6 +210,7 @@ def main(model_name: str,
          tp: int = 1,
          quant_path: str = None,
          group_size: int = 0,
+         trust_remote_code: bool = False,
          **kwargs):
     """deploy llama family models via turbomind.
 
@@ -227,6 +230,8 @@ def main(model_name: str,
         quant_path (str): Path of the quantized model, which can be None.
         group_size (int): a parameter used in AWQ to quantize fp16 weights
             to 4 bits
+        trust_remote_code (bool):  Whether or not to allow for custom models
+            defined on the Hub in their own modeling files. Defaults to False
         kwargs (dict): other params for convert
     """
 
@@ -271,7 +276,8 @@ def main(model_name: str,
 
     triton_models_path = copy_triton_model_templates(dst_path)
 
-    copy_tokenizer(model_path, tokenizer_path, triton_models_path)
+    copy_tokenizer(model_path, tokenizer_path, triton_models_path,
+                   trust_remote_code)
 
     # turbomind config
     cfg = TurbomindModelConfig.from_dict({}, allow_none=True)

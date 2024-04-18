@@ -4,7 +4,7 @@ TurboMind is one of the inference engines of LMDeploy. When using it to do model
 
 If you are using LMDeploy version 0.0.x, please refer to the [turbomind 1.0 config](#turbomind-10-config) section to learn the relevant content in the configuration. Otherwise, please read [turbomind 2.0 config](#turbomind-20-config) to familiarize yourself with the configuration details.
 
-## TurboMind 2.0 config
+## TurboMind 2.x config
 
 Take the `llama-2-7b-chat` model as an example. In TurboMind 2.0, its config.ini content is as follows:
 
@@ -33,7 +33,6 @@ step_length = 1
 cache_max_entry_count = 0.5
 cache_block_seq_len = 128
 cache_chunk_size = 1
-use_context_fmha = 1
 quant_policy = 0
 max_position_embeddings = 2048
 rope_scaling_factor = 0.0
@@ -97,9 +96,12 @@ The `cache_chunk_size` indicates the size of the k/v cache chunk to be allocated
 - When the value is -1, `cache_max_entry_count` number of k/v cache blocks are allocated.
 - When the value is 0, `sqrt(cache_max_entry_count)` number of k/v cache blocks are allocated.
 
-### kv int8 switch
+### kv quantization and inference switch
 
-When initiating 8bit k/v inference, set `quant_policy = 4`. Please refer to [kv int8](../quantization/kv_int8.md) for a guide.
+- `quant_policy=4` means 4bit k/v quantization and inference
+- `quant_policy=8` indicates 8bit k/v quantization and inference
+
+Please refer to [kv quant](../quantization/kv_quant.md) for detailed guide.
 
 ### long context switch
 
@@ -187,7 +189,7 @@ TurboMind allocates k/v cache memory based on `session_len`, `cache_chunk_size`,
 
 ### kv int8 switch
 
-When initiating 8bit k/v inference, change `quant_policy = 4` and `use_context_fmha = 0`. Please refer to [kv int8](../quantization/kv_int8.md) for a guide.
+When initiating 8bit k/v inference, change `quant_policy = 4` and `use_context_fmha = 0`. Please refer to [kv int8](../quantization/kv_quant.md) for a guide.
 
 ### long context switch
 
