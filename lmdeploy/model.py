@@ -889,6 +889,12 @@ class Deepseek(BaseChatTemplate):
                          eoa=eoa,
                          **kwargs)
 
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
         """Return the model_name that was registered to MODELS.
