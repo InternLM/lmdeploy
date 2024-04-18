@@ -17,7 +17,8 @@ struct Sequence {
         kActive
     };
 
-    enum Stage {
+    enum Stage
+    {
         kPrefill,
         kDecoding
     };
