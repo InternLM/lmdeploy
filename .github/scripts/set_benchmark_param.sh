@@ -8,6 +8,8 @@ fi
 if [[ $1 == *"w4a16" ]] || [[ $1 == *"4bit"* ]] || [[ $1 == *"awq"* ]] || [[ $1 == *"AWQ"* ]]
 then
     echo "MODEL_FORMAT=--model-format awq" >> "$GITHUB_ENV"
+else
+    echo "MODEL_FORMAT=" >> "$GITHUB_ENV"
 fi
 
 if [[ $1 == *"llama"* ]] || [[ $1 == *"Llama"* ]]
