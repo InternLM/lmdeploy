@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
 import json
+import uuid
 from abc import abstractmethod
 from typing import List, Literal, Optional
 
@@ -10,6 +11,11 @@ from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 MODELS = Registry('model', locations=['lmdeploy.model'])
+
+
+def random_uuid() -> str:
+    """Return a random uuid."""
+    return str(uuid.uuid4().hex)
 
 
 @dataclasses.dataclass
@@ -85,8 +91,8 @@ class ChatTemplateConfig:
             raise ValueError(
                 'Invalid input. Must be a file path or a valid JSON string.')
         json_data = json.loads(json_data)
-        assert json_data.get('model_name', None) is not None, \
-            'model_name is a must for json chat template.'
+        if json_data.get('model_name', None) is None:
+            json_data['model_name'] = random_uuid()
         if json_data['model_name'] not in MODELS.module_dict.keys():
             MODELS.register_module(json_data['model_name'],
                                    module=BaseChatTemplate)
@@ -921,6 +927,12 @@ class Deepseek(BaseChatTemplate):
                          eoa=eoa,
                          **kwargs)
 
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
         """Return the model_name that was registered to MODELS.
@@ -931,6 +943,41 @@ class Deepseek(BaseChatTemplate):
         path = model_path.lower()
         if 'deepseek' in path and 'chat' in path and 'vl' not in path:
             return 'deepseek'
+
+
+@MODELS.register_module(name=['internvl-zh'])
+class InternVLZH(BaseChatTemplate):
+
+    def __init__(self,
+                 user='<human>: ',
+                 eoh=' ',
+                 assistant='<bot>: ',
+                 eoa='</s>',
+                 session_len=4096,
+                 **kwargs):
+        super().__init__(user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         session_len=session_len,
+                         **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'internvl-chat-chinese' in path and 'v1-1' in path:
+            return 'internvl-zh'
 
 
 @MODELS.register_module(name=['deepseek-vl'])
@@ -1095,6 +1142,7 @@ class DbrxInstruct(BaseChatTemplate):
             return 'dbrx'
 
 
+@MODELS.register_module(name=['internvl-zh-hermes2'])
 @MODELS.register_module(name=['llava-chatml'])
 class ChatmlDirect(BaseChatTemplate):
 
@@ -1130,6 +1178,8 @@ class ChatmlDirect(BaseChatTemplate):
         path = model_path.lower()
         if 'llava' in path and 'v1.6-34b' in path:
             return 'llava-chatml'
+        if 'internvl-chat-chinese' in path and 'v1-2' in path:
+            return 'internvl-zh-hermes2'
 
 
 def best_match_model(query: str) -> Optional[str]:

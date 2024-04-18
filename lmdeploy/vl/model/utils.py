@@ -60,3 +60,13 @@ def add_sys_path(path: Union[str, os.PathLike]) -> Iterator[None]:
         yield
     finally:
         sys.path.remove(path)
+
+
+@contextmanager
+def disable_transformers_logging():
+    import transformers
+    from transformers.utils import logging
+    previous_level = logging.get_verbosity()
+    logging.set_verbosity(transformers.logging.ERROR)
+    yield
+    logging.set_verbosity(previous_level)

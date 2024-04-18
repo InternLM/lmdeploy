@@ -385,3 +385,19 @@ class ArgumentHelper:
             'it should be a multiple of 64. For Pytorch Engine, '
             'if Lora Adapter is specified, this parameter will '
             'be ignored')
+
+    @staticmethod
+    def num_tokens_per_iter(parser):
+        return parser.add_argument(
+            '--num-tokens-per-iter',
+            type=int,
+            default=0,
+            help='the number of tokens processed in a forward pass')
+
+    @staticmethod
+    def max_prefill_iters(parser):
+        return parser.add_argument(
+            '--max-prefill-iters',
+            type=int,
+            default=1,
+            help='the max number of forward passes in prefill stage')

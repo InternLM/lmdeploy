@@ -126,6 +126,8 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch == 'InternLMXComposer2ForCausalLM':
         return True
+    elif arch == 'InternVLChatModel':
+        return True
     return False
 
 

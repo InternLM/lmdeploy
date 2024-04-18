@@ -27,6 +27,8 @@ SUPPORTED_ARCHS = dict(
     LlavaLlamaForCausalLM='llama',
     # xcomposer2
     InternLMXComposer2ForCausalLM='xcomposer2',
+    # internvl
+    InternVLChatModel='internvl',
     # deepseek-vl
     MultiModalityCausalLM='deepseekvl')
 

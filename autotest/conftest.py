@@ -30,19 +30,3 @@ def common_case_config():
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
     return case_config
-
-
-def _init_cli_case_list():
-    case_path = os.path.join(cli_prompt_case_file)
-    with open(case_path) as f:
-        case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-    global global_cli_case_List
-    global_cli_case_List = list(case_config.keys())
-
-
-def _init_common_case_list():
-    case_path = os.path.join(common_prompt_case_file)
-    with open(case_path) as f:
-        case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-    global global_common_case_List
-    global_common_case_List = list(case_config.keys())

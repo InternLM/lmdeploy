@@ -38,7 +38,6 @@ jobs:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
         - /nvme/share_data/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
@@ -82,7 +81,7 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Test lmdeploy
-        run: CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test -v -s --alluredir=allure-results --clean-alluredir
+        run: CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test -x --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
         run: |
