@@ -19,11 +19,11 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
 
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
-#include "src/turbomind/layers/constant.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/triton_backend/triton_utils.hpp"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <algorithm>
 #include <functional>
@@ -180,10 +180,11 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
     if (input_tensors->count("logprobs")) {
         size_t max_logprob_length = std::min((int)max_request_output_len, instance_->session_len) + 1;
         h_logprob_vals_           = (float*)std::realloc(
-            h_logprob_vals_, sizeof(float) * request_batch_size * beam_width * max_logprob_length * 1024);
-        h_logprob_indexes_ = (uint32_t*)std::realloc(
-            h_logprob_indexes_, sizeof(uint32_t) * request_batch_size * beam_width * max_logprob_length * 1024);
-        h_logprob_nums_ = (uint32_t*)std::realloc(
+            h_logprob_vals_, sizeof(float) * request_batch_size * beam_width * max_logprob_length * ft::kMaxLogProb);
+        h_logprob_indexes_ = (uint32_t*)std::realloc(h_logprob_indexes_,
+                                                     sizeof(uint32_t) * request_batch_size * beam_width
+                                                         * max_logprob_length * ft::kMaxLogProb);
+        h_logprob_nums_    = (uint32_t*)std::realloc(
             h_logprob_nums_, sizeof(uint32_t) * request_batch_size * beam_width * max_logprob_length);
 
         output_tensors.insert(

@@ -24,7 +24,7 @@
 
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
-#include "src/turbomind/layers/constant.h"
+#include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 constexpr int   ENABLE_SINGLE_PASS_TOP_P = 0;

@@ -26,7 +26,7 @@
 
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
-#include "src/turbomind/layers/constant.h"
+#include "src/turbomind/utils/constant.h"
 
 namespace turbomind {
 
