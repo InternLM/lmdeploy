@@ -62,17 +62,21 @@ def disable_transformers_logging():
 
 @contextmanager
 def hack_import_with(src: List[str], dst: str = 'torch'):
-    """Replace wanted import package with a dummy one.
+    """Replace wanted and uninstalled package with a dummy one.
 
     Args:
         src (List): a list of package name
         dst (str): dummy package name. Default to 'torch'.
     """
     import sys
+    from importlib.util import find_spec
+    not_installed = []
     for item in src:
-        sys.modules[item] = __import__(dst)
+        if not find_spec(item):
+            not_installed.append(item)
+            sys.modules[item] = __import__(dst)
     yield
-    for item in src:
+    for item in not_installed:
         sys.modules.pop(item, None)
 
 
