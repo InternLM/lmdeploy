@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import os.path as osp
 import warnings
 from contextlib import contextmanager
 from typing import List
@@ -66,6 +67,76 @@ def _build_vision_tower_aux(vision_tower_cfg, **kwargs):
         raise ValueError(f'Unknown vision tower: {vision_tower_aux}')
 
 
+def _clip_vision_tower__init__(self, vision_tower, args, delay_load=False):
+    torch.nn.Module.__init__(self)
+
+    self.is_loaded = False
+    self.vision_tower_name = vision_tower if osp.exists(
+        vision_tower) else 'openai/clip-vit-large-patch14-336'
+    self.select_layer = args.mm_vision_select_layer
+    self.select_feature = getattr(args, 'mm_vision_select_feature', 'patch')
+    self.is_optimize = getattr(args, 'optimize_vision_tower', False)
+
+    if not delay_load:
+        self.load_model()
+    elif getattr(args, 'unfreeze_mm_vision_tower', False):
+        self.load_model()
+
+
+def _clip_vision_tower_load_model(self):
+    from minigemini.model.multimodal_encoder.clip_encoder import (
+        CLIPVisionModel, VideoFramesProcessor)
+    self.image_processor = VideoFramesProcessor.from_pretrained(
+        self.vision_tower_name)
+    from transformers import CLIPVisionConfig
+    config = CLIPVisionConfig.from_pretrained(self.vision_tower_name,
+                                              trust_remote_code=True)
+    self.vision_tower = CLIPVisionModel._from_config(config=config)
+    self.vision_tower.requires_grad_(False)
+    self.is_loaded = True
+
+
+def _openclip_vision_tower__init__(self, vision_tower, args, delay_load=False):
+    torch.nn.Module.__init__(self)
+    self.is_loaded = False
+    self.vision_tower_name = vision_tower
+    if osp.exists(osp.join(vision_tower, 'open_clip_config.json')):
+        import json
+        self.vision_config = json.load(
+            open(osp.join(vision_tower, 'open_clip_config.json'), 'r'))
+    self.is_optimize = getattr(args, 'optimize_vision_tower_aux', False)
+
+    if not delay_load:
+        self.load_model()
+
+
+def _openclip_vision_tower_load_model(self):
+    if 'convnext' in self.vision_tower_name:
+        if 'large' in self.vision_tower_name and 'd-320' in self.vision_tower_name:  # noqa
+            self.model_type = 'convnext_large_d_320'
+            self.model_channel = [192, 384, 768, 1536]  # stage 0-3
+        elif 'base' in self.vision_tower_name and 'w-320' in self.vision_tower_name:  # noqa
+            self.model_type = 'convnext_base_w_320'
+            self.model_channel = [128, 256, 512, 1024]
+        elif 'xxlarge' in self.vision_tower_name:
+            self.model_type = 'convnext_xxlarge'
+            self.model_channel = [384, 768, 1536, 3072]
+
+    from minigemini.model.multimodal_encoder.openclip_encoder import (
+        CLIP, get_model_config)
+    clip_model = CLIP(**get_model_config(self.model_type))
+    clip_model.visual.trunk.norm_pre = None
+    clip_model.visual.trunk.head = None
+    clip_model.visual.head = None
+
+    self.is_loaded = True
+    # decompose stem and stages blocks in vision tower
+    self.vision_stem = clip_model.visual.trunk.stem
+    self.vision_stages = clip_model.visual.trunk.stages
+    self.vision_stem.requires_grad_(False)
+    self.vision_stages.requires_grad_(False)
+
+
 @contextmanager
 def init_mini_gemini_model():
     import minigemini  # noqa: F401
@@ -75,9 +146,32 @@ def init_mini_gemini_model():
     old_vision_tower_aux = eval(
         'minigemini.model.multimodal_encoder.builder.build_vision_tower_aux')
     _set_function(old_vision_tower_aux, _build_vision_tower_aux)
+    old_vision_tower_init = eval(
+        'minigemini.model.multimodal_encoder.clip_encoder.CLIPVisionTower.__init__'  # noqa
+    )
+    _set_function(old_vision_tower_init, _clip_vision_tower__init__)
+    old_vision_tower_load_model = eval(
+        'minigemini.model.multimodal_encoder.clip_encoder.CLIPVisionTower.load_model'  # noqa
+    )
+    _set_function(old_vision_tower_load_model, _clip_vision_tower_load_model)
+    old_vision_tower_aux_init = eval(
+        'minigemini.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.__init__'  # noqa
+    )
+    _set_function(old_vision_tower_aux_init, _openclip_vision_tower__init__)
+    _set_function(old_vision_tower_load_model, _clip_vision_tower_load_model)
+    old_vision_tower_aux_load_model = eval(
+        'minigemini.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.load_model'  # noqa
+    )
+    _set_function(old_vision_tower_aux_load_model,
+                  _openclip_vision_tower_load_model)
     yield
     _set_function(_build_vision_tower, old_vision_tower)
     _set_function(_build_vision_tower_aux, old_vision_tower_aux)
+    _set_function(_clip_vision_tower__init__, old_vision_tower_init)
+    _set_function(_clip_vision_tower_load_model, old_vision_tower_load_model)
+    _set_function(_openclip_vision_tower__init__, old_vision_tower_aux_init)
+    _set_function(_openclip_vision_tower_load_model,
+                  old_vision_tower_aux_load_model)
 
 
 class MiniGeminiVisionModel(VisonModel):
