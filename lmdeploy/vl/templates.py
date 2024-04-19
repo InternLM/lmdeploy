@@ -159,6 +159,8 @@ class MiniGeminiLlamaTempateWrapper(VLChatTemplateWrapper):
 
     def append_image_token(self, prompt, num_images: int):
         """append image tokens to user prompt."""
+        if num_images == 0:
+            return prompt
         res = f'{IMAGE_TOKEN}\n'
         assert num_images <= 1, 'MiniGeminiLlama accepts 1 input image'
         res = res + prompt

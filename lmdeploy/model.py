@@ -563,7 +563,7 @@ class Llama3(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'llama-3' in model_path.lower() or 'llama3' in model_path.lower():
+        if 'llama-3-' in model_path.lower() or 'llama3-' in model_path.lower():
             return 'llama3'
 
 
