@@ -30,7 +30,9 @@ SUPPORTED_ARCHS = dict(
     # internvl
     InternVLChatModel='internvl',
     # deepseek-vl
-    MultiModalityCausalLM='deepseekvl')
+    MultiModalityCausalLM='deepseekvl',
+    # mini gemini
+    MiniGeminiLlamaForCausalLM='llama')
 
 
 def get_model_arch(model_path: str):

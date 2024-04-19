@@ -115,6 +115,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |        Gemma        |    2B-7B    |
 |        Dbrx         |    132B     |
 |   LLaVA(1.5,1.6)    |  7B - 34B   |
+|   MiniGeminiLlama   |     7B      |
 
 LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 

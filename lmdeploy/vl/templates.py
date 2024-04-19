@@ -161,6 +161,19 @@ class InternLMXComposer2TemplateWrapper(VLChatTemplateWrapper):
         return ' '.join([IMAGE_TOKEN] * num_images) + prompt
 
 
+class MiniGeminiLlamaTempateWrapper(VLChatTemplateWrapper):
+    """Qwen vl chat template."""
+
+    def append_image_token(self, prompt, num_images: int):
+        """append image tokens to user prompt."""
+        if num_images == 0:
+            return prompt
+        res = f'{IMAGE_TOKEN}\n'
+        assert num_images <= 1, 'MiniGeminiLlama accepts 1 input image'
+        res = res + prompt
+        return res
+
+
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
@@ -179,4 +192,6 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return InternLMXComposer2TemplateWrapper(chat_template)
     elif arch == 'InternVLChatModel':
         return InternVLChatTemplateWrapper(chat_template)
+    elif arch == 'MiniGeminiLlamaForCausalLM':
+        return MiniGeminiLlamaTempateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')

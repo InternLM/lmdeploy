@@ -2,7 +2,7 @@
 import os
 import sys
 from contextlib import contextmanager
-from typing import Dict, Iterator, List, Union
+from typing import Dict, Iterator, List, MutableSequence, Union
 
 import torch
 import torch.nn as nn
@@ -70,3 +70,39 @@ def disable_transformers_logging():
     logging.set_verbosity(transformers.logging.ERROR)
     yield
     logging.set_verbosity(previous_level)
+
+
+@contextmanager
+def hack_import_with(src: List[str], dst: str = 'torch'):
+    """Replace wanted and uninstalled package with a dummy one.
+
+    Args:
+        src (List): a list of package name
+        dst (str): dummy package name. Default to 'torch'.
+    """
+    import sys
+    from importlib.util import find_spec
+    not_installed = []
+    for item in src:
+        if not find_spec(item):
+            not_installed.append(item)
+            sys.modules[item] = __import__(dst)
+    yield
+    for item in not_installed:
+        sys.modules.pop(item, None)
+
+
+def _set_function(old_func, new_func):
+    """Replace old function with the new function."""
+    import gc
+    refs = gc.get_referrers(old_func)
+    obj_id = id(old_func)
+    for ref in refs:
+        if isinstance(ref, dict):
+            for x, y in ref.items():
+                if id(y) == obj_id:
+                    ref[x] = new_func
+        elif isinstance(ref, MutableSequence):
+            for i, v in enumerate(ref):
+                if id(v) == obj_id:
+                    ref[i] = new_func

@@ -67,8 +67,8 @@ def get_command_with_extra(cmd,
 
 def get_model_name(model):
     model_names = [
-        'llama', 'llama2', 'internlm', 'internlm2', 'baichuan2', 'chatglm2',
-        'falcon', 'yi', 'qwen'
+        'llama', 'llama2', 'llama3', 'internlm', 'internlm2', 'baichuan2',
+        'chatglm2', 'falcon', 'yi', 'qwen'
     ]
     model_names += list(MODELS.module_dict.keys())
     model_names.sort()
@@ -81,6 +81,8 @@ def get_model_name(model):
         return model_name
     if ('llama-2' in model_name):
         return 'llama2'
+    if ('llama-3' in model_name):
+        return 'llama3'
     if ('llava' in model_name):
         return 'vicuna'
     if ('yi-vl' in model_name):

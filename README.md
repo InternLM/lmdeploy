@@ -92,6 +92,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 | :-----------------: | :---------: |
 |        Llama        |  7B - 65B   |
 |       Llama2        |  7B - 70B   |
+|       Llama3        |   8B, 70B   |
 |      InternLM       |  7B - 20B   |
 |      InternLM2      |  7B - 20B   |
 | InternLM-XComposer  |     7B      |
@@ -114,6 +115,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |        Gemma        |    2B-7B    |
 |        Dbrx         |    132B     |
 |   LLaVA(1.5,1.6)    |  7B - 34B   |
+|   MiniGeminiLlama   |     7B      |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 

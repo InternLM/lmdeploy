@@ -261,10 +261,36 @@ class Vicuna(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'vicuna' in model_path.lower():
+        path = model_path.lower()
+        if 'vicuna' in path:
             return 'vicuna'
-        if 'wizardlm' in model_path.lower():
+        if 'wizardlm' in path:
             return 'wizardlm'
+
+
+@MODELS.register_module(name='mini-gemini-vicuna')
+class MiniGemini(Vicuna):
+    """Chat template of vicuna model."""
+
+    def __init__(self, session_len=4096, **kwargs):
+        super().__init__(session_len=session_len, **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'mini-gemini-7b' in path or 'mini-gemini-13b' in path:
+            return 'mini-gemini-vicuna'
 
 
 @MODELS.register_module(name='internlm-chat')
@@ -554,6 +580,55 @@ If a question does not make any sense, or is not factually coherent, explain why
         """
         if 'llama-2' in model_path.lower() or 'llama2' in model_path.lower():
             return 'llama2'
+
+
+@MODELS.register_module(name='llama3')
+class Llama3(BaseChatTemplate):
+    """Chat template of LLaMA3 model."""
+
+    def __init__(self,
+                 system='<|start_header_id|>system<|end_header_id|>\n\n',
+                 meta_instruction=None,
+                 eosys='<|eot_id|>',
+                 assistant='<|start_header_id|>assistant<|end_header_id|>\n\n',
+                 eoa='<|eot_id|>',
+                 user='<|start_header_id|>user<|end_header_id|>\n\n',
+                 eoh='<|eot_id|>',
+                 stop_words=['<|eot_id|>', '<|end_of_text|>'],
+                 session_len=8192,
+                 **kwargs):
+        super().__init__(system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         assistant=assistant,
+                         eoa=eoa,
+                         user=user,
+                         eoh=eoh,
+                         stop_words=stop_words,
+                         session_len=session_len,
+                         **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        if sequence_start:
+            return '<|begin_of_text|>' + super().get_prompt(
+                prompt, sequence_start)
+        return super().get_prompt(prompt, sequence_start)
+
+    def messages2prompt(self, messages, sequence_start=True):
+        if sequence_start and not isinstance(messages, str):
+            return '<|begin_of_text|>' + super().messages2prompt(
+                messages, sequence_start)[:-1]
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'llama-3-' in model_path.lower() or 'llama3-' in model_path.lower():
+            return 'llama3'
 
 
 @MODELS.register_module(name='qwen-14b')
