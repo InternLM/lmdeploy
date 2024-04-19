@@ -3,7 +3,6 @@ dst_path: /nvme/qa_test_models/autotest_model
 log_path: /nvme/qa_test_models/autotest_model/log
 dataset_path: /nvme/qa_test_models/...dataset
 
-
 tp_config:
     internlm-chat-20b: 2
     internlm2-chat-20b: 2
@@ -13,8 +12,7 @@ tp_config:
     Qwen-VL-Chat: 2
     llava-v1.5-13b: 2
 
-
-turbomind_model:
+turbomind_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm2-chat-1_8b
     - internlm/internlm-chat-7b
@@ -25,15 +23,21 @@ turbomind_model:
     - internlm/internlm2-chat-20b-4bits
     - Qwen/Qwen-7B-Chat
     - Qwen/Qwen-14B-Chat
+    - Qwen/Qwen1.5-7B-Chat
     - lmdeploy/llama2-chat-7b-w4
     - baichuan-inc/Baichuan2-7B-Chat
     - 01-ai/Yi-6B-Chat
-    - internlm/internlm2-1_8b
-    - internlm/internlm2-20b
+    - Qwen/Qwen-VL-Chat
+    - liuhaotian/llava-v1.5-7b
+    - liuhaotian/llava-v1.5-13b
+    - liuhaotian/llava-v1.6-vicuna-7b
+    - 01-ai/Yi-VL-6B
+    - deepseek-ai/deepseek-vl-1.3b-chat
+    - deepseek-ai/deepseek-coder-1.3b-instruct
     - codellama/CodeLlama-7b-Instruct-hf
+    - Qwen/Qwen1.5-4B-Chat-AWQ
 
-
-pytorch_model:
+pytorch_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm-chat-7b
     - internlm/internlm-chat-20b
@@ -41,18 +45,24 @@ pytorch_model:
     - internlm/internlm2-chat-20b
     - baichuan-inc/Baichuan2-7B-Chat
     - baichuan-inc/Baichuan2-13B-Chat
-    - THUDM/chatglm2-6b
-    - tiiuae/falcon-7b
     - 01-ai/Yi-6B-Chat
-    - internlm/internlm2-1_8b
-    - internlm/internlm2-20b
     - Qwen/Qwen1.5-7B-Chat
+    - deepseek-ai/deepseek-moe-16b-chat
     - mistralai/Mistral-7B-Instruct-v0.1
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-7b-it
-    - deepseek-ai/deepseek-moe-16b-chat
     - deepseek-ai/deepseek-coder-6.7b-instruct
+    - THUDM/chatglm2-6b
 
+turbomind_base_model:
+    - internlm/internlm2-1_8b
+    - internlm/internlm2-20b
+    - codellama/CodeLlama-7b-hf
+
+pytorch_base_model:
+    - tiiuae/falcon-7b
+    - internlm/internlm2-1_8b
+    - internlm/internlm2-20b
 
 vl_model:
     - Qwen/Qwen-VL-Chat
@@ -60,6 +70,7 @@ vl_model:
     - liuhaotian/llava-v1.5-13b
     - liuhaotian/llava-v1.6-vicuna-7b
     - 01-ai/Yi-VL-6B
+    - deepseek-ai/deepseek-vl-1.3b-chat
 
 quatization_case_config:
     w4a16:
@@ -70,18 +81,24 @@ quatization_case_config:
         - internlm/internlm2-chat-20b
         - baichuan-inc/Baichuan2-7B-Chat
         - internlm/internlm2-20b
-    kvint8: # more models are supported kvint8 quantization, but the chat response are not good, already removed
+    kvint:
         - meta-llama/Llama-2-7b-chat-hf
+        - internlm/internlm2-chat-1_8b
+        - internlm/internlm-chat-7b
         - internlm/internlm-chat-20b
+        - internlm/internlm2-chat-7b
         - internlm/internlm2-chat-20b
-    kvint8_w4a16:
-        - meta-llama/Llama-2-7b-chat-hf
-        - internlm/internlm-chat-20b
-        - internlm/internlm2-chat-20b
-        - internlm/internlm2-20b
+        - internlm/internlm2-chat-7b-4bits
+        - internlm/internlm2-chat-20b-4bits
         - Qwen/Qwen-7B-Chat
         - Qwen/Qwen-14B-Chat
+        - Qwen/Qwen1.5-7B-Chat
+        - lmdeploy/llama2-chat-7b-w4
         - baichuan-inc/Baichuan2-7B-Chat
+        - internlm/internlm2-1_8b
+        - internlm/internlm2-20b
+        - 01-ai/Yi-6B-Chat
+        - codellama/CodeLlama-7b-Instruct-hf
     w8a8:
         - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b

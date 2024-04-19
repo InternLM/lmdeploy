@@ -6,6 +6,7 @@
 | :----------------: | :--------: | :-------: | :-----: | :-----: | :---: |
 |       Llama        |  7B - 65B  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Llama2       |  7B - 70B  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Llama3       |  8B, 70B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM      |  7B - 20B  |    Yes    |   Yes   |   Yes   |  Yes  |
 |     InternLM2      |  7B - 20B  |    Yes    |   Yes   |   Yes   |  Yes  |
 | InternLM-XComposer |     7B     |    Yes    |    -    |    -    |   -   |
@@ -33,6 +34,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 | :----------: | :--------: | :-------: | :-----: | :--: |
 |    Llama     |  7B - 65B  |    Yes    |   No    | Yes  |
 |    Llama2    |  7B - 70B  |    Yes    |   No    | Yes  |
+|    Llama3    |  8B, 70B   |    Yes    |   No    | Yes  |
 |   InternLM   |  7B - 20B  |    Yes    |   No    | Yes  |
 |  InternLM2   |  7B - 20B  |    Yes    |   No    |  -   |
 |  Baichuan2   |  7B - 13B  |    Yes    |   No    | Yes  |
