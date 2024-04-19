@@ -105,7 +105,12 @@ struct GmemIteratorSm80 {
         // }
 
         // if (G_CTA > 1 && begin == 0 && threadIdx.x == 0 && blockIdx.x == 0) {
-        //     printf("[prefetch] counter=%d, g_mask=%d, t_mask=%d\n", g_counter_, (int)g_mask_, (int)tile_mask);
+        //     printf("[prefetch] counter=%d, g_mask=%d, t_mask=%d, src_data=%p\n", g_counter_, (int)g_mask_,
+        //     (int)tile_mask, src_data_);
+        // }
+
+        // if (!g_mask_) {
+        //     return;
         // }
 
         PRAGMA_UNROLL
@@ -120,16 +125,27 @@ struct GmemIteratorSm80 {
 
                 CpAsync(std::true_type{}, dst, src_data_, g_mask_ && tile_mask);
 
-                // if (tile_mask) {
-                //     static_assert(sizeof(AccessType) == sizeof(uint4));
-                //     *(uint4*)dst = __ldg((const uint4*)src_data_);
+                // if (g_mask_ && tile_mask) {
+                //     // static_assert(sizeof(AccessType) == sizeof(uint4));
+                //     // *(uint4*)dst = __ldg((const uint4*)src_data_);
+                //     AccessType tmp;
+                //     // Load(*(AccessType*)dst, (T*)src_data_);
+                //     Load(tmp, (T*)src_data_);
+                //     Store(dst, tmp);
+                //     if constexpr (Idx == 2) {
+                //         printf("fuck: %f %f\n", (float)tmp[0], (float)tmp[1]);
+                //     }
                 // }
-                src_data_ += src_step_c_;
+                if (g_mask_) {
+                    src_data_ += src_step_c_;
+                }
             }
             // if constexpr (SmemLayout::kIsTrivial) {
             //     smem_data_.ptr_ += Map::kDeltaS * SmemLayout::C - Map::kIterC * Map::kDeltaC;
             // }
-            src_data_ += src_step_s_;
+            if (g_mask_) {
+                src_data_ += src_step_s_;
+            }
         }
 
         // PRAGMA_UNROLL
@@ -137,10 +153,10 @@ struct GmemIteratorSm80 {
         //     PRAGMA_UNROLL
         //     for (int c = 0; c < Map::kIterC; ++c) {
         //         auto dst = &smem_data_(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
-        //         if (tile_mask) {
-        //             auto tmp = *(uint4*)dst;
-        //             if (Idx == 1) {
-        //                 printf("%08x %08x %08x %08x\n", tmp.x, tmp.y, tmp.z, tmp.w);
+        //         if (g_mask_ && tile_mask) {
+        //             auto tmp = *(AccessType*)dst;
+        //             if constexpr (Idx == 2) {
+        //                 printf("%f %f\n", (float)tmp[0], (float)tmp[1]);
         //             }
         //         }
         //     }

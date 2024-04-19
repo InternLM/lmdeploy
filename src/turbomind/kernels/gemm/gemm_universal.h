@@ -23,6 +23,7 @@ struct GemmUniversal {
     static constexpr int CTA_M = Impl::CTA_M;
     static constexpr int CTA_N = Impl::CTA_N;
     static constexpr int CTA_K = Impl::CTA_K;
+    static constexpr int CTA_G = Impl::CTA_G;
 
     using FragC = typename Impl::FragC;
 
@@ -62,7 +63,11 @@ struct GemmUniversal {
         typename Mainloop::GmemIterB gmem_B{param.B + n_idx * param.k,  // ptr
                                             param.k * Impl::kPackedN,   // stride s
                                             CTA_K * Impl::kPackedN};    // stride k
-        typename Mainloop::GmemIterQ gmem_Q{param.Q + n_idx, param.n, (CTA_K + 127) / 128 * param.n};
+        typename Mainloop::GmemIterQ gmem_Q{
+            param.Q + n_idx * 2,  // ptr
+            param.n * 2,          // stride s, not very useful
+            CTA_G * param.n * 2   // stride k
+        };
 
         Mainloop mainloop{};
 

@@ -203,8 +203,8 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
             const int warp_idx_n    = warp_id_n(warp_id);
             const int warp_offset_n = warp_idx_n * WARP_N;
 
-            // if (threadIdx.x == 0 && k == 0) {
-            //     printf("[load]     counter=%d, g_mask=%d\n", g_counter, g_mask);
+            // if (threadIdx.x == 0) {
+            //     printf("[load_%d]   counter=%d, g_mask=%d\n", k, g_counter, g_mask);
             // }
 
             PRAGMA_UNROLL
@@ -216,13 +216,14 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                     const int s = k * 16 / G;
                     if (g_mask) {
                         Lds((Array<T, 2>&)rmem_Q[k][n][i * 2], data + SmemLayoutQ::apply(s, c * 2));
+                        // if (k == ITER_K - 1) {
+                        //     Store(data + SmemLayoutQ::apply(s, c * 2), Array<T, 2>{});
+                        // }
+                        // if (threadIdx.x == 0) {
+                        //     printf("%f %f\n", (float)rmem_Q[k][n][i * 2], (float)rmem_Q[k][n][i * 2 + 1]);
+                        // }
                     }
-                    // printf("%f %f\n", (float)rmem_Q[k][n][i * 2], (float)rmem_Q[k][n][i * 2 + 1]);
                 }
-                // rmem_Q[k][n][0] = 1;
-                // rmem_Q[k][n][1] = 0;
-                // rmem_Q[k][n][2] = 1;
-                // rmem_Q[k][n][3] = 0;
             }
         }
 
@@ -339,7 +340,7 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                                 auto& k2 = (Array<T, 2>&)frag[c * 4 + s * 2];
                                 PRAGMA_UNROLL
                                 for (int i = 0; i < 2; ++i) {
-                                    k2[i] = __hfma(k2[i], rmem_Q[k][n][s * 2], rmem_Q[k][n][s * 2 + 1]);
+                                    k2[i] = __hfma(k2[i], rmem_Q[k][n + p_n][s * 2], rmem_Q[k][n + p_n][s * 2 + 1]);
                                 }
                             }
                         }
@@ -363,7 +364,9 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
     Compute(StateA& state_A, StateB& state_B, FragC& frag_C, int pipe_iter, Prefetch&& prefetch, Advance&& advance)
     {
         static_assert(ITER_K > 1);
-
+        // if (threadIdx.x == 0) {
+        //     printf("[compute] +++\n");
+        // }
         PRAGMA_UNROLL
         for (int k = 0; k < ITER_K; ++k) {
             state_A.Load((k + 1) % ITER_K, pipe_iter);
@@ -392,6 +395,9 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
             // ! Transform of k must come before prefetching k + 1
             state_B.Transform((k + 1) % ITER_K);
         }
+        // if (threadIdx.x == 0) {
+        //     printf("[compute] ---\n");
+        // }
     }
 
     template<class Func>

@@ -36,6 +36,13 @@ void invoke(T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, cuda
     constexpr int WARP_N = 64;
     constexpr int WARP_K = 32;
 
+    // constexpr int CTA_M  = 64;
+    // constexpr int CTA_N  = 64;
+    // constexpr int CTA_K  = 32;
+    // constexpr int WARP_M = 64;
+    // constexpr int WARP_N = 64;
+    // constexpr int WARP_K = 32;
+
     // constexpr int CTA_M  = 128;
     // constexpr int CTA_N  = 256;
     // constexpr int CTA_K  = 64;

@@ -54,4 +54,20 @@ struct Converter<uint16_t, uint4_t> {
     }
 };
 
+template<>
+struct Converter<uint16_t, uint8_t> {
+    template<class U, int N>
+    __device__ Array<uint8_t, N> operator()(const Array<U, N>& x)
+    {
+        static_assert(sizeof(U) == 2);
+        auto&             vi = (const Array<uint16_t, N>&)x;
+        Array<uint8_t, N> vo;
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            vo[i] = static_cast<uint8_t>(vi[i]);
+        }
+        return vo;
+    }
+};
+
 }  // namespace turbomind::gemm

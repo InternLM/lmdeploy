@@ -25,8 +25,8 @@ struct _Converter {
 };
 
 struct BaseConfig {
-    static constexpr int CTA_M = 128;
-    static constexpr int CTA_N = 128;
+    static constexpr int CTA_M = 64;
+    static constexpr int CTA_N = 64;
     static constexpr int CTA_K = 32;
 
     static constexpr int WARP_M = 64;
@@ -50,6 +50,14 @@ struct Config<T, uint16_t, uint4_t>: BaseConfig {
     using Gemm0  = Impl<MMA_81616, T, T, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
     using Gemm1  = Impl<MMA_81616, T, uint4_t, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
     using Kernel = Transcript<void, Gemm0, Gemm1, Converter<uint16_t, uint4_t>, CtaSwizzleMap<0>>;
+};
+
+template<class T>
+struct Config<T, uint16_t, uint8_t>: BaseConfig {
+    static_assert(sizeof(T) == 2);
+    using Gemm0  = Impl<MMA_81616, T, T, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Gemm1  = Impl<MMA_81616, T, uint8_t, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Kernel = Transcript<void, Gemm0, Gemm1, Converter<uint16_t, uint8_t>, CtaSwizzleMap<0>>;
 };
 
 }  // namespace
@@ -102,9 +110,11 @@ void transcript(To* dst, const Ti* src, int n, int k, cudaStream_t st)
 }
 
 template void transcript<half>(half* dst, const half* src, int n, int k, cudaStream_t st);
+
 template void transcript<half>(uint4_t* dst, const half* src, int n, int k, cudaStream_t st);
 template void transcript<half>(uint8_t* dst, const half* src, int n, int k, cudaStream_t st);
 
 template void transcript<half>(uint4_t* dst, const uint16_t* src, int n, int k, cudaStream_t st);
+template void transcript<half>(uint8_t* dst, const uint16_t* src, int n, int k, cudaStream_t st);
 
 }  // namespace turbomind::gemm
