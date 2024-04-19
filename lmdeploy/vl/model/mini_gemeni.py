@@ -1,13 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import warnings
+from contextlib import contextmanager
 from typing import List
 
 import torch
 from PIL.Image import Image
 
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import (disable_transformers_logging,
+from lmdeploy.vl.model.utils import (_set_function,
+                                     disable_transformers_logging,
                                      hack_import_with,
                                      load_model_from_weight_files)
 
@@ -24,16 +26,71 @@ def check_mini_gemini_install():
             ' --no-deps')
 
 
+def _build_vision_tower(vision_tower_cfg, **kwargs):
+    from minigemini.model.multimodal_encoder.builder import (CLIPVisionTower,
+                                                             EVAVisionTower)
+    vision_tower = getattr(vision_tower_cfg, 'mm_vision_tower',
+                           getattr(vision_tower_cfg, 'vision_tower', None))
+    image_processor = getattr(
+        vision_tower_cfg, 'image_processor',
+        getattr(vision_tower_cfg, 'image_processor',
+                '../processor/clip-patch14-224'))
+
+    if 'openai' in vision_tower.lower() or 'ShareGPT4V' in vision_tower:
+        return CLIPVisionTower(vision_tower, args=vision_tower_cfg, **kwargs)
+    elif 'lavis' in vision_tower.lower() or 'eva' in vision_tower.lower():
+        return EVAVisionTower(vision_tower,
+                              image_processor,
+                              args=vision_tower_cfg,
+                              **kwargs)
+    else:
+        raise ValueError(f'Unknown vision tower: {vision_tower}')
+
+
+def _build_vision_tower_aux(vision_tower_cfg, **kwargs):
+    from minigemini.model.multimodal_encoder.builder import (
+        CLIPVisionTower, OpenCLIPVisionTower)
+    vision_tower_aux = getattr(
+        vision_tower_cfg, 'mm_vision_tower_aux',
+        getattr(vision_tower_cfg, 'vision_tower_aux', None))
+
+    if 'openclip' in vision_tower_aux.lower():
+        return OpenCLIPVisionTower(vision_tower_aux,
+                                   args=vision_tower_cfg,
+                                   **kwargs)
+    elif 'openai' in vision_tower_aux.lower():
+        return CLIPVisionTower(vision_tower_aux,
+                               args=vision_tower_cfg,
+                               **kwargs)
+    else:
+        raise ValueError(f'Unknown vision tower: {vision_tower_aux}')
+
+
+@contextmanager
+def init_mini_gemini_model():
+    import minigemini  # noqa: F401
+    old_vision_tower = eval(
+        'minigemini.model.multimodal_encoder.builder.build_vision_tower')
+    _set_function(old_vision_tower, _build_vision_tower)
+    old_vision_tower_aux = eval(
+        'minigemini.model.multimodal_encoder.builder.build_vision_tower_aux')
+    _set_function(old_vision_tower_aux, _build_vision_tower_aux)
+    yield
+    _set_function(_build_vision_tower, old_vision_tower)
+    _set_function(_build_vision_tower_aux, old_vision_tower_aux)
+
+
 class MiniGeminiVisionModel(VisonModel):
     """Qwen vision model."""
 
     def __init__(self, model_path, device='cuda:0'):
         self.model_path = model_path
         self.device = device
-        self.build_model()
+        check_mini_gemini_install()
+        with init_mini_gemini_model():
+            self.build_model()
 
     def build_model(self):
-        check_mini_gemini_install()
         # empty init
         from accelerate import init_empty_weights
         from minigemini.mm_utils import process_images

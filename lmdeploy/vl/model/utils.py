@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 from contextlib import contextmanager
-from typing import Dict, List
+from typing import Dict, List, MutableSequence
 
 import torch
 import torch.nn as nn
@@ -68,3 +68,18 @@ def hack_import_with(src: List, dst: str = 'torch'):
     yield
     for item in src:
         sys.modules.pop(item, None)
+
+
+def _set_function(old_func, new_func):
+    import gc
+    refs = gc.get_referrers(old_func)
+    obj_id = id(old_func)
+    for ref in refs:
+        if isinstance(ref, dict):
+            for x, y in ref.items():
+                if id(y) == obj_id:
+                    ref[x] = new_func
+        elif isinstance(ref, MutableSequence):
+            for i, v in enumerate(ref):
+                if id(v) == obj_id:
+                    ref[i] = new_func
