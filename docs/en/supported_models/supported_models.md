@@ -20,6 +20,7 @@
 |         YI         |  6B - 34B  |    Yes    |   Yes   |   Yes   |  No   |
 |   LLaVA(1.5,1.6)   |  7B - 34B  |    Yes    |    -    |    -    |   -   |
 |   InternVL-Chat    |     -      |    Yes    |    -    |    -    |   -   |
+|  MiniGeminiLlama   |     7B     |    Yes    |   No    |   No    |  No   |
 
 "-" means not verified yet.
 

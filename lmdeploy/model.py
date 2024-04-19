@@ -261,10 +261,36 @@ class Vicuna(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'vicuna' in model_path.lower():
+        path = model_path.lower()
+        if 'vicuna' in path:
             return 'vicuna'
-        if 'wizardlm' in model_path.lower():
+        if 'wizardlm' in path:
             return 'wizardlm'
+
+
+@MODELS.register_module(name='mini-gemini-vicuna')
+class MiniGemini(Vicuna):
+    """Chat template of vicuna model."""
+
+    def __init__(self, session_len=4096, **kwargs):
+        super().__init__(session_len=session_len, **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'mini-gemini-7b' in path or 'mini-gemini-13b' in path:
+            return 'mini-gemini-vicuna'
 
 
 @MODELS.register_module(name='internlm-chat')
@@ -537,7 +563,7 @@ class Llama3(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'llama-3' in model_path.lower() or 'llama3' in model_path.lower():
+        if 'llama-3-' in model_path.lower() or 'llama3-' in model_path.lower():
             return 'llama3'
 
 
