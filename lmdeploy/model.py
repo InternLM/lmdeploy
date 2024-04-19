@@ -357,58 +357,20 @@ class InternLM2Chat7B(InternLMChat7B):
                  system='<|im_start|>system\n',
                  user='<|im_start|>user\n',
                  assistant='<|im_start|>assistant\n',
+                 environment='<|im_start|>environment\n',
+                 plugin='<|plugin|>',
+                 interpreter='<|interpreter|>',
                  eosys='<|im_end|>\n',
                  eoh='<|im_end|>\n',
                  eoa='<|im_end|>',
+                 eoenv='<|im_end|>\n',
                  separator='\n',
                  stop_words=['<|im_end|>', '<|action_end|>'],
                  **kwargs):
-
-        self.roles_cfg = dict(
-            system=dict(
-                begin=dict(with_name='<|im_start|>system name={name}\n',
-                           without_name='<|im_start|>system\n',
-                           name={
-                               'interpreter': '<|interpreter|>',
-                               'plugin': '<|plugin|>',
-                           }),
-                end='<|im_end|>\n',
-            ),
-            user=dict(begin=dict(
-                with_name='<|im_start|>user name={name}\n',
-                without_name='<|im_start|>user\n',
-            ),
-                      end='<|im_end|>\n'),
-            assistant=dict(begin=dict(
-                with_name='<|im_start|>assistant name={name}\n',
-                without_name='<|im_start|>assistant\n',
-                name={
-                    'interpreter': '<|interpreter|>',
-                    'plugin': '<|plugin|>',
-                }),
-                           end='<|im_end|>\n'),
-            environment=dict(begin=dict(
-                with_name='<|im_start|>environment name={name}\n',
-                without_name='<|im_start|>environment\n',
-                name={
-                    'interpreter': '<|interpreter|>',
-                    'plugin': '<|plugin|>',
-                }),
-                             end='<|im_end|>\n'),
-            tool=dict(
-                begin=dict(with_name='<|action_start|>{name}\n',
-                           name={
-                               'interpreter': '<|interpreter|>',
-                               'plugin': '<|plugin|>',
-                           }),
-                belong='assistant',
-                end='<|action_end|>\n',
-            ),
-            thought=dict(
-                begin=dict(without_name=''),
-                end='',
-                belong='assistant',
-            ))
+        self.plugin = plugin
+        self.interpreter = interpreter
+        self.environment = environment
+        self.eoenv = eoenv
         super(InternLM2Chat7B, self).__init__(session_len=session_len,
                                               system=system,
                                               user=user,
@@ -440,31 +402,17 @@ class InternLM2Chat7B(InternLMChat7B):
         Returns:
             str: the concatenated prompt
         """
-
-        def _format_begin(message):
-            role_cfg = self.roles_cfg[message['role']]
-            name = message.get('name', None)
-            if name is not None:
-                begin = role_cfg['begin'].get('with_name', '')
-                if name in role_cfg['begin'].get('name', {}):
-                    begin = begin.format(name=role_cfg['begin']['name'][name])
-                else:
-                    begin = begin.format(name=name)
-            else:
-                if isinstance(role_cfg.get('begin', ''), str):
-                    begin = role_cfg.get('begin', '')
-                elif isinstance(role_cfg['begin'], dict):
-                    begin = role_cfg['begin'].get('without_name', '')
-            return begin
-
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         box_map = dict(user=self.user,
                        assistant=self.assistant,
-                       system=self.system)
+                       system=self.system,
+                       environment=self.environment)
         eox_map = dict(user=self.eoh,
                        assistant=self.eoa + self.separator,
-                       system=self.eosys)
+                       system=self.eosys,
+                       environment=self.eoenv)
+        name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
         ret = ''
         if self.meta_instruction is not None:
             if len(messages) and messages[0]['role'] != 'system':
@@ -472,10 +420,9 @@ class InternLM2Chat7B(InternLMChat7B):
         for message in messages:
             role = message['role']
             content = message['content']
-            if 'name' in message:
-                begin = _format_begin(message)
-            else:
-                begin = box_map[role]
+            begin = box_map[role].strip(
+            ) + f" name={name_map[message['name']]}\n" if 'name' in message else box_map[
+                role]
             ret += f'{begin}{content}{eox_map[role]}'
         ret += f'{self.assistant}'
         return ret
