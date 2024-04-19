@@ -110,7 +110,7 @@ class Engine:
                     sequence_start=True,
                     sequence_end=True,
                     stream_output=stream_output):
-                _, res, n_token = outputs
+                res, n_token = outputs.token_ids, outputs.num_token
                 _, state = self.tokenizer.detokenize_incrementally(res, state)
                 now = time.perf_counter()
                 if n_prev_token != n_token:
