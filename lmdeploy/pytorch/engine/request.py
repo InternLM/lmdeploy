@@ -238,9 +238,6 @@ class RequestSender:
         """gather requests."""
         if self.manager._loop_task is None and not self.is_thread_safe():
             self.manager.create_loop_task()
-        if not self.is_loop_alive():
-            logger.error('Engine main loop stopped.')
-            exit(1)
         assert len(req_types) == len(data)
         batch_size = len(req_types)
 
