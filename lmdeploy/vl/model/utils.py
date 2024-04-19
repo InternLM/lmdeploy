@@ -61,7 +61,13 @@ def disable_transformers_logging():
 
 
 @contextmanager
-def hack_import_with(src: List, dst: str = 'torch'):
+def hack_import_with(src: List[str], dst: str = 'torch'):
+    """Replace wanted import package with a dummy one.
+
+    Args:
+        src (List): a list of package name
+        dst (str): dummy package name. Default to 'torch'.
+    """
     import sys
     for item in src:
         sys.modules[item] = __import__(dst)
@@ -71,6 +77,7 @@ def hack_import_with(src: List, dst: str = 'torch'):
 
 
 def _set_function(old_func, new_func):
+    """Replace old function with the new function."""
     import gc
     refs = gc.get_referrers(old_func)
     obj_id = id(old_func)
