@@ -518,6 +518,18 @@ class Llama3(BaseChatTemplate):
                          session_len=session_len,
                          **kwargs)
 
+    def get_prompt(self, prompt, sequence_start=True):
+        if sequence_start:
+            return '<|begin_of_text|>' + super().get_prompt(
+                prompt, sequence_start)
+        return super().get_prompt(prompt, sequence_start)
+
+    def messages2prompt(self, messages, sequence_start=True):
+        if sequence_start and not isinstance(messages, str):
+            return '<|begin_of_text|>' + super().messages2prompt(
+                messages, sequence_start)[:-1]
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
         """Return the model_name that was registered to MODELS.
