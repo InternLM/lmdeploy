@@ -399,11 +399,10 @@ class Engine:
         return stopped, num_appendable_ids
 
     @logging_timer('SamplingLogits', logger)
-    async def async_sampling_logits(self, logits: torch.Tensor,
-                                    history_ids: torch.Tensor,
-                                    sampling_inputs: SamplingInputs,
-                                    inputs: ModelInputs,
-                                    ignore_eos: torch.Tensor):
+    def async_sampling_logits(self, logits: torch.Tensor,
+                              history_ids: torch.Tensor,
+                              sampling_inputs: SamplingInputs,
+                              inputs: ModelInputs, ignore_eos: torch.Tensor):
         """sampling logits."""
 
         def __get_last_logits():
@@ -594,7 +593,7 @@ class Engine:
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
             # sampling
-            next_token_ids = await self.async_sampling_logits(
+            next_token_ids = self.async_sampling_logits(
                 logits, history_ids, sampling_inputs, inputs,
                 num_ignore_eos > 0)
             num_ignore_eos = num_ignore_eos - 1
