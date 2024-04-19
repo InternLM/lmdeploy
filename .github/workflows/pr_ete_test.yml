@@ -81,7 +81,7 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Test lmdeploy
-        run: CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test -x -v -s --alluredir=allure-results --clean-alluredir
+        run: CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test -x --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
         run: |
