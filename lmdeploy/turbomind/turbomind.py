@@ -35,6 +35,8 @@ import _turbomind as _tm  # noqa: E402
 
 logger = get_logger('lmdeploy')
 
+MAX_LOGPROBS = 1024
+
 
 def _construct_stop_or_bad_words(words: List[int] = None):
     if words is None or len(words) == 0:
@@ -668,8 +670,8 @@ class TurboMindInstance:
                                                  np.int32)
 
         if gen_config.logprobs is not None and gen_config.logprobs > 0:
-            if gen_config.logprobs > 1024:
-                gen_config.logprobs = 1024
+            if gen_config.logprobs > MAX_LOGPROBS:
+                gen_config.logprobs = MAX_LOGPROBS
                 logger.warning('logprobs shoudd be in range [1, 1024]'
                                f'update logprobs={gen_config.logprobs}')
             inputs['logprobs'] = _broadcast_np(gen_config.logprobs, np.int32)
