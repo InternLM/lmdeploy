@@ -148,10 +148,6 @@ class EngineInstance:
 
         token_ids = []
         while True:
-            if not self.req_sender.is_loop_alive():
-                yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
-                break
-
             resp = await self.req_sender.async_recv(req_id)
 
             if resp.req_id != req_id:
@@ -245,10 +241,6 @@ class EngineInstance:
 
         token_ids = []
         while True:
-            if not self.req_sender.is_loop_alive():
-                yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
-                break
-
             resp = self.req_sender.recv(req_id)
 
             if resp.req_id != req_id:
@@ -348,11 +340,6 @@ class EngineInstance:
         status = 0
         finish_count = batch_size
         while finish_count:
-            if not self.engine.req_manager.is_loop_alive():
-                logger.error('Engine loop is not alive.')
-                status = 1
-                break
-
             resp = await self.req_sender.async_recv_any()
             if resp.req_id not in req_ids:
                 continue
