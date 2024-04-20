@@ -123,6 +123,10 @@ class SubCliServe:
                             type=str,
                             default='',
                             help='Qos policy config path')
+        parser.add_argument('--log-stats',
+                            type=bool,
+                            default=False,
+                            help='Whether log stats to prometheus')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -294,7 +298,8 @@ class SubCliServe:
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
                        ssl=args.ssl,
-                       qos_config_path=args.qos_config_path)
+                       qos_config_path=args.qos_config_path,
+                       log_stats=args.log_stats)
 
     @staticmethod
     def api_client(args):
