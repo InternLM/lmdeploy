@@ -1049,7 +1049,7 @@ __global__ void topp_logprobs(T*           sorted_log_probs,
         if (tid == 0) {
             int offset                       = batch_id * vocab_size;
             int sampled_offset               = batch_id * kMaxLogProb;
-            sampled_logprobs[sampled_offset] = (float)sorted_log_probs[offset];
+            sampled_logprobs[sampled_offset] = 0.f;
             sampled_indexes[sampled_offset]  = sorted_id_vals[offset];
             sampled_nums[batch_id]           = 1;
         }
@@ -1096,7 +1096,7 @@ __global__ void topp_logprobs(T*           sorted_log_probs,
     __shared__ float cum_probs;
 
     if (tid == 0) {
-        sample_n  = vocab_size;
+        sample_n  = min(vocab_size, kMaxLogProb);
         selected  = 0;
         cum_probs = 1.0;
     }
@@ -1112,29 +1112,32 @@ __global__ void topp_logprobs(T*           sorted_log_probs,
     if (!skip) {
         int active_lane_id = WARP_SIZE - __popc(selected_shared[warp_id]);
         if (lane_id == active_lane_id) {
-            sample_n  = i_active;
+            sample_n  = min(i_active + 1, kMaxLogProb);
             selected  = sampled_nums[batch_id];
             cum_probs = thread_offset;
         }
     }
     __syncthreads();
 
-    sample_n               = min(sample_n, kMaxLogProb);
-    sampled_nums[batch_id] = sample_n;
+    int   local_sample_n  = sample_n;
+    float local_cum_probs = cum_probs;
+
+    sampled_nums[batch_id] = local_sample_n;
     int sampled_offset     = batch_id * kMaxLogProb;
-    for (int i = tid; i < sample_n; i += BLOCK_SIZE) {
-        sampled_logprobs[sampled_offset + i] = logf((float)sorted_log_probs[offset + i]) - logf(cum_probs);
+    for (int i = tid; i < local_sample_n; i += BLOCK_SIZE) {
+        sampled_logprobs[sampled_offset + i] = logf((float)sorted_log_probs[offset + i]) - logf(local_cum_probs);
         sampled_indexes[sampled_offset + i]  = sorted_id_vals[offset + i];
     }
 
-    __syncthreads();
-
+    // We should always output selected token. When topp=1.0, the selected may large than kMaxLogProb
+    // therefore, we should add the selected or replace the last output token
     if (selected >= sample_n) {
-        if (tid == kMaxLogProb - 1 || ((kMaxLogProb - 1 + BLOCK_SIZE - tid) % BLOCK_SIZE == 0)) {
-            int p                                = sample_n - (sample_n == kMaxLogProb);
-            sampled_nums[batch_id]               = p + 1;
-            sampled_logprobs[sampled_offset + p] = logf((float)sorted_log_probs[offset + selected]) - logf(cum_probs);
-            sampled_indexes[sampled_offset + p]  = sorted_id_vals[offset + selected];
+        if ((kMaxLogProb - 1 + BLOCK_SIZE - tid) % BLOCK_SIZE == 0) {
+            int p                  = sample_n - (sample_n == kMaxLogProb);
+            sampled_nums[batch_id] = p + 1;
+            sampled_logprobs[sampled_offset + p] =
+                logf((float)sorted_log_probs[offset + selected]) - logf(local_cum_probs);
+            sampled_indexes[sampled_offset + p] = sorted_id_vals[offset + selected];
         }
     }
 }

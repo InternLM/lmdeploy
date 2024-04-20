@@ -319,11 +319,13 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
         __shared__ float cum_probs;
 
         if (tid == 0) {
-            cum_probs = 0.0f;
-            sampled_n = k;
+            float _cum_probs = 0.0f;
+            sampled_n        = k;
+            cum_probs        = s_sum;
             for (int i = 0; i < k; i++) {
-                cum_probs += s_val2[i] / s_sum;
-                if (cum_probs > prob_threshold) {
+                _cum_probs += s_val2[i] / s_sum;
+                if (_cum_probs > prob_threshold) {
+                    cum_probs = _cum_probs * s_sum;
                     sampled_n = i + 1;
                     break;
                 }
