@@ -122,6 +122,8 @@ class TurbomindEngineConfig:
         download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
         revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
         max_prefill_token_num(int): the number of tokens each iteration during prefill, default to 8192
+        num_tokens_per_iter(int): the number of tokens processed in each forward pass. Working with `max_prefill_iters` enables "Dynamic SplitFuse"-like scheduling
+        max_prefill_iters(int): the max number of forward pass during prefill stage
     """  # noqa: E501
 
     model_name: Optional[str] = None
@@ -137,6 +139,8 @@ class TurbomindEngineConfig:
     download_dir: Optional[str] = None
     revision: Optional[str] = None
     max_prefill_token_num: int = 8192
+    num_tokens_per_iter: int = 0
+    max_prefill_iters: int = 1
 
 
 @dataclass

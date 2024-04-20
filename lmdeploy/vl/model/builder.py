@@ -5,7 +5,9 @@ from lmdeploy.utils import get_hf_config_content, get_model
 
 from .deepseek import DeepSeekVisionModel
 from .internvl import InternVLVisionModel
+from .internvl_llava import InternVLLlavaVisionModel
 from .llava import LlavaVisionModel
+from .mini_gemeni import MiniGeminiVisionModel
 from .qwen import QwenVisionModel
 from .yi import YiVisionModel
 
@@ -20,12 +22,17 @@ def load_vl_model(model_path: str):
         return QwenVisionModel(model_path)
     elif arch == 'LlavaLlamaForCausalLM':
         projector_type = config.get('mm_projector_type', 'linear')
+        mm_vision_tower = config.get('mm_vision_tower', '')
         if '_Norm' in projector_type:
             return YiVisionModel(model_path)
+        elif 'OpenGVLab' in mm_vision_tower:
+            return InternVLLlavaVisionModel(model_path)
         else:
             return LlavaVisionModel(model_path)
     if arch == 'MultiModalityCausalLM':
         return DeepSeekVisionModel(model_path)
     if arch == 'InternVLChatModel':
         return InternVLVisionModel(model_path)
+    if arch == 'MiniGeminiLlamaForCausalLM':
+        return MiniGeminiVisionModel(model_path)
     raise ValueError(f'unsupported vl model with arch {arch}')

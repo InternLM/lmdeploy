@@ -1013,6 +1013,8 @@ async def chat_interactive_v1(request: GenerateRequest,
 
     The request should be a JSON object with the following fields:
     - prompt: the prompt to use for the generation.
+    - image_url(str | List[str] | None): the image url or base64 encoded string
+        for VL models.
     - session_id: determine which instance will be called. If not specified
         with a value other than -1, using random value directly.
     - interactive_mode (bool): turn on interactive mode or not. On interactive
@@ -1070,6 +1072,18 @@ async def chat_interactive_v1(request: GenerateRequest,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens)
+    if request.image_url:
+        from lmdeploy.vl import load_image
+        if isinstance(request.image_url, List):
+            request.prompt = (request.prompt,
+                              [load_image(url) for url in request.image_url])
+        else:
+            request.prompt = (request.prompt, load_image(request.image_url))
+        if not hasattr(async_engine, '_convert_prompts'):
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                '`image_url` argument only works for VL model')
+        request.prompt = async_engine._convert_prompts(request.prompt)
     generation = async_engine.generate(
         request.prompt,
         request.session_id,

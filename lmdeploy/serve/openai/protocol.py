@@ -291,6 +291,8 @@ class EncodeResponse(BaseModel):
 class GenerateRequest(BaseModel):
     """Generate request."""
     prompt: Union[str, List[Dict[str, Any]]]
+    image_url: Optional[Union[str, List[str]]] = Field(default=None,
+                                                       examples=[None])
     session_id: int = -1
     interactive_mode: bool = False
     stream: bool = False
