@@ -61,6 +61,8 @@ class ChatCompletionRequestQos(BaseModel):
     messages: Union[str, List[Dict[str, str]]]
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
+    logprobs: Optional[bool] = False
+    top_logprobs: Optional[int] = None
     n: Optional[int] = 1
     max_tokens: Optional[int] = Field(default=None, examples=[None])
     stop: Optional[bool] = False
@@ -83,6 +85,8 @@ class ChatCompletionRequest(BaseModel):
     messages: Union[str, List[Dict[str, Any]]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])  # noqa
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
+    logprobs: Optional[bool] = False
+    top_logprobs: Optional[int] = None
     n: Optional[int] = 1
     max_tokens: Optional[int] = Field(default=None, examples=[None])
     stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
@@ -105,10 +109,35 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class LogProbs(BaseModel):
+    text_offset: List[int] = Field(default_factory=list)
+    token_logprobs: List[Optional[float]] = Field(default_factory=list)
+    tokens: List[str] = Field(default_factory=list)
+    top_logprobs: Optional[List[Optional[Dict[str, float]]]] = None
+
+
+class TopLogprob(BaseModel):
+    token: str
+    bytes: Optional[List[int]] = None
+    logprob: float
+
+
+class ChatCompletionTokenLogprob(BaseModel):
+    token: str
+    bytes: Optional[List[int]] = None
+    logprob: float
+    top_logprobs: List[TopLogprob]
+
+
+class ChoiceLogprobs(BaseModel):
+    content: Optional[List[ChatCompletionTokenLogprob]] = None
+
+
 class ChatCompletionResponseChoice(BaseModel):
     """Chat completion response choices."""
     index: int
     message: ChatMessage
+    logprobs: Optional[ChoiceLogprobs] = None
     finish_reason: Optional[Literal['stop', 'length']] = None
 
 
@@ -132,6 +161,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     """Chat completion response stream choice."""
     index: int
     delta: DeltaMessage
+    logprobs: Optional[ChoiceLogprobs] = None
     finish_reason: Optional[Literal['stop', 'length']] = None
 
 
@@ -151,6 +181,7 @@ class CompletionRequest(BaseModel):
     suffix: Optional[str] = None
     temperature: Optional[float] = 0.7
     n: Optional[int] = 1
+    logprobs: Optional[int] = None
     max_tokens: Optional[int] = 16
     stop: Optional[Union[str, List[str]]] = Field(default=None,
                                                   examples=[None])
@@ -176,6 +207,7 @@ class CompletionRequestQos(BaseModel):
     suffix: Optional[str] = None
     temperature: Optional[float] = 0.7
     n: Optional[int] = 1
+    logprobs: Optional[int] = None
     max_tokens: Optional[int] = 16
     stop: Optional[Union[str, List[str]]] = None
     stream: Optional[bool] = False
@@ -197,7 +229,7 @@ class CompletionResponseChoice(BaseModel):
     """Completion response choices."""
     index: int
     text: str
-    logprobs: Optional[int] = None
+    logprobs: Optional[LogProbs] = None
     finish_reason: Optional[Literal['stop', 'length']] = None
 
 
@@ -215,7 +247,7 @@ class CompletionResponseStreamChoice(BaseModel):
     """Completion response stream choice."""
     index: int
     text: str
-    logprobs: Optional[float] = None
+    logprobs: Optional[LogProbs] = None
     finish_reason: Optional[Literal['stop', 'length']] = None
 
 

@@ -248,6 +248,13 @@ void TopKSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
         sync_check_cuda_error();
     }
 
+    float* sampled_logprobs =
+        output_tensors->isExist("sampled_logprobs") ? output_tensors->at("sampled_logprobs").getPtr<float>() : nullptr;
+    uint32_t* sampled_indexes =
+        output_tensors->isExist("sampled_indexes") ? output_tensors->at("sampled_indexes").getPtr<uint32_t>() : nullptr;
+    uint32_t* sampled_nums =
+        output_tensors->isExist("sampled_nums") ? output_tensors->at("sampled_nums").getPtr<uint32_t>() : nullptr;
+
     invokeBatchTopKSampling(
         sampling_workspace_,
         sampling_workspace_size_,
@@ -257,6 +264,9 @@ void TopKSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
         output_tensors->at("finished", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<bool>(),
         cum_log_probs,
         output_log_probs,
+        sampled_logprobs,
+        sampled_indexes,
+        sampled_nums,
         output_tensors->at("curand_state").getPtr<curandState_t>() + ite * local_batch_size,
         (int)runtime_max_top_k_,  // useless because runtime_top_k_buf_ is never nullptr. Keep for legacy.
         (int*)(runtime_top_k_buf_ + ite * local_batch_size),
