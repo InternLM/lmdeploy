@@ -535,7 +535,9 @@ public:
         std::vector<int>   expected_sampled_nums(batch_size);
 
         // uniforms
-        float          h_uniforms[batch_size];
+        std::vector<float> _h_uniforms(batch_size);
+        float*             h_uniforms = _h_uniforms.data();
+
         float*         uniforms = reinterpret_cast<float*>(allocator->malloc(sizeof(float) * batch_size));
         curandState_t* curand_states =
             reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batch_size, false));
@@ -1062,7 +1064,9 @@ public:
         std::vector<int>   expected_sampled_nums(batch_size);
 
         // uniforms
-        float          h_uniforms[batch_size];
+        std::vector<float> _h_uniforms(batch_size);
+        float*             h_uniforms = _h_uniforms.data();
+
         float*         uniforms = reinterpret_cast<float*>(allocator->malloc(sizeof(float) * batch_size));
         curandState_t* curand_states =
             reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batch_size, false));
