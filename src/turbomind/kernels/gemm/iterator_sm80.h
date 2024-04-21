@@ -104,10 +104,12 @@ struct GmemIteratorSm80 {
         //     }
         // }
 
-        // if (G_CTA > 1 && begin == 0 && threadIdx.x == 0 && blockIdx.x == 0) {
+        // if (G_CTA > 1 && begin == 0 && threadIdx.x == 0 && blockIdx.x == 0 && Idx == 2) {
         //     printf("[prefetch] counter=%d, g_mask=%d, t_mask=%d, src_data=%p\n", g_counter_, (int)g_mask_,
         //     (int)tile_mask, src_data_);
         // }
+
+        // __syncthreads();
 
         // if (!g_mask_) {
         //     return;
@@ -126,14 +128,11 @@ struct GmemIteratorSm80 {
                 CpAsync(std::true_type{}, dst, src_data_, g_mask_ && tile_mask);
 
                 // if (g_mask_ && tile_mask) {
-                //     // static_assert(sizeof(AccessType) == sizeof(uint4));
-                //     // *(uint4*)dst = __ldg((const uint4*)src_data_);
                 //     AccessType tmp;
-                //     // Load(*(AccessType*)dst, (T*)src_data_);
                 //     Load(tmp, (T*)src_data_);
                 //     Store(dst, tmp);
                 //     if constexpr (Idx == 2) {
-                //         printf("fuck: %f %f\n", (float)tmp[0], (float)tmp[1]);
+                //         printf("fuck: %f %f\n", (float)tmp[0].x, (float)tmp[0].y);
                 //     }
                 // }
                 if (g_mask_) {
@@ -234,6 +233,7 @@ struct GmemIteratorSm80 {
     {
 #if TURBOMIND_ARCH_SM80
         constexpr int size = sizeof(AccessType);
+        static_assert(size <= 16);
         auto          ptr  = cast_smem_ptr_to_uint(dst);
         // clang-format off
         if constexpr (size == 16) {

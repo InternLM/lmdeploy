@@ -227,39 +227,14 @@ void prepare_test_data(universal_vector<T>&        a,    // [m,k]
 template<class T, class Tb>
 void Run(int m, int n, int k, int g = 128)
 {
-
     universal_vector<T> a;
     universal_vector<T> b;
-
     universal_vector<T> c_ref;
+    universal_vector<T> q;  //((k + g) / g * n * 2);
 
     universal_vector<uint16_t> b0;
 
-    universal_vector<T> q;  //((k + g) / g * n * 2);
-
     prepare_test_data<T, Tb>(a, b, c_ref, b0, q, m, n, k, g);
-
-    // RNG rng;
-
-    // rng.GenerateUniform(a.data().get(), a.size(), 1, -0.5);
-    // if constexpr (!std::is_same_v<Tb, T>) {
-    //     // generate random bytes for 16-bit width
-    //     rng.GenerateUInt((uint*)b0.data().get(), b0.size() / 2);
-    //     cudaDeviceSynchronize();
-    //     for (int i = 0; i < b0.size(); ++i) {
-    //         b0[i] %= (1 << bitsof<Tb>);  // constraint it's range
-    //         // b0[i] = (b0[i] % 15) + 1;
-    //         // b0[i] = 15;
-    //         b[i] = T(b0[i]);  // convert to floating type
-    //     }
-    //     for (int i = 0; i < q.size(); i += 2) {
-    //         q[i]     = T(1);
-    //         q[i + 1] = T(0);
-    //     }
-    // }
-    // else {
-    //     rng.GenerateUniform(b.data().get(), b.size(), 1, -0.5);
-    // }
 
     cudaDeviceSynchronize();
 
@@ -269,6 +244,7 @@ void Run(int m, int n, int k, int g = 128)
     if (1) {
         universal_vector<T>            c(m * n);
         universal_vector<Array<Tb, 8>> b1(n * k / 8);
+        universal_vector<T>            q_pack(q.size());
         auto                           B1 = (Tb*)b1.data().get();
 
         // for (int i = 0; i < q.size(); i += 2) {
@@ -277,10 +253,10 @@ void Run(int m, int n, int k, int g = 128)
 
         for (int i = 0; i < 1; ++i) {
             if constexpr (std::is_same_v<T, Tb>) {
-                gemm::transcript<T>(B1, b.data().get(), n, k, 0);
+                gemm::transcript<T>(B1, nullptr, b.data().get(), nullptr, n, k, g, 0);
             }
             else {
-                gemm::transcript<T>(B1, b0.data().get(), n, k, 0);
+                gemm::transcript<T>(B1, q_pack.data().get(), b0.data().get(), q.data().get(), n, k, g, 0);
             }
         }
 
@@ -291,7 +267,7 @@ void Run(int m, int n, int k, int g = 128)
         // }
 
         for (int i = 0; i < 10; ++i) {
-            gemm::invoke(c.data().get(), a.data().get(), B1, q.data().get(), m, n, k, 0);
+            gemm::invoke(c.data().get(), a.data().get(), B1, q_pack.data().get(), m, n, k, 0);
         }
 
         // for (int i = 0; i < 5; ++i) {
@@ -313,6 +289,6 @@ int main(int argc, char* argv[])
     Run<half, uint4_t>(4096, 4096, 4096);
     // Run<half, uint4_t>(64, 11008, 4096);
     // Run<half, uint4_t>(128, 128, 32);
-    // Run<half, uint8_t>(128, 128, 1024);
+    // Run<half, uint4_t>(128, 128, 1024);
     return 0;
 }

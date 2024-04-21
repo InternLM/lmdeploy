@@ -36,7 +36,7 @@ struct GemmUniversal {
     struct Param {
         T*                   A;  // x (m  ,k)
         get_pointer_type<Tb> B;  // W (n  ,k)
-        Tq*                  Q;  //   (k/g,n, 2)
+        Tq*                  Q;  //   (k/g,n)
         T*                   C;  //   (m  ,n)
         int                  m;
         int                  n;

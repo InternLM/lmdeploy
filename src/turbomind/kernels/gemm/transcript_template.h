@@ -16,7 +16,7 @@ template<class Arch_, class Gemm, class Gemm1, class Converter, class CtaMap_>
 struct Transcript {
 
     using T  = typename Gemm::Tb;
-    using Tq = typename Gemm::Tq;
+    using Tq = typename Gemm1::Tq;
     using T1 = typename Gemm1::Tb;
 
     using Arch   = Arch_;
@@ -25,18 +25,20 @@ struct Transcript {
     static constexpr int CTA_M = Gemm::CTA_M;
     static constexpr int CTA_N = Gemm::CTA_N;
     static constexpr int CTA_K = Gemm::CTA_K;
-    static constexpr int CTA_G = Gemm::CTA_G;
+
+    static constexpr int CTA_G = Gemm::CTA_G;  // CTA_K `ceil_div` G
+    static constexpr int G_CTA = Gemm::G_CTA;  // G `ceil_div` CTA_K
 
     static constexpr int WARP_CNT = Gemm::WARP_CNT;
 
     using ThreadMapB = typename Gemm::ThreadMapB;
-    using ThreadMapQ = typename Gemm::ThreadMapB;
+    using ThreadMapQ = typename Gemm::ThreadMapQ;
 
     using SmemLayoutB = typename Gemm::SmemLayoutB;
     using SmemLayoutQ = typename Gemm::SmemLayoutQ;
 
     using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, 100>;
-    using GemmIterQ = GmemIteratorSm80<T, ThreadMapQ, SmemLayoutQ, 101>;
+    using GmemIterQ = GmemIteratorSm80<Tq, ThreadMapQ, SmemLayoutQ, 101>;
 
     struct SharedStorage {
         __align__(16) Array<T, Gemm::SmemLayoutB::kSize> B;
@@ -51,9 +53,9 @@ struct Transcript {
 
     static_assert(CTA_K * CTA_N == MMA_CNT_K * MMA_CNT_N * WARP_SIZE * 8);
 
-    // static constexpr int P_Q_N = Gemm1::P_Q_N;
-    // static constexpr int P_Q_K = Gemm1::P_Q_K;
-    // static constexpr int G     = Gemm1::G;
+    static constexpr int P_Q_N = Gemm1::P_Q_N;
+    static constexpr int P_Q_K = Gemm1::P_Q_K;
+    static constexpr int G     = Gemm1::G;
 
     // row.col.row
     struct Param {
@@ -61,7 +63,7 @@ struct Transcript {
         const T*             B;
         const Tq*            Q;
         get_pointer_type<T1> C;
-        T*                   D;
+        Tq*                  D;
         int                  m;
         int                  n;
         int                  k;
@@ -81,16 +83,25 @@ struct Transcript {
 
         SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
-        const int                  packed_k = cta_cnt_k * MMA_CNT_K / P_K;
-        [[maybe_unused]] const int packed_n = cta_cnt_n * MMA_CNT_N / P_N;
+        const int                  packed_k   = cta_cnt_k * MMA_CNT_K / P_K;
+        [[maybe_unused]] const int packed_n   = cta_cnt_n * MMA_CNT_N / P_N;
+        const int                  q_packed_n = cta_cnt_n * MMA_CNT_N / P_Q_N;
 
         GmemIterB gmem_B{(T*)param.B + cta_idx_n * CTA_N * param.k, param.k, CTA_K};
+        GmemIterQ gmem_Q{(Tq*)param.Q + cta_idx_n * CTA_N, param.n, CTA_G * param.n};
+
+        if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
+            printf("P_Q_K=%d, P_Q_N=%d, q_packed_n=%d\n", P_Q_K, P_Q_N, q_packed_n);
+        }
 
         typename Gemm::StateB state_B{storage};
-        // typename Gemm::StateQ state_Q{storage};
+        typename Gemm::StateQ state_Q{storage};
 
         gmem_B.smem_data_ = state_B.data;
         gmem_B.ClearSmem();
+
+        gmem_Q.smem_data_ = state_Q.data;
+        gmem_Q.ClearSmem();
 
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
@@ -104,6 +115,11 @@ struct Transcript {
         for (; cta_idx_k < cta_cnt_k; ++cta_idx_k) {
             gmem_B.Prefetch(true);
             gmem_B.Advance();
+
+            if (cta_idx_k * CTA_K % G == 0 && param.Q != nullptr) {
+                gmem_Q.Prefetch(true);
+                gmem_Q.Advance();
+            }
             __pipeline_commit();
 
             __pipeline_wait_prior(0);
@@ -137,6 +153,48 @@ struct Transcript {
                         // mma fragment ptr for the warp
                         auto C = param.C + ((pack_idx_n * packed_k + pack_idx_k) * WARP_SIZE + lane_id) * kAccessSize;
                         Store((T1*)C, (Array<T1, kAccessSize>&)data);
+                    }
+                }
+            }
+
+            if (cta_idx_k * CTA_K % G == 0 && param.Q != nullptr) {
+                constexpr int G_FRAG = G / Gemm::OP_K;
+                PRAGMA_UNROLL
+                for (int k = 0; k < Gemm::ITER_K; k += P_Q_K) {
+                    const int frag_idx_k = cta_idx_k * MMA_CNT_K + k;  // FIXME
+                    if (frag_idx_k % G_FRAG != 0) {
+                        continue;
+                    }
+                    const int pack_idx_k = (frag_idx_k / G_FRAG) / P_Q_K;
+                    PRAGMA_UNROLL
+                    for (int p_k = 0; p_k < P_Q_K; ++p_k) {
+                        state_Q.Load(k + p_k, 0);
+                    }
+                    PRAGMA_UNROLL
+                    for (int n = 0; n < Gemm::ITER_N; n += P_Q_N) {
+                        const int    frag_idx_n = cta_idx_n * MMA_CNT_N + n + warp_id_n * Gemm::ITER_N;
+                        const int    pack_idx_n = frag_idx_n / P_Q_N;
+                        Array<Tq, 2> data[P_Q_K][P_Q_N];
+                        PRAGMA_UNROLL
+                        for (int p_k = 0; p_k < P_Q_K; ++p_k) {
+                            PRAGMA_UNROLL
+                            for (int p_n = 0; p_n < P_Q_N; ++p_n) {
+                                data[p_k][p_n] = state_Q.frag_Q[k + p_k][n + p_n];
+                            }
+                        }
+                        constexpr int kAccessSize = 2 * P_Q_K * P_Q_N;
+                        static_assert(sizeof(data) <= 16);
+                        if (warp_id_m == 0) {
+                            // if (threadIdx.x == 0) {
+                            //     printf("%d %d \n", pack_idx_k, pack_idx_n);
+                            // }
+
+                            auto D = param.D + ((pack_idx_k * q_packed_n + pack_idx_n) * 8 + lane_id / 4) * kAccessSize;
+                            if (lane_id % 4 == 0) {
+                                // printf("%d %d \n", pack_idx_k, pack_idx_n);
+                                Store(D, (Array<Tq, kAccessSize>&)data);
+                            }
+                        }
                     }
                 }
             }

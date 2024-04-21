@@ -39,7 +39,6 @@ struct Config: BaseConfig {};
 
 using Tq = half2;
 
-
 template<class T, class Tb>
 struct Config<T, T, Tb>: BaseConfig {
     using Gemm0  = Impl<MMA_81616, T, T, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
@@ -51,7 +50,7 @@ template<class T>
 struct Config<T, uint16_t, uint4_t>: BaseConfig {
     static_assert(sizeof(T) == 2);
     using Gemm0  = Impl<MMA_81616, T, T, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
-    using Gemm1  = Impl<MMA_81616, T, uint4_t, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Gemm1  = Impl<MMA_81616, T, uint4_t, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 1>;
     using Kernel = Transcript<void, Gemm0, Gemm1, Converter<uint16_t, uint4_t>, CtaSwizzleMap<0>>;
 };
 
@@ -59,7 +58,7 @@ template<class T>
 struct Config<T, uint16_t, uint8_t>: BaseConfig {
     static_assert(sizeof(T) == 2);
     using Gemm0  = Impl<MMA_81616, T, T, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
-    using Gemm1  = Impl<MMA_81616, T, uint8_t, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Gemm1  = Impl<MMA_81616, T, uint8_t, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 1>;
     using Kernel = Transcript<void, Gemm0, Gemm1, Converter<uint16_t, uint8_t>, CtaSwizzleMap<0>>;
 };
 
@@ -81,7 +80,8 @@ auto cast(T* p)
 }  // namespace detail
 
 template<class T, class Ti, class To>
-void transcript(To* dst, const Ti* src, int n, int k, cudaStream_t st)
+void transcript(To* dst_B, T* dst_Q, const Ti* src_B, const T* src_Q, int n, int k, int g, cudaStream_t st)
+
 {
     using Kernel = typename Config<T, Ti, To>::Kernel;
 
@@ -100,24 +100,24 @@ void transcript(To* dst, const Ti* src, int n, int k, cudaStream_t st)
 
     auto _src = [&] {
         if constexpr (std::is_same_v<Ti, uint16_t>) {
-            return (const T*)src;
+            return (const T*)src_B;
         }
         else {
-            return src;
+            return src_B;
         }
     }();
 
-    typename Kernel::Param params{nullptr, _src, nullptr, detail::cast(dst), nullptr, Kernel::CTA_M, n, k};
+    typename Kernel::Param params{nullptr, _src, (half2*)src_Q, detail::cast(dst_B), (half2*)dst_Q, Kernel::CTA_M, n, k};
 
     transcript_kernel<Kernel><<<grid, block, kSmemSize, st>>>(params);
 }
 
-template void transcript<half>(half* dst, const half* src, int n, int k, cudaStream_t st);
+template void transcript(half*, half*, const half*, const half*, int n, int k, int g, cudaStream_t st);
 
-template void transcript<half>(uint4_t* dst, const half* src, int n, int k, cudaStream_t st);
-template void transcript<half>(uint8_t* dst, const half* src, int n, int k, cudaStream_t st);
+template void transcript(uint4_t*, half*, const half*, const half*, int n, int k, int g, cudaStream_t st);
+template void transcript(uint8_t*, half*, const half*, const half*, int n, int k, int g, cudaStream_t st);
 
-template void transcript<half>(uint4_t* dst, const uint16_t* src, int n, int k, cudaStream_t st);
-template void transcript<half>(uint8_t* dst, const uint16_t* src, int n, int k, cudaStream_t st);
+template void transcript(uint4_t*, half*, const uint16_t*, const half*, int n, int k, int g, cudaStream_t st);
+template void transcript(uint8_t*, half*, const uint16_t*, const half*, int n, int k, int g, cudaStream_t st);
 
 }  // namespace turbomind::gemm

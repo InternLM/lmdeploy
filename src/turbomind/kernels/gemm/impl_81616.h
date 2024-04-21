@@ -82,7 +82,7 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
 
     static constexpr int kPackedN = Flag_ ? P_N * OP_N : 1;
 
-    static constexpr int P_Q   = 1;  // 16 / sizeof(Array<Tq, 2>);
+    static constexpr int P_Q   = Flag_ ? 16 / sizeof(Array<Tq, 2>) : 1;
     static constexpr int P_Q_N = P_Q;
     static constexpr int P_Q_K = 1;
 
@@ -100,7 +100,7 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
 
     // static constexpr int ITER_G = (WARP_K + G - 1) / G;
 
-    using FragQ = Array<Tq, 2 * P_Q>[ITER_K][ITER_N];
+    using FragQ = Array<Tq, 2>[ITER_K][ITER_N];
 
     using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K + 8>;
@@ -202,9 +202,9 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
 
         __device__ void Load(int k, int)
         {
-            if constexpr (std::is_same_v<T, Tb>) {
-                return;
-            }
+            // if constexpr (std::is_same_v<T, Tb>) {
+            //     return;
+            // }
 
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
@@ -216,22 +216,31 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             //     printf("[load_%d]   counter=%d, g_mask=%d\n", k, g_counter, g_mask);
             // }
 
-            PRAGMA_UNROLL
-            for (int n = 0; n < ITER_N; ++n) {
+            if constexpr (!Flag_) {
                 PRAGMA_UNROLL
-                for (int i = 0; i < 2; ++i) {
-                    //              16        1            8          WARP_N
-                    const int c = n * 16 + lane_id / 4 + i * 8 + warp_offset_n;
-                    const int s = k * 16 / G;
+                for (int n = 0; n < ITER_N; ++n) {
+                    PRAGMA_UNROLL
+                    for (int i = 0; i < 2; ++i) {
+                        //              16        1            8          WARP_N
+                        const int c = n * 16 + lane_id / 4 + i * 8 + warp_offset_n;
+                        const int s = k * 16 / G;
+                        if (g_mask) {
+                            Lds((Array<Tq, 1>&)frag_Q[k][n][i], &data[SmemLayoutQ::apply(s, c)]);
+                        }
+                    }
+                }
+            }
+            else {
+                constexpr int kAccessSize = 2 * P_Q;
+                constexpr int PACKED_N    = MMA_CNT_N / P_Q_N;
+                static_assert(PACKED_N * kAccessSize * 8 == CTA_N);
+                PRAGMA_UNROLL
+                for (int n = 0; n < ITER_N; n += P_Q_N) {
+                    const int pack_idx_n = (n + warp_idx_n * ITER_N) / P_Q_N;
+                    const int pack_idx_k = (k * 16 / G);
+                    const Tq* ptr = data + ((pack_idx_k * PACKED_N + pack_idx_n) * 8 + lane_id / 4) * kAccessSize;
                     if (g_mask) {
-                        // Lds(frag_Q[k][n][i], data + SmemLayoutQ::apply(s, c));
-                        frag_Q[k][n][i] = data[SmemLayoutQ::apply(s, c)];
-                        // if (k == ITER_K - 1) {
-                        //     Store(data + SmemLayoutQ::apply(s, c * 2), Array<T, 2>{});
-                        // }
-                        // if (threadIdx.x == 0) {
-                        //     printf("%f %f\n", (float)rmem_Q[k][n][i * 2], (float)rmem_Q[k][n][i * 2 + 1]);
-                        // }
+                        Lds((Array<Tq, kAccessSize>&)frag_Q[k][n], ptr);
                     }
                 }
             }
@@ -343,25 +352,14 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                     for (int p_n = 0; p_n < P_N; ++p_n) {
                         auto& frag = frag_B[k][n + p_n];
                         frag       = Converter::convert((Array<Tb, 8>&)data_B[k / P_K][n / P_N][(p_k * P_N + p_n) * 8]);
-                        // PRAGMA_UNROLL
-                        // for (int c = 0; c < 2; ++c) {
-                        //     PRAGMA_UNROLL
-                        //     for (int s = 0; s < 2; ++s) {
-                        //         auto& k2 = (Array<T, 2>&)frag[c * 4 + s * 2];
-                        //         PRAGMA_UNROLL
-                        //         for (int i = 0; i < 2; ++i) {
-                        //             k2[i] = __hfma(k2[i], rmem_Q[k][n + p_n][s * 2], rmem_Q[k][n + p_n][s * 2 + 1]);
-                        //         }
-                        //     }
-                        // }
-
                         PRAGMA_UNROLL
                         for (int c = 0; c < 2; ++c) {
                             PRAGMA_UNROLL
                             for (int s = 0; s < 2; ++s) {
-                                auto& k2 = (Array<T, 2>&)frag[c * 4 + s * 2];
-                                k2[0]    = apply_param(k2[0], frag_Q[k][n + p_n][s]);
-                                k2[1]    = apply_param(k2[1], frag_Q[k][n + p_n][s]);
+                                auto& k2    = (Array<T, 2>&)frag[c * 4 + s * 2];
+                                auto& param = to_array(frag_Q[k][n + p_n][s]);
+                                k2[0]       = apply_param(k2[0], param);
+                                k2[1]       = apply_param(k2[1], param);
                             }
                         }
                     }
@@ -369,14 +367,14 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             }
         }
 
-        __device__ T apply_param(T b, half2 p)
+        __device__ static Array<half, 2>& to_array(half2& x)
         {
-            return __hfma(b, p.x, p.y);
+            return reinterpret_cast<Array<half, 2>&>(x);
         }
 
-        __device__ T apply_param(T b, nv_bfloat162 p)
+        __device__ T apply_param(T b, const Array<T, 2>& p)
         {
-            return __hfma(b, p.x, p.y);
+            return __hfma(b, p[0], p[1]);
         }
 
         __device__ void Advance()
