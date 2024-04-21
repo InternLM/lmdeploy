@@ -2,6 +2,7 @@
 import asyncio
 import os
 from dataclasses import asdict, dataclass, field
+from datetime import timedelta
 from typing import Any, Callable, Dict, List
 
 import torch
@@ -867,7 +868,10 @@ def _start_tp_process(proc_id: int,
     """
     rank = proc_id + 1
     try:
-        dist.init_process_group('nccl', rank=rank, world_size=world_size)
+        dist.init_process_group('nccl',
+                                rank=rank,
+                                world_size=world_size,
+                                timeout=timedelta(days=35600))
         with torch.cuda.device(rank), torch.inference_mode():
             args = args or tuple()
             kwargs = kwargs or dict()
@@ -996,7 +1000,10 @@ class TPModelAgent(AutoModelAgent):
 
         rank = 0
         try:
-            dist.init_process_group('nccl', rank=rank, world_size=world_size)
+            dist.init_process_group('nccl',
+                                    rank=rank,
+                                    world_size=world_size,
+                                    timeout=timedelta(days=35600))
         except Exception as e:
             from traceback import print_exc
             logger.error(f'Rank[{rank}] failed.')
