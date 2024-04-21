@@ -16,6 +16,7 @@ template<class Arch_, class Gemm, class Gemm1, class Converter, class CtaMap_>
 struct Transcript {
 
     using T  = typename Gemm::Tb;
+    using Tq = typename Gemm::Tq;
     using T1 = typename Gemm1::Tb;
 
     using Arch   = Arch_;
@@ -24,17 +25,22 @@ struct Transcript {
     static constexpr int CTA_M = Gemm::CTA_M;
     static constexpr int CTA_N = Gemm::CTA_N;
     static constexpr int CTA_K = Gemm::CTA_K;
+    static constexpr int CTA_G = Gemm::CTA_G;
 
     static constexpr int WARP_CNT = Gemm::WARP_CNT;
 
-    using ThreadMapB  = typename Gemm::ThreadMapB;
+    using ThreadMapB = typename Gemm::ThreadMapB;
+    using ThreadMapQ = typename Gemm::ThreadMapB;
+
     using SmemLayoutB = typename Gemm::SmemLayoutB;
+    using SmemLayoutQ = typename Gemm::SmemLayoutQ;
 
     using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, 100>;
+    using GemmIterQ = GmemIteratorSm80<T, ThreadMapQ, SmemLayoutQ, 101>;
 
     struct SharedStorage {
         __align__(16) Array<T, Gemm::SmemLayoutB::kSize> B;
-        Array<T, 1> Q;
+        __align__(16) Array<Tq, Gemm::SmemLayoutQ::kSize> Q;
     };
 
     static constexpr int MMA_CNT_K = CTA_K / Gemm::OP_K;
@@ -45,11 +51,17 @@ struct Transcript {
 
     static_assert(CTA_K * CTA_N == MMA_CNT_K * MMA_CNT_N * WARP_SIZE * 8);
 
+    // static constexpr int P_Q_N = Gemm1::P_Q_N;
+    // static constexpr int P_Q_K = Gemm1::P_Q_K;
+    // static constexpr int G     = Gemm1::G;
+
     // row.col.row
     struct Param {
         const T*             A;
         const T*             B;
+        const Tq*            Q;
         get_pointer_type<T1> C;
+        T*                   D;
         int                  m;
         int                  n;
         int                  k;
@@ -75,6 +87,7 @@ struct Transcript {
         GmemIterB gmem_B{(T*)param.B + cta_idx_n * CTA_N * param.k, param.k, CTA_K};
 
         typename Gemm::StateB state_B{storage};
+        // typename Gemm::StateQ state_Q{storage};
 
         gmem_B.smem_data_ = state_B.data;
         gmem_B.ClearSmem();

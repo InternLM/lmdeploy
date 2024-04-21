@@ -37,26 +37,29 @@ struct BaseConfig {
 template<class T, class TbI_, class TbO>
 struct Config: BaseConfig {};
 
+using Tq = half2;
+
+
 template<class T, class Tb>
 struct Config<T, T, Tb>: BaseConfig {
-    using Gemm0  = Impl<MMA_81616, T, T, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
-    using Gemm1  = Impl<MMA_81616, T, Tb, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Gemm0  = Impl<MMA_81616, T, T, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Gemm1  = Impl<MMA_81616, T, Tb, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
     using Kernel = Transcript<void, Gemm0, Gemm1, _Converter<T, Tb>, CtaSwizzleMap<0>>;
 };
 
 template<class T>
 struct Config<T, uint16_t, uint4_t>: BaseConfig {
     static_assert(sizeof(T) == 2);
-    using Gemm0  = Impl<MMA_81616, T, T, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
-    using Gemm1  = Impl<MMA_81616, T, uint4_t, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Gemm0  = Impl<MMA_81616, T, T, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Gemm1  = Impl<MMA_81616, T, uint4_t, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
     using Kernel = Transcript<void, Gemm0, Gemm1, Converter<uint16_t, uint4_t>, CtaSwizzleMap<0>>;
 };
 
 template<class T>
 struct Config<T, uint16_t, uint8_t>: BaseConfig {
     static_assert(sizeof(T) == 2);
-    using Gemm0  = Impl<MMA_81616, T, T, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
-    using Gemm1  = Impl<MMA_81616, T, uint8_t, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Gemm0  = Impl<MMA_81616, T, T, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
+    using Gemm1  = Impl<MMA_81616, T, uint8_t, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
     using Kernel = Transcript<void, Gemm0, Gemm1, Converter<uint16_t, uint8_t>, CtaSwizzleMap<0>>;
 };
 
@@ -104,7 +107,7 @@ void transcript(To* dst, const Ti* src, int n, int k, cudaStream_t st)
         }
     }();
 
-    typename Kernel::Param params{nullptr, _src, detail::cast(dst), Kernel::CTA_M, n, k};
+    typename Kernel::Param params{nullptr, _src, nullptr, detail::cast(dst), nullptr, Kernel::CTA_M, n, k};
 
     transcript_kernel<Kernel><<<grid, block, kSmemSize, st>>>(params);
 }

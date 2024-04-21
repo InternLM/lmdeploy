@@ -16,6 +16,7 @@ struct GemmUniversal {
 
     using T  = typename Impl::T;
     using Tb = typename Impl::Tb;
+    using Tq = typename Impl::Tq;
 
     using Arch   = Arch_;
     using CtaMap = CtaMap_;
@@ -35,7 +36,7 @@ struct GemmUniversal {
     struct Param {
         T*                   A;  // x (m  ,k)
         get_pointer_type<Tb> B;  // W (n  ,k)
-        T*                   Q;  //   (k/g,n, 2)
+        Tq*                  Q;  //   (k/g,n, 2)
         T*                   C;  //   (m  ,n)
         int                  m;
         int                  n;
@@ -64,9 +65,9 @@ struct GemmUniversal {
                                             param.k * Impl::kPackedN,   // stride s
                                             CTA_K * Impl::kPackedN};    // stride k
         typename Mainloop::GmemIterQ gmem_Q{
-            param.Q + n_idx * 2,  // ptr
-            param.n * 2,          // stride s, not very useful
-            CTA_G * param.n * 2   // stride k
+            param.Q + n_idx,  // ptr
+            param.n,          // stride s, not very useful
+            CTA_G * param.n   // stride k
         };
 
         Mainloop mainloop{};

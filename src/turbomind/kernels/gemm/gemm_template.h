@@ -50,7 +50,9 @@ void invoke(T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, cuda
     // constexpr int WARP_N = 64;
     // constexpr int WARP_K = 64;
 
-    using Impl   = Impl<MMA_81616, T, Tb, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 4, 1>;
+    using Tq = half2;
+
+    using Impl   = Impl<MMA_81616, T, Tb, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 4, 1>;
     using Kernel = GemmUniversal<void, Mainloop_sm80<Impl>, CtaSwizzleMap<8>>;
 
     using Map = typename Kernel::CtaMap;
@@ -81,7 +83,7 @@ void invoke(T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, cuda
     }
 
     gemm_kernel<Kernel><<<grid, block, kSmemSize, st>>>(
-        typename Kernel::Param{(T*)A, detail::cast((Tb*)B), (T*)Q, C, m, n, k, log_tile}, typename Kernel::CtaMap{});
+        typename Kernel::Param{(T*)A, detail::cast((Tb*)B), (Tq*)Q, C, m, n, k, log_tile}, typename Kernel::CtaMap{});
 }
 
 }  // namespace turbomind::gemm

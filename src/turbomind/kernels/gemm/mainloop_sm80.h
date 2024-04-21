@@ -13,6 +13,7 @@ struct Mainloop_sm80 {
 
     using T  = typename Impl::T;
     using Tb = typename Impl::Tb;
+    using Tq = typename Impl::Tq;
 
     using FragC = typename Impl::FragC;
 
@@ -30,7 +31,7 @@ struct Mainloop_sm80 {
 
     using GmemIterA = GmemIteratorSm80<T, ThreadMapA, SmemLayoutA, 0>;
     using GmemIterB = GmemIteratorSm80<Tb, ThreadMapB, SmemLayoutB, 1>;
-    using GmemIterQ = GmemIteratorSm80<T, ThreadMapQ, SmemLayoutQ, 2, Impl::G_CTA, std::is_same_v<T, Tb>>;
+    using GmemIterQ = GmemIteratorSm80<Tq, ThreadMapQ, SmemLayoutQ, 2, Impl::G_CTA, std::is_same_v<T, Tb>>;
 
     static constexpr bool kUseGmemQ = !std::is_same_v<T, Tb>;
 

@@ -15,6 +15,7 @@ namespace turbomind::gemm {
 
 template<class T_,
          class Tb_,
+         class Tq_,
          int CTA_M_,
          int CTA_N_,
          int CTA_K_,
@@ -23,14 +24,20 @@ template<class T_,
          int WARP_K_,
          int Stages_,
          int Flag_>
-struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K_, Stages_, Flag_> {
+struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K_, Stages_, Flag_> {
 
     using T  = T_;
     using Tb = Tb_;
+    using Tq = Tq_;
+
+    static constexpr int G = 128;
 
     static constexpr int CTA_M = CTA_M_;
     static constexpr int CTA_N = CTA_N_;
     static constexpr int CTA_K = CTA_K_;
+    static constexpr int CTA_G = (CTA_K + G - 1) / G;
+
+    static constexpr int G_CTA = (G + CTA_K - 1) / CTA_K;
 
     static constexpr int WARP_M = WARP_M_;
     static constexpr int WARP_N = WARP_N_;
@@ -75,7 +82,12 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
 
     static constexpr int kPackedN = Flag_ ? P_N * OP_N : 1;
 
-    static constexpr int G = 128;
+    static constexpr int P_Q   = 1;  // 16 / sizeof(Array<Tq, 2>);
+    static constexpr int P_Q_N = P_Q;
+    static constexpr int P_Q_K = 1;
+
+    // static constexpr int kPacked_Q_C = CTA_N;
+    // static constexpr int kPacked_Q_S = CTA_G;
 
     using FragA = Array<T, 4>[ITER_K][ITER_M];      // {m8,k4}, [iK,iM], (k2,k2)
                                                     //   1  2    16  8     8  1
@@ -88,7 +100,7 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
 
     // static constexpr int ITER_G = (WARP_K + G - 1) / G;
 
-    using DataQ = Array<T, 4>[ITER_K][ITER_N];
+    using FragQ = Array<Tq, 2 * P_Q>[ITER_K][ITER_N];
 
     using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K + 8>;
@@ -102,18 +114,15 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                                           gemm::ThreadMap<kPackedC, kPackedS, 128 / bitsof<Tb>, WARP_CNT, WARP_SIZE>,
                                           gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>>;
 
-    static constexpr int CTA_G = (CTA_K + G - 1) / G;
-    static constexpr int G_CTA = (G + CTA_K - 1) / CTA_K;
-
     // [CTA_K / G, CTA_N]
-    using SmemLayoutQ = SmemLayoutV2<CTA_G, CTA_N * 2>;
-    using ThreadMapQ  = gemm::ThreadMap<CTA_N * 2, CTA_G, 2, WARP_CNT, 32>;
+    using SmemLayoutQ = SmemLayoutV2<CTA_G, CTA_N>;
+    using ThreadMapQ  = gemm::ThreadMap<CTA_N, CTA_G, 1, WARP_CNT, 32>;
 
     union SharedStorage {
         struct {
             __align__(16) T A[Stages_ * SmemLayoutA::kSize];
             __align__(16) Array<Tb, Stages_ * SmemLayoutB::kSize> B;
-            __align__(16) Array<T, Stages_ * SmemLayoutQ::kSize> Q;
+            __align__(16) Array<Tq, Stages_ * SmemLayoutQ::kSize> Q;
         };
     };
 
@@ -177,13 +186,13 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
     };
 
     struct StateQ {
-        SmemAccessor<T, SmemLayoutQ> smem_Q;
-        DataQ                        rmem_Q;
-        int                          offset = 0;
-        T*                           data;
-        int                          counting  = false;
-        int                          g_counter = 0;
-        bool                         g_mask    = true;
+        SmemAccessor<Tq, SmemLayoutQ> smem_Q;
+        FragQ                         frag_Q;
+        int                           offset = 0;
+        Tq*                           data;
+        int                           counting  = false;
+        int                           g_counter = 0;
+        bool                          g_mask    = true;
 
         template<class Storage>
         __device__ StateQ(Storage& storage): smem_Q{storage.Q.data()}
@@ -215,7 +224,8 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
                     const int c = n * 16 + lane_id / 4 + i * 8 + warp_offset_n;
                     const int s = k * 16 / G;
                     if (g_mask) {
-                        Lds((Array<T, 2>&)rmem_Q[k][n][i * 2], data + SmemLayoutQ::apply(s, c * 2));
+                        // Lds(frag_Q[k][n][i], data + SmemLayoutQ::apply(s, c));
+                        frag_Q[k][n][i] = data[SmemLayoutQ::apply(s, c)];
                         // if (k == ITER_K - 1) {
                         //     Store(data + SmemLayoutQ::apply(s, c * 2), Array<T, 2>{});
                         // }
@@ -326,27 +336,47 @@ struct Impl<MMA_81616, T_, Tb_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K
             }
             else {
                 using Converter = ConvertKvCache<Tb, T>;
-                auto& rmem_Q    = state_Q->rmem_Q;
+                auto& frag_Q    = state_Q->frag_Q;
                 PRAGMA_UNROLL
                 for (int n = 0; n < ITER_N; n += P_N) {
                     PRAGMA_UNROLL
                     for (int p_n = 0; p_n < P_N; ++p_n) {
                         auto& frag = frag_B[k][n + p_n];
                         frag       = Converter::convert((Array<Tb, 8>&)data_B[k / P_K][n / P_N][(p_k * P_N + p_n) * 8]);
+                        // PRAGMA_UNROLL
+                        // for (int c = 0; c < 2; ++c) {
+                        //     PRAGMA_UNROLL
+                        //     for (int s = 0; s < 2; ++s) {
+                        //         auto& k2 = (Array<T, 2>&)frag[c * 4 + s * 2];
+                        //         PRAGMA_UNROLL
+                        //         for (int i = 0; i < 2; ++i) {
+                        //             k2[i] = __hfma(k2[i], rmem_Q[k][n + p_n][s * 2], rmem_Q[k][n + p_n][s * 2 + 1]);
+                        //         }
+                        //     }
+                        // }
+
                         PRAGMA_UNROLL
                         for (int c = 0; c < 2; ++c) {
                             PRAGMA_UNROLL
                             for (int s = 0; s < 2; ++s) {
                                 auto& k2 = (Array<T, 2>&)frag[c * 4 + s * 2];
-                                PRAGMA_UNROLL
-                                for (int i = 0; i < 2; ++i) {
-                                    k2[i] = __hfma(k2[i], rmem_Q[k][n + p_n][s * 2], rmem_Q[k][n + p_n][s * 2 + 1]);
-                                }
+                                k2[0]    = apply_param(k2[0], frag_Q[k][n + p_n][s]);
+                                k2[1]    = apply_param(k2[1], frag_Q[k][n + p_n][s]);
                             }
                         }
                     }
                 }
             }
+        }
+
+        __device__ T apply_param(T b, half2 p)
+        {
+            return __hfma(b, p.x, p.y);
+        }
+
+        __device__ T apply_param(T b, nv_bfloat162 p)
+        {
+            return __hfma(b, p.x, p.y);
         }
 
         __device__ void Advance()

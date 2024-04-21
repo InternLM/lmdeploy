@@ -7,6 +7,7 @@ struct MMA_81616 {};
 template<class Tag,
          class T,
          class Tb,
+         class Tq,
          int CTA_M,
          int CTA_N,
          int CTA_K,
