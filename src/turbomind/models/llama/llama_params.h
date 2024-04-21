@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include <map>
 #include <string>
 
@@ -36,7 +37,7 @@ struct EngineParams {
 struct LoraParams {
     int                          r;
     float                        scale;
-    int                          policy;
+    LoraPolicy                   policy;
     int                          max_wo_r;
     std::map<std::string, int>   rank_pattern;
     std::map<std::string, float> scale_pattern;

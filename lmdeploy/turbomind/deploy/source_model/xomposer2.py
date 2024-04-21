@@ -93,7 +93,7 @@ class Xcomposer2Model(LlamaModel):
         """lora config for internlm-xcomposer2-7b."""
         return dict(lora_r=256,
                     lora_scale=1.0,
-                    lora_policy=1,
+                    lora_policy="plora",
                     lora_max_wo_r=256)
 
     def _lora_cfg_4khd_7b(self, model_info: dict):
@@ -115,7 +115,7 @@ class Xcomposer2Model(LlamaModel):
         return dict(lora_r=256,
                     lora_scale=1.0,
                     lora_max_wo_r=256,
-                    lora_policy=1,
+                    lora_policy="plora",
                     lora_rank_pattern=rank_pattern,
                     lora_scale_pattern=scale_pattern)
 

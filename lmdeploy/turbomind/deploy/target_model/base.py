@@ -67,7 +67,7 @@ class TurbomindModelConfig:
     rope_scaling_factor: float = 0.0
     use_dynamic_ntk: int = 0
     use_logn_attn: int = 0
-    lora_policy: int = 0
+    lora_policy: str = ""
     lora_r: int = 0
     lora_scale: float = 0.0
     lora_max_wo_r: int = 0

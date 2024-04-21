@@ -52,16 +52,34 @@ inline size_t getBitSize(WeightType type)
     return 0;
 }
 
+enum class LoraPolicy : int
+{
+    kNull,
+    kPlora,
+};
+
+inline LoraPolicy getLoraPolicy(const std::string& policy)
+{
+    if (policy == "plora") {
+        return LoraPolicy::kPlora;
+    }
+    return LoraPolicy::kNull;
+}
+
+struct LoraWeight {
+    LoraPolicy policy;
+    int        r;
+    float      scale;
+    void*      a;
+    void*      b;
+};
+
 template<typename T>
 struct LlamaDenseWeight {
     size_t     input_dims;
     size_t     output_dims;
     void*      kernel;
-    int        lora_policy;
-    size_t     lora_r;
-    void*      lora_a;
-    void*      lora_b;
-    float      lora_scale;
+    LoraWeight lora;
     WeightType type;
     T*         bias;
     T*         scales_and_zeros;

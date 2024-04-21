@@ -38,7 +38,7 @@ public:
             case WeightType::kFP16:
             case WeightType::kFP32:
             case WeightType::kBF16:
-                if (lora_mask != nullptr && weight.lora_r > 0) {
+                if (lora_mask != nullptr && weight.lora.r > 0) {
                     forwardFpLora(output_data, input_data, batch_size, weight, type, lora_mask);
                 }
                 else {
@@ -83,28 +83,28 @@ private:
         // output = x*W + output
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
                               CUBLAS_OP_N,
-                              weight.lora_r,                                  // m
+                              weight.lora.r,                                  // m
                               batch_size,                                     // n
                               weight.input_dims,                              // k
-                              (const T*)weight.lora_a,                        // A
-                              weight.lora_r,                                  // lda
+                              (const T*)weight.lora.a,                        // A
+                              weight.lora.r,                                  // lda
                               input_data,                                     // B
                               weight.input_dims,                              // ldb
                               output_data + batch_size * weight.output_dims,  // C
-                              weight.lora_r);                                 // ldc
+                              weight.lora.r);                                 // ldc
 
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
                               CUBLAS_OP_N,
                               weight.output_dims,                             // m
                               batch_size,                                     // n
-                              weight.lora_r,                                  // k
-                              (const T*)weight.lora_b,                        // A
+                              weight.lora.r,                                  // k
+                              (const T*)weight.lora.b,                        // A
                               weight.output_dims,                             // lda
                               output_data + batch_size * weight.output_dims,  // B
-                              weight.lora_r,                                  // ldb
+                              weight.lora.r,                                  // ldb
                               output_data,                                    // C
                               weight.output_dims,                             // ldc
-                              weight.lora_scale,                              // alpha
+                              weight.lora.scale,                              // alpha
                               0.0f);                                          // beta
 
         invokeMask(output_data, lora_mask, batch_size, weight.output_dims, stream_);

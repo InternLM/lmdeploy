@@ -20,6 +20,7 @@
 
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "3rdparty/INIReader.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaInstanceComm.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
@@ -224,7 +225,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_params_.extra_tokens_per_iter = reader.GetInteger("llama", "extra_tokens_per_iter", 0);
     engine_params_.max_prefill_iters     = reader.GetInteger("llama", "max_prefill_iters", 1);
 
-    lora_params_.policy        = reader.GetInteger("llama", "lora_policy", 0);
+    lora_params_.policy        = ft::getLoraPolicy(reader.Get("llama", "lora_policy", ""));
     lora_params_.r             = reader.GetInteger("llama", "lora_r", 0);
     lora_params_.scale         = reader.GetFloat("llama", "lora_scale", 0);
     lora_params_.max_wo_r      = reader.GetInteger("llama", "lora_max_wo_r", 0);

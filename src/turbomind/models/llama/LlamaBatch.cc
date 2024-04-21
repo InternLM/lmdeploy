@@ -702,7 +702,7 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
     // +1 padding, BlockIterator does not use predicate
     const size_t max_block_count = sequence_manager_->max_block_count() + 1;
 
-    if (model_->lora_params_.policy == 1) {
+    if (model_->lora_params_.policy == LoraPolicy::kPlora) {
         lora_mask_buf_ = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_context_token_num_, false);
         size_t sz      = sizeof(T) * max_context_token_num_ * (hidden_units + model_->lora_params_.max_wo_r);
         context_decoder_output_buf_ = (T*)allocator_->reMalloc(context_decoder_output_buf_, sz, false);

@@ -48,7 +48,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank)
 {
-    if (lora_params.policy == 1) {
+    if (lora_params.policy == LoraPolicy::kPlora) {
         std::vector<std::string> keys = {
             "attention.w_qkv", "attention.wo", "feed_forward.w1", "feed_forward.w2", "feed_forward.w3"};
         std::vector<LlamaDenseWeight<T>*> weights = {&self_attn_weights.qkv,
@@ -71,9 +71,9 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
                 TM_LOG_DEBUG("find scale name=%s, value=%f", full_name.c_str(), scale);
             }
             if (rank) {
-                weight.lora_r      = rank;
-                weight.lora_scale  = scale;
-                weight.lora_policy = lora_params.policy;
+                weight.lora.r      = rank;
+                weight.lora.scale  = scale;
+                weight.lora.policy = lora_params.policy;
             }
         }
     }
@@ -122,10 +122,10 @@ void freeWeights(LlamaDenseWeight<T>& weights)
     weights.scales_and_zeros = nullptr;
 
     {
-        cudaFree(weights.lora_a);
-        cudaFree(weights.lora_b);
-        weights.lora_a = nullptr;
-        weights.lora_b = nullptr;
+        cudaFree(weights.lora.a);
+        cudaFree(weights.lora.b);
+        weights.lora.a = nullptr;
+        weights.lora.b = nullptr;
     }
 }
 
@@ -148,10 +148,10 @@ void mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
         deviceMalloc((T**)&weights.scales_and_zeros, weights.input_dims / weights.group_size * weights.output_dims * 2);
     }
 
-    if (weights.lora_policy == 1 && weights.lora_r > 0 && weights.lora_scale > 0) {
+    if (weights.lora.r > 0) {
         FT_CHECK(bit_size >= 16);
-        deviceMalloc((T**)&weights.lora_a, weights.input_dims * weights.lora_r);
-        deviceMalloc((T**)&weights.lora_b, weights.lora_r * weights.output_dims);
+        deviceMalloc((T**)&weights.lora.a, weights.input_dims * weights.lora.r);
+        deviceMalloc((T**)&weights.lora.b, weights.lora.r * weights.output_dims);
     }
 }
 
@@ -195,22 +195,22 @@ void getWeightTensor(LlamaDenseWeight<T>& weights, bool bias, const std::string&
                              weights.scales_and_zeros});
     }
 
-    if (weights.lora_policy == 1 && weights.lora_r) {
+    if (weights.lora.r) {
         FT_CHECK(bit_size >= 16);
         auto        n       = prefix.rfind(".");
         std::string _prefix = prefix.substr(0, n);
         std::string _num    = prefix.substr(n + 1);
         output.insert(
             concat(_prefix, "lora_a", _num, "weight"),
-            Tensor{MEMORY_GPU, getTensorType<T>(), {weights.input_dims * weights.lora_r * sizeof(T)}, weights.lora_a});
+            Tensor{MEMORY_GPU, getTensorType<T>(), {weights.input_dims * weights.lora.r * sizeof(T)}, weights.lora.a});
         output.insert(
             concat(_prefix, "lora_b", _num, "weight"),
-            Tensor{MEMORY_GPU, getTensorType<T>(), {weights.lora_r * weights.output_dims * sizeof(T)}, weights.lora_b});
+            Tensor{MEMORY_GPU, getTensorType<T>(), {weights.lora.r * weights.output_dims * sizeof(T)}, weights.lora.b});
         TM_LOG_DEBUG("allocate lora weight, layer_name=%s input_dims=%d, output_dims=%d, lora_r=%d",
                      get_name("weight").c_str(),
                      weights.input_dims,
                      weights.output_dims,
-                     weights.lora_r);
+                     weights.lora.r);
     }
 }
 

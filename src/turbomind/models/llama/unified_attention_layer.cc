@@ -47,8 +47,8 @@ void UnifiedAttentionLayer<T>::allocateBuffer(size_t            q_count,
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
-    if (weights->qkv.lora_r) {
-        size_t sz = sizeof(T) * q_count * (local_q_kv_head_num * size_per_head_ + weights->qkv.lora_r);
+    if (weights->qkv.lora.r) {
+        size_t sz = sizeof(T) * q_count * (local_q_kv_head_num * size_per_head_ + weights->qkv.lora.r);
         qkv_buf_  = (T*)allocator_->reMalloc(qkv_buf_, sz, false);
     }
     else {

@@ -31,11 +31,11 @@ void LlamaFfnLayer<T>::allocateBuffer(size_t                     token_num,
                                       const LlamaDenseWeight<T>* gating,
                                       const LlamaDenseWeight<T>* inter)
 {
-    size_t sz       = sizeof(T) * token_num * inter_size_;
-    size_t sz_gate  = (gating->lora_policy == 1 && gating->lora_r > 0) ? sz + sz / inter_size_ * gating->lora_r : sz;
-    size_t sz_inter = (inter->lora_policy == 1 && inter->lora_r > 0) ? sz + sz / inter_size_ * inter->lora_r : sz;
-    inter_buf_      = (T*)allocator_->reMalloc(inter_buf_, sz_inter, false);
-    gating_buf_     = (T*)allocator_->reMalloc(gating_buf_, sz_gate, false);
+    size_t sz           = sizeof(T) * token_num * inter_size_;
+    size_t sz_gate      = (gating->lora.r > 0) ? sz + sz / inter_size_ * gating->lora.r : sz;
+    size_t sz_inter     = (inter->lora.r > 0) ? sz + sz / inter_size_ * inter->lora.r : sz;
+    inter_buf_          = (T*)allocator_->reMalloc(inter_buf_, sz_inter, false);
+    gating_buf_         = (T*)allocator_->reMalloc(gating_buf_, sz_gate, false);
     is_allocate_buffer_ = true;
 }
 
