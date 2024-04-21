@@ -35,8 +35,9 @@ struct EngineParams {
 
 struct LoraParams {
     int                          r;
-    int                          scale;
+    float                        scale;
     int                          policy;
+    int                          max_wo_r;
     std::map<std::string, int>   rank_pattern;
     std::map<std::string, float> scale_pattern;
 };

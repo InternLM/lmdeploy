@@ -69,7 +69,8 @@ class TurbomindModelConfig:
     use_logn_attn: int = 0
     lora_policy: int = 0
     lora_r: int = 0
-    lora_scale: int = 0
+    lora_scale: float = 0.0
+    lora_max_wo_r: int = 0
     lora_rank_pattern: str = ''
     lora_scale_pattern: str = ''
 

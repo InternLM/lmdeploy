@@ -38,14 +38,17 @@ namespace turbomind {
 
 template<typename T>
 
-void UnifiedAttentionLayer<T>::allocateBuffer(size_t q_count, size_t k_count, size_t batch_size)
+void UnifiedAttentionLayer<T>::allocateBuffer(size_t            q_count,
+                                              size_t            k_count,
+                                              size_t            batch_size,
+                                              const WeightType* weights)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
-    if (lora_params_.policy == 1) {
-        size_t sz = sizeof(T) * q_count * local_q_kv_head_num * size_per_head_ * 3;
+    if (weights->qkv.lora_r) {
+        size_t sz = sizeof(T) * q_count * (local_q_kv_head_num * size_per_head_ + weights->qkv.lora_r);
         qkv_buf_  = (T*)allocator_->reMalloc(qkv_buf_, sz, false);
     }
     else {
@@ -135,7 +138,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     /// allocate buffers
     allocateBuffer(token_num,                                           // shared
                    h_cu_k_len[batch_size] - h_cu_k_len[dc_batch_size],  // prefill
-                   batch_size);
+                   batch_size,
+                   weights);
 
     // [L, 2, H, s, D]
     const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;

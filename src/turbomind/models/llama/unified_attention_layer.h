@@ -37,7 +37,7 @@ public:
     static constexpr int kDecodeMaxSplits = 16;
 
     void freeBuffer();
-    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size);
+    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, const WeightType* weights);
 
     UnifiedAttentionLayer(size_t               head_num,
                           size_t               kv_head_num,

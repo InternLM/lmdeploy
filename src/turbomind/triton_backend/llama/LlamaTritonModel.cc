@@ -226,7 +226,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
 
     lora_params_.policy        = reader.GetInteger("llama", "lora_policy", 0);
     lora_params_.r             = reader.GetInteger("llama", "lora_r", 0);
-    lora_params_.scale         = reader.GetInteger("llama", "lora_scale", 0);
+    lora_params_.scale         = reader.GetFloat("llama", "lora_scale", 0);
+    lora_params_.max_wo_r      = reader.GetInteger("llama", "lora_max_wo_r", 0);
     lora_params_.rank_pattern  = getLoraPattern<int>(reader.Get("llama", "lora_rank_pattern", ""),
                                                     [](const std::string& s) { return std::stoi(s); });
     lora_params_.scale_pattern = getLoraPattern<float>(reader.Get("llama", "lora_scale_pattern", ""),

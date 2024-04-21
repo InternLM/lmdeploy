@@ -70,7 +70,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
                 scale = it->second;
                 TM_LOG_DEBUG("find scale name=%s, value=%f", full_name.c_str(), scale);
             }
-            if (rank && scale > 0) {
+            if (rank) {
                 weight.lora_r      = rank;
                 weight.lora_scale  = scale;
                 weight.lora_policy = lora_params.policy;
@@ -120,6 +120,13 @@ void freeWeights(LlamaDenseWeight<T>& weights)
     weights.kernel           = nullptr;
     weights.bias             = nullptr;
     weights.scales_and_zeros = nullptr;
+
+    {
+        cudaFree(weights.lora_a);
+        cudaFree(weights.lora_b);
+        weights.lora_a = nullptr;
+        weights.lora_b = nullptr;
+    }
 }
 
 template<typename T>
