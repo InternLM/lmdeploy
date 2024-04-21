@@ -75,16 +75,16 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
 }
 
 template<typename T>
-std::map<std::string, T> getLoraPattern(std::string pattern, T (*func)(const std::string& s))
+std::map<std::string, std::pair<std::regex, T>> getLoraPattern(std::string pattern, T (*func)(const std::string& s))
 {
-    std::map<std::string, T> res;
-    std::stringstream        ss(pattern);
-    std::string              kv;
+    std::map<std::string, std::pair<std::regex, T>> res;
+    std::stringstream                               ss(pattern);
+    std::string                                     kv;
     while (std::getline(ss, kv, ',')) {
         auto pos = kv.rfind(":");
         auto k   = kv.substr(0, pos);
         auto v   = func(kv.substr(pos + 1));
-        res.emplace(k, v);
+        res.emplace(k, std::make_pair(std::regex(k), v));
     }
     return res;
 }

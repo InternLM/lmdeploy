@@ -86,7 +86,7 @@ int ini_parse_stream(ini_reader reader, void* stream, ini_handler handler,
 
 /* Maximum line length for any line in INI file. */
 #ifndef INI_MAX_LINE
-#define INI_MAX_LINE 10000
+#define INI_MAX_LINE 200
 #endif
 
 #ifdef __cplusplus

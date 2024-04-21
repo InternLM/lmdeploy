@@ -62,13 +62,20 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
             int         rank      = lora_params.r;
             float       scale     = lora_params.scale;
             std::string full_name = "layers." + std::to_string(layer_idx) + "." + name;
-            if (auto it = lora_params.rank_pattern.find(full_name); it != lora_params.rank_pattern.end()) {
-                rank = it->second;
-                TM_LOG_DEBUG("find rank name=%s, value=%d", full_name.c_str(), rank);
+
+            for (const auto& [re, pr] : lora_params.rank_pattern) {
+                if (std::regex_search(full_name, pr.first)) {
+                    rank = pr.second;
+                    TM_LOG_DEBUG("find rank, pattern=%s, name=%s, value=%d", re.c_str(), full_name.c_str(), rank);
+                    break;
+                }
             }
-            if (auto it = lora_params.scale_pattern.find(full_name); it != lora_params.scale_pattern.end()) {
-                scale = it->second;
-                TM_LOG_DEBUG("find scale name=%s, value=%f", full_name.c_str(), scale);
+            for (const auto& [re, pr] : lora_params.scale_pattern) {
+                if (std::regex_search(full_name, pr.first)) {
+                    scale = pr.second;
+                    TM_LOG_DEBUG("find scale pattern=%s, name=%s, value=%f", re.c_str(), full_name.c_str(), scale);
+                    break;
+                }
             }
             if (rank) {
                 weight.lora.r      = rank;

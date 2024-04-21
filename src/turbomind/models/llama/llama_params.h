@@ -4,6 +4,7 @@
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include <map>
+#include <regex>
 #include <string>
 
 namespace turbomind {
@@ -35,12 +36,13 @@ struct EngineParams {
 };
 
 struct LoraParams {
-    int                          r;
-    float                        scale;
-    LoraPolicy                   policy;
-    int                          max_wo_r;
-    std::map<std::string, int>   rank_pattern;
-    std::map<std::string, float> scale_pattern;
+    int        r;
+    float      scale;
+    LoraPolicy policy;
+    int        max_wo_r;
+
+    std::map<std::string, std::pair<std::regex, int>>   rank_pattern;
+    std::map<std::string, std::pair<std::regex, float>> scale_pattern;
 };
 
 }  // namespace turbomind

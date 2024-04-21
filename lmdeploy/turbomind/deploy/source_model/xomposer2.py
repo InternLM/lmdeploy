@@ -93,29 +93,19 @@ class Xcomposer2Model(LlamaModel):
         """lora config for internlm-xcomposer2-7b."""
         return dict(lora_r=256,
                     lora_scale=1.0,
-                    lora_policy="plora",
+                    lora_policy='plora',
                     lora_max_wo_r=256)
 
     def _lora_cfg_4khd_7b(self, model_info: dict):
         """lora config for internlm-xcomposer2-4khd-7b."""
-        num_layer = model_info['num_layer']
-        rank_pattern = []
-        scale_pattern = []
-        rank_qkv = 8
-        rank_wo = 256
-        scale_qkv = 2.0
-        scale_wo = 1.0
-        for i in range(num_layer):
-            for key, rank, scale in zip(['w_qkv', 'wo'], [rank_qkv, rank_wo],
-                                        [scale_qkv, scale_wo]):
-                rank_pattern.append(f'layers.{i}.attention.{key}:{rank}')
-                scale_pattern.append(f'layers.{i}.attention.{key}:{scale}')
+        rank_pattern = ['attention.w_qkv:8', 'attention.wo:256']
+        scale_pattern = ['attention.w_qkv:2.0', 'attention.wo:1.0']
         rank_pattern = ','.join(rank_pattern)
         scale_pattern = ','.join(scale_pattern)
         return dict(lora_r=256,
                     lora_scale=1.0,
                     lora_max_wo_r=256,
-                    lora_policy="plora",
+                    lora_policy='plora',
                     lora_rank_pattern=rank_pattern,
                     lora_scale_pattern=scale_pattern)
 
