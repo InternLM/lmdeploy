@@ -7,15 +7,15 @@ from configparser import ConfigParser
 from contextlib import contextmanager
 from queue import LifoQueue, Queue
 from threading import Thread
-from typing import Iterable, List, Optional, Union
+from typing import Dict, Iterable, List, Optional, Union
 
 import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import (EngineGenerationConfig, ResponseType,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
+                               ResponseType, TurbomindEngineConfig)
 from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
                             best_match_model)
 from lmdeploy.tokenizer import Tokenizer
@@ -34,6 +34,8 @@ sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 
 logger = get_logger('lmdeploy')
+
+MAX_LOGPROBS = 1024
 
 
 def _construct_stop_or_bad_words(words: List[int] = None):
@@ -79,8 +81,8 @@ def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
 
 
 def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
-    # A workaround to support max token number of each iteration in prefill
-    if src.max_prefill_token_num is not None and src.session_len is not None:
+    if src.max_prefill_token_num is not None and \
+            src.session_len is not None and src.num_tokens_per_iter == 0:
         dst.num_tokens_per_iter = src.max_prefill_token_num
         dst.max_prefill_iters = (src.session_len + src.max_prefill_token_num -
                                  1) // src.max_prefill_token_num
@@ -509,6 +511,33 @@ class TurboMindInstance:
                            'use GenerationConfig instead.')
         return config
 
+    def _get_logprobs(self,
+                      logprob_vals: torch.Tensor,
+                      logprob_indexes: torch.Tensor,
+                      logprob_nums: torch.Tensor,
+                      output_ids: torch.Tensor,
+                      logprobs: int = None,
+                      length: int = None,
+                      out_logprobs: List[Dict[int, float]] = None,
+                      session_id: int = None):
+        if logprobs is None:
+            return None
+        if out_logprobs is None:
+            out_logprobs = []
+        if len(output_ids) <= len(out_logprobs):
+            return out_logprobs
+        offset = len(out_logprobs)
+        for (token_id, idx, val, n) in zip(output_ids[offset:length],
+                                           logprob_indexes[offset:length],
+                                           logprob_vals[offset:length],
+                                           logprob_nums[offset:length]):
+            n = min(n.item(), logprobs)
+            tok_res = {idx[i].item(): val[i].item() for i in range(n)}
+            if token_id.item() not in tok_res:
+                tok_res[token_id.item()] = val[idx == token_id].item()
+            out_logprobs.append(tok_res)
+        return out_logprobs
+
     def end(self, session_id: int):
         """End the given session."""
         input_ids = [self.tm_model.tokenizer.eos_token_id]
@@ -640,6 +669,13 @@ class TurboMindInstance:
             inputs['min_length'] = _broadcast_np(gen_config.min_new_tokens,
                                                  np.int32)
 
+        if gen_config.logprobs is not None and gen_config.logprobs > 0:
+            if gen_config.logprobs > MAX_LOGPROBS:
+                gen_config.logprobs = MAX_LOGPROBS
+                logger.warning('logprobs shoudd be in range [1, 1024]'
+                               f'update logprobs={gen_config.logprobs}')
+            inputs['logprobs'] = _broadcast_np(gen_config.logprobs, np.int32)
+
         bad_words = []
         if gen_config.bad_words is not None:
             bad_words.extend(gen_config.bad_words)
@@ -714,6 +750,7 @@ class TurboMindInstance:
 
         seq_start = input_lengths + input_lengths.new_tensor(step)
 
+        out_logprobs = None
         prev_len = 0
         # generator
         while True:
@@ -732,23 +769,40 @@ class TurboMindInstance:
             ]
             sequence_length -= seq_start.to(sequence_length.device)
 
+            if 'logprob_vals' in outputs:
+                logprob_vals = outputs['logprob_vals'][0, 0]
+                logprob_indexes = outputs['logprob_indexes'][0, 0]
+                logprob_nums = outputs['logprob_nums'][0, 0]
+                out_logprobs = self._get_logprobs(logprob_vals,
+                                                  logprob_indexes,
+                                                  logprob_nums, output_ids[0],
+                                                  gen_config.logprobs,
+                                                  sequence_length.cpu().item(),
+                                                  out_logprobs, session_id)
+
             outputs = []
             status = ResponseType.FINISH if finish else ResponseType.SUCCESS
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id \
                         and not gen_config.ignore_eos:
-                    outputs = (status, output[:-1].tolist(), len_ - 1)
+                    outputs = EngineOutput(status, output[:-1].tolist(),
+                                           len_ - 1)
                 elif len(output) > 0 and \
                     gen_config.stop_words is not None and \
                         output[-1].item() in gen_config.stop_words:
-                    outputs = (status, output[:-1].tolist(), len_)
+                    outputs = EngineOutput(status, output[:-1].tolist(), len_)
                 else:
-                    outputs = (status, output.tolist(), len_)
-            if outputs[-1] < prev_len and not finish:
+                    outputs = EngineOutput(status, output.tolist(), len_)
+            if outputs.num_token < prev_len and not finish:
                 continue
             else:
-                prev_len = outputs[-1]
+                prev_len = outputs.num_token
+
+            if out_logprobs:
+                output_token_len = len(outputs.token_ids)
+                outputs.logprobs = out_logprobs[:output_token_len]
+
             yield outputs
 
             if finish:
@@ -808,6 +862,7 @@ class TurboMindInstance:
         self._forward_thread(tm_inputs)
 
         seq_start = input_lengths + input_lengths.new_tensor(step)
+        out_logprobs = None
 
         # generator
         while True:
@@ -826,19 +881,38 @@ class TurboMindInstance:
             ]
             sequence_length -= seq_start.to(sequence_length.device)
 
+            if 'logprob_vals' in outputs:
+                logprob_vals = outputs['logprob_vals'][0, 0]
+                logprob_indexes = outputs['logprob_indexes'][0, 0]
+                logprob_nums = outputs['logprob_nums'][0, 0]
+                out_logprobs = self._get_logprobs(logprob_vals,
+                                                  logprob_indexes,
+                                                  logprob_nums, output_ids[0],
+                                                  gen_config.logprobs,
+                                                  sequence_length.cpu().item(),
+                                                  out_logprobs, session_id)
+
             outputs = []
             status = ResponseType.FINISH if finish else ResponseType.SUCCESS
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id \
                         and not gen_config.ignore_eos:
-                    outputs = (status, output[:-1].tolist(), len_ - 1)
+                    outputs = EngineOutput(status, output[:-1].tolist(),
+                                           len_ - 1, out_logprobs)
                 elif len(output) > 0 and \
                     gen_config.stop_words is not None and \
                         output[-1].item() in gen_config.stop_words:
-                    outputs = (status, output[:-1].tolist(), len_)
+                    outputs = EngineOutput(status, output[:-1].tolist(), len_,
+                                           out_logprobs)
                 else:
-                    outputs = (status, output.tolist(), len_)
+                    outputs = EngineOutput(status, output.tolist(), len_,
+                                           out_logprobs)
+
+            if out_logprobs:
+                output_token_len = len(outputs.token_ids)
+                outputs.logprobs = out_logprobs[:output_token_len]
+
             yield outputs
 
             if finish:

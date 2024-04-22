@@ -72,11 +72,23 @@ class PatchedInternLM2Attention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-            cos, sin = self.rotary_emb(value_states.transpose(0, 1),
-                                       seq_len=max_kv_seq_length)
+            if not hasattr(context, '_cos'):
+                cos, sin = self.rotary_emb(value_states.transpose(0, 1),
+                                           seq_len=max_kv_seq_length)
+                context._cos = cos
+                context._sin = sin
+            else:
+                cos = context._cos
+                sin = context._sin
             query_states, key_states = apply_rotary_pos_emb(
-                query_states, key_states, cos, sin, position_ids,
-                context.position_ids_1d)
+                query_states,
+                key_states,
+                cos,
+                sin,
+                position_ids,
+                context.position_ids_1d,
+                q_embed=query_states,
+                k_embed=key_states)
             return query_states, key_states, value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)

@@ -48,6 +48,7 @@ FetchContent_Declare(
   repo-cutlass
   GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
   GIT_TAG        6f47420213f757831fae65c686aa471749fa8d60
+  GIT_SHALLOW ON
 )
 
 set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")

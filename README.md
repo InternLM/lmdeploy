@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/04\] TurboMind adds online int8/int4 KV cache quantization and inference for all supported devices. Refer [here](docs/en/quantization/kv_quant.md) for detailed guide
 - \[2024/04\] TurboMind latest upgrade boosts GQA, rocketing the [internlm2-20b](https://huggingface.co/internlm/internlm2-20b) model inference to 16+ RPS, about 1.8x faster than vLLM.
 - \[2024/04\] Support Qwen1.5-MOE and dbrx.
 - \[2024/03\] Support DeepSeek-VL offline inference pipeline and serving.
@@ -91,6 +92,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 | :----------------: | :--------: |
 |       Llama        |  7B - 65B  |
 |       Llama2       |  7B - 70B  |
+|       Llama3       |  8B, 70B   |
 |      InternLM      |  7B - 20B  |
 |     InternLM2      |  7B - 20B  |
 | InternLM-XComposer |     7B     |
@@ -111,6 +113,8 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
 |        Dbrx        |    132B    |
+|   LLaVA(1.5,1.6)   |  7B - 34B  |
+|  MiniGeminiLlama   |     7B     |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 

@@ -92,6 +92,10 @@ private:
     float* d_cum_log_probs_    = nullptr;
     float* d_output_logits_    = nullptr;
 
+    float*    h_logprob_vals_    = nullptr;
+    uint32_t* h_logprob_indexes_ = nullptr;
+    uint32_t* h_logprob_nums_    = nullptr;
+
     uint32_t*          h_total_output_lengths_ = nullptr;
     std::exception_ptr h_exception_            = nullptr;
 };

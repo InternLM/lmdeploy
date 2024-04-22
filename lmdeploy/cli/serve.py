@@ -157,6 +157,8 @@ class SubCliServe:
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
+        ArgumentHelper.num_tokens_per_iter(tb_group)
+        ArgumentHelper.max_prefill_iters(tb_group)
 
     @staticmethod
     def add_parser_api_client():

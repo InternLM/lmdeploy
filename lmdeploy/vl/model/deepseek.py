@@ -17,7 +17,8 @@ def check_deepseek_vl_install():
     except ImportError:
         raise ImportError(
             'To use DeepSeekVLModel, please install deepseek_vl by '
-            'pip install git+https://github.com/deepseek-ai/DeepSeek-VL.git')
+            'pip install git+https://github.com/deepseek-ai/DeepSeek-VL.git'
+            ' --no-deps')
 
 
 class DeepSeekVisionModel(VisonModel):

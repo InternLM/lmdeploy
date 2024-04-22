@@ -26,6 +26,7 @@
 
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
+#include "src/turbomind/utils/constant.h"
 
 namespace turbomind {
 
@@ -210,6 +211,9 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                      bool*          finished,
                                      float*         cum_log_probs,
                                      float*         output_log_probs,
+                                     float*         sampled_logprobs,
+                                     uint32_t*      sampled_indexes,
+                                     uint32_t*      sampled_nums,
                                      const int      max_top_k,
                                      const int*     top_ks,
                                      const float    top_p,
@@ -309,6 +313,34 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
             finished[batch_id]        = ids[batch_id] == end_ids[batch_id] ? true : false;
         }
     }
+
+    if (sampled_logprobs != nullptr && sampled_indexes != nullptr && sampled_nums != nullptr) {
+        __shared__ int   sampled_n;
+        __shared__ float cum_probs;
+
+        if (tid == 0) {
+            float _cum_probs = 0.0f;
+            sampled_n        = k;
+            cum_probs        = s_sum;
+            for (int i = 0; i < k; i++) {
+                _cum_probs += s_val2[i] / s_sum;
+                if (_cum_probs > prob_threshold) {
+                    cum_probs = _cum_probs * s_sum;
+                    sampled_n = i + 1;
+                    break;
+                }
+            }
+            sampled_nums[batch_id] = sampled_n;
+        }
+        __syncthreads();
+
+        int   local_sampled_n = sampled_n;
+        float local_cum_probs = cum_probs;
+        for (int ite = tid; ite < local_sampled_n; ite += BLOCK_SIZE_) {
+            sampled_logprobs[batch_id * kMaxLogProb + ite] = logf(s_val2[ite]) - logf(local_cum_probs);
+            sampled_indexes[batch_id * kMaxLogProb + ite] = topk_tmp_id_buf[batch_id * stride + s_id[ite]] % vocab_size;
+        }
+    }
 }
 
 #ifdef _MSC_VER
@@ -333,6 +365,9 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                                                                                  finished,             \
                                                                                                  cum_log_probs,        \
                                                                                                  output_log_probs,     \
+                                                                                                 sampled_logprobs,     \
+                                                                                                 sampled_indexes,      \
+                                                                                                 sampled_nums,         \
                                                                                                  max_top_k,            \
                                                                                                  top_ks,               \
                                                                                                  top_p,                \
@@ -365,6 +400,9 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                                                                                  finished,             \
                                                                                                  cum_log_probs,        \
                                                                                                  output_log_probs,     \
+                                                                                                 sampled_logprobs,     \
+                                                                                                 sampled_indexes,      \
+                                                                                                 sampled_nums,         \
                                                                                                  max_top_k,            \
                                                                                                  top_ks,               \
                                                                                                  top_p,                \
@@ -385,6 +423,9 @@ void invokeBatchTopKSampling(void*          workspace,
                              bool*          finished,
                              float*         cum_log_probs,
                              float*         output_log_probs,
+                             float*         sampled_logprobs,
+                             uint32_t*      sampled_indexes,
+                             uint32_t*      sampled_nums,
                              curandState_t* curandstate,
                              const int      max_top_k,
                              const int*     top_ks,
@@ -449,6 +490,9 @@ template void invokeBatchTopKSampling(void*          workspace,
                                       bool*          finished_buf,
                                       float*         cum_log_probs,
                                       float*         output_log_probs,
+                                      float*         sampled_logprobs,
+                                      uint32_t*      sampled_indexes,
+                                      uint32_t*      sampled_nums,
                                       curandState_t* curandstate,
                                       const int      max_top_k,
                                       const int*     top_ks,
@@ -468,6 +512,9 @@ template void invokeBatchTopKSampling(void*          workspace,
                                       bool*          finished_buf,
                                       float*         cum_log_probs,
                                       float*         output_log_probs,
+                                      float*         sampled_logprobs,
+                                      uint32_t*      sampled_indexes,
+                                      uint32_t*      sampled_nums,
                                       curandState_t* curandstate,
                                       const int      max_top_k,
                                       const int*     top_ks,
@@ -505,6 +552,9 @@ void invokeTopKSampling(void*          workspace,
                             finished_buf,
                             cum_log_probs,
                             output_log_probs,
+                            nullptr,
+                            nullptr,
+                            nullptr,
                             curandstate,
                             top_k,
                             nullptr,

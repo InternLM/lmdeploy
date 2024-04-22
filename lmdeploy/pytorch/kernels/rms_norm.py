@@ -27,7 +27,6 @@ def rms_norm_kernel(input, weight, output, input_row_stride, n_cols, eps,
     tl.store(out_ptr + offsets, out, mask=offsets < n_cols)
 
 
-@torch.inference_mode()
 def rms_norm(hidden_states: Tensor, weight: Tensor, eps: float = 1e-6):
     """rms norm."""
 

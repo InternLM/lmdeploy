@@ -31,7 +31,8 @@ def run_pipeline_chat_test(config, cases_info, model_case, tp, type):
         backend_config = PytorchEngineConfig(tp=tp)
     else:
         if 'kvint8' in model_case and ('w4' in model_case
-                                       or '4bits' in model_case):
+                                       or '4bits' in model_case
+                                       or 'awq' in model_case.lower()):
             backend_config = TurbomindEngineConfig(tp=tp,
                                                    model_format='awq',
                                                    quant_policy=4)
@@ -39,38 +40,28 @@ def run_pipeline_chat_test(config, cases_info, model_case, tp, type):
             backend_config = TurbomindEngineConfig(tp=tp,
                                                    model_format='hf',
                                                    quant_policy=4)
-        elif 'w4' in model_case or '4bits' in model_case:
+        elif 'w4' in model_case or ('4bits' in model_case
+                                    or 'awq' in model_case.lower()):
             backend_config = TurbomindEngineConfig(tp=tp, model_format='awq')
         else:
             backend_config = TurbomindEngineConfig(tp=tp)
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     # run testcases
-    gen_config = GenerationConfig(temperature=0.01)
+    gen_config = GenerationConfig(top_k=1)
     for case in cases_info.keys():
-        if (case == 'memory_test'
-                or case == 'emoji_case') and 'chat' not in model_case.lower():
-            continue
-
         case_info = cases_info.get(case)
 
         print('case:' + case)
         prompts = []
         for prompt_detail in case_info:
             prompt = list(prompt_detail.keys())[0]
-            if 'chat' not in model_case.lower():  # base model
-                prompts.append(prompt)
-            else:  # chat model
-                prompts.append({'role': 'user', 'content': prompt})
+            prompts.append({'role': 'user', 'content': prompt})
             print('prompt:' + prompt)
 
-            if 'chat' not in model_case.lower():  # base model
-                response = pipe(prompts, gen_config=gen_config)[-1].text
-            else:  # chat model
-                response = pipe([prompts], gen_config=gen_config)[0].text
+            response = pipe([prompts], gen_config=gen_config)[0].text
 
-            if 'chat' in model_case.lower():
-                prompts.append({'role': 'assistant', 'content': response})
+            prompts.append({'role': 'assistant', 'content': response})
             print('output:' + response)
 
 
