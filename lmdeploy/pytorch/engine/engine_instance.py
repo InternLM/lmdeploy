@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, EngineOutput
 from lmdeploy.utils import get_logger
 
 from ..messages import SamplingParam
@@ -148,23 +148,19 @@ class EngineInstance:
 
         token_ids = []
         while True:
-            if not self.req_sender.is_loop_alive():
-                yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
-                break
-
             resp = await self.req_sender.async_recv(req_id)
 
             if resp.req_id != req_id:
                 continue
             if resp.type == ResponseType.SUCCESS:
                 token_ids += resp.data['token_ids']
-                yield (resp.type, token_ids, len(token_ids))
+                yield EngineOutput(resp.type, token_ids, len(token_ids))
             elif resp.type == ResponseType.FINISH:
                 token_ids += resp.data['token_ids']
-                yield (resp.type, token_ids, len(token_ids))
+                yield EngineOutput(resp.type, token_ids, len(token_ids))
                 break
             else:
-                yield (resp.type, [], 0)
+                yield EngineOutput(resp.type, [], 0)
                 break
 
     async def async_infer(self,
@@ -191,10 +187,10 @@ class EngineInstance:
                                                      **kwargs):
             status, tmp_ids, _ = outputs
             if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
-                return (status, token_ids, len(token_ids))
+                return EngineOutput(status, token_ids, len(token_ids))
             token_ids = tmp_ids
 
-        return (0, token_ids, len(token_ids))
+        return EngineOutput(0, token_ids, len(token_ids))
 
     def stream_infer(self,
                      session_id: int,
@@ -245,23 +241,19 @@ class EngineInstance:
 
         token_ids = []
         while True:
-            if not self.req_sender.is_loop_alive():
-                yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
-                break
-
             resp = self.req_sender.recv(req_id)
 
             if resp.req_id != req_id:
                 continue
             if resp.type == ResponseType.SUCCESS:
                 token_ids += resp.data['token_ids']
-                yield (resp.type, token_ids, len(token_ids))
+                yield EngineOutput(resp.type, token_ids, len(token_ids))
             elif resp.type == ResponseType.FINISH:
                 token_ids += resp.data['token_ids']
-                yield (resp.type, token_ids, len(token_ids))
+                yield EngineOutput(resp.type, token_ids, len(token_ids))
                 break
             else:
-                yield (resp.type, [], 0)
+                yield EngineOutput(resp.type, [], 0)
                 break
 
     def infer(self,
@@ -288,10 +280,10 @@ class EngineInstance:
                                          **kwargs):
             status, tmp_ids, _ = outputs
             if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
-                return (status, token_ids, len(token_ids))
+                return EngineOutput(status, token_ids, len(token_ids))
             token_ids = tmp_ids
 
-        return (0, token_ids, len(token_ids))
+        return EngineOutput(0, token_ids, len(token_ids))
 
     async def async_batched_infer(self,
                                   session_ids: List[int],
@@ -348,11 +340,6 @@ class EngineInstance:
         status = 0
         finish_count = batch_size
         while finish_count:
-            if not self.engine.req_manager.is_loop_alive():
-                logger.error('Engine loop is not alive.')
-                status = 1
-                break
-
             resp = await self.req_sender.async_recv_any()
             if resp.req_id not in req_ids:
                 continue
@@ -372,7 +359,7 @@ class EngineInstance:
                 break
 
         output_token_len = [len(token_ids) for token_ids in output_token_ids]
-        return (status, output_token_ids, output_token_len)
+        return EngineOutput(status, output_token_ids, output_token_len)
 
     def batched_infer(self,
                       session_ids: List[int],

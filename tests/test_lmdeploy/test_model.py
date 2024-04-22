@@ -105,6 +105,42 @@ def test_internlm_chat():
     assert model.session_len == 8192
 
 
+def test_messages2prompt4internlm2_chat():
+    model = MODELS.get('internlm2-chat-7b')()
+    # Test with a single message
+    messages = [
+        {
+            'role': 'system',
+            'name': 'interpreter',
+            'content': 'You have access to python environment.'
+        },
+        {
+            'role': 'user',
+            'content': 'use python drwa a line'
+        },
+        {
+            'role': 'assistant',
+            'content': '<|action_start|><|interpreter|>\ncode<|action_end|>\n'
+        },
+        {
+            'role': 'environment',
+            'name': 'interpreter',
+            'content': "[{'type': 'image', 'content': 'image url'}]"
+        },
+    ]
+    expected_prompt = (
+        model.system.strip() +
+        ' name=<|interpreter|>\nYou have access to python environment.' +
+        model.eosys + model.user + 'use python drwa a line' + model.eoh +
+        model.assistant +
+        '<|action_start|><|interpreter|>\ncode<|action_end|>\n' + model.eoa +
+        model.separator + model.environment.strip() +
+        " name=<|interpreter|>\n[{'type': 'image', 'content': 'image url'}]" +
+        model.eoenv + model.assistant)
+    actual_prompt = model.messages2prompt(messages)
+    assert actual_prompt == expected_prompt
+
+
 def test_baichuan():
     prompt = 'hello, can u introduce yourself'
     model = MODELS.get('baichuan-7b')(capability='completion')

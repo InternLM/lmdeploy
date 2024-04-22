@@ -162,6 +162,7 @@ class APIClient:
 
     def chat_interactive_v1(self,
                             prompt: Union[str, List[Dict[str, str]]],
+                            image_url: Optional[Union[str, List[str]]] = None,
                             session_id: int = -1,
                             interactive_mode: bool = False,
                             stream: bool = False,
@@ -184,6 +185,8 @@ class APIClient:
 
         Args:
             prompt: the prompt to use for the generation.
+            image_url (str | List[str] | None): the image url or base64 encoded
+                string for VL models.
             session_id: determine which instance will be called.
                 If not specified with a value other than -1, using random value
                 directly.
@@ -308,6 +311,7 @@ class APIClient:
     def chat(self,
              prompt: str,
              session_id: int,
+             image_url: Optional[Union[str, List[str]]] = None,
              request_output_len: int = 512,
              stream: bool = False,
              top_p: float = 0.8,
@@ -322,6 +326,8 @@ class APIClient:
             session_id: determine which instance will be called.
                 If not specified with a value other than -1, using random value
                 directly.
+            image_url (str | List[str] | None): the image url or base64 encoded
+                string for VL models.
             stream: whether to stream the results or not.
             stop: whether to stop the session response or not.
             request_output_len (int): output token nums
@@ -342,6 +348,7 @@ class APIClient:
         for outputs in self.chat_interactive_v1(
                 prompt,
                 session_id=session_id,
+                image_url=image_url,
                 request_output_len=request_output_len,
                 interactive_mode=True,
                 stream=stream,

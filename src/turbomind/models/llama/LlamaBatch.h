@@ -222,6 +222,13 @@ private:
     float* context_logits_buf_{};
     float* local_context_logits_buf_{};
 
+    float*    sampled_logprobs_{};
+    uint32_t* sampled_indexes_{};
+    uint32_t* sampled_nums_{};
+    float*    h_sampled_logprobs_{};
+    uint32_t* h_sampled_indexes_{};
+    uint32_t* h_sampled_nums_{};
+
     float* rope_theta_{};
 
     // used by dynamic decoder
