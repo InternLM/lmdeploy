@@ -226,3 +226,35 @@ MODULE_MAP.update({
     'modeling_dbrx.DbrxExpertGLU':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxExpertGLU'
 })
+
+# mixtral
+MODULE_MAP.update({
+    'transformers.models.mixtral.modeling_mixtral.MixtralAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    'transformers.models.mixtral.modeling_mixtral.MixtralFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    'transformers.models.mixtral.modeling_mixtral.MixtralSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    'transformers.models.mixtral.modeling_mixtral.MixtralModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralModel',
+    'transformers.models.mixtral.modeling_mixtral.MixtralBLockSparseTop2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
+    'transformers.models.mixtral.modeling_mixtral.MixtralBlockSparseTop2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
+    'transformers.models.mixtral.modeling_mixtral.MixtralRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})
+
+# starcode2
+MODULE_MAP.update({
+    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2Attention',
+    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2FlashAttention2':    # noqa: E501
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2Attention',
+    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2SdpaAttention':    # noqa: E501
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2Attention',
+    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2Model':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2MLP',
+})

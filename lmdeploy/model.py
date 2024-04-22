@@ -1193,6 +1193,23 @@ class ChatmlDirect(BaseChatTemplate):
             return 'internvl-zh-hermes2'
 
 
+@MODELS.register_module(name='starcoder2')
+class StarCoder2(BaseModel):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'starcoder2' in model_path.lower():
+            return 'starcoder2'
+
+
 def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 
