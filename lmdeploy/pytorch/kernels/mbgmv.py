@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import torch
 import triton
 import triton.language as tl
 from torch import Tensor
@@ -139,7 +138,6 @@ def _acc_b_mv_kernel(
         tl.store(Out + o_off + oh_off, out, mask=h_mask)
 
 
-@torch.inference_mode()
 def mbgmv_a(x: Tensor,
             lora_a: Tensor,
             adapter_ids: Tensor,
@@ -197,7 +195,6 @@ def mbgmv_a(x: Tensor,
     return xa
 
 
-@torch.inference_mode()
 def mbgmv_b(xa: Tensor,
             lora_b: Tensor,
             adapter_ids: Tensor,

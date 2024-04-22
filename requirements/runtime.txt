@@ -11,7 +11,7 @@ safetensors
 sentencepiece
 shortuuid
 tiktoken
-torch<=2.1.2,>=2.0.0
-transformers>=4.33.0,<=4.38.2
+torch<=2.2.2,>=2.0.0
+transformers
 triton>=2.1.0,<=2.2.0
 uvicorn

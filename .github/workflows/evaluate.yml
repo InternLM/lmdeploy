@@ -33,12 +33,12 @@ jobs:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
       volumes:
-        - /mnt/bigdisk/lmdeploy-github-actions/pip-cache:/root/.cache/pip
-        - /mnt/bigdisk/lmdeploy-github-actions/packages:/root/packages
-        - /mnt/bigdisk/lmdeploy-github-actions/resources:/root/resources
-        - /mnt/bigdisk/lmdeploy-github-actions/evaluation-reports:/root/evaluation-reports
-        - /mnt/bigdisk/lmdeploy-github-actions/opencompass-data:/root/opencompass-data
-        - /mnt/bigdisk/qa_test_models:/root/models
+        - /nvme/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/github-actions/packages:/root/packages
+        - /nvme/github-actions/resources:/root/resources
+        - /nvme/github-actions/evaluation-reports:/root/evaluation-reports
+        - /nvme/github-actions/opencompass-data:/root/opencompass-data
+        - /nvme/qa_test_models:/root/models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems

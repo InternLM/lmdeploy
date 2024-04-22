@@ -49,7 +49,7 @@ def infer(model, session_id: int, input_ids: List,
                                             sequence_start=True,
                                             sequence_end=True,
                                             stream_output=True):
-            _, res, n_token = outputs
+            n_token = outputs.num_token
             now = time.perf_counter()
             if n_prev_token != n_token:
                 token_latency_stats[n_prev_token] = np.round(now - prev, 3)

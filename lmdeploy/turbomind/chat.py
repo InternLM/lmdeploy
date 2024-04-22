@@ -134,7 +134,7 @@ def main(model_path: str,
                     gen_config=gen_config,
                     ignore_eos=False,
                     random_seed=seed if nth_round == 1 else None):
-                _, res, tokens = outputs
+                res, tokens = outputs.token_ids, outputs.num_token
                 # decode res
                 response, state = tokenizer.detokenize_incrementally(
                     res, state=state)

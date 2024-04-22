@@ -24,6 +24,7 @@
 
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
+#include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 constexpr int   ENABLE_SINGLE_PASS_TOP_P = 0;
@@ -877,6 +878,7 @@ struct BlockPrefixCallbackOp {
 template<typename T, int BLOCK_SIZE>
 __global__ void topp_sampling(T*             sorted_log_probs,
                               int*           sorted_id_vals,
+                              uint32_t*      sampled_nums,
                               int*           ids,
                               int*           sequence_length,
                               bool*          finished_buf,
@@ -999,6 +1001,143 @@ __global__ void topp_sampling(T*             sorted_log_probs,
                     finished_buf[batch_id] ? sequence_length[batch_id] : sequence_length[batch_id] + 1;
                 finished_buf[batch_id] = ids[batch_id] == end_ids[batch_id] ? 1 : 0;
             }
+
+            // temporary storage the selected token
+            if (sampled_nums) {
+                sampled_nums[batch_id] = i_active;
+            }
+        }
+    }
+}
+
+template<typename T, int BLOCK_SIZE>
+__global__ void topp_logprobs(T*           sorted_log_probs,
+                              int*         sorted_id_vals,
+                              float*       sampled_logprobs,
+                              uint32_t*    sampled_indexes,
+                              uint32_t*    sampled_nums,
+                              const int*   begin_offset_buf,
+                              const int*   offset_buf,
+                              const int    vocab_size,
+                              const float  top_p,
+                              const float* top_ps,
+                              const int    batch_size,
+                              const bool*  skip_decode)
+{
+    __shared__ int stop_shared;
+
+    const int tid      = threadIdx.x;
+    const int batch_id = blockIdx.x;
+    if (skip_decode != nullptr && skip_decode[batch_id]) {
+        return;
+    }
+
+    constexpr int WARP_SIZE      = 32;
+    constexpr int NUM_WARPS      = BLOCK_SIZE / WARP_SIZE;
+    const int     lane_id        = threadIdx.x % WARP_SIZE;
+    const int     warp_id        = threadIdx.x / WARP_SIZE;
+    const float   prob_threshold = (top_ps != nullptr) ? top_ps[batch_id] : top_p;
+
+    if (threadIdx.x == 0) {
+        stop_shared = 0;
+    }
+
+    // if begin_offset_buf and offset_buf of sorting have same value,
+    // this means that we have find best one in beam_topK_kernel_for_topP
+    // and skip the sorting. So, we can skip then during sampling.
+    if (begin_offset_buf[batch_id] == offset_buf[batch_id]) {
+        if (tid == 0) {
+            int offset                       = batch_id * vocab_size;
+            int sampled_offset               = batch_id * kMaxLogProb;
+            sampled_logprobs[sampled_offset] = 0.f;
+            sampled_indexes[sampled_offset]  = sorted_id_vals[offset];
+            sampled_nums[batch_id]           = 1;
+        }
+        return;
+    }
+
+    typedef cub::BlockScan<float, BLOCK_SIZE>  BlockScan;
+    __shared__ typename BlockScan::TempStorage temp_storage;
+    __shared__ uint32_t                        selected_shared[NUM_WARPS];
+    // Initialize running total
+    BlockPrefixCallbackOp prefix_op(0);
+
+    if (lane_id == 0) {
+        selected_shared[warp_id] = 0;
+    }
+
+    __syncthreads();
+
+    int   offset        = batch_id * vocab_size;
+    int   end           = ((vocab_size + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
+    int   i_active      = 0;
+    float thread_offset = 0;
+    for (int i = tid; i < end; i += BLOCK_SIZE) {
+        float thread_count = (i < vocab_size) ? (float)sorted_log_probs[offset + i] : 0.f;
+        BlockScan(temp_storage).InclusiveSum(thread_count, thread_offset, prefix_op);
+
+        uint32_t active_mask = __ballot_sync(0xFFFFFFFF, prob_threshold <= thread_offset);
+
+        i_active = i;
+        if (active_mask != 0) {
+            if (lane_id == 0) {
+                atomicAdd(&stop_shared, 1);
+                selected_shared[warp_id] = active_mask;
+            }
+        }
+        __syncthreads();
+        if (stop_shared > 0) {
+            break;
+        }
+    };
+
+    __shared__ int   sample_n;
+    __shared__ int   selected;
+    __shared__ float cum_probs;
+
+    if (tid == 0) {
+        sample_n  = min(vocab_size, kMaxLogProb);
+        selected  = 0;
+        cum_probs = 1.0;
+    }
+    __syncthreads();
+
+    // select first active warp
+    bool skip = (selected_shared[warp_id] > 0) ? false : true;
+    for (int i = 0; i < warp_id; i++) {
+        if (selected_shared[i] != 0) {
+            skip = true;
+        }
+    }
+    if (!skip) {
+        int active_lane_id = WARP_SIZE - __popc(selected_shared[warp_id]);
+        if (lane_id == active_lane_id) {
+            sample_n  = min(i_active + 1, kMaxLogProb);
+            selected  = sampled_nums[batch_id];
+            cum_probs = thread_offset;
+        }
+    }
+    __syncthreads();
+
+    int   local_sample_n  = sample_n;
+    float local_cum_probs = cum_probs;
+
+    sampled_nums[batch_id] = local_sample_n;
+    int sampled_offset     = batch_id * kMaxLogProb;
+    for (int i = tid; i < local_sample_n; i += BLOCK_SIZE) {
+        sampled_logprobs[sampled_offset + i] = logf((float)sorted_log_probs[offset + i]) - logf(local_cum_probs);
+        sampled_indexes[sampled_offset + i]  = sorted_id_vals[offset + i];
+    }
+
+    // We should always output selected token. When topp=1.0, the selected may large than kMaxLogProb
+    // therefore, we should add the selected or replace the last output token
+    if (selected >= sample_n) {
+        if ((kMaxLogProb - 1 + BLOCK_SIZE - tid) % BLOCK_SIZE == 0) {
+            int p                  = sample_n - (sample_n == kMaxLogProb);
+            sampled_nums[batch_id] = p + 1;
+            sampled_logprobs[sampled_offset + p] =
+                logf((float)sorted_log_probs[offset + selected]) - logf(local_cum_probs);
+            sampled_indexes[sampled_offset + p] = sorted_id_vals[offset + selected];
         }
     }
 }
@@ -1013,6 +1152,9 @@ void invokeBatchTopPSampling(void*           workspace,
                              float*          cum_log_probs,
                              float*          output_log_probs,
                              const T*        log_probs,
+                             float*          sampled_logprobs,
+                             uint32_t*       sampled_indexes,
+                             uint32_t*       sampled_nums,
                              const int*      id_vals,
                              int*            offset_buf,
                              int*            begin_offset_buf,
@@ -1144,6 +1286,7 @@ void invokeBatchTopPSampling(void*           workspace,
     dim3          grid(batch_size);
     topp_sampling<T, SAMPLING_BLOCK_SIZE><<<grid, SAMPLING_BLOCK_SIZE, 0, stream>>>(sorted_log_probs,
                                                                                     sorted_id_vals,
+                                                                                    sampled_nums,
                                                                                     output_ids,
                                                                                     sequence_length,
                                                                                     finished_buf,
@@ -1158,6 +1301,21 @@ void invokeBatchTopPSampling(void*           workspace,
                                                                                     end_ids,
                                                                                     batch_size,
                                                                                     skip_decode);
+
+    if (sampled_logprobs != nullptr && sampled_indexes != nullptr && sampled_nums != nullptr) {
+        topp_logprobs<T, SAMPLING_BLOCK_SIZE><<<grid, SAMPLING_BLOCK_SIZE, 0, stream>>>(sorted_log_probs,
+                                                                                        sorted_id_vals,
+                                                                                        sampled_logprobs,
+                                                                                        sampled_indexes,
+                                                                                        sampled_nums,
+                                                                                        begin_offset_buf,
+                                                                                        offset_buf + 1,
+                                                                                        vocab_size,
+                                                                                        max_top_p,
+                                                                                        top_ps,
+                                                                                        batch_size,
+                                                                                        skip_decode);
+    }
 }
 
 template void invokeBatchTopPSampling(void*           workspace,
@@ -1169,6 +1327,9 @@ template void invokeBatchTopPSampling(void*           workspace,
                                       float*          cum_log_probs,
                                       float*          output_log_probs,
                                       const float*    log_probs,
+                                      float*          sampled_logprobs,
+                                      uint32_t*       sampled_indexes,
+                                      uint32_t*       sampled_nums,
                                       const int*      id_vals,
                                       int*            offset_buf,
                                       int*            begin_offset_buf,
@@ -1191,6 +1352,9 @@ template void invokeBatchTopPSampling(void*           workspace,
                                       float*          cum_log_probs,
                                       float*          output_log_probs,
                                       const half*     log_probs,
+                                      float*          sampled_logprobs,
+                                      uint32_t*       sampled_indexes,
+                                      uint32_t*       sampled_nums,
                                       const int*      id_vals,
                                       int*            offset_buf,
                                       int*            begin_offset_buf,
@@ -1235,6 +1399,9 @@ void invokeTopPSampling(void*           workspace,
                             cum_log_probs,
                             output_log_probs,
                             log_probs,
+                            nullptr,
+                            nullptr,
+                            nullptr,
                             id_vals,
                             offset_buf,
                             begin_offset_buf,

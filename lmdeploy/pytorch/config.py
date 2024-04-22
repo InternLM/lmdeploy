@@ -200,6 +200,14 @@ class ModelConfig:
                 head_dim=head_dim,
                 vocab_size=hf_config.vocab_size)
 
+        def __build_qwen():
+            cfg = __build_default()
+            if cfg.bos_token_id is None:
+                cfg.bos_token_id = 151644
+            if cfg.eos_token_id is None:
+                cfg.eos_token_id = 151645
+            return cfg
+
         if hf_config.model_type == 'falcon':
             model_config = __build_falcon()
         elif hf_config.model_type == 'chatglm':
@@ -208,6 +216,8 @@ class ModelConfig:
             model_config = __build_gemma()
         elif hf_config.model_type == 'dbrx':
             model_config = __build_dbrx()
+        elif hf_config.model_type == 'qwen':
+            model_config = __build_qwen()
         else:
             model_config = __build_default()
 
