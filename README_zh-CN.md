@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/04\] 支持 InternVL v1.1, v1.2，MiniGemini，InternLM-XComposer2 等 VLM 模型
 - \[2024/04\] TurboMind 支持 kv cache int4/int8 在线量化和推理，适用已支持的所有型号显卡。详情请参考[这里](docs/zh_cn/quantization/kv_quant.md)
 - \[2024/04\] TurboMind 引擎升级，优化 GQA 推理。[internlm2-20b](https://huggingface.co/internlm/internlm2-20b) 推理速度达 16+ RPS，约是 vLLM 的 1.8 倍
 - \[2024/04\] 支持 Qwen1.5-MOE 和 dbrx.
