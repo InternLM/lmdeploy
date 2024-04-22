@@ -78,6 +78,7 @@ private:
                        Type                       type,
                        int*                       lora_mask)
     {
+        FT_CHECK(type == kGemm);
         // output = lora(x) * scale
         // output = mask(output)
         // output = x*W + output
