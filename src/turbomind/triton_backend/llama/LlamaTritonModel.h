@@ -101,6 +101,7 @@ private:
     bool                            attn_bias_;
     int                             quant_policy_;
     int                             group_size_;
+    turbomind::LoraParams           lora_params_;
 
     // shared weights for each device
     std::vector<std::shared_ptr<ft::LlamaWeight<T>>> shared_weights_;

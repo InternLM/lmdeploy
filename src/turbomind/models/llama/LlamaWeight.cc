@@ -32,6 +32,7 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
                             bool       attn_bias,
                             WeightType weight_type,
                             int        group_size,
+                            LoraParams lora_params,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank):
     hidden_units_(head_num * size_per_head),
@@ -49,12 +50,14 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
     }
     decoder_layer_weights.reserve(num_layer_);
     for (unsigned l = 0; l < num_layer_; ++l) {
-        decoder_layer_weights.push_back(new LlamaDecoderLayerWeight<T>(head_num,
+        decoder_layer_weights.push_back(new LlamaDecoderLayerWeight<T>(l,
+                                                                       head_num,
                                                                        kv_head_num,
                                                                        size_per_head,
                                                                        inter_size_,
                                                                        weight_type_,
                                                                        group_size,
+                                                                       lora_params,
                                                                        attn_bias,
                                                                        tensor_para_size_,
                                                                        tensor_para_rank_));

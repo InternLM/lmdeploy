@@ -25,7 +25,7 @@ class TestAutoBackend:
             ('baichuan-inc/Baichuan2-13B-Chat', True, False),
             ('internlm/internlm-chat-7b', True, True),
             ('internlm/internlm2-chat-7b', True, True),
-            ('internlm/internlm-xcomposer2-7b', False, False),
+            ('internlm/internlm-xcomposer2-7b', False, True),
             ('internlm/internlm-xcomposer-7b', False, True),
             ('THUDM/chatglm2-6b', True, False),
             ('THUDM/chatglm3-6b', True, False),
