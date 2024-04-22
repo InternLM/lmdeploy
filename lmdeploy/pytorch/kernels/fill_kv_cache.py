@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import torch
 import triton
 import triton.language as tl
 from torch import Tensor
@@ -96,7 +95,6 @@ def _fill_kv_cache_kernel(
                  mask=mask)
 
 
-@torch.inference_mode()
 def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
                   v_caches: Tensor, q_start_loc: Tensor, q_seq_length: Tensor,
                   kv_seq_length: Tensor, max_q_seq_length: int,

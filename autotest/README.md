@@ -54,21 +54,19 @@ interface model - interface function cases of pipeline、 restful api and triton
 
 The relationship between functionalities and test cases is as follows:
 
-| case model |             Function             |                    Test Case File                    |
-| :--------: | :------------------------------: | :--------------------------------------------------: |
-|   tools    |       quantization - w4a16       |    tools/quantization/test_quantization_w4a16.py     |
-|   tools    |       quantization - w8a8        |     tools/quantization/test_quantization_w8a8.py     |
-|   tools    |      quantization - kv int8      |    tools/quantization/test_quantization_kvint8.py    |
-|   tools    | quantization - kv int8 and w4a16 | tools/quantization/test_quantization_kvint8_w4a16.py |
-|   tools    |             convert              |            tools/convert/test_convert.py             |
-|   tools    |    pipeline chat - turbomind     |    tools/pipeline/test_pipeline_chat_turbomind.py    |
-|   tools    |     pipeline chat - pytorch      |     tools/pipeline/test_pipeline_chat_pytorch.py     |
-|   tools    |   restful_api chat - turbomind   |    tools/pipeline/test_restful_chat_turbomind.py     |
-|   tools    |    restful_api chat - pytorch    |     tools/pipeline/test_restful_chat_pytorch.py      |
-|   tools    |     command chat - workspace     |      tools/chat/test_command_chat_workspace.py       |
-|   tools    |   command chat - hf turbomind    |     tools/chat/test_command_chat_hf_turbomind.py     |
-|   tools    |    command chat - hf pytorch     |      tools/chat/test_command_chat_hf_pytorch.py      |
-| interface  |    command chat - hf pytorch     |      tools/chat/test_command_chat_hf_pytorch.py      |
+| case model |           Function           |                 Test Case File                 |
+| :--------: | :--------------------------: | :--------------------------------------------: |
+|   tools    |     quantization - w4a16     | tools/quantization/test_quantization_w4a16.py  |
+|   tools    |     quantization - w8a8      |  tools/quantization/test_quantization_w8a8.py  |
+|   tools    |           convert            |         tools/convert/test_convert.py          |
+|   tools    |  pipeline chat - turbomind   | tools/pipeline/test_pipeline_chat_turbomind.py |
+|   tools    |   pipeline chat - pytorch    |  tools/pipeline/test_pipeline_chat_pytorch.py  |
+|   tools    | restful_api chat - turbomind | tools/pipeline/test_restful_chat_turbomind.py  |
+|   tools    |  restful_api chat - pytorch  |  tools/pipeline/test_restful_chat_pytorch.py   |
+|   tools    |   command chat - workspace   |   tools/chat/test_command_chat_workspace.py    |
+|   tools    | command chat - hf turbomind  |  tools/chat/test_command_chat_hf_turbomind.py  |
+|   tools    |  command chat - hf pytorch   |   tools/chat/test_command_chat_hf_pytorch.py   |
+| interface  |  command chat - hf pytorch   |   tools/chat/test_command_chat_hf_pytorch.py   |
 
 The modules and models currently covered by the turbomind and pytorch backend is in `autotest/config.yaml` by using turbomind_model and pytorch_model.
 

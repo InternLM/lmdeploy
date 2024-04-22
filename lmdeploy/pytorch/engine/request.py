@@ -148,13 +148,13 @@ class RequestSender:
         timeout = 1
 
         while True:
-            if not self.manager.is_loop_alive():
-                logger.debug('Engine loop is not alive.')
-                exit(1)
             try:
                 ret = self.resp_thread_que.get(timeout=timeout)
                 return ret
             except Empty:
+                if not self.manager.is_loop_alive():
+                    logger.debug('Engine loop is not alive.')
+                    exit(1)
                 continue
             except Exception as e:
                 logger.exception(
@@ -170,12 +170,12 @@ class RequestSender:
 
         async def __no_threadsafe_get():
             while True:
-                if not self.manager.is_loop_alive():
-                    logger.debug('Engine loop is not alive.')
-                    exit(1)
                 try:
                     return await asyncio.wait_for(self.resp_que.get(), timeout)
                 except asyncio.TimeoutError:
+                    if not self.manager.is_loop_alive():
+                        logger.debug('Engine loop is not alive.')
+                        exit(1)
                     continue
                 except Exception as e:
                     logger.exception(
@@ -238,9 +238,6 @@ class RequestSender:
         """gather requests."""
         if self.manager._loop_task is None and not self.is_thread_safe():
             self.manager.create_loop_task()
-        if not self.is_loop_alive():
-            logger.error('Engine main loop stopped.')
-            exit(1)
         assert len(req_types) == len(data)
         batch_size = len(req_types)
 
