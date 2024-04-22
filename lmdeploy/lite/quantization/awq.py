@@ -23,6 +23,11 @@ NORM_FCS_MAP = {
         'ln_1': ['attn.c_attn'],
         'ln_2': ['mlp.w1', 'mlp.w2']
     },
+    'Qwen2DecoderLayer': {
+        'input_layernorm':
+        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
     'DecoderLayer': {
         'input_layernorm': ['self_attn.W_pack'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
@@ -44,6 +49,10 @@ FC_FCS_MAP = {
     'QWenBlock': {
         'attn.c_attn': ['attn.c_proj'],
         'mlp.w1': ['mlp.c_proj']
+    },
+    'Qwen2DecoderLayer': {
+        'self_attn.v_proj': ['self_attn.o_proj'],
+        'mlp.up_proj': ['mlp.down_proj']
     },
     'DecoderLayer': {
         'self_attn.W_pack': ['self_attn.o_proj'],

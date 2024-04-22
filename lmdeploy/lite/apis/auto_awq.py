@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
 import torch
 from torch import nn
 
@@ -15,6 +14,7 @@ LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
     'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
+    'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
@@ -23,6 +23,7 @@ NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
     'InternLM2ForCausalLM': 'InternLM2RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
+    'Qwen2ForCausalLM': 'Qwen2RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
@@ -66,6 +67,12 @@ def auto_awq(model: str,
 
     smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size, device)
     quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)
+    quantization_config = dict(quant_method='awq',
+                               version='gemm',
+                               bits=w_bits,
+                               group_size=w_group_size,
+                               zero_point=not w_sym)
+    model.config.update(dict(quantization_config=quantization_config))
 
     model.save_pretrained(work_dir,
                           max_shard_size='2GB',
