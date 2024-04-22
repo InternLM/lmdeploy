@@ -1212,6 +1212,14 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
+    # model_path is not local path.
+    from lmdeploy.utils import get_model
+    if not os.path.exists(model_path):
+        download_dir = backend_config.download_dir \
+            if backend_config is not None else None
+        revision = backend_config.revision \
+            if backend_config is not None else None
+        model_path = get_model(model_path, download_dir, revision)
     pipeline_type, pipeline_class = get_task(model_path)
 
     VariableInterface.async_engine = pipeline_class(
