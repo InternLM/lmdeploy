@@ -18,5 +18,5 @@ add_library(gemm2 gemm.cu transcript.cu)
 target_compile_options(gemm2 PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info>)
 
-add_executable(test_gemm_kernels test_gemm.cu test_utils.cu)
+add_executable(test_gemm_kernels test_gemm.cu test_utils.cu cache_utils.cu)
 target_link_libraries(test_gemm_kernels PRIVATE gemm2 cublas)

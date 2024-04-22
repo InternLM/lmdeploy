@@ -4,6 +4,7 @@
 
 #include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/mma.h"
@@ -102,10 +103,14 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
 
     using FragQ = Array<Tq, 2>[ITER_K][ITER_N];
 
-    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
+    // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
+    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 8, 32, Swizzle<2, 3, 3>>;
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K + 8>;
     // using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, 16, 64, Swizzle<3, 3, 3>>;
-    using ThreadMapA = gemm::ThreadMap<CTA_K, CTA_M, 8, WARP_CNT>;
+    static constexpr int kGmemAccessSizeA =
+        std::min<int>(16 / sizeof(T), std::max<int>(4 / sizeof(T), (CTA_K * CTA_M) / (WARP_CNT * WARP_SIZE)));
+
+    using ThreadMapA = gemm::ThreadMap<CTA_K, CTA_M, kGmemAccessSizeA, WARP_CNT>;
 
     using SmemLayoutB = std::conditional_t<Flag_,
                                            SmemLayoutV2<kPackedS, kPackedC, kPackedS, kPackedC, Identity>,
@@ -116,7 +121,14 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
 
     // [CTA_K / G, CTA_N]
     using SmemLayoutQ = SmemLayoutV2<CTA_G, CTA_N>;
-    using ThreadMapQ  = gemm::ThreadMap<CTA_N, CTA_G, 1, WARP_CNT, 32>;
+    static constexpr int kGmemAccessSizeQ =
+        std::min<int>(16 / sizeof(T), std::max<int>(1, (CTA_N * CTA_G) / (WARP_CNT * WARP_SIZE)));
+    using ThreadMapQ = gemm::ThreadMap<CTA_N, CTA_G, kGmemAccessSizeQ, WARP_CNT, 32>;
+
+    // static constexpr int kGmemAccessSizeC =
+    //     std::min<int>(16 / sizeof(T), std::max(1, (CTA_K * CTA_M) / (WARP_CNT * WARP_SIZE)));
+    // using SmemLayoutC = SmemLayoutV2<CTA_M, CTA_N, 8, 32, Identity>;
+    // using ThreadMapC  = gemm::ThreadMap<CTA_N, CTA_M, kGmemAccessSizeC, WARP_CNT>;
 
     union SharedStorage {
         struct {
@@ -144,9 +156,11 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
 
             const int warp_offset_m = warp_id_m(warp_id) * WARP_M;
 
+            SmemAccessor<T, SmemLayoutA> smem{data};
+
             if constexpr (ITER_M == 1) {
-                // const int offset_s = lane_id % 8 + warp_offset_m;
-                // const int offset_c = lane_id / 8 * 8;
+                const int offset_s = lane_id % 8 + warp_offset_m;
+                const int offset_c = lane_id / 8 * 8;
                 // if constexpr (ITER_K % 2 == 0) {
                 //     if (k % 2 == 0) {
                 //         const int s = offset_s;
@@ -155,14 +169,12 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                 //     }
                 // }
                 // else {
-                //     const int s = offset_s;
-                //     const int c = offset_c % 16 + k * 16;
-                //     ldsm_x2((Array<uint32_t, 2>&)frag_A[k][0], cast_smem_ptr_to_uint(&smem_A(s, c, offset)));
+                const int s = offset_s;
+                const int c = offset_c % 16 + k * 16;
+                ldsm_x2((Array<uint32_t, 2>&)frag_A[k][0], cast_smem_ptr_to_uint(&smem(s, c)));
                 // }
             }
             else {
-                SmemAccessor<T, SmemLayoutA> smem{data};
-
                 const int offset_s = lane_id % 8 + lane_id / 16 * 8 + warp_offset_m;
                 const int offset_c = lane_id / 8 * 8 % 16;
                 static_assert(ITER_M % 2 == 0);

@@ -27,15 +27,31 @@ auto cast(T* p)
 }  // namespace detail
 
 template<class T, class Tb>
-void invoke(T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, cudaStream_t st)
+void invoke(
+    T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, int splits, void* workspace, cudaStream_t st)
 {
-    constexpr int CTA_M  = 128;
-    constexpr int CTA_N  = 128;
-    constexpr int CTA_K  = 32;
-    constexpr int WARP_M = 64;
-    constexpr int WARP_N = 64;
-    constexpr int WARP_K = 32;
+    // constexpr int CTA_M  = 128;
+    // constexpr int CTA_N  = 128;
+    // constexpr int CTA_K  = 32;
+    // constexpr int WARP_M = 64;
+    // constexpr int WARP_N = 64;
+    // constexpr int WARP_K = 32;
 
+    constexpr int CTA_M  = 8;
+    constexpr int CTA_N  = 128;
+    constexpr int CTA_K  = 64;
+    constexpr int WARP_M = 8;
+    constexpr int WARP_N = 64;
+    constexpr int WARP_K = 64;
+
+    // constexpr int CTA_M  = 8;
+    // constexpr int CTA_N  = 64;
+    // constexpr int CTA_K  = 32;
+    // constexpr int WARP_M = 8;
+    // constexpr int WARP_N = 64;
+    // constexpr int WARP_K = 32;
+
+    // single warp, debug setting
     // constexpr int CTA_M  = 64;
     // constexpr int CTA_N  = 64;
     // constexpr int CTA_K  = 32;
@@ -52,12 +68,12 @@ void invoke(T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, cuda
 
     using Tq = half2;
 
-    using Impl   = Impl<MMA_81616, T, Tb, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 1>;
-    using Kernel = GemmUniversal<void, Mainloop_sm80<Impl>, CtaSwizzleMap<8>>;
+    using Impl   = Impl<MMA_81616, T, Tb, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 4, 1>;
+    using Kernel = GemmUniversal<void, Mainloop_sm80<Impl>, CtaSwizzleMap<0>>;
 
     using Map = typename Kernel::CtaMap;
 
-    auto tiles = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, 1);
+    auto tiles = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, splits);
 
     auto log_tile = Map::get_log_tile(tiles);
     // std::cout << "log_tile: " << log_tile << "\n";
@@ -83,8 +99,12 @@ void invoke(T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, cuda
         cudaFuncSetAttribute(gemm_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
     }
 
-    gemm_kernel<Kernel><<<grid, block, kSmemSize, st>>>(
-        typename Kernel::Param{(T*)A, detail::cast((Tb*)B), (Tq*)Q, C, m, n, k, log_tile}, typename Kernel::CtaMap{});
+    float* partial_C = reinterpret_cast<float*>(workspace);
+    int*   locks     = reinterpret_cast<int*>(partial_C + splits * m * n);
+
+    typename Kernel::Param param{(T*)A, detail::cast((Tb*)B), (Tq*)Q, C, m, n, k, log_tile, tiles, partial_C, locks};
+
+    gemm_kernel<Kernel><<<grid, block, kSmemSize, st>>>(param, typename Kernel::CtaMap{});
 }
 
 }  // namespace turbomind::gemm

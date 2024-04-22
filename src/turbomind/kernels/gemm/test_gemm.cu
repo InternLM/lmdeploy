@@ -1,5 +1,6 @@
 
 #include "src/turbomind/kernels/attention/quantization.h"
+#include "src/turbomind/kernels/gemm/cache_utils.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/test_utils.h"
 #include "src/turbomind/kernels/gemm/transcript.h"
@@ -219,6 +220,7 @@ void prepare_test_data(universal_vector<T>&        a,    // [m,k]
     }
 
     for (int i = 0; i < 5; ++i) {
+        gemm::CacheFlushing::flush();
         computeRefCublas(c.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
     }
 
@@ -229,6 +231,8 @@ void prepare_test_data(universal_vector<T>&        a,    // [m,k]
 template<class T, class Tb>
 void Run(int m, int n, int k, int g = 128)
 {
+    constexpr int kMaxSplits = 32;
+
     universal_vector<T> a;
     universal_vector<T> b;
     universal_vector<T> c_ref;
@@ -237,6 +241,9 @@ void Run(int m, int n, int k, int g = 128)
     universal_vector<uint16_t> b0;
 
     prepare_test_data<T, Tb>(a, b, c_ref, b0, q, m, n, k, g);
+
+    universal_vector<float> workspace(c_ref.size() * (kMaxSplits + 1));
+    thrust::fill(workspace.begin(), workspace.end(), 0);
 
     cudaDeviceSynchronize();
 
@@ -269,7 +276,9 @@ void Run(int m, int n, int k, int g = 128)
         // }
 
         for (int i = 0; i < 10; ++i) {
-            gemm::invoke(c.data().get(), a.data().get(), B1, q_pack.data().get(), m, n, k, 0);
+            gemm::CacheFlushing::flush();
+            gemm::invoke(
+                c.data().get(), a.data().get(), B1, q_pack.data().get(), m, n, k, 6, workspace.data().get(), 0);
         }
 
         // for (int i = 0; i < 5; ++i) {
@@ -285,12 +294,27 @@ void Run(int m, int n, int k, int g = 128)
     cudaDeviceSynchronize();
 }
 
-int main(int argc, char* argv[])
+template<class T, class Tb>
+void Test()
 {
     // Run<half, uint4_t>(8192, 8192, 8192);
-    Run<half, uint4_t>(4096, 4096, 4096);
+    // Run<half, uint4_t>(4096, 4096, 4096);
     // Run<half, uint4_t>(64, 11008, 4096);
     // Run<half, uint4_t>(128, 128, 32);
     // Run<half, uint4_t>(128, 128, 1024);
+
+    // llama2-7b
+    // Run<T, Tb>(8, 11008 * 2, 4096); // mlp.up/gate
+    // Run<T, Tb>(8, 4096, 11008);  // mlp.down
+
+    // llama2-7b
+    Run<T, Tb>(8, 10240 / 8, 8192);  // attn.qkv
+
+    // Run<T, Tb>(8, 64, 128);
+}
+
+int main(int argc, char* argv[])
+{
+    Test<half, uint4_t>();
     return 0;
 }

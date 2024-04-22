@@ -8,7 +8,7 @@
 
 namespace turbomind::gemm {
 
-template<int DimC, int DimS, int AccessC, int WarpCount, int WarpThreadC = DimC / AccessC>
+template<int DimC, int DimS, int AccessC, int WarpCount, int WarpThreadC = std::min(WARP_SIZE, DimC / AccessC)>
 struct ThreadMap {
     static constexpr int kDimC = DimC;
     static constexpr int kDimS = DimS;
