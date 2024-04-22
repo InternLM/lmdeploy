@@ -185,13 +185,8 @@ struct Transcript {
                         constexpr int kAccessSize = 2 * P_Q_K * P_Q_N;
                         static_assert(sizeof(data) <= 16);
                         if (warp_id_m == 0) {
-                            // if (threadIdx.x == 0) {
-                            //     printf("%d %d \n", pack_idx_k, pack_idx_n);
-                            // }
-
                             auto D = param.D + ((pack_idx_k * q_packed_n + pack_idx_n) * 8 + lane_id / 4) * kAccessSize;
                             if (lane_id % 4 == 0) {
-                                // printf("%d %d \n", pack_idx_k, pack_idx_n);
                                 Store(D, (Array<Tq, kAccessSize>&)data);
                             }
                         }

@@ -70,7 +70,7 @@ struct GmemIteratorSm80 {
         src_offset_ = src_offset_ * bitsof<T> / bitsof<char>;
 
         src_step_c_ = Map::kDeltaC * bitsof<T> / bitsof<char>;
-        src_step_s_ = Map::kDeltaS * stride_s_ - Map::kIterC * Map::kDeltaC * bitsof<T> / bitsof<char>;
+        src_step_s_ = Map::kDeltaS * stride_s_;  // - Map::kIterC * Map::kDeltaC * bitsof<T> / bitsof<char>;
         // src_step_k_ = stride_k_ - Map::kIterS * Map::kDeltaS * stride_s_;
 
         // initialize for the first tile
@@ -125,7 +125,7 @@ struct GmemIteratorSm80 {
                 //     smem_data_.ptr_ += Map::kDeltaC;
                 // }
 
-                CpAsync(std::true_type{}, dst, src_data_, g_mask_ && tile_mask);
+                CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, g_mask_ && tile_mask);
 
                 // if (g_mask_ && tile_mask) {
                 //     AccessType tmp;
@@ -135,9 +135,10 @@ struct GmemIteratorSm80 {
                 //         printf("fuck: %f %f\n", (float)tmp[0].x, (float)tmp[0].y);
                 //     }
                 // }
-                if (g_mask_) {
-                    src_data_ += src_step_c_;
-                }
+
+                // if constexpr (Idx != 2) {
+                // src_data_ += src_step_c_;
+                // }
             }
             // if constexpr (SmemLayout::kIsTrivial) {
             //     smem_data_.ptr_ += Map::kDeltaS * SmemLayout::C - Map::kIterC * Map::kDeltaC;
@@ -234,7 +235,7 @@ struct GmemIteratorSm80 {
 #if TURBOMIND_ARCH_SM80
         constexpr int size = sizeof(AccessType);
         static_assert(size <= 16);
-        auto          ptr  = cast_smem_ptr_to_uint(dst);
+        auto ptr = cast_smem_ptr_to_uint(dst);
         // clang-format off
         if constexpr (size == 16) {
             asm volatile("{\n"

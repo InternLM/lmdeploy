@@ -33,7 +33,13 @@ struct CtaSwizzleMap {
     TM_HOST_DEVICE static int get_log_tile(int3 tiled_shape)
     {
         auto n = tiled_shape.y;
-        if (N >= 8 && n >= 6) {
+        if (N >= 32) {
+            return 5;
+        }
+        else if (N >= 16) {
+            return 4;
+        }
+        else if (N >= 8 && n >= 6) {
             return 3;
         }
         else if (N >= 4 && n >= 3) {

@@ -218,7 +218,9 @@ void prepare_test_data(universal_vector<T>&        a,    // [m,k]
         b.swap(b_f);
     }
 
-    computeRefCublas(c.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
+    for (int i = 0; i < 5; ++i) {
+        computeRefCublas(c.data().get(), a.data().get(), b.data().get(), m, n, k, 0);
+    }
 
     cudaDeviceSynchronize();
     Compare(c.data().get(), c_ref.data().get(), n, n, m);

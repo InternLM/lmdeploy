@@ -52,7 +52,7 @@ void invoke(T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, cuda
 
     using Tq = half2;
 
-    using Impl   = Impl<MMA_81616, T, Tb, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 4, 1>;
+    using Impl   = Impl<MMA_81616, T, Tb, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 1>;
     using Kernel = GemmUniversal<void, Mainloop_sm80<Impl>, CtaSwizzleMap<8>>;
 
     using Map = typename Kernel::CtaMap;
@@ -60,6 +60,7 @@ void invoke(T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, cuda
     auto tiles = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, 1);
 
     auto log_tile = Map::get_log_tile(tiles);
+    // std::cout << "log_tile: " << log_tile << "\n";
 
     auto grid = Map::get_grid_shape(tiles);
 
