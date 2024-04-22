@@ -383,12 +383,20 @@ class InternLM2Chat7B(InternLMChat7B):
                  system='<|im_start|>system\n',
                  user='<|im_start|>user\n',
                  assistant='<|im_start|>assistant\n',
+                 environment='<|im_start|>environment\n',
+                 plugin='<|plugin|>',
+                 interpreter='<|interpreter|>',
                  eosys='<|im_end|>\n',
                  eoh='<|im_end|>\n',
                  eoa='<|im_end|>',
+                 eoenv='<|im_end|>\n',
                  separator='\n',
                  stop_words=['<|im_end|>', '<|action_end|>'],
                  **kwargs):
+        self.plugin = plugin
+        self.interpreter = interpreter
+        self.environment = environment
+        self.eoenv = eoenv
         super(InternLM2Chat7B, self).__init__(session_len=session_len,
                                               system=system,
                                               user=user,
@@ -410,6 +418,40 @@ class InternLM2Chat7B(InternLMChat7B):
         path = model_path.lower()
         if 'internlm2' in path and ('chat' in path or 'math' in path):
             return 'internlm2'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        box_map = dict(user=self.user,
+                       assistant=self.assistant,
+                       system=self.system,
+                       environment=self.environment)
+        eox_map = dict(user=self.eoh,
+                       assistant=self.eoa + self.separator,
+                       system=self.eosys,
+                       environment=self.eoenv)
+        name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
+        ret = ''
+        if self.meta_instruction is not None:
+            if len(messages) and messages[0]['role'] != 'system':
+                ret += f'{self.system}{self.meta_instruction}{self.eosys}'
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            begin = box_map[role].strip(
+            ) + f" name={name_map[message['name']]}\n" if 'name' in message else box_map[
+                role]
+            ret += f'{begin}{content}{eox_map[role]}'
+        ret += f'{self.assistant}'
+        return ret
 
 
 @MODELS.register_module(name='baichuan-7b')
