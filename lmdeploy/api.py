@@ -61,6 +61,11 @@ def pipeline(model_path: str,
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
 
+    # model_path is not local path.
+    from lmdeploy.utils import get_model
+    if not os.path.exists(model_path):
+        model_path = get_model(model_path)
+
     pipeline_type, pipeline_class = get_task(model_path)
     if pipeline_type == 'vlm':
         assert (type(backend_config) is TurbomindEngineConfig) or \
