@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
 import torch
 from torch import nn
 
@@ -68,6 +67,12 @@ def auto_awq(model: str,
 
     smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size, device)
     quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)
+    quantization_config = dict(quant_method='awq',
+                               version='gemm',
+                               bits=w_bits,
+                               group_size=w_group_size,
+                               zero_point=not w_sym)
+    model.config.update(dict(quantization_config=quantization_config))
 
     model.save_pretrained(work_dir,
                           max_shard_size='2GB',
