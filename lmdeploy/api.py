@@ -57,12 +57,11 @@ def pipeline(model_path: str,
     """ # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
-    from lmdeploy.utils import get_logger
+    from lmdeploy.utils import get_logger, get_model
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
 
     # model_path is not local path.
-    from lmdeploy.utils import get_model
     if not os.path.exists(model_path):
         download_dir = backend_config.download_dir \
             if backend_config is not None else None
