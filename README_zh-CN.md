@@ -94,14 +94,15 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 | :-----------------: | :---------: |
 |        Llama        |  7B - 65B   |
 |       Llama2        |  7B - 70B   |
+|       Llama3        |   8B, 70B   |
 |      InternLM       |  7B - 20B   |
 |      InternLM2      |  7B - 20B   |
 | InternLM-XComposer  |     7B      |
 | InternLM-XComposer2 | 7B, 4khd-7B |
 |        QWen         | 1.8B - 72B  |
-|       QWen-VL       |     7B      |
 |       QWen1.5       | 0.5B - 72B  |
 |     QWen1.5-MoE     |    A2.7B    |
+|       QWen-VL       |     7B      |
 |      Baichuan       |  7B - 13B   |
 |      Baichuan2      |  7B - 13B   |
 |     Code Llama      |  7B - 34B   |
