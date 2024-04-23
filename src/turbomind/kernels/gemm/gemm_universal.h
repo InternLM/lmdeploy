@@ -11,7 +11,7 @@
 
 namespace turbomind::gemm {
 
-template<class Arch_, class Mainloop, class CtaMap_>
+template<class Arch_, class Mainloop, class CtaMap_, bool SplitK>
 struct GemmUniversal {
 
     using Impl = typename Mainloop::Impl;
@@ -60,14 +60,11 @@ struct GemmUniversal {
 
         const int chunk_per_split = (chunk_cnt + tiled_shape.z - 1) / tiled_shape.z;
 
-        const int cta_offset_k = chunk_per_split * chunk_size * tile_offset.z;
-        const int gemm_k_size  = std::min(cta_offset_k + chunk_per_split * chunk_size, param.k) - cta_offset_k;
+        const int offset_k    = chunk_per_split * chunk_size * tile_offset.z;
+        const int gemm_k_size = std::min(offset_k + chunk_per_split * chunk_size, param.k) - offset_k;
 
-        // const int gemm_k_size = param.k / tiled_shape.z;
-
-        const int m_idx = tile_offset.x * CTA_M;
-        const int n_idx = tile_offset.y * CTA_N;
-        // const int k_idx = tile_offset.z * gemm_k_size;
+        const int offset_m = tile_offset.x * CTA_M;
+        const int offset_n = tile_offset.y * CTA_N;
 
         SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
@@ -75,30 +72,34 @@ struct GemmUniversal {
 
         int tile_iter = (gemm_k_size + CTA_K - 1) / CTA_K;
 
-        typename Mainloop::GmemIterA gmem_A{param.A + m_idx * param.k + cta_offset_k,                   // ptr
-                                            param.k,                                                    // stride s
-                                            CTA_K};                                                     // stride k
-        typename Mainloop::GmemIterB gmem_B{param.B + n_idx * param.k + cta_offset_k * Impl::kPackedN,  // ptr
-                                            param.k * Impl::kPackedN,                                   // stride s
-                                            CTA_K * Impl::kPackedN};                                    // stride k
+        typename Mainloop::GmemIterA gmem_A{
+            param.A + offset_m * param.k + offset_k,  // ptr
+            param.k,                                  // stride s
+            CTA_K                                     // stride k
+        };
+        typename Mainloop::GmemIterB gmem_B{
+            param.B + offset_n * param.k + offset_k * Impl::kPackedN,  // ptr
+            param.k * Impl::kPackedN,                                  // stride s
+            CTA_K * Impl::kPackedN                                     // stride k
+        };
         typename Mainloop::GmemIterQ gmem_Q{
-            param.Q + n_idx + cta_offset_k / Impl::G * param.n,  // ptr
-            param.n,                                             // stride s
-            CTA_G * param.n                                      // stride k
+            param.Q + offset_n + offset_k / Impl::G * param.n,  // ptr
+            param.n,                                            // stride s
+            CTA_G * param.n                                     // stride k
         };
 
         Mainloop mainloop{};
 
         mainloop(gmem_A, gmem_B, gmem_Q, frag_C, tile_iter, storage);
 
-        if (tiled_shape.z == 1) {
-            StoreC(frag_C, m_idx, n_idx, param, storage);
+        if (!SplitK || tiled_shape.z == 1) {
+            StoreC(frag_C, offset_m, offset_n, param, storage);
         }
         else {
             // store partial
             Impl::template StoreC<float>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
-                Store(&param.partial_C[tile_offset.z * param.m * param.n + (m_idx + mi) * param.n + n_idx + ni],
-                      cast<float>(vec));
+                const int idx = tile_offset.z * param.m * param.n + (offset_m + mi) * param.n + offset_n + ni;
+                Store(&param.partial_C[idx], cast<float>(vec));
             });
 
             int* locks = &param.locks[(tile_offset.x * tiled_shape.y + tile_offset.y) * tiled_shape.z];
@@ -144,8 +145,8 @@ struct GemmUniversal {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
-        const int cta_offset_m = tile_offset.x * CTA_M;
-        const int cta_offset_n = tile_offset.y * CTA_N;
+        const int offset_m = tile_offset.x * CTA_M;
+        const int offset_n = tile_offset.y * CTA_N;
 
         const int2 d = Map::get_offset(warp_id, lane_id);
 
@@ -157,7 +158,7 @@ struct GemmUniversal {
                 for (int c = 0; c < C; ++c) {
                     const int ni = d.x + c * Map::kDeltaC;
                     Ldg(frag_C[s][c],
-                        &param.partial_C[k * param.m * param.n + (cta_offset_m + mi) * param.n + cta_offset_n + ni]);
+                        &param.partial_C[k * param.m * param.n + (offset_m + mi) * param.n + offset_n + ni]);
                 }
             }
 
@@ -177,7 +178,7 @@ struct GemmUniversal {
             PRAGMA_UNROLL
             for (int c = 0; c < C; ++c) {
                 const int ni = d.x + c * Map::kDeltaC;
-                Store(&param.C[(cta_offset_m + mi) * param.n + cta_offset_n + ni], cast<T>(accu_C[s][c]));
+                Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<T>(accu_C[s][c]));
             }
         }
     }

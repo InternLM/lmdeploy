@@ -30,19 +30,34 @@ template<class T, class Tb>
 void invoke(
     T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, int splits, void* workspace, cudaStream_t st)
 {
-    // constexpr int CTA_M  = 128;
+    // int4 8192^3 (CTA_K:32,Stages=5 -> 4096^3)
+    constexpr int  CTA_M   = 128;
+    constexpr int  CTA_N   = 256;
+    constexpr int  CTA_K   = 64;
+    constexpr int  WARP_M  = 128;
+    constexpr int  WARP_N  = 32;
+    constexpr int  WARP_K  = 64;
+    constexpr int  Stages  = 3;
+    constexpr bool SplitK  = false;
+    constexpr int  Swizzle = 16;
+
+    // int4 4096^3
+    // constexpr int  CTA_M   = 128;
+    // constexpr int  CTA_N   = 128;
+    // constexpr int  CTA_K   = 32;
+    // constexpr int  WARP_M  = 128;
+    // constexpr int  WARP_N  = 32;
+    // constexpr int  WARP_K  = 32;
+    // constexpr int  Stages  = 4;
+    // constexpr bool SplitK  = false;
+    // constexpr int  Swizzle = 8;
+
+    // constexpr int CTA_M  = 8;
     // constexpr int CTA_N  = 128;
-    // constexpr int CTA_K  = 32;
-    // constexpr int WARP_M = 64;
+    // constexpr int CTA_K  = 64;
+    // constexpr int WARP_M = 8;
     // constexpr int WARP_N = 64;
     // constexpr int WARP_K = 32;
-
-    constexpr int CTA_M  = 8;
-    constexpr int CTA_N  = 128;
-    constexpr int CTA_K  = 64;
-    constexpr int WARP_M = 8;
-    constexpr int WARP_N = 64;
-    constexpr int WARP_K = 32;
 
     // constexpr int CTA_M  = 8;
     // constexpr int CTA_N  = 64;
@@ -68,8 +83,8 @@ void invoke(
 
     using Tq = half2;
 
-    using Impl   = Impl<MMA_81616, T, Tb, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 5, 1>;
-    using Kernel = GemmUniversal<void, Mainloop_sm80<Impl>, CtaSwizzleMap<0>>;
+    using Impl   = Impl<MMA_81616, T, Tb, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, Stages, 1>;
+    using Kernel = GemmUniversal<void, Mainloop_sm80<Impl>, CtaSwizzleMap<Swizzle>, SplitK>;
 
     using Map = typename Kernel::CtaMap;
 

@@ -148,7 +148,7 @@ struct Transcript {
                         }
                     }
                     constexpr int kAccessSize = 8 * P_K * P_N;
-                    static_assert(sizeof(data) == 16);
+                    static_assert(sizeof(data) <= 16);
                     if (warp_id_m == 0) {
                         // mma fragment ptr for the warp
                         auto C = param.C + ((pack_idx_n * packed_k + pack_idx_k) * WARP_SIZE + lane_id) * kAccessSize;
