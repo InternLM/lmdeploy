@@ -78,7 +78,7 @@ class Engine:
         client = APIClient(self.server_addr, api_key=self.api_key)
         if model_name is None:
             self.model_name = client.available_models[0]
-            print(f"using model:{self.model_name}")
+            print(f'using model: {self.model_name}\n')
         else:
             self.model_name = model_name
         self.pbar = None
