@@ -40,8 +40,8 @@ class TestMBGMV:
         yield ret
 
     @pytest.fixture
-    def scaling(self, adapter_ids):
-        yield torch.ones(adapter_ids.size(0)).cuda()
+    def scaling(self, ranks):
+        yield torch.arange(ranks.size(0)).cuda() + 1
 
     @pytest.fixture
     def lora_a(self, ranks, head_size, dtype):
@@ -90,13 +90,14 @@ class TestMBGMV:
         yield cache
 
     @pytest.fixture
-    def gt(self, input, adapter_ids, lora_a, lora_b):
+    def gt(self, input, adapter_ids, lora_a, lora_b, scaling):
         out = []
         for inp, r_id in zip(input, adapter_ids):
             inp = inp.unsqueeze(0)
             l_a = lora_a[r_id]
             l_b = lora_b[r_id]
-            out.append(inp @ l_a @ l_b)
+            s = scaling[r_id]
+            out.append(inp @ l_a @ l_b * s)
 
         yield torch.cat(out)
 

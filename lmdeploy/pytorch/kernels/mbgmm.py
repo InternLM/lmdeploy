@@ -119,7 +119,7 @@ def _acc_b_mm_kernel(
 
     start_loc = tl.load(B_start_loc + cur_batch)
     adapter_id = tl.load(B_adapter_id + cur_batch)
-    scaling = tl.load(B_scaling + cur_batch)
+    scaling = tl.load(B_scaling + adapter_id)
     rank = tl.load(Ranks + adapter_id)
 
     rank_off = adapter_id * stride_ptb + r_off
