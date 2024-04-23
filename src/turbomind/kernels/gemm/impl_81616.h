@@ -456,7 +456,7 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
         // }
     }
 
-    template<class Func>
+    template<class Tc, class Func>
     __device__ static void StoreC(FragC& frag_C, SharedStorage& storage, Func&& func)
     {
         const int warp_id = threadIdx.x / WARP_SIZE;
@@ -505,12 +505,18 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             for (int n = 0; n < ITER_N; ++n) {
                 PRAGMA_UNROLL
                 for (int nn = 0; nn < 2; ++nn) {
-                    auto tmp = cast<T>((Array<float, 2>&)frag_C[m][n][nn * 2]);
+                    const int    mi = m * OP_M + lane_id / 4 * 1;
+                    const int    ni = n * OP_N + lane_id % 4 * 2 + nn * 8;
+                    Array<Tc, 2> tmp;
                     // {n8,m4},[iM,iN],(n2,m2) -> {m8,n4},[iM,iN],(n2,n2)
                     //   1  2    8 16    8  1       1  2    8 16    8  1
-                    (uint32_t&)tmp = transpose_m8n8_b16((uint32_t&)tmp);
-                    const int mi   = m * OP_M + lane_id / 4 * 1;
-                    const int ni   = n * OP_N + lane_id % 4 * 2 + nn * 8;
+                    if constexpr (std::is_same_v<Tc, float>) {
+                        (Array<uint32_t, 2>&)tmp = transpose_m8n8_b32((Array<uint32_t, 2>&)frag_C[m][n][nn * 2]);
+                    }
+                    else {
+                        tmp            = cast<T>((Array<float, 2>&)frag_C[m][n][nn * 2]);
+                        (uint32_t&)tmp = transpose_m8n8_b16((uint32_t&)tmp);
+                    }
                     ((Func&&)func)(warp_offset_m + mi, warp_offset_n + ni, tmp);
                 }
             }

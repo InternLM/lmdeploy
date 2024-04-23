@@ -95,9 +95,8 @@ struct GemmUniversal {
             StoreC(frag_C, m_idx, n_idx, param, storage);
         }
         else {
-
             // store partial
-            Impl::StoreC(frag_C, storage, [&](int mi, int ni, const auto& vec) {
+            Impl::template StoreC<float>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
                 Store(&param.partial_C[tile_offset.z * param.m * param.n + (m_idx + mi) * param.n + n_idx + ni],
                       cast<float>(vec));
             });
@@ -124,8 +123,8 @@ struct GemmUniversal {
 
     __device__ void StoreC(FragC& frag_C, int offset_m, int offset_n, const Param& param, SharedStorage& storage)
     {
-        Impl::StoreC(frag_C, storage, [&](int mi, int ni, const auto& vec) {
-            Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<half>(vec));  //
+        Impl::template StoreC<T>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
+            Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<T>(vec));  //
         });
     }
 

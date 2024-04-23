@@ -371,4 +371,19 @@ __inline__ __device__ uint32_t transpose_m8n8_b16(uint32_t a)
 #endif
 }
 
+__inline__ __device__ Array<uint32_t, 2> transpose_m8n8_b32(const Array<uint32_t, 2>& x)
+{
+    uint32_t lo = __byte_perm(x[0], x[1], 0x5410);
+    uint32_t hi = __byte_perm(x[0], x[1], 0x7632);
+
+    lo = transpose_m8n8_b16(lo);
+    hi = transpose_m8n8_b16(hi);
+
+    Array<uint32_t, 2> y;
+    y[0] = __byte_perm(lo, hi, 0x5410);
+    y[1] = __byte_perm(lo, hi, 0x7632);
+
+    return y;
+}
+
 }  // namespace turbomind
