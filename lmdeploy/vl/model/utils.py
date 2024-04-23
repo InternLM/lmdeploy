@@ -128,6 +128,7 @@ def _set_func(origin_func_path: str,
 
 @contextmanager
 def rewrite_ctx(origin_func_path: List[str], rewrite_func: List[Callable]):
+    """rewrite context."""
     assert len(origin_func_path) == len(rewrite_func)
     origin_func_list = []
     for (func_path, dst_func) in zip(origin_func_path, rewrite_func):
