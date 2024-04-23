@@ -262,6 +262,8 @@ class Vicuna(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
+        if 'llava' in path and 'v1.5' in path:
+            return 'vicuna'
         if 'vicuna' in path:
             return 'vicuna'
         if 'wizardlm' in path:
