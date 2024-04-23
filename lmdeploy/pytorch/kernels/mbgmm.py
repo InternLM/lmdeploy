@@ -185,10 +185,6 @@ def mbgmm_a(x: Tensor,
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
 
-    assert x.dim() == 2
-    assert lora_a.dim() == 2
-    assert rank_offset.dim() == 2
-
     head_size = x.size(-1)
     batch_size = len(q_seqlens)
     max_rank = max_rank // rank_step
@@ -248,10 +244,6 @@ def mbgmm_b(xa: Tensor,
         device_type = device.type
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
-
-    assert xa.dim() == 2
-    assert lora_b.dim() == 2
-    assert rank_offset.dim() == 2
 
     if out_size is None:
         out_size = lora_b.size(-1)
