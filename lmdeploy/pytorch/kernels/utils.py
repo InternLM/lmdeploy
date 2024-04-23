@@ -16,6 +16,8 @@ if version.parse(triton.__version__) <= version.parse('2.2.0'):
         return dict(device=device, device_type=device_type, stream=stream)
 else:
 
+    KERNEL_META = dict()
+
     def get_kernel_meta(tensor: torch.Tensor):
         """kernel meta."""
-        return dict()
+        return KERNEL_META
