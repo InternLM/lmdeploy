@@ -185,7 +185,7 @@ class EngineInstance:
                                                      input_ids,
                                                      gen_config=gen_config,
                                                      **kwargs):
-            status, tmp_ids, _ = outputs
+            status, tmp_ids = outputs.status, outputs.token_ids
             if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
                 return EngineOutput(status, token_ids, len(token_ids))
             token_ids = tmp_ids
@@ -278,7 +278,7 @@ class EngineInstance:
                                          input_ids,
                                          gen_config=gen_config,
                                          **kwargs):
-            status, tmp_ids, _ = outputs
+            status, tmp_ids = outputs.status, outputs.token_ids
             if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
                 return EngineOutput(status, token_ids, len(token_ids))
             token_ids = tmp_ids
