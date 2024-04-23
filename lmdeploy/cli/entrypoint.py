@@ -29,7 +29,9 @@ def run():
         if model_path is not None and not os.path.exists(args.model_path):
             args.model_path = get_model(args.model_path)
         model_path_or_server = getattr(args, 'model_path_or_server', None)
-        if model_path_or_server is not None and ':' not in model_path_or_server:  # noqa: E501
+        if model_path_or_server is not None and (
+                ':' not in model_path_or_server
+                and not os.path.exists(model_path_or_server)):
             args.model_path_or_server = get_model(args.model_path_or_server)
 
         args.run(args)
