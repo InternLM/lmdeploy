@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
+import sys
 from contextlib import contextmanager
-from typing import Callable, Dict, List, MutableSequence
+from typing import Callable, Dict, Iterator, List, MutableSequence, Union
 
 import torch
 import torch.nn as nn
@@ -48,6 +49,17 @@ def load_model_from_weight_files(model: nn.Module, folder: str) -> None:
         ckpt = os.path.join(folder, file_name)
         state_dict = load_weight_ckpt(ckpt)
         model.load_state_dict(state_dict, strict=False)
+
+
+@contextmanager
+def add_sys_path(path: Union[str, os.PathLike]) -> Iterator[None]:
+    """Temporarily add the given path to `sys.path`."""
+    path = os.fspath(path)
+    try:
+        sys.path.insert(0, path)
+        yield
+    finally:
+        sys.path.remove(path)
 
 
 @contextmanager
