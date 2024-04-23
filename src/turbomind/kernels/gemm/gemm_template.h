@@ -38,11 +38,11 @@ void invoke(
     // constexpr int WARP_K = 32;
 
     constexpr int CTA_M  = 8;
-    constexpr int CTA_N  = 128;
-    constexpr int CTA_K  = 64;
+    constexpr int CTA_N  = 64;
+    constexpr int CTA_K  = 128;
     constexpr int WARP_M = 8;
     constexpr int WARP_N = 64;
-    constexpr int WARP_K = 64;
+    constexpr int WARP_K = 32;
 
     // constexpr int CTA_M  = 8;
     // constexpr int CTA_N  = 64;

@@ -11,6 +11,7 @@
 #include "src/turbomind/kernels/core/smem.h"
 #include "src/turbomind/kernels/gemm/impl.h"
 #include "src/turbomind/kernels/gemm/thread_map.h"
+#include <type_traits>
 
 namespace turbomind::gemm {
 
@@ -50,7 +51,9 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     static constexpr int WARP_CNT_N = CTA_N / WARP_N;
     static constexpr int WARP_CNT_K = CTA_K / WARP_K;
 
-    static constexpr int WARP_CNT = WARP_CNT_M * WARP_CNT_N * WARP_CNT_K;
+    static constexpr int WARP_CNT_MN = WARP_CNT_M * WARP_CNT_N;
+
+    static constexpr int WARP_CNT = WARP_CNT_MN * WARP_CNT_K;
 
     // - M batch size
     // - N output dims
@@ -130,12 +133,16 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     // using SmemLayoutC = SmemLayoutV2<CTA_M, CTA_N, 8, 32, Identity>;
     // using ThreadMapC  = gemm::ThreadMap<CTA_N, CTA_M, kGmemAccessSizeC, WARP_CNT>;
 
+    using ReduceC =
+        std::conditional_t<(WARP_CNT_K > 1), Array<float, 4>[WARP_CNT_M][WARP_CNT_N][ITER_M][ITER_N][WARP_SIZE], float>;
+
     union SharedStorage {
         struct {
             __align__(16) T A[Stages_ * SmemLayoutA::kSize];
             __align__(16) Array<Tb, Stages_ * SmemLayoutB::kSize> B;
             __align__(16) Array<Tq, Stages_ * SmemLayoutQ::kSize> Q;
         };
+        __align__(16) ReduceC red_C;
     };
 
     struct StateA {
@@ -155,12 +162,13 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             const int lane_id = threadIdx.x % WARP_SIZE;
 
             const int warp_offset_m = warp_id_m(warp_id) * WARP_M;
+            const int warp_offset_k = warp_id_k(warp_id) * WARP_K;
 
             SmemAccessor<T, SmemLayoutA> smem{data};
 
             if constexpr (ITER_M == 1) {
-                const int offset_s = lane_id % 8 + warp_offset_m;
-                const int offset_c = lane_id / 8 * 8;
+                const int offset_s = lane_id % 8 * 1 + warp_offset_m;
+                const int offset_c = lane_id / 8 * 8 % 16 + warp_offset_k;
                 // if constexpr (ITER_K % 2 == 0) {
                 //     if (k % 2 == 0) {
                 //         const int s = offset_s;
@@ -170,13 +178,13 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                 // }
                 // else {
                 const int s = offset_s;
-                const int c = offset_c % 16 + k * 16;
+                const int c = offset_c + k * 16;
                 ldsm_x2((Array<uint32_t, 2>&)frag_A[k][0], cast_smem_ptr_to_uint(&smem(s, c)));
                 // }
             }
             else {
                 const int offset_s = lane_id % 8 + lane_id / 16 * 8 + warp_offset_m;
-                const int offset_c = lane_id / 8 * 8 % 16;
+                const int offset_c = lane_id / 8 * 8 % 16 + warp_offset_k;
                 static_assert(ITER_M % 2 == 0);
                 PRAGMA_UNROLL
                 for (int m = 0; m < ITER_M; m += 2) {
@@ -299,13 +307,15 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
 
-            const int warp_idx_k    = 0;
-            const int warp_idx_n    = warp_id_n(warp_id);
+            const int warp_idx_k = warp_id_k(warp_id);
+            const int warp_idx_n = warp_id_n(warp_id);
+
+            const int warp_offset_k = warp_idx_k * WARP_K;
             const int warp_offset_n = warp_idx_n * WARP_N;
 
             if constexpr (!Flag_) {
-                const int offset_s = lane_id % 16 + warp_offset_n;
-                const int offset_c = lane_id / 16 * 8;
+                const int offset_s = lane_id % 16 * 1 + warp_offset_n;
+                const int offset_c = lane_id / 16 * 8 + warp_offset_k;
 
                 PRAGMA_UNROLL
                 for (int n = 0; n < ITER_N; ++n) {
@@ -441,13 +451,47 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     }
 
     template<class Func>
-    __device__ static void StoreC(FragC& frag_C, Func&& func)
+    __device__ static void StoreC(FragC& frag_C, SharedStorage& storage, Func&& func)
     {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
-        const int warp_offset_m = warp_id_m(warp_id) * WARP_M;
-        const int warp_offset_n = warp_id_n(warp_id) * WARP_N;
+        const int warp_idx_m = warp_id_m(warp_id);
+        const int warp_idx_n = warp_id_n(warp_id);
+        const int warp_idx_k = warp_id_k(warp_id);
+
+        const int warp_offset_m = warp_idx_m * WARP_M;
+        const int warp_offset_n = warp_idx_n * WARP_N;
+
+        if constexpr (WARP_CNT_K > 1) {
+            using namespace ops;
+            PRAGMA_UNROLL
+            for (int k = 0; k < WARP_CNT_K; ++k) {
+                __syncthreads();
+                PRAGMA_UNROLL
+                for (int m = 0; m < ITER_M; ++m) {
+                    PRAGMA_UNROLL
+                    for (int n = 0; n < ITER_N; ++n) {
+                        auto red_C = storage.red_C[warp_idx_m][warp_idx_n][m][n][lane_id].data();
+                        if (warp_idx_k != k) {
+                            continue;
+                        }
+                        if (k > 0) {
+                            Array<float, 4> tmp_C;
+                            Load(tmp_C, red_C);
+                            frag_C[m][n] = tmp_C + frag_C[m][n];
+                        }
+                        if (k < WARP_CNT_K - 1) {
+                            Store(red_C, frag_C[m][n]);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (warp_idx_k != WARP_CNT_K - 1) {
+            return;
+        }
 
         PRAGMA_UNROLL
         for (int m = 0; m < ITER_M; ++m) {
