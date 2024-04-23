@@ -25,6 +25,7 @@ def _x_a_mm_kernel(
     stride_xas,
     stride_xar,
     stride_ptb,
+    stride_r,
     rank_step,
     BLOCK_M: tl.constexpr,
     BLOCK_R: tl.constexpr,
@@ -43,7 +44,7 @@ def _x_a_mm_kernel(
 
     start_loc = tl.load(B_start_loc + cur_batch)
     adapter_id = tl.load(B_adapter_id + cur_batch)
-    rank = tl.load(Ranks + adapter_id) // rank_step
+    rank = tl.load(Ranks + adapter_id * stride_r) // rank_step
 
     rank_off = adapter_id * stride_ptb + r_off
     rank_mask = r_off < rank
@@ -103,6 +104,8 @@ def _acc_b_mm_kernel(
     stride_os,
     stride_oh,
     stride_ptb,
+    stride_r,
+    stride_s,
     BLOCK_M: tl.constexpr,
     BLOCK_R: tl.constexpr,
     BLOCK_HO: tl.constexpr,
@@ -119,8 +122,8 @@ def _acc_b_mm_kernel(
 
     start_loc = tl.load(B_start_loc + cur_batch)
     adapter_id = tl.load(B_adapter_id + cur_batch)
-    scaling = tl.load(B_scaling + adapter_id)
-    rank = tl.load(Ranks + adapter_id)
+    scaling = tl.load(B_scaling + adapter_id * stride_s)
+    rank = tl.load(Ranks + adapter_id * stride_r)
 
     rank_off = adapter_id * stride_ptb + r_off
     rank_mask = r_off < rank
@@ -214,6 +217,7 @@ def mbgmm_a(x: Tensor,
                          stride_xas=xa.stride(0),
                          stride_xar=xa.stride(1),
                          stride_ptb=rank_offset.stride(0),
+                         stride_r=ranks.stride(0),
                          rank_step=rank_step,
                          BLOCK_M=BLOCK_M,
                          BLOCK_R=BLOCK_R,
@@ -278,6 +282,8 @@ def mbgmm_b(xa: Tensor,
                            stride_os=output.stride(0),
                            stride_oh=output.stride(1),
                            stride_ptb=rank_offset.stride(0),
+                           stride_r=ranks.stride(0),
+                           stride_s=scaling.stride(0),
                            BLOCK_M=BLOCK_M,
                            BLOCK_R=BLOCK_R,
                            BLOCK_HO=BLOCK_HO,
