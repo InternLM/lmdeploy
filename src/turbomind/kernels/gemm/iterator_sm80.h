@@ -48,6 +48,8 @@ struct GmemIteratorSm80 {
 
     SmemAccessor<T, SmemLayout> smem_data_;
 
+    static_assert(!Map::kPartialC);
+
     __device__ GmemIteratorSm80(Pointer data, int stride_s, int stride_k): smem_data_{Pointer{nullptr}}
     {
         if constexpr (Disable) {
@@ -129,11 +131,8 @@ struct GmemIteratorSm80 {
 
                 // if (g_mask_ && tile_mask) {
                 //     AccessType tmp;
-                //     Load(tmp, (T*)src_data_);
+                //     Load(tmp, (const T*)(src_data_ + src_step_c_ * c));
                 //     Store(dst, tmp);
-                //     if constexpr (Idx == 2) {
-                //         printf("fuck: %f %f\n", (float)tmp[0].x, (float)tmp[0].y);
-                //     }
                 // }
 
                 // if constexpr (Idx != 2) {
@@ -185,8 +184,11 @@ struct GmemIteratorSm80 {
             src_ptr_ += stride_k_;
         }
 
-        ++g_counter_;
-        g_mask_ = g_counter_ % G_CTA == 0;
+        if constexpr (G_CTA != 1) {
+            ++g_counter_;
+            g_mask_ = g_counter_ % G_CTA == 0;
+        }
+
         // ++g_counter_;
         // if constexpr (Idx == 2) {
         //     if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {

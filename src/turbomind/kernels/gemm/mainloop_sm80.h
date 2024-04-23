@@ -37,7 +37,7 @@ struct Mainloop_sm80 {
 
     static constexpr int kBatchA = (ThreadMapA::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
     static constexpr int kBatchB = (ThreadMapB::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
-    static constexpr int kBatchQ = (ThreadMapB::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
+    static constexpr int kBatchQ = (ThreadMapQ::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
 
     static constexpr int G_CTA = Impl::G_CTA;
 

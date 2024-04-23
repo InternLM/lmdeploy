@@ -125,8 +125,8 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     // [CTA_K / G, CTA_N]
     using SmemLayoutQ = SmemLayoutV2<CTA_G, CTA_N>;
     static constexpr int kGmemAccessSizeQ =
-        std::min<int>(16 / sizeof(T), std::max<int>(1, (CTA_N * CTA_G) / (WARP_CNT * WARP_SIZE)));
-    using ThreadMapQ = gemm::ThreadMap<CTA_N, CTA_G, kGmemAccessSizeQ, WARP_CNT, 32>;
+        std::min<int>(16 / sizeof(Tq), std::max(1, (CTA_N * CTA_G) / (WARP_CNT * WARP_SIZE)));
+    using ThreadMapQ = gemm::ThreadMap<CTA_N, CTA_G, kGmemAccessSizeQ, WARP_CNT>;
 
     // static constexpr int kGmemAccessSizeC =
     //     std::min<int>(16 / sizeof(T), std::max(1, (CTA_K * CTA_M) / (WARP_CNT * WARP_SIZE)));
@@ -229,8 +229,11 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
 
-            const int warp_idx_n    = warp_id_n(warp_id);
+            const int warp_idx_n = warp_id_n(warp_id);
+            const int warp_idx_k = warp_id_k(warp_id);
+
             const int warp_offset_n = warp_idx_n * WARP_N;
+            const int warp_offset_k = warp_idx_k * WARP_K;
 
             // if (threadIdx.x == 0) {
             //     printf("[load_%d]   counter=%d, g_mask=%d\n", k, g_counter, g_mask);
@@ -243,7 +246,7 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                     for (int i = 0; i < 2; ++i) {
                         //              16        1            8          WARP_N
                         const int c = n * 16 + lane_id / 4 + i * 8 + warp_offset_n;
-                        const int s = k * 16 / G;
+                        const int s = (k * 16 + warp_offset_k) / G;
                         if (g_mask) {
                             Lds((Array<Tq, 1>&)frag_Q[k][n][i], &data[SmemLayoutQ::apply(s, c)]);
                         }
@@ -257,7 +260,7 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
                 PRAGMA_UNROLL
                 for (int n = 0; n < ITER_N; n += P_Q_N) {
                     const int pack_idx_n = (n + warp_idx_n * ITER_N) / P_Q_N;
-                    const int pack_idx_k = (k * 16 / G);
+                    const int pack_idx_k = (k * 16 + warp_offset_k) / G;
                     const Tq* ptr = data + ((pack_idx_k * PACKED_N + pack_idx_n) * 8 + lane_id / 4) * kAccessSize;
                     if (g_mask) {
                         Lds((Array<Tq, kAccessSize>&)frag_Q[k][n], ptr);
@@ -278,10 +281,13 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             }
             data = smem_Q.ptr_ + offset;
 
-            if (counting) {
-                ++g_counter;
-                g_mask = g_counter % G_CTA == 0;
+            if constexpr (G_CTA != 1) {
+                if (counting) {
+                    ++g_counter;
+                    g_mask = g_counter % G_CTA == 0;
+                }
             }
+
             // if (threadIdx.x == 0) {
             //     printf("[q]        counter=%d, g_mask=%d\n", g_counter, g_mask);
             // }
@@ -513,17 +519,32 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
 
     __device__ static int warp_id_m(int warp_id)
     {
-        return warp_id % WARP_CNT_M;
+        if constexpr (WARP_CNT_M == 1) {
+            return 0;
+        }
+        else {
+            return warp_id % WARP_CNT_M;
+        }
     }
 
     __device__ static int warp_id_n(int warp_id)
     {
-        return warp_id / WARP_CNT_M % WARP_CNT_N;
+        if constexpr (WARP_CNT_N == 1) {
+            return 0;
+        }
+        else {
+            return warp_id / WARP_CNT_M % WARP_CNT_N;
+        }
     }
 
     __device__ static int warp_id_k(int warp_id)
     {
-        return warp_id / WARP_CNT_M / WARP_CNT_N;
+        if constexpr (WARP_CNT_K == 1) {
+            return 0;
+        }
+        else {
+            return warp_id / WARP_CNT_M / WARP_CNT_N;
+        }
     }
 };
 

@@ -278,7 +278,7 @@ void Run(int m, int n, int k, int g = 128)
         for (int i = 0; i < 10; ++i) {
             gemm::CacheFlushing::flush();
             gemm::invoke(
-                c.data().get(), a.data().get(), B1, q_pack.data().get(), m, n, k, 6, workspace.data().get(), 0);
+                c.data().get(), a.data().get(), B1, q_pack.data().get(), m, n, k, 1, workspace.data().get(), 0);
         }
 
         // for (int i = 0; i < 5; ++i) {
@@ -295,7 +295,7 @@ void Run(int m, int n, int k, int g = 128)
 }
 
 template<class T, class Tb>
-void Test()
+void Test(int bsz, int tp)
 {
     // Run<half, uint4_t>(8192, 8192, 8192);
     // Run<half, uint4_t>(4096, 4096, 4096);
@@ -304,17 +304,17 @@ void Test()
     // Run<half, uint4_t>(128, 128, 1024);
 
     // llama2-7b
-    // Run<T, Tb>(8, 11008 * 2, 4096); // mlp.up/gate
-    // Run<T, Tb>(8, 4096, 11008);  // mlp.down
+    Run<T, Tb>(bsz, 11008 * 2 / tp, 4096); // mlp.up/gate
+    // Run<T, Tb>(bsz, 4096, 11008 / tp);  // mlp.down
 
     // llama2-7b
-    Run<T, Tb>(8, 10240 / 8, 8192);  // attn.qkv
+    // Run<T, Tb>(bsz, 10240 / tp, 8192);  // attn.qkv
 
-    // Run<T, Tb>(8, 64, 128);
+    // Run<T, Tb>(8, 128, 512);
 }
 
 int main(int argc, char* argv[])
 {
-    Test<half, uint4_t>();
+    Test<half, uint4_t>(8, 1);
     return 0;
 }

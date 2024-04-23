@@ -158,14 +158,15 @@ struct Transcript {
             }
 
             if (cta_idx_k * CTA_K % G == 0 && param.Q != nullptr) {
-                constexpr int G_FRAG = G / Gemm::OP_K;
+                static_assert(P_Q_K == 1);
+                constexpr int frag_k_per_group = G / Gemm::OP_K;
                 PRAGMA_UNROLL
                 for (int k = 0; k < Gemm::ITER_K; k += P_Q_K) {
-                    const int frag_idx_k = cta_idx_k * MMA_CNT_K + k;  // FIXME
-                    if (frag_idx_k % G_FRAG != 0) {
+                    const int frag_idx_k = cta_idx_k * MMA_CNT_K + k;
+                    if (frag_idx_k % frag_k_per_group != 0) {
                         continue;
                     }
-                    const int pack_idx_k = (frag_idx_k / G_FRAG) / P_Q_K;
+                    const int pack_idx_k = frag_idx_k / frag_k_per_group / P_Q_K;
                     PRAGMA_UNROLL
                     for (int p_k = 0; p_k < P_Q_K; ++p_k) {
                         state_Q.Load(k + p_k, 0);

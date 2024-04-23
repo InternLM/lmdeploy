@@ -83,7 +83,7 @@ struct GemmUniversal {
                                             CTA_K * Impl::kPackedN};                                    // stride k
         typename Mainloop::GmemIterQ gmem_Q{
             param.Q + n_idx + cta_offset_k / Impl::G * param.n,  // ptr
-            param.n,                                             // stride s, not very useful
+            param.n,                                             // stride s
             CTA_G * param.n                                      // stride k
         };
 
