@@ -5,7 +5,7 @@ import pytest
 import yaml
 from utils.triton_engine import Engine
 
-SERVER_ADDR = '0.0.0.0:33337'
+SERVER_ADDR = 'localhost:33337'
 
 
 def get_random_session_id():

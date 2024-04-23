@@ -9,6 +9,12 @@ from lmdeploy.serve.turbomind import chatbot
 SERVER_ADDR = 'localhost:33337'
 
 
+def get_random_session_id():
+    characters = string.digits
+    random_chars = ''.join(random.choice(characters) for i in range(6))
+    return int(random_chars)
+
+
 @pytest.mark.order(8)
 @pytest.mark.triton
 @pytest.mark.flaky(reruns=0)
@@ -204,13 +210,6 @@ class TestTritonInterface:
         status, res, tokens = engine.triton_infer(session_id,
                                                   'What is your name?',
                                                   'req_id:', 50, True, True)
-        print('tokens', tokens)
         assert status == chatbot.StatusCode.TRITON_STREAM_END, status
         status = engine.triton_cancel(session_id)
         assert status == chatbot.StatusCode.TRITON_SERVER_ERR, status
-
-
-def get_random_session_id():
-    characters = string.digits
-    random_chars = ''.join(random.choice(characters) for i in range(6))
-    return int(random_chars)
