@@ -76,7 +76,7 @@ class Engine:
         self.csv = csv
         self.api_key = api_key
         client = APIClient(self.server_addr, api_key=self.api_key)
-        if model_name == None:
+        if model_name is None:
             self.model_name = client.available_models[0]
             print(f"using model:{self.model_name}")
         else:
@@ -214,7 +214,7 @@ class Engine:
 def main(server_addr: str,
          tokenizer_path: str,
          dataset: str,
-         api_key:Optional[str] = None,
+         api_key: Optional[str] = None,
          model_name: Optional[str] = None,
          concurrency: int = 128,
          num_prompts: int = 5000,
