@@ -80,22 +80,6 @@ def hack_import_with(src: List[str], dst: str = 'torch'):
         sys.modules.pop(item, None)
 
 
-def _set_function(old_func, new_func):
-    """Replace old function with the new function."""
-    import gc
-    refs = gc.get_referrers(old_func)
-    obj_id = id(old_func)
-    for ref in refs:
-        if isinstance(ref, dict):
-            for x, y in ref.items():
-                if id(y) == obj_id:
-                    ref[x] = new_func
-        elif isinstance(ref, MutableSequence):
-            for i, v in enumerate(ref):
-                if id(v) == obj_id:
-                    ref[i] = new_func
-
-
 def _set_func(origin_func_path: str,
               rewrite_func: Callable,
               origin_func: Callable = None):
