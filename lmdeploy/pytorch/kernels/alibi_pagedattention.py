@@ -6,7 +6,8 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
+
+from .utils import get_kernel_meta
 
 assert triton.__version__ >= '2.1.0'
 
@@ -415,13 +416,6 @@ def alibi_paged_attention_fwd(q: Tensor,
         BLOCK (int): The kernel block size.
     """
 
-    def _kernel_meta():
-        device = q.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
@@ -439,7 +433,7 @@ def alibi_paged_attention_fwd(q: Tensor,
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
 
     num_warps = 4 if Lk <= 64 else 8
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(q)
     is_decoding = q.shape[-3] == b_seq_len.size(0)
     if not is_decoding:
         _fwd_kernel[grid](q,

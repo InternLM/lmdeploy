@@ -2,7 +2,8 @@
 import triton
 import triton.language as tl
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
+
+from .utils import get_kernel_meta
 
 
 @triton.jit
@@ -101,13 +102,6 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
                   block_offsets: Tensor):
     """fill key/value state to cache for paged attention."""
 
-    def _kernel_meta():
-        device = k_states.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     block_offsets = block_offsets.contiguous()
     batch_size = block_offsets.size(0)
     block_size, num_heads, head_dim = k_caches.size()[1:]
@@ -117,7 +111,7 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
     BLOCK_H = triton.next_power_of_2(num_heads)
     BLOCK_D = triton.next_power_of_2(head_dim)
     grid = [batch_size, max_num_blocks]
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(k_states)
     _fill_kv_cache_kernel[grid](
         k_states,
         v_states,

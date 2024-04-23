@@ -3,6 +3,8 @@ import torch
 import triton
 import triton.language as tl
 
+from .utils import get_kernel_meta
+
 
 @triton.jit
 def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
@@ -53,15 +55,6 @@ def multinomial_sampling(scores: torch.Tensor,
                          indices: torch.Tensor = None):
     """multinomial sampling."""
 
-    def __kernel_meta():
-        """kernel meta."""
-        from triton.runtime.jit import get_cuda_stream
-        device = scores.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     assert scores.dim() == 2
     batch_size, num_tokens = scores.size()
     device = scores.device
@@ -82,7 +75,7 @@ def multinomial_sampling(scores: torch.Tensor,
     BLOCK_N = 64
 
     grid = [triton.cdiv(batch_size, BLOCK)]
-    kernel_meta = __kernel_meta()
+    kernel_meta = get_kernel_meta(scores)
     _multinomial_sampling_kernel[grid](scores,
                                        seeds,
                                        offsets,

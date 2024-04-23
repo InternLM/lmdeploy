@@ -5,7 +5,8 @@ import triton
 import triton.language as tl
 from packaging import version
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
+
+from .utils import get_kernel_meta
 
 TRITON_VERSION = version.parse(triton.__version__)
 
@@ -426,14 +427,6 @@ def paged_attention_fwd(
     if window_size is None:
         window_size = -1
 
-    def _kernel_meta():
-        """kernel meta."""
-        device = q.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
@@ -448,7 +441,7 @@ def paged_attention_fwd(
     BLOCK = 64 if k.size(1) < 16 else k.size(1)
     num_sub_blocks = BLOCK // k.size(1)
 
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(q)
     is_decoding = q.shape[-3] == q_seqlens.size(0)
     if not is_decoding:
         grid = (batch, head, triton.cdiv(max_seqlen, BLOCK))

@@ -2,7 +2,8 @@
 import triton
 import triton.language as tl
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
+
+from .utils import get_kernel_meta
 
 
 def _next_pow_of_2(x):
@@ -148,13 +149,6 @@ def mbgmv_a(x: Tensor,
             rank_step: int = 1):
     """mbgmv_a."""
 
-    def _kernel_meta():
-        device = x.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     assert x.dim() == 2
     assert lora_a.dim() == 2
     assert rank_page_table.dim() == 2
@@ -170,7 +164,7 @@ def mbgmv_a(x: Tensor,
     num_warps = 4
     grid = [batch_size]
     xa = x.new_empty((x.size(0), BLOCK_R))
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(x)
     _x_a_mv_kernel[grid](x,
                          lora_a,
                          xa,
@@ -206,13 +200,6 @@ def mbgmv_b(xa: Tensor,
             out_size: int = None):
     """mbgmv_b."""
 
-    def _kernel_meta():
-        device = xa.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     assert xa.dim() == 2
     assert lora_b.dim() == 2
     assert rank_page_table.dim() == 2
@@ -228,7 +215,7 @@ def mbgmv_b(xa: Tensor,
     num_warps = 4
     grid = [batch_size]
     output = xa.new_empty((xa.size(0), BLOCK_HO))
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(xa)
     _acc_b_mv_kernel[grid](xa,
                            lora_b,
                            output,

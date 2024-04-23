@@ -3,7 +3,8 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
+
+from .utils import get_kernel_meta
 
 
 @triton.jit
@@ -67,13 +68,6 @@ def fused_rotary_emb(q: Tensor,
                      out_k: Tensor = None):
     """Fuse `rotary_embedding` and `apply_rotary_pos_emb`."""
 
-    def _kernel_meta():
-        device = q.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     if out_q is None:
         out_q = torch.empty_like(q)
     else:
@@ -93,7 +87,7 @@ def fused_rotary_emb(q: Tensor,
     BLOCK_F = q.size(-1) // 2
     batch_size = q.size(0)
     max_seq_len = q.size(1)
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(q)
     num_warps = 4
 
     grid = (batch_size, triton.cdiv(max_seq_len, BLOCK))
