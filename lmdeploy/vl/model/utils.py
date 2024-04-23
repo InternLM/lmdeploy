@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 from contextlib import contextmanager
-from typing import Dict, List, MutableSequence
+from typing import Callable, Dict, List, MutableSequence
 
 import torch
 import torch.nn as nn
@@ -94,3 +94,63 @@ def _set_function(old_func, new_func):
             for i, v in enumerate(ref):
                 if id(v) == obj_id:
                     ref[i] = new_func
+
+
+def _set_func(origin_func_path: str,
+              rewrite_func: Callable,
+              origin_func: Callable = None):
+    """Replace old function with the new function.
+
+    Args:
+        origin_func_path (str): original function path
+        rewrite_func (Callable): function to replace with
+        origin_func (Callable): function to replace
+    """
+    # import module
+    split_path = origin_func_path.split('.')
+    for i in range(len(split_path), 0, -1):
+        try:
+            exec('import {}'.format('.'.join(split_path[:i])))
+            break
+        except Exception:
+            continue
+
+    method_class = False
+    if len(split_path) > 1:
+        module_or_class = eval('.'.join(split_path[:-1]))
+        if isinstance(module_or_class, type):
+            method_class = True
+
+    origin_func = eval(origin_func_path) \
+        if origin_func is None else origin_func
+
+    # replace method
+    if not method_class:
+        import gc
+        refs = gc.get_referrers(origin_func)
+        obj_id = id(origin_func)
+        for ref in refs:
+            if isinstance(ref, dict):
+                for x, y in ref.items():
+                    if id(y) == obj_id:
+                        ref[x] = rewrite_func
+            elif isinstance(ref, MutableSequence):
+                for i, v in enumerate(ref):
+                    if id(v) == obj_id:
+                        ref[i] = rewrite_func
+    exec(f'{origin_func_path} = rewrite_func')
+    return origin_func
+
+
+@contextmanager
+def rewrite_ctx(origin_func_path: List[str], rewrite_func: List[Callable]):
+    assert len(origin_func_path) == len(rewrite_func)
+    origin_func_list = []
+    for (func_path, dst_func) in zip(origin_func_path, rewrite_func):
+        origin_func = _set_func(func_path, dst_func)
+        origin_func_list.append(origin_func)
+    yield
+    for (func_path, dst_func, origin_func) in zip(origin_func_path,
+                                                  rewrite_func,
+                                                  origin_func_list):
+        _set_func(func_path, origin_func, dst_func)
