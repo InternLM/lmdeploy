@@ -15,6 +15,10 @@ from .block import LogicalTokenBlocks
 
 logger = get_logger('lmdeploy')
 
+# vlm input type from pipeline
+InputEmbeddingType = List[np.ndarray]
+InputEmbeddingRangeType = List[List[int]]
+
 
 @dataclass
 class InputEmbeddings:
@@ -391,7 +395,6 @@ class SchedulerSequence:
     def __post_init__(self):
         """post init."""
         self._num_history_ids: int = 0
-        self._history_len_offset = 0
         self._num_token_ids: int = len(self.history_cache)
         self._input_embeddings: List[
             InputEmbeddings] = self.history_embeddings.embeddings
@@ -405,11 +408,6 @@ class SchedulerSequence:
     def history_len(self) -> int:
         """get history length."""
         return self._num_history_ids
-
-    @property
-    def history_len_offset(self) -> int:
-        """get history length offset for cogvlm."""
-        return self._history_len_offset
 
     @property
     def session_id(self) -> int:
@@ -480,11 +478,8 @@ class SchedulerSequence:
                          embeddings: List[InputEmbeddings] = None):
         """Update token ids, old token ids will be added to history."""
         self._num_history_ids += self._num_token_ids
-        # update history len offset for cogvlm
-        for emb in self._input_embeddings:
-            self._history_len_offset += emb.end - emb.start - 3
 
-        self._input_embeddings = []
+        self._input_embeddings: List[InputEmbeddings] = []
         if embeddings is not None:
             new_embeddings = [
                 emb.move_position(self._num_history_ids) for emb in embeddings

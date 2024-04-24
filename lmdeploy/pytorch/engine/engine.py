@@ -14,7 +14,8 @@ from lmdeploy.utils import get_logger, get_model, logging_timer
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..check_env import check_adapters, check_env, check_model
 from ..config import CacheConfig, SchedulerConfig
-from ..messages import MessageStatus, SchedulerSequence
+from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
+                        MessageStatus, SchedulerSequence)
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 from .model_agent import AutoModelAgent, ModelInputs
@@ -402,7 +403,7 @@ class Engine:
             # minus num of vision tokens
             history_length_offsets = torch.tensor([
                 sum([
-                    emb.end - emb.start + 3
+                    emb.end - emb.start - 3
                     for emb in msg.history_embeddings.get_embeddings(
                         end=msg.history_len)
                 ]) for msg in messages
@@ -851,12 +852,15 @@ class Engine:
         from .engine_instance import EngineInstance
         return EngineInstance(self)
 
-    async def async_batched_infer(self,
-                                  session_ids: List[int],
-                                  token_ids: List[List[int]] = None,
-                                  gen_config: EngineGenerationConfig = None,
-                                  adapter_names: List[str] = None,
-                                  keep_cache: bool = False):
+    async def async_batched_infer(
+            self,
+            session_ids: List[int],
+            token_ids: List[List[int]] = None,
+            gen_config: EngineGenerationConfig = None,
+            adapter_names: List[str] = None,
+            keep_cache: bool = False,
+            input_embeddings: List[InputEmbeddingType] = None,
+            input_embedding_ranges: List[InputEmbeddingRangeType] = None):
         """Send inference request.
 
         Args:
@@ -876,24 +880,27 @@ class Engine:
             token_ids=token_ids,
             gen_config=gen_config,
             adapter_names=adapter_names,
+            input_embeddings=input_embeddings,
+            input_embedding_ranges=input_embedding_ranges,
             keep_cache=keep_cache)
 
-    def batched_infer(self,
-                      session_ids: List[int],
-                      token_ids: List[List[int]] = None,
-                      gen_config: EngineGenerationConfig = None,
-                      adapter_names: List[str] = None,
-                      keep_cache: bool = False,
-                      vision_embeddings=None,
-                      vision_embedding_ranges=None):
+    def batched_infer(
+            self,
+            session_ids: List[int],
+            token_ids: List[List[int]] = None,
+            gen_config: EngineGenerationConfig = None,
+            adapter_names: List[str] = None,
+            keep_cache: bool = False,
+            input_embeddings: List[InputEmbeddingType] = None,
+            input_embedding_ranges: List[InputEmbeddingRangeType] = None):
         """batched infer."""
         return self.engine_instance.batched_infer(
             session_ids=session_ids,
             token_ids=token_ids,
             gen_config=gen_config,
             adapter_names=adapter_names,
-            vision_embeddings=vision_embeddings,
-            vision_embedding_ranges=vision_embedding_ranges,
+            input_embeddings=input_embeddings,
+            input_embedding_ranges=input_embedding_ranges,
             keep_cache=keep_cache)
 
     async def async_add_session(self, session_id: int):

@@ -45,7 +45,7 @@ class VLAsyncEngine(AsyncEngine):
         else:
             decorated = prompt
         segs = decorated.split(IMAGE_TOKEN)
-        print(f'input_prompt={decorated}')
+
         results = {}
         input_ids = []
         if len(segs) > 1:
