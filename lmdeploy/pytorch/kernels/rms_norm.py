@@ -9,8 +9,7 @@ from .triton_utils import get_kernel_meta, wrap_jit_func
 
 @wrap_jit_func
 @triton.jit
-def rms_norm_kernel(input: 'Tensor', weight: 'Tensor', output: 'Tensor',
-                    input_row_stride, n_cols, eps: 'float',
+def rms_norm_kernel(input, weight, output, input_row_stride, n_cols, eps,
                     N_COLS: tl.constexpr, BLOCK_N: tl.constexpr):
     """rms norm kernel."""
     prog_id = tl.program_id(0)
