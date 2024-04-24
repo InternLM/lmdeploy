@@ -1,3 +1,4 @@
+einops
 fastapi
 fire
 mmengine-lite

@@ -21,6 +21,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
@@ -29,12 +30,14 @@ template<typename T>
 struct LlamaDecoderLayerWeight {
 public:
     LlamaDecoderLayerWeight() = delete;
-    LlamaDecoderLayerWeight(size_t     head_num,
+    LlamaDecoderLayerWeight(int        layer_idx,
+                            size_t     head_num,
                             size_t     kv_head_num,
                             size_t     size_per_head,
                             size_t     inter_size,
                             WeightType weight_type,
                             int        group_size,
+                            LoraParams lora_params,
                             bool       attn_bias,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank);

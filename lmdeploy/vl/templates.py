@@ -154,6 +154,13 @@ class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
         return res
 
 
+class InternLMXComposer2TemplateWrapper(VLChatTemplateWrapper):
+    """InternLM-XComposer2 chat template."""
+
+    def append_image_token(self, prompt, num_images: int):
+        return ' '.join([IMAGE_TOKEN] * num_images) + prompt
+
+
 class MiniGeminiLlamaTempateWrapper(VLChatTemplateWrapper):
     """Qwen vl chat template."""
 
@@ -181,6 +188,8 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return LlavaVLChatTemplateWrapper(chat_template)
     elif arch == 'MultiModalityCausalLM':  # deepseek-vl
         return DeepSeekVLChatTemplateWrapper(chat_template)
+    elif arch in ['InternLMXComposer2ForCausalLM', 'InternLM2ForCausalLM']:
+        return InternLMXComposer2TemplateWrapper(chat_template)
     elif arch == 'InternVLChatModel':
         return InternVLChatTemplateWrapper(chat_template)
     elif arch == 'MiniGeminiLlamaForCausalLM':

@@ -27,12 +27,14 @@
 namespace turbomind {
 
 template<typename T>
-LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(size_t     head_num,
+LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
+                                                    size_t     head_num,
                                                     size_t     kv_head_num,
                                                     size_t     size_per_head,
                                                     size_t     inter_size,
                                                     WeightType weight_type,
                                                     int        group_size,
+                                                    LoraParams lora_params,
                                                     bool       attn_bias,
                                                     size_t     tensor_para_size,
                                                     size_t     tensor_para_rank):
@@ -46,6 +48,43 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(size_t     head_num,
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank)
 {
+    if (lora_params.policy == LoraPolicy::kPlora) {
+        std::vector<std::string> keys = {
+            "attention.w_qkv", "attention.wo", "feed_forward.w1", "feed_forward.w2", "feed_forward.w3"};
+        std::vector<LlamaDenseWeight<T>*> weights = {&self_attn_weights.qkv,
+                                                     &self_attn_weights.output,
+                                                     &ffn_weights.gating,
+                                                     &ffn_weights.output,
+                                                     &ffn_weights.intermediate};
+        for (int i = 0; i < keys.size(); i++) {
+            const auto& name      = keys[i];
+            auto&       weight    = *weights[i];
+            int         rank      = lora_params.r;
+            float       scale     = lora_params.scale;
+            std::string full_name = "layers." + std::to_string(layer_idx) + "." + name;
+
+            for (const auto& [re, pr] : lora_params.rank_pattern) {
+                if (std::regex_search(full_name, pr.first)) {
+                    rank = pr.second;
+                    TM_LOG_DEBUG("find rank, pattern=%s, name=%s, value=%d", re.c_str(), full_name.c_str(), rank);
+                    break;
+                }
+            }
+            for (const auto& [re, pr] : lora_params.scale_pattern) {
+                if (std::regex_search(full_name, pr.first)) {
+                    scale = pr.second;
+                    TM_LOG_DEBUG("find scale pattern=%s, name=%s, value=%f", re.c_str(), full_name.c_str(), scale);
+                    break;
+                }
+            }
+            if (rank) {
+                weight.lora.r      = rank;
+                weight.lora.scale  = scale;
+                weight.lora.policy = lora_params.policy;
+            }
+        }
+    }
+
     self_attn_weights.qkv.input_dims  = hidden_units_;
     self_attn_weights.qkv.output_dims = (head_num + 2 * kv_head_num) * size_per_head / tensor_para_size_;
     self_attn_weights.qkv.type        = weight_type;
@@ -88,6 +127,13 @@ void freeWeights(LlamaDenseWeight<T>& weights)
     weights.kernel           = nullptr;
     weights.bias             = nullptr;
     weights.scales_and_zeros = nullptr;
+
+    {
+        cudaFree(weights.lora.a);
+        cudaFree(weights.lora.b);
+        weights.lora.a = nullptr;
+        weights.lora.b = nullptr;
+    }
 }
 
 template<typename T>
@@ -107,6 +153,12 @@ void mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
         deviceMemSetZero((int*)weights.kernel, weights.input_dims * weights.output_dims / factor);
         // interleaved scales/zeros
         deviceMalloc((T**)&weights.scales_and_zeros, weights.input_dims / weights.group_size * weights.output_dims * 2);
+    }
+
+    if (weights.lora.r > 0) {
+        FT_CHECK(bit_size >= 16);
+        deviceMalloc((T**)&weights.lora.a, weights.input_dims * weights.lora.r);
+        deviceMalloc((T**)&weights.lora.b, weights.lora.r * weights.output_dims);
     }
 }
 
@@ -148,6 +200,24 @@ void getWeightTensor(LlamaDenseWeight<T>& weights, bool bias, const std::string&
                              getTensorType<T>(),
                              {weights.input_dims / weights.group_size * weights.output_dims * 2 * sizeof(T)},
                              weights.scales_and_zeros});
+    }
+
+    if (weights.lora.r) {
+        FT_CHECK(bit_size >= 16);
+        auto        n       = prefix.rfind(".");
+        std::string _prefix = prefix.substr(0, n);
+        std::string _num    = prefix.substr(n + 1);
+        output.insert(
+            concat(_prefix, "lora_a", _num, "weight"),
+            Tensor{MEMORY_GPU, getTensorType<T>(), {weights.input_dims * weights.lora.r * sizeof(T)}, weights.lora.a});
+        output.insert(
+            concat(_prefix, "lora_b", _num, "weight"),
+            Tensor{MEMORY_GPU, getTensorType<T>(), {weights.lora.r * weights.output_dims * sizeof(T)}, weights.lora.b});
+        TM_LOG_DEBUG("allocate lora weight, layer_name=%s input_dims=%d, output_dims=%d, lora_r=%d",
+                     get_name("weight").c_str(),
+                     weights.input_dims,
+                     weights.output_dims,
+                     weights.lora.r);
     }
 }
 
