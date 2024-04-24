@@ -123,7 +123,7 @@ LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomin
 
 它们在支持的模型类别、计算精度方面有所差别。用户可参考[这里](./docs/zh_cn/supported_models/supported_models.md), 查阅每个推理引擎的能力，并根据实际需求选择合适的。
 
-# 快速开始
+# 快速开始 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
 
 ## 安装
 
@@ -164,8 +164,8 @@ print(response)
 为了帮助用户更进一步了解 LMDeploy，我们准备了用户指南和进阶指南，请阅读我们的[文档](https://lmdeploy.readthedocs.io/zh-cn/latest/)：
 
 - 用户指南
-  - [LLM 推理 pipeline](./docs/zh_cn/inference/pipeline.md)
-  - [VLM 推理 pipeline](./docs/zh_cn/inference/vl_pipeline.md)
+  - [LLM 推理 pipeline](./docs/zh_cn/inference/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
+  - [VLM 推理 pipeline](./docs/zh_cn/inference/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
   - [LLM 推理服务](./docs/zh_cn/serving/api_server.md)
   - [VLM 推理服务](./docs/zh_cn/serving/api_server_vl.md)
   - [模型量化](./docs/zh_cn/quantization)
