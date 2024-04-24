@@ -110,7 +110,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |       Mistral       |     7B      |
 |    DeepSeek-MoE     |     16B     |
 |     DeepSeek-VL     |     7B      |
-|    InternVL-Chat    |      -      |
+|    InternVL-Chat    | v1.1- v1.5  |
 |       Mixtral       |    8x7B     |
 |        Gemma        |    2B-7B    |
 |        Dbrx         |    132B     |
