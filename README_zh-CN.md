@@ -158,7 +158,7 @@ print(response)
 
 - 用户指南
   - [LLM 推理 pipeline](./docs/zh_cn/inference/pipeline.md)
-  - [VLM 推理 pipeline](./docs/zh_cn/inference/vl_pipeline.md)
+  - [VLM 推理 pipeline](./docs/zh_cn/inference/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
   - [LLM 推理服务](./docs/zh_cn/serving/api_server.md)
   - [VLM 推理服务](./docs/zh_cn/serving/api_server_vl.md)
   - [模型量化](./docs/zh_cn/quantization)

@@ -157,7 +157,7 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
 
 - User Guide
   - [LLM Inference pipeline](./docs/en/inference/pipeline.md)
-  - [VLM Inference pipeline](./docs/en/inference/vl_pipeline.md)
+  - [VLM Inference pipeline](./docs/en/inference/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
   - [LLM Serving](docs/en/serving/api_server.md)
   - [VLM Serving](docs/en/serving/api_server_vl.md)
   - [Quantization](docs/en/quantization)
