@@ -48,12 +48,14 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
         return int2{sm_count, max_active_ctas};
     }();
 
-    dim3 grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, 1, Kernel::CTA_H);
+    const int head_per_cta = std::min(Kernel::CTA_H, params.num_heads / params.num_kv_heads);
+
+    dim3 grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, 1, head_per_cta);
 
     const int grid_size = grid.x * grid.y * grid.z;
     const int split_cnt = GetSplitCount(max_split_count, grid_size, caps.y, caps.x, 4);
 
-    grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, split_cnt, Kernel::CTA_H);
+    grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, split_cnt, head_per_cta);
 
     auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
     if (err) {

@@ -44,6 +44,7 @@ __global__ void reduce_kernel(typename Reduce::T* out,
            query_idx,
            head_idx,
            head_num,
+           1,  // head_per_cta
            split_cnt,
            max_split_cnt,
            exp_scale,

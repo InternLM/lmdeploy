@@ -49,6 +49,10 @@ struct AttentionUniversal {
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
+    static constexpr bool kProcessKV = CTA_Q == 1;
+
+    int head_per_cta_;
+
     __device__ __host__ static bool need_separate_reduce(int max_split_cnt)
     {
         if constexpr (CTA_Q > 1) {
@@ -57,6 +61,94 @@ struct AttentionUniversal {
         }
         else {
             return CTA_H * max_split_cnt > 32;
+        }
+    }
+
+    template<class Vec>
+    __device__ void
+    ApplyBias(Vec& vec_Q, Vec& vec_K, Vec& vec_V, const ParamType& params, int head_idx, int kv_head_idx, int2 offset)
+    {
+        using Map              = typename Impl::ThreadMapQ;
+        constexpr int kVecSize = Map::kAccessC;
+        constexpr int ITER_C   = Map::kIterC;
+        constexpr int ITER_S   = Map::kIterS;
+        if constexpr (kProcessKV) {
+            Array<T, kVecSize> bias_K[ITER_C];
+            Array<T, kVecSize> bias_V[ITER_C];
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                const int di    = offset.x + c * Map::kDeltaC;
+                const int k_idx = kv_head_idx * kHeadDim + di;
+                if (params.k_bias) {
+                    Ldg(bias_K[c], &params.k_bias[k_idx]);
+                }
+                if (params.v_bias) {
+                    Ldg(bias_V[c], &params.v_bias[k_idx]);
+                }
+            }
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < ITER_C; ++c) {
+                    using namespace ops;
+                    if (params.k_bias) {
+                        vec_K[s][c] = vec_K[s][c] + bias_K[c];
+                    }
+                    if (params.v_bias) {
+                        vec_V[s][c] = vec_V[s][c] + bias_V[c];
+                    }
+                }
+            }
+        }
+
+        if constexpr (CTA_H == 1) {
+            Array<T, kVecSize> bias_Q[ITER_C];
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                const int di    = offset.x + c * Map::kDeltaC;
+                const int q_idx = head_idx * kHeadDim + di;
+                if (params.q_bias) {
+                    Ldg(bias_Q[c], &params.q_bias[q_idx]);
+                }
+            }
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < ITER_C; ++c) {
+                    using namespace ops;
+                    if (params.q_bias) {
+                        vec_Q[s][c] = vec_Q[s][c] + bias_Q[c];
+                    }
+                }
+            }
+        }
+        else if constexpr (CTA_Q == 1) {
+            Array<T, kVecSize> bias_Q[ITER_S][ITER_C];
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                const int hi = offset.y + s * Map::kDeltaS;
+                PRAGMA_UNROLL
+                for (int c = 0; c < ITER_C; ++c) {
+                    const int di    = offset.x + c * Map::kDeltaC;
+                    const int q_idx = (head_idx + hi) * kHeadDim + di;
+                    if (params.q_bias && check_h(hi)) {
+                        Ldg(bias_Q[s][c], &params.q_bias[q_idx]);
+                    }
+                }
+            }
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < ITER_C; ++c) {
+                    using namespace ops;
+                    if (params.q_bias) {
+                        vec_Q[s][c] = vec_Q[s][c] + bias_Q[s][c];
+                    }
+                }
+            }
+        }
+        else {
+            static_assert(CTA_Q == 1 || CTA_H == 1);
         }
     }
 
@@ -75,7 +167,6 @@ struct AttentionUniversal {
                              int              warp_id,
                              int              lane_id)
     {
-        constexpr bool kProcessKV = CTA_Q == 1;
 
         using Map = typename Impl::ThreadMapQ;
 
@@ -86,7 +177,7 @@ struct AttentionUniversal {
         constexpr int ITER_C = Map::kIterC;
         constexpr int ITER_S = Map::kIterS;
 
-        Vec vec_Q[ITER_S][ITER_C]{};
+        Vec vec_Q[ITER_S][ITER_C]{};  // [QxH, D]
         Vec vec_K[ITER_S][ITER_C];
         Vec vec_V[ITER_S][ITER_C];
 
@@ -100,12 +191,14 @@ struct AttentionUniversal {
             const int qi = si / CTA_H + qi_begin;
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
-                const int di    = offset.x + c * Map::kDeltaC;
-                const int q_idx = qi * params.stride + hi * kHeadDim + di;
-                const int k_idx = qi * params.stride + kv_head_idx * kHeadDim + di;
+                const int     di    = offset.x + c * Map::kDeltaC;
+                const int64_t q_idx = qi * params.stride + hi * kHeadDim + di;
+                const int64_t k_idx = qi * params.stride + kv_head_idx * kHeadDim + di;
                 if (qi < qi_end) {
-                    Ldg(vec_Q[s][c], &params.q[q_idx]);
-                    if constexpr (kProcessKV) {
+                    if (check_h(si % CTA_H)) {
+                        Ldg(vec_Q[s][c], &params.q[q_idx]);
+                    }
+                    if constexpr (kProcessKV) {  // duplicate loads
                         Ldg(vec_K[s][c], &params.k[k_idx]);
                         Ldg(vec_V[s][c], &params.v[k_idx]);
                     }
@@ -113,46 +206,7 @@ struct AttentionUniversal {
             }
         }
 
-        Vec bias_Q[ITER_C];
-        Vec bias_K[ITER_C];
-        Vec bias_V[ITER_C];
-
-        PRAGMA_UNROLL
-        for (int c = 0; c < ITER_C; ++c) {
-            const int di    = offset.x + c * Map::kDeltaC;
-            const int q_idx = head_idx * kHeadDim + di;
-            const int k_idx = kv_head_idx * kHeadDim + di;
-            if (params.q_bias) {
-                Ldg(bias_Q[c], &params.q_bias[q_idx]);
-            }
-            if constexpr (kProcessKV) {
-                if (params.k_bias) {
-                    Ldg(bias_K[c], &params.k_bias[k_idx]);
-                }
-                if (params.v_bias) {
-                    Ldg(bias_V[c], &params.v_bias[k_idx]);
-                }
-            }
-        }
-
-        PRAGMA_UNROLL
-        for (int s = 0; s < ITER_S; ++s) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < ITER_C; ++c) {
-                using namespace ops;
-                if (params.q_bias) {
-                    vec_Q[s][c] = vec_Q[s][c] + bias_Q[c];
-                }
-                if constexpr (kProcessKV) {
-                    if (params.k_bias) {
-                        vec_K[s][c] = vec_K[s][c] + bias_K[c];
-                    }
-                    if (params.v_bias) {
-                        vec_V[s][c] = vec_V[s][c] + bias_V[c];
-                    }
-                }
-            }
-        }
+        ApplyBias(vec_Q, vec_K, vec_V, params, head_idx, kv_head_idx, offset);
 
         const float rope_base = params.rope_theta ? params.rope_theta[batch_idx] : params.rotary_embedding_base;
         PRAGMA_UNROLL
@@ -261,12 +315,15 @@ struct AttentionUniversal {
     __device__ void
     operator()(const ParamType& params, CacheIteratorFactory& cache_iter_factory, const CtaMap& cta_map, char* smem_buf)
     {
+        head_per_cta_ = min(CTA_H, params.num_heads / params.num_kv_heads);
         // [q, h, b]
         const int query_idx = cta_map.query_idx() * CTA_Q;
-        const int head_idx  = cta_map.head_idx() * CTA_H;
+        const int head_idx  = cta_map.head_idx() * head_per_cta_;
         const int batch_idx = cta_map.batch_idx();
         const int split_idx = cta_map.split_idx();
         const int split_cnt = cta_map.split_count();
+
+        const int kv_head_idx = head_idx / (params.num_heads / params.num_kv_heads);
 
         // early exit if finished flag is set
         if (params.finished[batch_idx]) {
@@ -286,8 +343,6 @@ struct AttentionUniversal {
 
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
-
-        const int kv_head_idx = head_idx * params.num_kv_heads / params.num_heads;
 
         const int context_len = params.cu_k_len[batch_idx + 1] - params.cu_k_len[batch_idx];
         const int history_len = context_len - input_len;
@@ -404,6 +459,7 @@ struct AttentionUniversal {
                       qi_begin,
                       head_idx,
                       params.num_heads,
+                      head_per_cta_,
                       split_idx + 1,
                       params.max_split_k,
                       params.inv_sqrt_dh,
@@ -425,7 +481,7 @@ struct AttentionUniversal {
             return true;
         }
         else {
-            return hi < CTA_H;
+            return hi < head_per_cta_;
         }
     }
 

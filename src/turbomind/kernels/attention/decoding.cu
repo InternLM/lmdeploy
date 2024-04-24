@@ -45,11 +45,23 @@ void dispatchDecoding(const AttentionParams<T>& params)
         if (query_group_sz % 8 == 0) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 8, kHeadDim>>(params);
         }
+        else if (query_group_sz % 7 == 0) {
+            return invokeDecoding<Decoding<Arch, T, Tkv, 7, kHeadDim>>(params);
+        }
         else if (query_group_sz % 6 == 0) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 6, kHeadDim>>(params);
         }
+        else if (query_group_sz % 5 == 0) {
+            return invokeDecoding<Decoding<Arch, T, Tkv, 5, kHeadDim>>(params);
+        }
         else if (query_group_sz % 4 == 0) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 4, kHeadDim>>(params);
+        }
+        else if (query_group_sz % 3 == 0) {
+            return invokeDecoding<Decoding<Arch, T, Tkv, 3, kHeadDim>>(params);
+        }
+        else if (query_group_sz % 2 == 0) {
+            return invokeDecoding<Decoding<Arch, T, Tkv, 2, kHeadDim>>(params);
         }
         else {
             return invokeDecoding<Decoding<Arch, T, Tkv, 1, kHeadDim>>(params);
