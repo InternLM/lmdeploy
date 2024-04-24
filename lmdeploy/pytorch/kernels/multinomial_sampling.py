@@ -3,9 +3,10 @@ import torch
 import triton
 import triton.language as tl
 
-from .utils import get_kernel_meta
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
+@wrap_jit_func
 @triton.jit
 def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
                                  stride_sb, stride_st, stride_ib, stride_it,

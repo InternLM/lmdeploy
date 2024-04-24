@@ -6,7 +6,7 @@ import triton.language as tl
 from packaging import version
 from torch import Tensor
 
-from .utils import get_kernel_meta
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 TRITON_VERSION = version.parse(triton.__version__)
 
@@ -48,6 +48,7 @@ else:
             return tl.load(offset_ptr + block_id) * BLOCK + offs_n
 
 
+@wrap_jit_func
 @triton.jit
 def _fwd_split_kernel(
     Q,
@@ -189,6 +190,7 @@ def _fwd_split_kernel(
     tl.store(Acc_out + off_meta + 1 + tl.arange(0, 1), l_i)
 
 
+@wrap_jit_func
 @triton.jit
 def _reduce_split_kernel(
     Acc,
@@ -257,6 +259,7 @@ def _get_convert_pv(nv_capability):
 _convert_pv = None
 
 
+@wrap_jit_func
 @triton.jit
 def _fwd_kernel(
     Q,

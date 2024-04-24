@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .utils import get_kernel_meta
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 assert triton.__version__ >= '2.1.0'
 
@@ -66,6 +66,7 @@ def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
         return tl.load(offset_ptr + block_id) * BLOCK + offs_n
 
 
+@wrap_jit_func
 @triton.jit
 def _fwd_split_kernel(
     Q,
@@ -206,6 +207,7 @@ def _fwd_split_kernel(
     tl.store(Acc_out + off_meta + 1 + tl.arange(0, 1), l_i)
 
 
+@wrap_jit_func
 @triton.jit
 def _reduce_split_kernel(
     Acc,
@@ -251,6 +253,7 @@ def _reduce_split_kernel(
     tl.store(Out + out_offs, acc)
 
 
+@wrap_jit_func
 @triton.jit
 def _fwd_kernel(
     Q,
@@ -384,7 +387,6 @@ def _fwd_kernel(
     tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 
 
-@torch.no_grad()
 def alibi_paged_attention_fwd(q: Tensor,
                               k: Tensor,
                               v: Tensor,

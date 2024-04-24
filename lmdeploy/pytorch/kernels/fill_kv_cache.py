@@ -3,7 +3,7 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .utils import get_kernel_meta
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
 @triton.jit
@@ -11,6 +11,7 @@ def _div_up(val, other):
     return (val + other - 1) // other
 
 
+@wrap_jit_func
 @triton.jit
 def _fill_kv_cache_kernel(
     KStates,

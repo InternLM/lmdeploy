@@ -3,7 +3,7 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .utils import get_kernel_meta
+from .triton_utils import get_kernel_meta
 
 
 def _next_pow_of_2(x):

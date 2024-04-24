@@ -4,9 +4,10 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .utils import get_kernel_meta
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
+@wrap_jit_func
 @triton.jit
 def _fused_rotary_emb_kernel(
         Q, K, PostionIds, InvFreq, scaling_factor, OutQ, OutK, stride_bq,

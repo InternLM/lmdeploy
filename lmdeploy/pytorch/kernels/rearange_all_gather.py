@@ -3,9 +3,10 @@ import torch
 import triton
 import triton.language as tl
 
-from .utils import get_kernel_meta
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
+@wrap_jit_func
 @triton.jit
 def _rearange_all_gather_kernel(X, StartLoc, SeqLen, AdapterIds, Ranks, Out,
                                 stride_x, stride_o, world_size,
@@ -40,6 +41,7 @@ def _rearange_all_gather_kernel(X, StartLoc, SeqLen, AdapterIds, Ranks, Out,
         tl.store(Out + o_off, x, mask=o_mask)
 
 
+@wrap_jit_func
 @triton.jit
 def _rearange_all_gather_decoding_kernel(X, AdapterIds, Ranks, Out, stride_x,
                                          stride_o, world_size, seq_len,
