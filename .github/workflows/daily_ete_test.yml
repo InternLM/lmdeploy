@@ -262,10 +262,10 @@ jobs:
     needs: test_tools
     timeout-minutes: 30
     env:
-      HF_MODEL: /nvme/qa_test_models/internlm-chat-20b
+      HF_MODEL: /nvme/qa_test_models/internlm2-chat-20b
       WORKDIR: /nvme/qa_test_models/triton_workspace
       OFFLINE_PKGS: /nvme/qa_test_models/offline_pkg
-      TB_MODEL: internlm-chat-20b-fp16-tp2
+      TB_MODEL: internlm2-chat-20b-fp16-tp2
       GRPC_PORT: 33337
     steps:
       - name: Clone repository
@@ -300,6 +300,7 @@ jobs:
       - name: Build lmdeploy from source
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
+          docker exec $CONTAINER_ID sed -i 's/https:\/\/github.com\/NVIDIA\/cutlass.git/https:\/\/521github.com\/extdomains\/github.com\/NVIDIA\/cutlass.git/g' CMakeLists.txt
           docker exec $CONTAINER_ID mkdir build
           docker exec --workdir /__w/lmdeploy/lmdeploy/build \
             --env http_proxy=${{secrets.PROXY}} \
@@ -371,7 +372,7 @@ jobs:
         run: |
           docker exec $CONTAINER_ID \
             lmdeploy convert \
-            internlm-chat-20b \
+            internlm2-chat-20b \
             /root/workspace/hf_model \
             --tp 2 \
             --trust-remote-code \
@@ -391,7 +392,13 @@ jobs:
           # print triton server log file
           cat run.log
           python3 -c 'import os; assert not os.path.exists("finish.txt"), "Failed to start tritonserver"'
-      - name: Test triton server
+      - name: Test triton server - chatbot
+        run: |
+          docker exec \
+            --env no_proxy="localhost,127.0.0.1" \
+            --env NO_PROXY="localhost,127.0.0.1" \
+            $CONTAINER_ID pytest autotest/interface/triton/test_triton_server_func.py -n 10
+      - name: Test triton server - chat cli
         run: |
           docker exec \
             --env no_proxy="localhost,127.0.0.1" \
