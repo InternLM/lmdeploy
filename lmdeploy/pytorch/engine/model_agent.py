@@ -319,10 +319,7 @@ class StepContext:
                             seq_length: torch.LongTensor,
                             device: str = 'cuda'):
         """get 1d position_ids."""
-        if position_ids.ndim == 1:
-            return position_ids
-
-        if position_ids.size(1) == 1:
+        if position_ids.size(0) == 1 or position_ids.size(1) == 1:
             position_ids_1d = position_ids.flatten()
         else:
             position_ids_1d = [
@@ -367,20 +364,23 @@ def model_forward(patched_model: torch.nn.Module,
                   stream: torch.cuda.Stream = None,
                   task_type: Literal['llm', 'vlm'] = 'llm'):
     """perform model forward."""
-    extra_kwargs = {}
-    if task_type == 'vlm' and not inputs.is_decoding:
-        extra_kwargs.update(
-            dict(
-                input_embeddings=inputs.input_embeddings,
-                input_embedding_ranges=inputs.input_embedding_ranges,
-            ))
-        if inputs.token_type_ids is not None:
-            extra_kwargs['token_type_ids'] = inputs.token_type_ids
 
     stream = stream or torch.cuda.current_stream()
     with torch.inference_mode(), torch.cuda.stream(stream):
         # forward
+
         inputs = inputs.to_device('cuda')
+
+        extra_kwargs = {}
+        if task_type == 'vlm' and not inputs.is_decoding:
+            extra_kwargs.update(
+                dict(
+                    input_embeddings=inputs.input_embeddings,
+                    input_embedding_ranges=inputs.input_embedding_ranges,
+                ))
+            if inputs.token_type_ids is not None:
+                extra_kwargs['token_type_ids'] = inputs.token_type_ids
+
         context = StepContext.new(
             inputs=inputs,
             world_size=world_size,
