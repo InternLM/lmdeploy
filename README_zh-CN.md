@@ -157,7 +157,7 @@ print(response)
 为了帮助用户更进一步了解 LMDeploy，我们准备了用户指南和进阶指南，请阅读我们的[文档](https://lmdeploy.readthedocs.io/zh-cn/latest/)：
 
 - 用户指南
-  - [LLM 推理 pipeline](./docs/zh_cn/inference/pipeline.md)
+  - [LLM 推理 pipeline](./docs/zh_cn/inference/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
   - [VLM 推理 pipeline](./docs/zh_cn/inference/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
   - [LLM 推理服务](./docs/zh_cn/serving/api_server.md)
   - [VLM 推理服务](./docs/zh_cn/serving/api_server_vl.md)
