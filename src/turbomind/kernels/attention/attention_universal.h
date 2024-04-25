@@ -51,7 +51,23 @@ struct AttentionUniversal {
 
     static constexpr bool kProcessKV = CTA_Q == 1;
 
-    int head_per_cta_;
+    const int q_group_size_;
+    const int q_head_per_cta_;
+    const int cta_per_q_group_;
+
+    // past-the-end hi of the CTA
+    int hi_end_{1};
+
+    __device__ bool check_h(int hi)
+    {
+        if constexpr (CTA_Q > 1) {
+            // bypass the check for prefill kernels since `hi == 0` constantly
+            return true;
+        }
+        else {
+            return hi < hi_end_;
+        }
+    }
 
     __device__ __host__ static bool need_separate_reduce(int max_split_cnt)
     {
@@ -312,18 +328,34 @@ struct AttentionUniversal {
         Impl::TransformQ(smem_Q, frag_Q);
     }
 
+    __device__ AttentionUniversal(int q_group_size, int q_head_per_cta, int cta_per_q_group):
+        q_group_size_{q_group_size}, q_head_per_cta_{q_head_per_cta}, cta_per_q_group_{cta_per_q_group}
+    {
+    }
+
     __device__ void
     operator()(const ParamType& params, CacheIteratorFactory& cache_iter_factory, const CtaMap& cta_map, char* smem_buf)
     {
-        head_per_cta_ = min(CTA_H, params.num_heads / params.num_kv_heads);
         // [q, h, b]
         const int query_idx = cta_map.query_idx() * CTA_Q;
-        const int head_idx  = cta_map.head_idx() * head_per_cta_;
         const int batch_idx = cta_map.batch_idx();
         const int split_idx = cta_map.split_idx();
         const int split_cnt = cta_map.split_count();
 
-        const int kv_head_idx = head_idx / (params.num_heads / params.num_kv_heads);
+        int head_idx;
+        int kv_head_idx;
+
+        if constexpr (CTA_H == 1) {
+            head_idx    = cta_map.head_idx();
+            kv_head_idx = head_idx / q_group_size_;
+        }
+        else {
+            int cta_h_idx = cta_map.head_idx();
+            int local_idx = cta_h_idx % cta_per_q_group_ * q_head_per_cta_;
+            kv_head_idx   = cta_h_idx / cta_per_q_group_;
+            head_idx      = kv_head_idx * q_group_size_ + local_idx;
+            hi_end_       = q_group_size_ - local_idx;
+        }
 
         // early exit if finished flag is set
         if (params.finished[batch_idx]) {
@@ -459,7 +491,7 @@ struct AttentionUniversal {
                       qi_begin,
                       head_idx,
                       params.num_heads,
-                      head_per_cta_,
+                      hi_end_,
                       split_idx + 1,
                       params.max_split_k,
                       params.inv_sqrt_dh,
@@ -471,17 +503,6 @@ struct AttentionUniversal {
             if (threadIdx.x < split_idx) {
                 locks[threadIdx.x] = 0;
             }
-        }
-    }
-
-    __device__ bool check_h(int hi)
-    {
-        if constexpr (CTA_Q > 1) {
-            // bypass the check for prefill kernels since `hi == 0` constantly
-            return true;
-        }
-        else {
-            return hi < head_per_cta_;
         }
     }
 
@@ -560,11 +581,14 @@ extern __shared__ char smem_buf[];
 template<class Kernel>
 __global__ void attention_kernel(typename Kernel::ParamType            params,
                                  typename Kernel::CacheIteratorFactory cache_iter_factory,
-                                 typename Kernel::CtaMap               cta_map)
+                                 typename Kernel::CtaMap               cta_map,
+                                 int                                   q_group_size,
+                                 int                                   q_head_per_cta,
+                                 int                                   cta_per_q_group)
 {
 #if __CUDA_ARCH__
     if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
-        Kernel{}(params, cache_iter_factory, cta_map, smem_buf);
+        Kernel{q_group_size, q_head_per_cta, cta_per_q_group}(params, cache_iter_factory, cta_map, smem_buf);
     }
 #endif
 }

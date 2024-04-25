@@ -48,14 +48,20 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
         return int2{sm_count, max_active_ctas};
     }();
 
-    const int head_per_cta = std::min(Kernel::CTA_H, params.num_heads / params.num_kv_heads);
+    const int q_group_size   = params.num_heads / params.num_kv_heads;
+    const int q_head_per_cta = std::min(q_group_size, Kernel::CTA_H);
 
-    dim3 grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, 1, head_per_cta);
+    // cta needed to process one query group
+    const int cta_per_q_group = (q_group_size + q_head_per_cta - 1) / q_head_per_cta;
+
+    // std::cout << "head_per_cta: " << q_head_per_cta << ", cta_per_q_group: " << cta_per_q_group << "\n";
+
+    dim3 grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, 1, cta_per_q_group);
 
     const int grid_size = grid.x * grid.y * grid.z;
     const int split_cnt = GetSplitCount(max_split_count, grid_size, caps.y, caps.x, 4);
 
-    grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, split_cnt, head_per_cta);
+    grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, split_cnt, cta_per_q_group);
 
     auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
     if (err) {
@@ -67,7 +73,8 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
 
     auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
 
-    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cache_iter_factory, CtaMap{});
+    kernel_func<<<grid, block, kSmemSize, params.stream>>>(
+        params, cache_iter_factory, CtaMap{}, q_group_size, q_head_per_cta, cta_per_q_group);
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
         std::cout << cudaGetErrorString(err) << "\n";

@@ -62,7 +62,15 @@ void invokeAttention(const typename Kernel::ParamType& params)
 
     auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
 
-    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cache_iter_factory, cta_map);
+    const int q_group_size = params.num_heads / params.num_kv_heads;
+
+    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params,
+                                                           cache_iter_factory,
+                                                           cta_map,
+                                                           q_group_size,
+                                                           1,            // q_head_per_cta
+                                                           q_group_size  // cta_per_q_group
+    );
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
         std::cout << cudaGetErrorString(err) << "\n";

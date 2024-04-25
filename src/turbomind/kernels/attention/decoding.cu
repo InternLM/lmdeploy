@@ -42,25 +42,25 @@ void dispatchDecoding(const AttentionParams<T>& params)
     auto dispatch_h = [&](auto arch, auto kv) -> bool {
         using Arch = decltype(arch);
         using Tkv  = decltype(kv);
-        if (query_group_sz % 8 == 0) {
+        if (query_group_sz >= 8) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 8, kHeadDim>>(params);
         }
-        else if (query_group_sz % 7 == 0) {
+        else if (query_group_sz >= 7) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 7, kHeadDim>>(params);
         }
-        else if (query_group_sz % 6 == 0) {
+        else if (query_group_sz >= 6) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 6, kHeadDim>>(params);
         }
-        else if (query_group_sz % 5 == 0) {
+        else if (query_group_sz >= 5) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 5, kHeadDim>>(params);
         }
-        else if (query_group_sz % 4 == 0) {
+        else if (query_group_sz >= 4) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 4, kHeadDim>>(params);
         }
-        else if (query_group_sz % 3 == 0) {
+        else if (query_group_sz >= 3) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 3, kHeadDim>>(params);
         }
-        else if (query_group_sz % 2 == 0) {
+        else if (query_group_sz >= 2) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 2, kHeadDim>>(params);
         }
         else {

@@ -34,7 +34,7 @@ struct Reduce {
                                int            query_idx,
                                int            head_idx,
                                int            head_num,
-                               int            head_per_cta,  // actual head per CTA
+                               int            hi_end,
                                int            split_cnt,
                                int            max_split_cnt,
                                float          exp_scale,
@@ -68,7 +68,7 @@ struct Reduce {
             for (int k = 0; k < K; ++k) {
                 const int  si   = (lane_id % L + k * L) * stride_k + offset_k;
                 const int  idx  = (query_idx * head_num + head_idx + hi) * max_split_cnt + si;
-                const bool mask = hi < head_per_cta && si < split_cnt;
+                const bool mask = hi < hi_end && si < split_cnt;
                 if (mask) {
                     frag_M[k] = partial_M[idx];
                     frag_L[k] = partial_L[idx];
@@ -121,7 +121,7 @@ struct Reduce {
                 for (int k = 0; k < K; ++k) {
                     const int  si   = (lane_id % L + k * L) * stride_k + offset_k;
                     const int  idx  = (query_idx * head_num + head_idx + hi) * max_split_cnt + si;
-                    const bool mask = hi < head_per_cta && si < split_cnt;
+                    const bool mask = hi < hi_end && si < split_cnt;
                     if (mask) {
                         partial_M[idx] = block_M;
                         partial_L[idx] = block_L;
@@ -168,7 +168,7 @@ struct Reduce {
                 using namespace ops;
                 ki += k;
                 const int  split_idx = offset_k + stride_k * ki;
-                const bool mask      = split_idx < split_cnt && hi < head_per_cta;
+                const bool mask      = split_idx < split_cnt && hi < hi_end;
                 const int  offset = ((query_idx * head_num + head_idx + hi) * max_split_cnt + split_idx) * HeadDim + di;
                 if (mask) {
                     Load(frag_O[s][c], &partial_O[offset]);
@@ -193,7 +193,7 @@ struct Reduce {
         }
 
         for_each([&](int s, int c, int ki, int hi, int di) {
-            if (ki == 0 && hi < head_per_cta) {
+            if (ki == 0 && hi < hi_end) {
                 if constexpr (IsFinal) {
                     const int offset = (query_idx * head_num + head_idx + hi) * HeadDim + di;
                     Store(&out[offset], cast<T>((Vec&)storage.O[hi][ki][di]));
