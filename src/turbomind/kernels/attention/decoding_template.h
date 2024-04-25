@@ -4,7 +4,7 @@
 
 #include "attention_params.h"
 #include "attention_universal.h"
-#include "reduce_template.h"
+#include "reduce.h"
 #include "src/turbomind/kernels/attention/thread_map.h"
 #include "utils.h"
 namespace turbomind {
@@ -83,17 +83,17 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
     }
 
     if (Kernel::need_separate_reduce(split_cnt)) {
-        attention::dispatchReduce<Kernel::kHeadDim>(params.out,
-                                                    params.partial_M,
-                                                    params.partial_L,
-                                                    params.partial_O,
-                                                    params.split_cnt,
-                                                    params.max_split_k,
-                                                    split_cnt,
-                                                    params.token_num,
-                                                    params.num_heads,
-                                                    params.inv_sqrt_dh,
-                                                    params.stream);
+        attention::invokeReduce<Kernel::kHeadDim>(params.out,
+                                                  params.partial_M,
+                                                  params.partial_L,
+                                                  params.partial_O,
+                                                  params.split_cnt,
+                                                  params.max_split_k,
+                                                  split_cnt,
+                                                  params.token_num,
+                                                  params.num_heads,
+                                                  params.inv_sqrt_dh,
+                                                  params.stream);
     }
 
     return true;

@@ -7,7 +7,7 @@
 #include "block.h"
 #include "iterator.h"
 #include "quantization.h"
-#include "reduce.h"
+#include "reduce_kernel.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include <limits>
 #include <type_traits>
