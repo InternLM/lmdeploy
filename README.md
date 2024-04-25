@@ -211,6 +211,8 @@ For detailed inference benchmarks in more devices and more settings, please refe
     <tr>
         <td>Dbrx</td>
         <td>132B</td>
+        <td></td>
+        <td></td>
     </tr>
 </table>
 

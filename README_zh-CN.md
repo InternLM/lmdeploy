@@ -212,6 +212,8 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
     <tr>
         <td>Dbrx</td>
         <td>132B</td>
+        <td></td>
+        <td></td>
     </tr>
 </table>
 
