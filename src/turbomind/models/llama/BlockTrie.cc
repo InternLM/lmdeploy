@@ -39,7 +39,7 @@ void BlockTrie::match(Sequence& seq)
     int num_matched = curr_node->num_matched;
 
     while (num_matched + block_seq_len_ < seq.tokens.size()) {
-        std::vector<int> curr_tokens(seq.tokens.begin()+num_matched, seq.tokens.begin()+num_matched+block_seq_len_);
+        std::vector<int> curr_tokens(seq.tokens.begin() + num_matched, seq.tokens.begin() + num_matched + block_seq_len_);
         size_t hash_key = hash(curr_tokens);
 
         auto it = curr_node->children.find(hash_key);
@@ -87,10 +87,9 @@ void BlockTrie::cache(const Sequence& seq)
 
     int idx = num_matched / block_seq_len_;
     BlockIds cached_blocks;
-    BlockIds free_blocks;
 
     while (num_matched + block_seq_len_ <= seq.cache_len) {
-        std::vector<int> curr_tokens(seq.tokens.begin()+num_matched, seq.tokens.begin()+num_matched+block_seq_len_);
+        std::vector<int> curr_tokens(seq.tokens.begin() + num_matched, seq.tokens.begin() + num_matched + block_seq_len_);
         size_t hash_key = hash(curr_tokens);
 
         auto it = curr_node->children.find(hash_key);
