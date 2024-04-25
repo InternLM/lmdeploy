@@ -40,11 +40,16 @@ def check_env_torch():
 
 def check_env_triton():
     """check OpenAI Triton environment."""
+    from packaging import version
     logger = get_logger('lmdeploy')
 
     try:
         logger.debug('Checking <Triton> environment.')
         import torch
+        import triton
+        if version.parse(triton.__version__) != version.parse('2.1.0'):
+            logger.warning('Install triton==2.1.0'
+                           ' if you want to get better performance.')
 
         from .triton_custom_add import custom_add
         a = torch.tensor([1, 2], device='cuda')

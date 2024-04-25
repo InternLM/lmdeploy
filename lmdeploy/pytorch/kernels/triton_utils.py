@@ -28,6 +28,10 @@ else:
         return KERNEL_META
 
 
+TRITON_DIVIIBILITY = getattr(JITFunction, 'divisibility', 16)
+TRITON_DIVIIBILITY_8 = getattr(JITFunction, 'divisibility_8', 8)
+
+
 class JitFunction220Wrapper:
 
     def __init__(self, jit_func: JITFunction):
@@ -42,16 +46,16 @@ class JitFunction220Wrapper:
 
     @staticmethod
     def _specialization_key(value):
-        if hasattr(value, 'data_ptr'):
-            return (value.data_ptr() % JITFunction.divisibility == 0, )
-
         if isinstance(value, int):
             # bool is a subclass of int, so we don't check explicitly above.
             return (
-                value % JITFunction.divisibility == 0,
-                value % JITFunction.divisibility_8 == 0,
+                value % TRITON_DIVIIBILITY == 0,
+                value % TRITON_DIVIIBILITY_8 == 0,
                 value == 1,
             )
+
+        if hasattr(value, 'data_ptr'):
+            return (value.data_ptr() % TRITON_DIVIIBILITY == 0, )
 
         return (False, )
 
@@ -63,6 +67,12 @@ class JitFunction220Wrapper:
                                      get_arch_default_num_warps)
 
         def _make_spec_key_str(anno, key):
+            if 'Tensor' in anno:
+                return f'({key}.data_ptr() % TRITON_DIVIIBILITY == 0, )'
+            if anno == 'int' or anno == 'bool':
+                return (f'({key} % TRITON_DIVIIBILITY == 0, '
+                        f'{key} % TRITON_DIVIIBILITY_8 == 0, '
+                        f'{key} == 1, )')
             return f'_specialization_key({key})'
 
         def _make_sig_key_str(anno, key):
@@ -200,6 +210,8 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, *
             kernel_cache=jit_func.cache,
             launch_enter_hook=CompiledKernel.launch_enter_hook,
             launch_exit_hook=CompiledKernel.launch_exit_hook,
+            TRITON_DIVIIBILITY=TRITON_DIVIIBILITY,
+            TRITON_DIVIIBILITY_8=TRITON_DIVIIBILITY_8,
         )
         exec(src, scope)
         return scope[f'_{fn.__name__}_launcher']
@@ -224,13 +236,13 @@ class JitFunction230Wrapper:
     @staticmethod
     def _specialization_key(value):
         if hasattr(value, 'data_ptr'):
-            return (value.data_ptr() % JITFunction.divisibility == 0, )
+            return (value.data_ptr() % TRITON_DIVIIBILITY == 0, )
 
         if isinstance(value, int):
             # bool is a subclass of int, so we don't check explicitly above.
             return (
-                value % JITFunction.divisibility == 0,
-                value % JITFunction.divisibility_8 == 0,
+                value % TRITON_DIVIIBILITY == 0,
+                value % TRITON_DIVIIBILITY_8 == 0,
                 value == 1,
             )
 
@@ -358,6 +370,6 @@ def wrap_jit_func(func):
 
     if triton_version == version.parse('2.2.0'):
         return JitFunction220Wrapper(func)
-    elif triton_version == version.parse('2.3.0'):
+    if triton_version == version.parse('2.3.0'):
         return JitFunction230Wrapper(func)
     return func
