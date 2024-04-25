@@ -11,5 +11,4 @@ template bool invokeDecoding<Decoding<arch::Sm80, half, uint4_t, 8, 128>>(const 
 
 template bool invokeDecoding<Decoding<arch::Sm80, half, uint4_t, 16, 128>>(const AttentionParams<half>&);
 
-
 }  // namespace turbomind
