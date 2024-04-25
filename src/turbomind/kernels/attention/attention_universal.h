@@ -80,9 +80,9 @@ struct AttentionUniversal {
         }
     }
 
-    template<class Vec>
-    __device__ void
-    ApplyBias(Vec& vec_Q, Vec& vec_K, Vec& vec_V, const ParamType& params, int head_idx, int kv_head_idx, int2 offset)
+    template<class VecQ, class VecKV>
+    __device__ void ApplyBias(
+        VecQ& vec_Q, VecKV& vec_K, VecKV& vec_V, const ParamType& params, int head_idx, int kv_head_idx, int2 offset)
     {
         using Map              = typename Impl::ThreadMapQ;
         constexpr int kVecSize = Map::kAccessC;
@@ -103,16 +103,13 @@ struct AttentionUniversal {
                 }
             }
             PRAGMA_UNROLL
-            for (int s = 0; s < ITER_S; ++s) {
-                PRAGMA_UNROLL
-                for (int c = 0; c < ITER_C; ++c) {
-                    using namespace ops;
-                    if (params.k_bias) {
-                        vec_K[s][c] = vec_K[s][c] + bias_K[c];
-                    }
-                    if (params.v_bias) {
-                        vec_V[s][c] = vec_V[s][c] + bias_V[c];
-                    }
+            for (int c = 0; c < ITER_C; ++c) {
+                using namespace ops;
+                if (params.k_bias) {
+                    vec_K[0][c] = vec_K[0][c] + bias_K[c];
+                }
+                if (params.v_bias) {
+                    vec_V[0][c] = vec_V[0][c] + bias_V[c];
                 }
             }
         }
@@ -194,8 +191,8 @@ struct AttentionUniversal {
         constexpr int ITER_S = Map::kIterS;
 
         Vec vec_Q[ITER_S][ITER_C]{};  // [QxH, D]
-        Vec vec_K[ITER_S][ITER_C];
-        Vec vec_V[ITER_S][ITER_C];
+        Vec vec_K[1][ITER_C];
+        Vec vec_V[1][ITER_C];
 
         const int2 offset = Map::get_offset(warp_id, lane_id);
 
@@ -214,9 +211,11 @@ struct AttentionUniversal {
                     if (check_h(si % CTA_H)) {
                         Ldg(vec_Q[s][c], &params.q[q_idx]);
                     }
-                    if constexpr (kProcessKV) {  // duplicate loads
-                        Ldg(vec_K[s][c], &params.k[k_idx]);
-                        Ldg(vec_V[s][c], &params.v[k_idx]);
+                    if constexpr (kProcessKV) {  // duplicate loads in s
+                        if (s == 0) {
+                            Ldg(vec_K[0][c], &params.k[k_idx]);
+                            Ldg(vec_V[0][c], &params.v[k_idx]);
+                        }
                     }
                 }
             }
@@ -238,8 +237,9 @@ struct AttentionUniversal {
                 const int ti = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx + history_len;
                 rope.apply(vec_Q[s][c], ti);
                 if constexpr (kProcessKV) {
-                    static_assert(ITER_S == 1);
-                    rope.apply(vec_K[0][c], ti);
+                    if (s == 0) {
+                        rope.apply(vec_K[0][c], ti);
+                    }
                 }
             }
         }
@@ -257,30 +257,26 @@ struct AttentionUniversal {
         }
 
         if constexpr (kProcessKV) {
-            static_assert(ITER_S == 1);
             const int qi = offset.y / CTA_H;
             const int ti = history_len;
 
-            Array<T, 2> param_K[ITER_S];
-            Array<T, 2> param_V[ITER_S];
+            Array<T, 2> param_K[1];
+            Array<T, 2> param_V[1];
 
             if constexpr (!std::is_same_v<T, Tkv>) {
                 warp_stats<Map::kWarpThreadC>(param_K, vec_K, bitsof<Tkv>);
                 warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
             }
 
-            Array<Tkv, kVecSize> out_K[ITER_S][ITER_C];
-            Array<Tkv, kVecSize> out_V[ITER_S][ITER_C];
+            Array<Tkv, kVecSize> out_K[1][ITER_C];
+            Array<Tkv, kVecSize> out_V[1][ITER_C];
 
+            ConvertKvCache<T, Tkv> conv_K{param_K[0][0], param_K[0][1]};
+            ConvertKvCache<T, Tkv> conv_V{param_V[0][0], param_V[0][1]};
             PRAGMA_UNROLL
-            for (int s = 0; s < ITER_S; ++s) {
-                ConvertKvCache<T, Tkv> conv_K{param_K[s][0], param_K[s][1]};
-                ConvertKvCache<T, Tkv> conv_V{param_V[s][0], param_V[s][1]};
-                PRAGMA_UNROLL
-                for (int c = 0; c < ITER_C; ++c) {
-                    out_K[s][c] = conv_K(vec_K[s][c]);
-                    out_V[s][c] = conv_V(vec_V[s][c]);
-                }
+            for (int c = 0; c < ITER_C; ++c) {
+                out_K[0][c] = conv_K(vec_K[0][c]);
+                out_V[0][c] = conv_V(vec_V[0][c]);
             }
 
             iterator.block_head_.with(

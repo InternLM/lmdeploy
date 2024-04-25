@@ -54,7 +54,8 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
     // cta needed to process one query group
     const int cta_per_q_group = (q_group_size + q_head_per_cta - 1) / q_head_per_cta;
 
-    // std::cout << "head_per_cta: " << q_head_per_cta << ", cta_per_q_group: " << cta_per_q_group << "\n";
+    // std::cout << "CTA_H: " << Kernel::CTA_H << ", head_per_cta: " << q_head_per_cta
+    //           << ", cta_per_q_group: " << cta_per_q_group << "\n";
 
     dim3 grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, 1, cta_per_q_group);
 

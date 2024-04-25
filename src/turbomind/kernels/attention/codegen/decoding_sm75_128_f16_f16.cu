@@ -9,4 +9,6 @@ using namespace attention;
 
 template bool invokeDecoding<Decoding<arch::Sm75, half, half, 8, 128>>(const AttentionParams<half>& params);
 
+template bool invokeDecoding<Decoding<arch::Sm75, half, half, 16, 128>>(const AttentionParams<half>& params);
+
 }  // namespace turbomind
