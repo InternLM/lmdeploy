@@ -62,7 +62,7 @@ class CacheConfig:
         logger = get_logger('lmdeploy')
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning(
-                'Shared cache is not available for window attention.')
+                'Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
 
 
