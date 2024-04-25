@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/04\] Support Llama3 and more VLMs, such as InternVL v1.1, v1.2, MiniGemini, InternLMXComposer2.
 - \[2024/04\] TurboMind adds online int8/int4 KV cache quantization and inference for all supported devices. Refer [here](docs/en/quantization/kv_quant.md) for detailed guide
 - \[2024/04\] TurboMind latest upgrade boosts GQA, rocketing the [internlm2-20b](https://huggingface.co/internlm/internlm2-20b) model inference to 16+ RPS, about 1.8x faster than vLLM.
 - \[2024/04\] Support Qwen1.5-MOE and dbrx.
@@ -88,39 +89,40 @@ For detailed inference benchmarks in more devices and more settings, please refe
 
 # Supported Models
 
-|       Model        |    Size    |
-| :----------------: | :--------: |
-|       Llama        |  7B - 65B  |
-|       Llama2       |  7B - 70B  |
-|       Llama3       |  8B, 70B   |
-|      InternLM      |  7B - 20B  |
-|     InternLM2      |  7B - 20B  |
-| InternLM-XComposer |     7B     |
-|        QWen        | 1.8B - 72B |
-|      QWen1.5       | 0.5B - 72B |
-|    QWen1.5-MoE     |   A2.7B    |
-|      QWen-VL       |     7B     |
-|      Baichuan      |  7B - 13B  |
-|     Baichuan2      |  7B - 13B  |
-|     Code Llama     |  7B - 34B  |
-|      ChatGLM2      |     6B     |
-|       Falcon       | 7B - 180B  |
-|         YI         |  6B - 34B  |
-|      Mistral       |     7B     |
-|    DeepSeek-MoE    |    16B     |
-|    DeepSeek-VL     |     7B     |
-|   InternVL-Chat    |     -      |
-|      Mixtral       |    8x7B    |
-|       Gemma        |   2B-7B    |
-|        Dbrx        |    132B    |
-|   LLaVA(1.5,1.6)   |  7B - 34B  |
-|  MiniGeminiLlama   |     7B     |
+|        Model        |    Size     |
+| :-----------------: | :---------: |
+|        Llama        |  7B - 65B   |
+|       Llama2        |  7B - 70B   |
+|       Llama3        |   8B, 70B   |
+|      InternLM       |  7B - 20B   |
+|      InternLM2      |  7B - 20B   |
+| InternLM-XComposer  |     7B      |
+| InternLM-XComposer2 | 7B, 4khd-7B |
+|        QWen         | 1.8B - 72B  |
+|       QWen1.5       | 0.5B - 72B  |
+|     QWen1.5-MoE     |    A2.7B    |
+|       QWen-VL       |     7B      |
+|      Baichuan       |     7B      |
+|      Baichuan2      |  7B - 13B   |
+|     Code Llama      |  7B - 34B   |
+|      ChatGLM2       |     6B      |
+|       Falcon        |  7B - 180B  |
+|         YI          |  6B - 34B   |
+|       Mistral       |     7B      |
+|    DeepSeek-MoE     |     16B     |
+|     DeepSeek-VL     |     7B      |
+|    InternVL-Chat    |      -      |
+|       Mixtral       |    8x7B     |
+|        Gemma        |    2B-7B    |
+|        Dbrx         |    132B     |
+|   LLaVA(1.5,1.6)    |  7B - 34B   |
+|   MiniGeminiLlama   |     7B      |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
 They differ in the types of supported models and the inference data type. Please refer to [this table](./docs/en/supported_models/supported_models.md) for each engine's capability and choose the proper one that best fits your actual needs.
 
-# Quick Start
+# Quick Start [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
 
 ## Installation
 
@@ -161,8 +163,8 @@ Please overview [getting_started](./docs/en/get_started.md) section for the basi
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
 - User Guide
-  - [LLM Inference pipeline](./docs/en/inference/pipeline.md)
-  - [VLM Inference pipeline](./docs/en/inference/vl_pipeline.md)
+  - [LLM Inference pipeline](./docs/en/inference/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
+  - [VLM Inference pipeline](./docs/en/inference/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
   - [LLM Serving](docs/en/serving/api_server.md)
   - [VLM Serving](docs/en/serving/api_server_vl.md)
   - [Quantization](docs/en/quantization)

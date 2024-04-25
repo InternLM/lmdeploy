@@ -162,6 +162,7 @@ class CacheEngine:
             cpu_cache.append((key_blocks, value_blocks))
         return cpu_cache
 
+    @torch.inference_mode()
     def _swap(self, src: List[KVCache], dst: List[KVCache],
               src_to_dst: Dict[int, int]):
         """Move caches from src memory to dst memory.

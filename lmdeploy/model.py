@@ -383,12 +383,20 @@ class InternLM2Chat7B(InternLMChat7B):
                  system='<|im_start|>system\n',
                  user='<|im_start|>user\n',
                  assistant='<|im_start|>assistant\n',
+                 environment='<|im_start|>environment\n',
+                 plugin='<|plugin|>',
+                 interpreter='<|interpreter|>',
                  eosys='<|im_end|>\n',
                  eoh='<|im_end|>\n',
                  eoa='<|im_end|>',
+                 eoenv='<|im_end|>\n',
                  separator='\n',
                  stop_words=['<|im_end|>', '<|action_end|>'],
                  **kwargs):
+        self.plugin = plugin
+        self.interpreter = interpreter
+        self.environment = environment
+        self.eoenv = eoenv
         super(InternLM2Chat7B, self).__init__(session_len=session_len,
                                               system=system,
                                               user=user,
@@ -410,6 +418,104 @@ class InternLM2Chat7B(InternLMChat7B):
         path = model_path.lower()
         if 'internlm2' in path and ('chat' in path or 'math' in path):
             return 'internlm2'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        box_map = dict(user=self.user,
+                       assistant=self.assistant,
+                       system=self.system,
+                       environment=self.environment)
+        eox_map = dict(user=self.eoh,
+                       assistant=self.eoa + self.separator,
+                       system=self.eosys,
+                       environment=self.eoenv)
+        name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
+        ret = ''
+        if self.meta_instruction is not None:
+            if len(messages) and messages[0]['role'] != 'system':
+                ret += f'{self.system}{self.meta_instruction}{self.eosys}'
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            begin = box_map[role].strip(
+            ) + f" name={name_map[message['name']]}\n" if 'name' in message else box_map[
+                role]
+            ret += f'{begin}{content}{eox_map[role]}'
+        ret += f'{self.assistant}'
+        return ret
+
+
+@MODELS.register_module(name='internlm-xcomposer2')
+class InternLMXComposer2Chat7B(InternLMChat7B):
+    """Chat template and generation parameters of InternLM-XComposer2-7b."""
+
+    def __init__(
+            self,
+            session_len=4096,
+            system='[UNUSED_TOKEN_146]system\n',
+            meta_instruction="""You are an AI assistant whose name is InternLM-XComposer (浦语·灵笔).
+- InternLM-XComposer (浦语·灵笔) is a multi-modality conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
+- InternLM-XComposer (浦语·灵笔) can understand and communicate fluently in the language chosen by the user such as English and 中文.
+- InternLM-XComposer (浦语·灵笔) is capable of comprehending and articulating responses effectively based on the provided image.""",
+            user='[UNUSED_TOKEN_146]user\n',
+            assistant='[UNUSED_TOKEN_146]assistant\n',
+            eosys='[UNUSED_TOKEN_145]\n',
+            eoh='[UNUSED_TOKEN_145]\n',
+            eoa='[UNUSED_TOKEN_145]\n',
+            separator='\n',
+            stop_words=['[UNUSED_TOKEN_145]'],
+            **kwargs):
+        super().__init__(session_len=session_len,
+                         system=system,
+                         meta_instruction=meta_instruction,
+                         user=user,
+                         assistant=assistant,
+                         eosys=eosys,
+                         eoh=eoh,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'internlm' in path and 'xcomposer2' in path and '4khd' not in path:
+            return 'internlm-xcomposer2'
+
+
+@MODELS.register_module(name='internlm-xcomposer2-4khd')
+class InternLMXComposer24khdChat7B(InternLMXComposer2Chat7B):
+    """Chat template and generation parameters of InternLM-
+    XComposer2-4khd-7b."""
+
+    def __init__(self, session_len=16384, **kwargs):
+        super().__init__(session_len=session_len, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'internlm' in path and 'xcomposer2' in path and '4khd' in path:
+            return 'internlm-xcomposer2-4khd'
 
 
 @MODELS.register_module(name='baichuan-7b')

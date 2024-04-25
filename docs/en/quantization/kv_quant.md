@@ -1,6 +1,6 @@
 # Key-Value(KV) Cache Quantization
 
-The latest main branch of LMDeploy supports **online** key-value (kv) cache quantization with int4 and int8 numerical precision, utilizing an asymmetric quantization method that is applied on a per-head, per-token basis. The original kv offline quantization method has been removed.
+Since v0.4.0, LMDeploy has supported **online** key-value (kv) cache quantization with int4 and int8 numerical precision, utilizing an asymmetric quantization method that is applied on a per-head, per-token basis. The original kv offline quantization method has been removed.
 
 Intuitively, quantizing the kv cache is beneficial for reducing memory usage. Compared to FP16, the memory for int4/int8 kv can be reduced to 1/4 and 1/2, respectively. This means that under the same memory conditions, the system can support a significantly increased number of concurrent operations after kv quantization, thereby ultimately enhancing throughput.
 
@@ -21,7 +21,11 @@ In summary, LMDeploy kv quantization has the following advantages:
 3. KV int8 quantization has almost lossless accuracy, and KV int4 quantization accuracy is within an acceptable range
 4. Efficient inference, with int8/int4 kv quantization applied to llama2-7b, RPS is improved by round 30% and 40% respectively compared to fp16
 
-In the next section, we will take `internlm2-chat-7b` model as an example, introducing the usage of kv quantization and inference of lmdeploy. But before that, please install lmdeploy from source according to the [build](../build.md) guide, because lmdeploy hasn't released this feature yet.
+In the next section, we will take `internlm2-chat-7b` model as an example, introducing the usage of kv quantization and inference of lmdeploy. But before that, please ensure that lmdeploy is installed.
+
+```shell
+pip install lmdeploy
+```
 
 ## Usage
 
