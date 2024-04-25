@@ -1299,6 +1299,45 @@ class ChatmlDirect(BaseChatTemplate):
             return 'internvl-zh-hermes2'
 
 
+@MODELS.register_module(name='phi-3')
+class Phi3Instruct(BaseChatTemplate):
+    """Chat template of InternLM model."""
+
+    def __init__(
+            self,
+            system='<|system|>\n',
+            meta_instruction="""You are a helpful AI assistant.""",  # noqa: E501
+            eosys='<|end|>\n',
+            user='<|user|>\n',
+            eoh='<|end|>\n',
+            assistant='<|assistant|>:',
+            eoa='<|end|>\n',
+            separator='\n',
+            stop_words=['<|end|>'],
+            **kwargs):
+        super().__init__(system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if all([c in path for c in ['phi-3', 'instruct']]):
+            return 'phi-3'
+
+
 def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 

@@ -50,3 +50,4 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 | DeepSeek-MoE |    16B     |    Yes    |   No    |  No  |
 |    Gemma     |   2B-7B    |    Yes    |   No    |  No  |
 |     Dbrx     |    132B    |    Yes    |   No    |  No  |
+|  Phi-3-mini  |    3.8B    |    Yes    |   No    |  No  |

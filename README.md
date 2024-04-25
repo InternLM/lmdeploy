@@ -117,6 +117,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |        Dbrx         |    132B     |
 |   LLaVA(1.5,1.6)    |  7B - 34B   |
 |   MiniGeminiLlama   |     7B      |
+|     Phi-3-mini      |    3.8B     |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 

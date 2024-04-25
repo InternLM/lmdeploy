@@ -50,3 +50,4 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 | DeepSeek-MoE |    16B     |    Yes    |   No    |  No  |
 |    Gemma     |   2B-7B    |    Yes    |   No    |  No  |
 |     Dbrx     |    132B    |    Yes    |   No    |  No  |
+|  Phi-3-mini  |    3.8B    |    Yes    |   No    |  No  |
