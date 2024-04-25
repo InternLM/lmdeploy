@@ -5,8 +5,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 from torch.distributed._tensor import DeviceMesh
-from transformers.modeling_outputs import (BaseModelOutputWithPast,
-                                           CausalLMOutputWithPast)
+from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
@@ -151,13 +150,10 @@ class PatchedVisionExpertAttention(nn.Module):
                                   dtype=hidden_states.dtype,
                                   device=hidden_states.device)
 
-        attn_output_vision = self.vision_expert_dense(
+        attn_output[vision_token_mask] = self.vision_expert_dense(
             context_layer[vision_token_mask])
-        attn_output_language = self.language_expert_dense(
+        attn_output[language_token_mask] = self.language_expert_dense(
             context_layer[language_token_mask])
-
-        attn_output[vision_token_mask] = attn_output_vision
-        attn_output[language_token_mask] = attn_output_language
         return attn_output, None, past_key_value
 
     def forward(
@@ -182,81 +178,24 @@ class PatchedVisionExpertAttention(nn.Module):
         )
 
 
-class PatchedVisionExpertMLP(nn.Module):
-
-    def forward(self, hidden_states: 'torch.Tensor(B, L, D)',
-                token_type_ids: 'torch.LongTensor(B, L)'):
-        output = torch.empty(hidden_states.shape,
-                             dtype=hidden_states.dtype,
-                             device=hidden_states.device)
-        vision_token_mask, language_token_mask = get_expert_mask(
-            token_type_ids)
-        output[vision_token_mask] = self.vision_mlp(
-            hidden_states[vision_token_mask])
-        output[language_token_mask] = self.language_mlp(
-            hidden_states[language_token_mask])
-        return output
-
-
-class PatchedCogVLMDecoderLayer(nn.Module):
+class PatchedCogVLMModel(nn.Module):
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        token_type_ids: torch.LongTensor,
-        position_ids: torch.LongTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor,
-                                                 torch.FloatTensor]]]:
-        residual = hidden_states
-
-        hidden_states = self.input_layernorm(hidden_states)
-
-        # Self Attention
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
-            hidden_states=hidden_states,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-        )
-        hidden_states = residual + hidden_states
-
-        # Fully Connected
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states, token_type_ids=token_type_ids)
-        hidden_states = residual + hidden_states
-
-        outputs = (hidden_states, )
-
-        if output_attentions:
-            outputs += (self_attn_weights, )
-
-        if use_cache:
-            outputs += (present_key_value, )
-
-        return outputs  # type: ignore
-
-
-class PatchedCogVLMModel(nn.Module):
-
-    def forward(self,
-                input_ids: torch.LongTensor = None,
-                vision_embeddings: Optional[List[torch.Tensor]] = None,
-                vision_embedding_ranges: Optional[torch.LongTensor] = None,
-                token_type_ids: Optional[torch.LongTensor] = None,
-                position_ids: Optional[torch.LongTensor] = None,
-                past_key_values: Optional[List[torch.FloatTensor]] = None,
-                **kwargs) -> Union[Tuple, BaseModelOutputWithPast]:
+        input_ids: torch.LongTensor = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        **kwargs,
+    ) -> Union[Tuple, BaseModelOutputWithPast]:
         # not allow for inputs_embeds, because we want to process image feature
         assert input_ids is not None
+        context = self.context.context
+        # get inputs from context
+        vision_embeddings = context.inputs.input_embeddings
+        vision_embedding_ranges = context.inputs.input_embedding_ranges
+        token_type_ids = context.inputs.token_type_ids
         inputs_embeds = self.embed_tokens(input_ids)
+
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             # multi-modality
             assert token_type_ids is not None, 'multi-modality requires `token_type_ids`!'
@@ -287,36 +226,4 @@ class PatchedCogVLMModel(nn.Module):
             past_key_values=past_key_value,
             hidden_states=None,
             attentions=None,
-        )
-
-
-class PatchedCogVLMForCausalLM(nn.Module):
-
-    def forward(self,
-                input_ids: torch.LongTensor = None,
-                input_embeddings: Optional[List[torch.Tensor]] = None,
-                input_embedding_ranges: Optional[torch.LongTensor] = None,
-                token_type_ids: Optional[torch.LongTensor] = None,
-                position_ids: Optional[torch.LongTensor] = None,
-                past_key_values: Optional[List[torch.FloatTensor]] = None,
-                **kwargs) -> Union[Tuple, CausalLMOutputWithPast]:
-        outputs = self.model(
-            input_ids=input_ids,
-            token_type_ids=token_type_ids,
-            vision_embeddings=input_embeddings,
-            vision_embedding_ranges=input_embedding_ranges,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
-        )
-
-        hidden_states = outputs[0]
-        logits = self.lm_head(hidden_states)
-        logits = logits.float()
-
-        return CausalLMOutputWithPast(
-            loss=None,
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
         )

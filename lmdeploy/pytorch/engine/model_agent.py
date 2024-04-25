@@ -2,7 +2,7 @@
 import asyncio
 import os
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, List, Literal
+from typing import Any, Callable, Dict, List
 
 import torch
 import torch.distributed as dist
@@ -361,8 +361,7 @@ def model_forward(patched_model: torch.nn.Module,
                   cache_engine: CacheEngine,
                   json_config: dict = None,
                   world_size: int = 1,
-                  stream: torch.cuda.Stream = None,
-                  task_type: Literal['llm', 'vlm'] = 'llm'):
+                  stream: torch.cuda.Stream = None):
     """perform model forward."""
 
     stream = stream or torch.cuda.current_stream()
@@ -370,16 +369,6 @@ def model_forward(patched_model: torch.nn.Module,
         # forward
 
         inputs = inputs.to_device('cuda')
-
-        extra_kwargs = {}
-        if task_type == 'vlm' and not inputs.is_decoding:
-            extra_kwargs.update(
-                dict(
-                    input_embeddings=inputs.input_embeddings,
-                    input_embedding_ranges=inputs.input_embedding_ranges,
-                ))
-            if inputs.token_type_ids is not None:
-                extra_kwargs['token_type_ids'] = inputs.token_type_ids
 
         context = StepContext.new(
             inputs=inputs,
@@ -397,8 +386,7 @@ def model_forward(patched_model: torch.nn.Module,
             output_attentions=False,
             output_hidden_states=False,
             use_origin=False,
-            context=context,
-            **extra_kwargs)
+            context=context)
     return dict(logits=output['logits'], custom_outputs=context._outputs)
 
 
@@ -587,8 +575,7 @@ class BaseModelAgent(AutoModelAgent):
                                self.cache_engine,
                                self.model_config.json_config,
                                world_size=1,
-                               stream=self.stream,
-                               task_type=self.model_config.task_type)
+                               stream=self.stream)
         return output
 
     def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
@@ -881,8 +868,7 @@ def _tp_model_loop(
                       cache_engine,
                       model_config.json_config,
                       world_size=world_size,
-                      stream=stream,
-                      task_type=model_config.task_type)
+                      stream=stream)
 
 
 def _start_tp_process(proc_id: int,
@@ -1088,8 +1074,7 @@ class TPModelAgent(AutoModelAgent):
                                self.cache_engine,
                                self.model_config.json_config,
                                world_size=1,
-                               stream=self.stream,
-                               task_type=self.model_config.task_type)
+                               stream=self.stream)
         return output
 
     def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
