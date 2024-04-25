@@ -395,6 +395,8 @@ class SchedulerSequence:
     def __post_init__(self):
         """post init."""
         self._num_history_ids: int = 0
+        self._num_history_images: int = 0
+        self._num_history_image_tokens: int = 0
         self._num_token_ids: int = len(self.history_cache)
         self._input_embeddings: List[
             InputEmbeddings] = self.history_embeddings.embeddings
@@ -408,6 +410,16 @@ class SchedulerSequence:
     def history_len(self) -> int:
         """get history length."""
         return self._num_history_ids
+
+    @property
+    def history_image_num(self) -> int:
+        """get history image number."""
+        return self._num_history_images
+
+    @property
+    def history_image_token_len(self) -> int:
+        """get history image token length."""
+        return self._num_history_image_tokens
 
     @property
     def session_id(self) -> int:
@@ -478,6 +490,10 @@ class SchedulerSequence:
                          embeddings: List[InputEmbeddings] = None):
         """Update token ids, old token ids will be added to history."""
         self._num_history_ids += self._num_token_ids
+        # update history image nums
+        self._num_history_images += len(self._input_embeddings)
+        self._num_history_image_tokens += sum(
+            [emb.end - emb.start for emb in self._input_embeddings])
 
         self._input_embeddings: List[InputEmbeddings] = []
         if embeddings is not None:

@@ -71,7 +71,6 @@ class PatchedVisionExpertAttention(nn.Module):
         block_offsets = context.block_offsets
         max_q_seq_length = context.max_q_seq_length
         max_kv_seq_length = context.max_kv_seq_length
-        position_ids_1d = context.position_ids_1d
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_heads // world_size
         head_dim = self.head_dim
@@ -100,13 +99,14 @@ class PatchedVisionExpertAttention(nn.Module):
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
             cos, sin = self.rotary_emb(value_states, seq_len=max_kv_seq_length)
+
             query_states, key_states = apply_rotary_pos_emb(
                 query_states,
                 key_states,
                 cos.squeeze(1),
                 sin.squeeze(1),
                 position_ids,
-                position_ids_1d=position_ids_1d)
+                position_ids_1d=position_ids)
             return query_states, key_states, value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
@@ -191,10 +191,10 @@ class PatchedCogVLMModel(nn.Module):
         assert input_ids is not None
         context = self.context.context
         # get inputs from context
-        vision_embeddings = context.inputs.input_embeddings
-        vision_embedding_ranges = context.inputs.input_embedding_ranges
-        token_type_ids = context.inputs.token_type_ids
+        vision_embeddings = context.input_embeddings
+        vision_embedding_ranges = context.input_embedding_ranges
         inputs_embeds = self.embed_tokens(input_ids)
+        token_type_ids, position_ids = _get_cogvlm_inputs(context)
 
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             # multi-modality
@@ -227,3 +227,45 @@ class PatchedCogVLMModel(nn.Module):
             hidden_states=None,
             attentions=None,
         )
+
+
+def _get_cogvlm_inputs(context):
+    """get cogvlm inputs."""
+    inputs = context.inputs
+
+    q_seq_length = inputs.seq_length
+
+    history_position_lengths = inputs.history_lengths - inputs.history_image_token_lengths + inputs.history_image_nums * 3
+    token_type_ids = None
+    device = inputs.history_lengths.device
+    if inputs.is_decoding:
+        position_ids = history_position_lengths
+    else:
+        if inputs.input_embedding_ranges is not None and len(
+                inputs.input_embedding_ranges) > 0:
+            token_type_ids = []
+            position_ids = []
+            for idx, input_ranges in enumerate(inputs.input_embedding_ranges):
+                seq_len = q_seq_length[idx]
+                cur_token_type_ids = torch.zeros(seq_len,
+                                                 dtype=torch.long,
+                                                 device=device)
+                cur_position_mask = torch.ones(seq_len,
+                                               dtype=torch.long,
+                                               device=device)
+                for start, end in input_ranges:
+                    # vision token_types
+                    cur_token_type_ids[start:end] = VISION_TOKEN_TYPE
+                    cur_position_mask[start + 2:end - 1] = 0
+
+                cur_position_ids = cur_position_mask.cumsum(
+                    0) - 1 + history_position_lengths[idx]
+                position_ids.append(cur_position_ids)
+                token_type_ids.append(cur_token_type_ids)
+            position_ids = torch.cat(position_ids)
+            token_type_ids = torch.cat(token_type_ids).unsqueeze(0)
+        else:
+            position_ids = (context.attention_mask.long().cumsum(-1) -
+                            1).squeeze(0)
+            position_ids += history_position_lengths
+    return token_type_ids, position_ids

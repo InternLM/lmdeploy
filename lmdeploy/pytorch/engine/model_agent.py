@@ -115,6 +115,8 @@ class ModelInputs:
     input_ids: torch.LongTensor
     seq_length: torch.LongTensor
     history_lengths: torch.LongTensor
+    history_image_nums: torch.LongTensor
+    history_image_token_lengths: torch.LongTensor
     block_offsets: torch.LongTensor
     max_q_seq_length: int
     max_history_length: int
@@ -126,18 +128,13 @@ class ModelInputs:
     max_rank: int = 0
     meta: Any = None
     input_embeddings: List[torch.Tensor] = None
-    input_embedding_ranges: torch.LongTensor = None
-    token_type_ids: torch.Tensor = None
-    position_ids: torch.LongTensor = None
-    history_position_lengths: torch.LongTensor = None
+    input_embedding_ranges: List[torch.LongTensor] = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
         assert self.is_decoding
         self.history_lengths = self.history_lengths + 1
         self.max_history_length = self.max_history_length + 1
-        if self.history_position_lengths is not None:
-            self.history_position_lengths = self.history_position_lengths + 1
 
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
@@ -172,6 +169,7 @@ class ModelInputs:
                 local_adapter_ids = local_adapter_ids[:, start:end]
 
             block_offsets = self.block_offsets[:, :block_end]
+
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
@@ -233,7 +231,8 @@ class StepContext:
     global_adapter_ids: torch.LongTensor = None
     adapter_offsets: torch.LongTensor = None
     max_rank: int = 0
-    history_position_lengths: torch.LongTensor = None
+    input_embeddings: List[torch.Tensor] = None
+    input_embedding_ranges: torch.LongTensor = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -254,11 +253,27 @@ class StepContext:
             world_size (int): The distribution world size.
             device (str): The device of the tensors.
         """
+
         q_seq_length = inputs.seq_length
         max_q_seq_length = inputs.max_q_seq_length
-        history_position_lengths = inputs.history_lengths
-        if inputs.history_position_lengths is not None:
-            history_position_lengths = inputs.history_position_lengths
+        history_lengths = inputs.history_lengths
+
+        # for vlm
+        input_embeddings: List[torch.Tensor] = None
+        input_embedding_ranges: torch.LongTensor = None
+        if inputs.input_embeddings is not None and len(
+                inputs.input_embeddings) > 0:
+            assert len(inputs.input_embeddings) == len(
+                inputs.input_embedding_ranges)
+            input_embeddings = inputs.input_embeddings
+            input_embedding_ranges = [
+                rg for rg in inputs.input_embedding_ranges
+            ]
+            # add offsets for ranges
+            for i in range(1, len(inputs.input_embedding_ranges)):
+                input_embedding_ranges[
+                    i] = input_embedding_ranges[i] + q_seq_length[i - 1]
+            input_embedding_ranges = torch.cat(input_embedding_ranges, dim=0)
 
         batch_size = len(q_seq_length)
         device = q_seq_length.device
@@ -267,16 +282,13 @@ class StepContext:
         if inputs.is_decoding:
             q_start_loc = torch.arange(0, batch_size, device=device)
             attention_mask = torch.ones_like(q_seq_length)[:, None]
-            position_ids = history_position_lengths.unsqueeze(-1)
+            position_ids = history_lengths.unsqueeze(-1)
         else:
             q_start_loc = q_seq_length.cumsum(0) - q_seq_length
             mask_range = torch.arange(max_q_seq_length, device=device)[None, :]
             attention_mask = (mask_range < q_seq_length[:, None]).long()
-            if inputs.position_ids is None:
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                position_ids += history_position_lengths.unsqueeze(-1)
-            else:
-                position_ids = inputs.position_ids
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids += history_lengths.unsqueeze(-1)
 
         # position ids 1d
         position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
@@ -290,27 +302,27 @@ class StepContext:
         if window_size > 0:
             kv_seq_length -= inputs.num_ignored_history
 
-        ret = StepContext(
-            inputs=inputs,
-            block_offsets=inputs.block_offsets,
-            position_ids=position_ids,
-            position_ids_1d=position_ids_1d,
-            attention_mask=attention_mask,
-            q_start_loc=q_start_loc,
-            history_lengths=inputs.history_lengths,
-            history_position_lengths=inputs.history_position_lengths,
-            q_seq_length=inputs.seq_length,
-            kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_q_seq_length,
-            max_kv_seq_length=max_kv_seq_length,
-            kv_caches=kv_caches,
-            is_decoding=inputs.is_decoding,
-            world_size=world_size,
-            json_config=json_config,
-            local_adapter_ids=inputs.local_adapter_ids,
-            global_adapter_ids=inputs.global_adapter_ids,
-            adapter_offsets=inputs.adapter_offsets,
-            max_rank=inputs.max_rank)
+        ret = StepContext(inputs=inputs,
+                          block_offsets=inputs.block_offsets,
+                          position_ids=position_ids,
+                          position_ids_1d=position_ids_1d,
+                          input_embeddings=input_embeddings,
+                          input_embedding_ranges=input_embedding_ranges,
+                          attention_mask=attention_mask,
+                          q_start_loc=q_start_loc,
+                          history_lengths=inputs.history_lengths,
+                          q_seq_length=inputs.seq_length,
+                          kv_seq_length=kv_seq_length,
+                          max_q_seq_length=max_q_seq_length,
+                          max_kv_seq_length=max_kv_seq_length,
+                          kv_caches=kv_caches,
+                          is_decoding=inputs.is_decoding,
+                          world_size=world_size,
+                          json_config=json_config,
+                          local_adapter_ids=inputs.local_adapter_ids,
+                          global_adapter_ids=inputs.global_adapter_ids,
+                          adapter_offsets=inputs.adapter_offsets,
+                          max_rank=inputs.max_rank)
         return ret
 
     @classmethod
@@ -367,7 +379,6 @@ def model_forward(patched_model: torch.nn.Module,
     stream = stream or torch.cuda.current_stream()
     with torch.inference_mode(), torch.cuda.stream(stream):
         # forward
-
         inputs = inputs.to_device('cuda')
 
         context = StepContext.new(

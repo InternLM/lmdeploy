@@ -342,45 +342,23 @@ class Engine:
         history_lengths = [msg.history_len for msg in messages]
         history_lengths = torch.tensor(history_lengths)
 
+        history_image_nums = torch.LongTensor(
+            [msg.history_image_num for msg in messages])
+        history_image_token_lengths = torch.LongTensor(
+            [msg.history_image_token_len for msg in messages])
+
+        input_embeddings = []
+        input_embedding_ranges = []
+        for msg in messages:
+            input_embeddings.extend([
+                torch.from_numpy(emb.embeddings)
+                for emb in msg.input_embeddings
+            ])
+            input_embedding_ranges.append(
+                torch.LongTensor([[emb.start, emb.end]
+                                  for emb in msg.input_embeddings]))
+
         token_ids = [msg.token_ids for msg in messages]
-
-        is_vllm = self.model_agent.model_config.task_type == 'vlm'
-        is_cogvlm = self.model_agent.model_config.model_arch == 'CogVLMForCausalLM'  # noqa: E501
-
-        def __get_vlm_inputs(messages: SeqList):
-            """get input_embeddings and ranges for vlm."""
-            input_embeddings = []
-            emb_ranges = []
-            pre_len = 0
-            for msg in messages:
-                for emb in msg.input_embeddings:
-                    emb_ranges.append([pre_len + emb.start, pre_len + emb.end])
-                    input_embeddings.append(torch.from_numpy(emb.embeddings))
-                pre_len += msg.num_all_ids
-            emb_ranges = torch.LongTensor(emb_ranges)
-            return input_embeddings, emb_ranges
-
-        def __get_cogvlm_inputs(messages: SeqList,
-                                history_position_lengths: torch.LongTensor):
-            token_type_ids = []
-            position_ids = []
-            for idx, msg in enumerate(messages):
-                cur_token_type_ids = torch.zeros(msg.num_token_ids,
-                                                 dtype=torch.long)
-                cur_position_mask = torch.ones(msg.num_token_ids,
-                                               dtype=torch.long)
-                for emb in msg.input_embeddings:
-                    # vision token_types
-                    cur_token_type_ids[emb.start:emb.end] = 1
-                    cur_position_mask[emb.start + 2:emb.end - 1] = 0
-
-                cur_position_ids = cur_position_mask.cumsum(
-                    0) - 1 + history_position_lengths[idx]
-                position_ids.append(cur_position_ids)
-                token_type_ids.append(cur_token_type_ids)
-            position_ids = torch.cat(position_ids).unsqueeze(0)
-            token_type_ids = torch.cat(token_type_ids).unsqueeze(0)
-            return token_type_ids, position_ids
 
         meta = messages[0].meta
 
@@ -392,33 +370,9 @@ class Engine:
 
         is_decoding = input_ids.size(0) == batch_size
 
-        # args for vlm
-        input_embeddings = None
-        input_embedding_ranges = None
-        token_type_ids = None
-        position_ids = None
-        history_position_lengths = None
-
-        if is_cogvlm:
-            # minus num of vision tokens
-            history_length_offsets = torch.tensor([
-                sum([
-                    emb.end - emb.start - 3
-                    for emb in msg.history_embeddings.get_embeddings(
-                        end=msg.history_len)
-                ]) for msg in messages
-            ])
-            history_position_lengths = history_lengths - history_length_offsets
-
         if not is_decoding:
             seq_length = [len(tokens) for tokens in token_ids]
             seq_length = torch.tensor(seq_length, dtype=torch.long)
-            if is_vllm:
-                input_embeddings, input_embedding_ranges = __get_vlm_inputs(
-                    messages)
-                if is_cogvlm:
-                    token_type_ids, position_ids = __get_cogvlm_inputs(
-                        messages, history_position_lengths)
         else:
             seq_length = self._seq_length_buf[:batch_size]
 
@@ -449,24 +403,24 @@ class Engine:
 
         num_ignored_history = [msg.num_ignored_history for msg in messages]
         num_ignored_history = torch.tensor(num_ignored_history)
-        return ModelInputs(input_ids=input_ids,
-                           input_embeddings=input_embeddings,
-                           input_embedding_ranges=input_embedding_ranges,
-                           token_type_ids=token_type_ids,
-                           position_ids=position_ids,
-                           seq_length=seq_length,
-                           history_lengths=history_lengths,
-                           history_position_lengths=history_position_lengths,
-                           block_offsets=block_offsets,
-                           max_q_seq_length=max_q_seq_length,
-                           max_history_length=max_history_length,
-                           is_decoding=is_decoding,
-                           num_ignored_history=num_ignored_history,
-                           local_adapter_ids=local_adapter_ids,
-                           global_adapter_ids=global_adapter_ids,
-                           adapter_offsets=adapter_offsets,
-                           max_rank=max_rank,
-                           meta=meta)
+        return ModelInputs(
+            input_ids=input_ids,
+            input_embeddings=input_embeddings,
+            input_embedding_ranges=input_embedding_ranges,
+            seq_length=seq_length,
+            history_lengths=history_lengths,
+            history_image_nums=history_image_nums,
+            history_image_token_lengths=history_image_token_lengths,
+            block_offsets=block_offsets,
+            max_q_seq_length=max_q_seq_length,
+            max_history_length=max_history_length,
+            is_decoding=is_decoding,
+            num_ignored_history=num_ignored_history,
+            local_adapter_ids=local_adapter_ids,
+            global_adapter_ids=global_adapter_ids,
+            adapter_offsets=adapter_offsets,
+            max_rank=max_rank,
+            meta=meta)
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,
                                  stop_words: torch.Tensor,
