@@ -90,34 +90,130 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 
 # 支持的模型
 
-|        Model        |    Size     |
-| :-----------------: | :---------: |
-|        Llama        |  7B - 65B   |
-|       Llama2        |  7B - 70B   |
-|       Llama3        |   8B, 70B   |
-|      InternLM       |  7B - 20B   |
-|      InternLM2      |  7B - 20B   |
-| InternLM-XComposer  |     7B      |
-| InternLM-XComposer2 | 7B, 4khd-7B |
-|        QWen         | 1.8B - 72B  |
-|       QWen1.5       | 0.5B - 72B  |
-|     QWen1.5-MoE     |    A2.7B    |
-|       QWen-VL       |     7B      |
-|      Baichuan       |     7B      |
-|      Baichuan2      |  7B - 13B   |
-|     Code Llama      |  7B - 34B   |
-|      ChatGLM2       |     6B      |
-|       Falcon        |  7B - 180B  |
-|         YI          |  6B - 34B   |
-|       Mistral       |     7B      |
-|    DeepSeek-MoE     |     16B     |
-|     DeepSeek-VL     |     7B      |
-|    InternVL-Chat    |      -      |
-|       Mixtral       |    8x7B     |
-|        Gemma        |    2B-7B    |
-|        Dbrx         |    132B     |
-|   LLaVA(1.5,1.6)    |  7B - 34B   |
-|   MiniGeminiLlama   |     7B      |
+<table>
+    <tr>
+        <th colspan="2" align="center">LLM</th>
+        <th colspan="2" align="center">VLM</th>
+    </tr>
+    <tr>
+        <td>model</td>
+        <td>size</td>
+        <td>model</td>
+        <td>size</td>
+    </tr>
+    <tr>
+        <td>Llama</td>
+        <td>7B - 65B</td>
+        <td>LLaVA(1.5,1.6)</td>
+        <td>7B - 34B</td>
+    </tr>
+    <tr>
+        <td>Llama2</td>
+        <td>7B - 70B</td>
+        <td>QWen-VL</td>
+        <td>7B</td>
+    </tr>
+    <tr>
+        <td>Llama3</td>
+        <td>8B, 70B</td>
+        <td>InternLM-XComposer</td>
+        <td>7B</td>
+    </tr>
+    <tr>
+        <td>InternLM</td>
+        <td>7B - 20B</td>
+        <td>InternLM-XComposer2</td>
+        <td>7B, 4khd-7B</td>
+    </tr>
+    <tr>
+        <td>InternLM2</td>
+        <td>7B - 20B</td>
+        <td>DeepSeek-VL</td>
+        <td>7B</td>
+    </tr>
+    <tr>
+        <td>QWen</td>
+        <td>1.8B - 72B</td>
+        <td>InternVL-Chat</td>
+        <td>-</td>
+    </tr>
+    <tr>
+        <td>QWen1.5</td>
+        <td>0.5B - 72B</td>
+        <td>MiniGeminiLlama</td>
+        <td>7B</td>
+    </tr>
+    <tr>
+        <td>QWen1.5-MoE</td>
+        <td>A2.7B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>Baichuan</td>
+        <td>7B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>Baichuan2</td>
+        <td>7B - 13B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>Code Llama</td>
+        <td>7B - 34B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>ChatGLM2</td>
+        <td>6B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>Falcon</td>
+        <td>7B - 180B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>YI</td>
+        <td>6B - 34B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>Mistral</td>
+        <td>7B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>DeepSeek-MoE</td>
+        <td>16B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>Mixtral</td>
+        <td>8x7B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>Gemma</td>
+        <td>2B-7B</td>
+        <td></td>
+        <td></td>
+    </tr>
+    <tr>
+        <td>Dbrx</td>
+        <td>132B</td>
+    </tr>
+</table>
 
 LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 
