@@ -404,41 +404,37 @@ class AsyncEngine:
             gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
         outputs = [Response('', 0, 0, i) for i in range(prompt_num)]
-        for j in range(0, prompt_num, self.instance_num):
-            batch_prompts = prompts[j:j + self.instance_num]
-            generators = []
-            for i, prompt in enumerate(batch_prompts):
-                generators.append(
-                    self.generate(prompt,
-                                  i,
-                                  gen_config=gen_config,
-                                  stream_response=True,
-                                  sequence_start=True,
-                                  sequence_end=True,
-                                  do_preprocess=do_preprocess,
-                                  adapter_name=adapter_name,
-                                  **kwargs))
+        generators = []
+        for i, prompt in enumerate(prompts):
+            generators.append(
+                self.generate(prompt,
+                              i,
+                              gen_config=gen_config,
+                              stream_response=True,
+                              sequence_start=True,
+                              sequence_end=True,
+                              do_preprocess=do_preprocess,
+                              adapter_name=adapter_name,
+                              **kwargs))
 
-            async def _inner_call(i, generator):
-                async for out in generator:
-                    outputs[i + j].text += out.response
-                    outputs[i + j].generate_token_len = out.generate_token_len
-                    outputs[i + j].input_token_len = out.input_token_len
-                    outputs[i + j].finish_reason = out.finish_reason
-                    if out.token_ids:
-                        outputs[i + j].token_ids.extend(out.token_ids)
-                    if out.logprobs:
-                        if outputs[i + j].logprobs is None:
-                            outputs[i + j].logprobs = []
-                        outputs[i + j].logprobs.extend(out.logprobs)
+        async def _inner_call(i, generator):
+            async for out in generator:
+                outputs[i].text += out.response
+                outputs[i].generate_token_len = out.generate_token_len
+                outputs[i].input_token_len = out.input_token_len
+                outputs[i].finish_reason = out.finish_reason
+                if out.token_ids:
+                    outputs[i].token_ids.extend(out.token_ids)
+                if out.logprobs:
+                    if outputs[i].logprobs is None:
+                        outputs[i].logprobs = []
+                    outputs[i].logprobs.extend(out.logprobs)
 
-            async def gather():
-                await asyncio.gather(*[
-                    _inner_call(i, generators[i])
-                    for i in range(len(batch_prompts))
-                ])
+        async def gather():
+            await asyncio.gather(
+                *[_inner_call(i, generators[i]) for i in range(len(prompts))])
 
-            _get_event_loop().run_until_complete(gather())
+        _get_event_loop().run_until_complete(gather())
         outputs = outputs[0] if need_list_wrap else outputs
         return outputs
 
@@ -475,52 +471,46 @@ class AsyncEngine:
         # set random if it is not set
         if gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
-        prompt_num = len(prompts)
         outputs = Queue()
         generators = []
-        for j in range(0, prompt_num, self.instance_num):
-            batch_prompts = prompts[j:j + self.instance_num]
-            generators = []
-            for i, prompt in enumerate(batch_prompts):
-                generators.append(
-                    self.generate(prompt,
-                                  i,
-                                  gen_config=gen_config,
-                                  stream_response=True,
-                                  sequence_start=True,
-                                  sequence_end=True,
-                                  do_preprocess=do_preprocess,
-                                  adapter_name=adapter_name,
-                                  **kwargs))
+        for i, prompt in enumerate(prompts):
+            generators.append(
+                self.generate(prompt,
+                              i,
+                              gen_config=gen_config,
+                              stream_response=True,
+                              sequence_start=True,
+                              sequence_end=True,
+                              do_preprocess=do_preprocess,
+                              adapter_name=adapter_name,
+                              **kwargs))
 
-            async def _inner_call(i, generator):
-                async for out in generator:
-                    outputs.put(
-                        Response(out.response, out.generate_token_len,
-                                 out.input_token_len, i + j, out.finish_reason,
-                                 out.token_ids, out.logprobs))
+        async def _inner_call(i, generator):
+            async for out in generator:
+                outputs.put(
+                    Response(out.response, out.generate_token_len,
+                             out.input_token_len, i, out.finish_reason,
+                             out.token_ids, out.logprobs))
 
-            async def gather():
-                await asyncio.gather(*[
-                    _inner_call(i, generators[i])
-                    for i in range(len(batch_prompts))
-                ])
-                outputs.put(None)
+        async def gather():
+            await asyncio.gather(
+                *[_inner_call(i, generators[i]) for i in range(len(prompts))])
+            outputs.put(None)
 
-            proc = Thread(
-                target=lambda: _get_event_loop().run_until_complete(gather()))
-            proc.start()
+        proc = Thread(
+            target=lambda: _get_event_loop().run_until_complete(gather()))
+        proc.start()
 
-            while True:
-                try:
-                    out = outputs.get(timeout=0.001)
-                    if out is None:
-                        break
-                    yield out
-                except Empty:
-                    pass
+        while True:
+            try:
+                out = outputs.get(timeout=0.001)
+                if out is None:
+                    break
+                yield out
+            except Empty:
+                pass
 
-            proc.join()
+        proc.join()
 
     async def _get_prompt_input(self, prompt: str, do_preprocess: bool,
                                 sequence_start: bool, adapter_name: str):
