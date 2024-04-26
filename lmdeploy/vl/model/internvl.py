@@ -148,4 +148,5 @@ class InternVLVisionModel(VisonModel):
     @torch.no_grad()
     def forward(self, images: List[Image]) -> List[torch.Tensor]:
         """forward."""
+        images = [x.convert('RGB') for x in images]
         return self._forward_func(images)
