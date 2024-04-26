@@ -76,6 +76,8 @@ class ActivationObserver(GlobalAvailMixin):
         self.absmean_val = torch.full((dim, ), 0, dtype=torch.float16)
         self.mean_val = torch.full((dim, ), 0, dtype=torch.float16)
         self.num_batches_tracked = 0
+        self.value = None
+        self.scales = None
 
     @torch.no_grad()
     def observe(self, x: torch.Tensor) -> None:
@@ -99,6 +101,7 @@ class ActivationObserver(GlobalAvailMixin):
         self.max_val = torch.maximum(self.max_val, cur_max)
         self.min_val = torch.minimum(self.min_val, cur_min)
         self.absmax_val = torch.maximum(self.absmax_val, cur_absmax)
+        self.value = x
 
         # Update mean and absmean value with accumulated sum divided
         # by total number of batches
@@ -111,3 +114,8 @@ class ActivationObserver(GlobalAvailMixin):
 
         # Increment the count of batches tracked
         self.num_batches_tracked += 1
+
+
+    @torch.no_grad()
+    def save_awq_sacle(self, scales: torch.Tensor) -> None:
+        self.scales = scales
