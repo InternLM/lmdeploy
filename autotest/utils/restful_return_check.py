@@ -49,7 +49,6 @@ def assert_chat_interactive_batch_return(output):
 
 def assert_chat_interactive_stream_return(output,
                                           is_last: bool = False,
-                                          is_text_empty: bool = False,
                                           index: int = None):
     assert output.get('input_tokens') > 0
     if index is not None:
@@ -60,9 +59,6 @@ def assert_chat_interactive_stream_return(output,
     if is_last:
         assert len(output.get('text')) >= 0
         assert output.get('finish_reason') in ['stop', 'length']
-    elif is_text_empty:
-        assert len(output.get('text')) == 0
-        assert output.get('finish_reason') is None
     else:
         assert len(output.get('text')) >= 0
         assert output.get('finish_reason') is None
