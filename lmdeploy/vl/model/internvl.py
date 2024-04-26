@@ -15,6 +15,7 @@ logger = get_logger('lmdeploy')
 
 def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height,
                               image_size):
+    """copy from https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5."""
     best_ratio_diff = float('inf')
     best_ratio = (1, 1)
     area = width * height
@@ -35,6 +36,7 @@ def dynamic_preprocess(image,
                        max_num=6,
                        image_size=448,
                        use_thumbnail=False):
+    """copy from https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5."""
     orig_width, orig_height = image.size
     aspect_ratio = orig_width / orig_height
 
