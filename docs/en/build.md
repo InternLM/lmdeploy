@@ -55,6 +55,8 @@ Then, follow the steps below to set up the compilation environment:
   ```
 - install [nccl](https://docs.nvidia.com/deeplearning/nccl/install-guide/index.html), and set environment variables:
   ```shell
+  git clone https://github.com/NVIDIA/nccl.git
+  cd nccl && make -j src.build
   export NCCL_ROOT_DIR=/path/to/nccl/build
   export NCCL_LIBRARIES=/path/to/nccl/build/lib
   ```
@@ -63,8 +65,10 @@ Then, follow the steps below to set up the compilation environment:
   wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz
   tar xf openmpi-4.1.5.tar.gz
   cd openmpi-4.1.5
-  ./configure
+  ./configure --prefix=/usr/local/openmpi
   make -j$(nproc) && make install
+  export PATH=$PATH:/usr/local/openmpi/bin
+  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
   ```
 - build and install lmdeploy libraries:
   ```shell
