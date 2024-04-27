@@ -150,8 +150,6 @@ struct Schedule {
     int input_count1;
     int input_count2;
 
-    int cu_block_count_{};
-
     Sequences        active;
     std::vector<int> block_counts;
     Sequences        inactive;
@@ -217,8 +215,6 @@ struct Transaction {
     int preempt_{};
     int cache_evict_{};
 
-    int max_block_count_;
-
     Sequences victims_;
 
     const Sequences& sequences_;
@@ -231,15 +227,14 @@ struct Transaction {
                         int block_count,
                         int input_count,
                         Schedule& sched,
-                        std::shared_ptr<BlockTrie>& block_trie,
-                        int max_block_count):
-        sequences_(sequences), schedule_(sched), index_(index), block_count_(block_count), input_count_(input_count), block_trie_(block_trie), max_block_count_(max_block_count)
+                        std::shared_ptr<BlockTrie>& block_trie):
+        sequences_(sequences), schedule_(sched), index_(index), block_count_(block_count), input_count_(input_count), block_trie_(block_trie)
     {
     }
 
     void Process()
     {
-        if (schedule_.input_count1 > 0 && (schedule_.cu_block_count_ + sequences_[index_]->blocks.size()+block_count_) <= max_block_count_) {
+        if (schedule_.input_count1 > 0) {
             int count = block_count_;
 
             int tmp = std::min(schedule_.free, count);
@@ -272,7 +267,6 @@ struct Transaction {
                 }
             }
             if (count == 0) {
-                schedule_.cu_block_count_ += (sequences_[index_]->blocks.size()+block_count_);
                 return Commit();
             }
         }
@@ -432,7 +426,7 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // `schedule.last` is decreasing in the loop
     for (int i = 0; i < schedule.last; ++i) {
         const int input_length = context_lengths[i] - sequences[i]->cache_len;
-        Transaction{sequences, i, required[i], input_length, schedule, block_trie_, max_block_count()}.Process();
+        Transaction{sequences, i, required[i], input_length, schedule, block_trie_}.Process();
     }
 
     // mark remaining sequences invalid

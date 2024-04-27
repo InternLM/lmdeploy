@@ -130,10 +130,6 @@ public:
 
     int max_block_count() const noexcept
     {
-        if (block_trie_->enabled()) {
-            // if enable prefix caching, the max_block_count in batch can be larger
-            return block_manager_->max_block_count() * 2;
-        }
         return block_manager_->max_block_count();
     }
 
