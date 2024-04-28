@@ -2,8 +2,9 @@
 import torch
 from torch import nn
 
-from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP, awq_layers,
-                                            quant_weights, smooth_layers)
+from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
+                                            awq_layers, quant_weights,
+                                            smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
 
 from .calibrate import calibrate
@@ -60,7 +61,7 @@ def auto_awq(model: str,
     norm2fcs = NORM_FCS_MAP[layer_type]
     input_stats = torch.load(work_dir / 'inputs_stats.pth')
     act_scales = input_stats['absmax']
-    awq_scales = input_stats['scales']
+    awq_ratios = input_stats['ratios']
     layers = collect_target_modules(model, layer_type)
     fcs = {}
     for l_name, layer in layers.items():
@@ -68,7 +69,8 @@ def auto_awq(model: str,
         fcs.update(name2fc)
 
     # smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size, device)
-    awq_layers(layers, fc2fcs, norm2fcs, awq_scales, w_group_size, device)
+    awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios, w_group_size,
+               device)
     quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)
     quantization_config = dict(quant_method='awq',
                                version='gemm',

@@ -189,7 +189,7 @@ def scale_ln_fcs(ln, fcs, scales):
     scales = scales.to(ln.weight.device)
 
     ln.weight.div_(scales)
-    if hasattr(ln, "bias") and ln.bias is not None:
+    if hasattr(ln, 'bias') and ln.bias is not None:
         ln.bias.div_(scales)
 
     for fc in fcs:
@@ -211,7 +211,7 @@ def scale_fc_fc(fc1, fc2, scales):
     scales = scales.to(fc1.weight.device)
 
     # fc1.weight.div_(scales.view(-1, 1))
-    fc1.weight[-scales.size(0) :].div_(scales.view(-1, 1))
+    fc1.weight[-scales.size(0):].div_(scales.view(-1, 1))
     if fc1.bias is not None:
         fc1.bias.div_(scales.view(-1))
 
@@ -300,6 +300,7 @@ def awq_layers(layers,
                fc2fcs,
                norm2fcs,
                a_scales,
+               a_ratios=None,
                group_size=-1,
                device='cuda'):
     """Apply awq based on input scales."""
@@ -307,23 +308,25 @@ def awq_layers(layers,
     for l_name, layer in layers.items():
         layer.to(device)
         for ln_name, fc_names in norm2fcs.items():
-            scales = [a_scales[f'{l_name}.{n}'] for n in fc_names]
-            scales = [s for s in scales if s is not None]
+            a_name = [f'{l_name}.{n}' for n in fc_names][0]
+            ratios = [a_ratios[f'{l_name}.{n}'] for n in fc_names]
+            ratios = [s for s in ratios if s is not None]
 
             ln = layer.get_submodule(ln_name)
             fcs = [layer.get_submodule(n) for n in fc_names]
-            scale_ln_fcs(ln, fcs, scales[0])
+            smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size, ratios[0])
 
         for f_name, fc_names in fc2fcs.items():
-            scales = [a_scales[f'{l_name}.{n}'] for n in fc_names]
-            scales = [s for s in scales if s is not None]
-            if not len(scales):
-                continue
+            a_name = [f'{l_name}.{n}' for n in fc_names][0]
+            ratios = [a_ratios[f'{l_name}.{n}'] for n in fc_names]
+            ratios = [s for s in ratios if s is not None]
+            if not len(ratios):
+                ratios = [0.5]
 
             fc = layer.get_submodule(f_name)
             fcs = [layer.get_submodule(n) for n in fc_names]
 
-            scale_fc_fc(fc, fcs[0], scales[0])
+            smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size, ratios[0])
 
         layer.to('cpu')
         print(f'{l_name} smooth weight done.')

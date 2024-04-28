@@ -77,7 +77,7 @@ class ActivationObserver(GlobalAvailMixin):
         self.mean_val = torch.full((dim, ), 0, dtype=torch.float16)
         self.num_batches_tracked = 0
         self.value = None
-        self.scales = None
+        self.ratio = None
 
     @torch.no_grad()
     def observe(self, x: torch.Tensor) -> None:
@@ -115,7 +115,6 @@ class ActivationObserver(GlobalAvailMixin):
         # Increment the count of batches tracked
         self.num_batches_tracked += 1
 
-
     @torch.no_grad()
-    def save_awq_sacle(self, scales: torch.Tensor) -> None:
-        self.scales = scales
+    def save_ratio(self, ratio: float) -> None:
+        self.ratio = ratio

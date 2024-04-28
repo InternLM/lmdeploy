@@ -340,12 +340,16 @@ def get_op_name(module, op):
     for name, m in module.named_modules():
         if m is op:
             return name
-    raise ValueError(f"Cannot find op {op} in module {module}")
+    raise ValueError(f'Cannot find op {op} in module {module}')
+
 
 # core quantization method (simulated quantization)
-def pseudo_quantize_tensor(
-    w, n_bit=8, zero_point=True, q_group_size=-1, inplace=False, get_scale_zp=False
-):
+def pseudo_quantize_tensor(w,
+                           n_bit=8,
+                           zero_point=True,
+                           q_group_size=-1,
+                           inplace=False,
+                           get_scale_zp=False):
     org_w_shape = w.shape
     if q_group_size > 0:
         assert org_w_shape[-1] % q_group_size == 0
@@ -362,8 +366,8 @@ def pseudo_quantize_tensor(
         assert min_val is None
         max_val = w.abs().amax(dim=1, keepdim=True)
         max_val = max_val.clamp(min=1e-5)
-        max_int = 2 ** (n_bit - 1) - 1
-        min_int = -(2 ** (n_bit - 1))
+        max_int = 2**(n_bit - 1) - 1
+        min_int = -(2**(n_bit - 1))
         scales = max_val / max_int
         zeros = 0
 
@@ -371,13 +375,11 @@ def pseudo_quantize_tensor(
     assert torch.isnan(w).sum() == 0
 
     if inplace:
-        (
-            (w.div_(scales).round_().add_(zeros)).clamp_(min_int, max_int).sub_(zeros)
-        ).mul_(scales)
+        ((w.div_(scales).round_().add_(zeros)).clamp_(
+            min_int, max_int).sub_(zeros)).mul_(scales)
     else:
-        w = (
-            torch.clamp(torch.round(w / scales) + zeros, min_int, max_int) - zeros
-        ) * scales
+        w = (torch.clamp(torch.round(w / scales) + zeros, min_int, max_int) -
+             zeros) * scales
     assert torch.isnan(w).sum() == 0
 
     w = w.reshape(org_w_shape)
@@ -387,12 +389,15 @@ def pseudo_quantize_tensor(
     else:
         return w
 
+
 @torch.no_grad()
 def get_act_scale(x):
     return x.abs().view(-1, x.shape[-1]).mean(0)
 
+
 @torch.no_grad()
-def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat, mod_name):
+def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat,
+                     mod_name):
     # firstly, get the weight quantize function
     def w_quantize_func(p):
         return pseudo_quantize_tensor(
@@ -401,9 +406,8 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat, mod_nam
             **q_config,
         ).detach()
 
-
-    if "use_cache" in module_kwargs:
-        module_kwargs.pop("use_cache")
+    if 'use_cache' in module_kwargs:
+        module_kwargs.pop('use_cache')
 
     # find the best scale ratio
     def _search_module_scale(block, linears2scale: list, x, kwargs={}):
@@ -417,9 +421,8 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat, mod_nam
 
         x_max = get_act_scale(x)
 
-        best_error = float("inf")
+        best_error = float('inf')
         best_ratio = -1
-        best_scales = None
 
         n_grid = 20
         history = []
@@ -431,29 +434,23 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat, mod_nam
             scales = scales / (scales.max() * scales.min()).sqrt()
             for fc in linears2scale:
                 fc.weight.mul_(scales.view(1, -1).to(fc.weight.device))
-                fc.weight.data = w_quantize_func(fc.weight.data) / (scales.view(1, -1))
+                fc.weight.data = w_quantize_func(
+                    fc.weight.data) / (scales.view(1, -1))
             out = block(x, **kwargs)
             if isinstance(out, tuple):
                 out = out[0]
 
-            loss = (
-                (org_out - out).float().pow(2).mean().item()
-            )  # float prevents overflow
+            loss = ((org_out - out).float().pow(2).mean().item()
+                    )  # float prevents overflow
             history.append(loss)
-            is_best = loss < best_error
-            if is_best:
+            if loss < best_error:
                 best_error = loss
                 best_ratio = ratio
-                best_scales = scales
             block.load_state_dict(org_sd)
         if best_ratio == -1:
             print(history)
             raise Exception
-        print(best_ratio)
-        best_scales = best_scales.view(-1)
-
-        assert torch.isnan(best_scales).sum() == 0, best_scales
-        return best_scales.detach()
+        return best_ratio
 
     def _auto_get_scale(prev_op, layers, inp, module2inspect=None, kwargs={}):
         # module2inspect: if given, we will check the output diff of this module instead of layers
@@ -461,14 +458,14 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat, mod_nam
             assert len(layers) == 1
             module2inspect = layers[0]
 
-        scales = _search_module_scale(module2inspect, layers, inp.value, kwargs)
-        scales = scales.detach().cpu()
-        inp.save_awq_sacle(scales)
+        best_ratio = _search_module_scale(module2inspect, layers, inp.value,
+                                          kwargs)
+        inp.save_ratio(best_ratio)
         # prev_op_name, [layer_name], scale
         return (
             get_op_name(module, prev_op),
             tuple([get_op_name(module, m) for m in layers]),
-            scales,
+            best_ratio,
         )
 
     scales_list = []  # return the searched scales
@@ -481,11 +478,10 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat, mod_nam
                 module.self_attn.k_proj,
                 module.self_attn.v_proj,
             ],
-            inp=input_feat[mod_name+".self_attn.q_proj"],
+            inp=input_feat[mod_name + '.self_attn.q_proj'],
             module2inspect=module.self_attn,
             kwargs=module_kwargs,
-        )
-    )
+        ))
     # attn out
     # Please refer to https://github.com/mit-han-lab/llm-awq/pull/67#issue-1850622696
     if module.self_attn.v_proj.weight.shape == module.self_attn.o_proj.weight.shape:
@@ -493,27 +489,25 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat, mod_nam
             _auto_get_scale(
                 prev_op=module.self_attn.v_proj,
                 layers=[module.self_attn.o_proj],
-                inp=input_feat[mod_name+".self_attn.o_proj"],
-            )
-        )
+                inp=input_feat[mod_name + '.self_attn.o_proj'],
+            ))
     # fc1
     scales_list.append(
         _auto_get_scale(
             prev_op=module.post_attention_layernorm,
             layers=[module.mlp.gate_proj, module.mlp.up_proj],
-            inp=input_feat[mod_name+".mlp.gate_proj"],
+            inp=input_feat[mod_name + '.mlp.gate_proj'],
             module2inspect=module.mlp,
-        )
-    )
+        ))
     # fc2
     scales_list.append(
         _auto_get_scale(
             prev_op=module.mlp.up_proj,
             layers=[module.mlp.down_proj],
-            inp=input_feat[mod_name+".mlp.down_proj"],
-        )
-    )
+            inp=input_feat[mod_name + '.mlp.down_proj'],
+        ))
     return scales_list
+
 
 class AWQCalibrationContext(CalibrationContext):
 
@@ -551,7 +545,6 @@ class AWQCalibrationContext(CalibrationContext):
             hook_fn = mod.register_forward_pre_hook(_input_hook)
             self._hooks.append(hook_fn)
 
-
     def export(self, out_dir):
         """Export the calibration statistics (inputs, outputs, keys and values)
         to specified directory.
@@ -566,7 +559,7 @@ class AWQCalibrationContext(CalibrationContext):
             'mean': {},
             'absmax': {},
             'absmean': {},
-            'scales': {},
+            'ratios': {},
         }
         obs_group = ActivationObserver.find_group(self.inp_obs_group)
         for name, obs in obs_group.items():
@@ -575,13 +568,13 @@ class AWQCalibrationContext(CalibrationContext):
             inputs_stats['mean'][name] = obs.mean_val
             inputs_stats['absmax'][name] = obs.absmax_val
             inputs_stats['absmean'][name] = obs.absmean_val
-            inputs_stats['scales'][name] = obs.scales
+            inputs_stats['ratios'][name] = obs.ratio
         torch.save(inputs_stats, out_dir / 'inputs_stats.pth')
-
 
     def _wrap_decoder_layers_for_search(self):
         """Method to wrap the decoder layers' forward functions for observing
         their key/value cache during batched forward passes."""
+
         @torch.no_grad()
         def _forward(mod, *args, **kwargs):
 
@@ -593,7 +586,9 @@ class AWQCalibrationContext(CalibrationContext):
             out = self._ori_forwards[mod](*args, **kwargs)
             obs_group = ActivationObserver.find_group(self.inp_obs_group)
             mod_name = self.mod2name[mod]
-            scales_list = auto_scale_block(mod, kwargs, self.w_bits, dict(zero_point=True, q_group_size=128), obs_group, mod_name)
+            scales_list = auto_scale_block(
+                mod, kwargs, self.w_bits,
+                dict(zero_point=True, q_group_size=128), obs_group, mod_name)
             for key, item in obs_group.items():
                 if key.startswith(f'{mod_name}.'):
                     item.value.cpu()
@@ -613,7 +608,6 @@ class AWQCalibrationContext(CalibrationContext):
             self._ori_forwards[layer] = layer.forward
             layer.forward = partial(_forward, layer)
             layer.cpu()
-
 
     def __enter__(self):
         """Prepares the Calibration object for a 'with' statement by
