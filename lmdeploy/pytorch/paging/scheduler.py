@@ -74,7 +74,8 @@ class Scheduler:
 
     def build_eviction_helper(self, eviction_type: str):
         if eviction_type == 'copy':
-            logger.warning('copy eviction has been deprecated.')
+            logger.warning('`copy` eviction has been deprecated, '
+                           'use `recompute` instead.')
             eviction_type = 'recompute'
         if eviction_type == 'recompute':
             from .eviction_helper import RecomputeEvictionHelper

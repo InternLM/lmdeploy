@@ -192,13 +192,13 @@ class BlockTrie:
         # filter ref-cnt == 1 (trie own one block ref)
         leave_blocks = np.array(list(leaf.block for leaf in leaves))
         ref_cnt = self.allocator.get_ref_count(leave_blocks)
-        access_times = self.allocator.get_access_time(leave_blocks)
         indices = (ref_cnt == 1).nonzero()[0]
         if len(indices) == 0:
             return 0
 
         # make heap
         leaves = list(leaves[i] for i in indices)
+        access_times = self.allocator.get_access_time(leave_blocks)
         access_times = list(access_times[i] for i in indices)
         leaves = list(zip(access_times, leaves))
         heapq.heapify(leaves)
