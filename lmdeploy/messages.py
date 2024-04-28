@@ -134,7 +134,7 @@ class TurbomindEngineConfig:
     max_batch_size: int = 128
     cache_max_entry_count: float = 0.8
     cache_block_seq_len: int = 64
-    enable_prefix_caching: bool = False
+    enable_prefix_caching: bool = True
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False

@@ -213,7 +213,6 @@ struct Transaction {
     int allocate_{};
     int evict_{};
     int preempt_{};
-    int cache_evict_{};
 
     Sequences victims_;
 
@@ -222,13 +221,8 @@ struct Transaction {
 
     std::shared_ptr<BlockTrie> block_trie_;
 
-    explicit Transaction(const Sequences& sequences,
-                        int index,
-                        int block_count,
-                        int input_count,
-                        Schedule& sched,
-                        std::shared_ptr<BlockTrie>& block_trie):
-        sequences_(sequences), schedule_(sched), index_(index), block_count_(block_count), input_count_(input_count), block_trie_(block_trie)
+    explicit Transaction(const Sequences& sequences, int index, int block_count, int input_count, Schedule& sched):
+        sequences_(sequences), schedule_(sched), index_(index), block_count_(block_count), input_count_(input_count)
     {
     }
 
@@ -244,13 +238,6 @@ struct Transaction {
             tmp = std::min(schedule_.cached, count);
             count -= tmp;
             evict_ += tmp;
-
-            // evict from block trie
-            if (block_trie_->enabled()) {
-                cache_evict_ = block_trie_->evict(count);
-                count -= cache_evict_;
-                evict_ += cache_evict_;
-            }
 
             for (int vidx = schedule_.last - 1; count && vidx > index_; --vidx) {
                 if (sequences_[vidx]->status == Sequence::kCached) {
@@ -280,7 +267,6 @@ struct Transaction {
         // update available resources
         schedule_.free -= allocate_;
         FT_CHECK(schedule_.free >= 0);
-        schedule_.cached += cache_evict_;
         schedule_.cached += preempt_;
         schedule_.cached -= evict_;
         FT_CHECK(schedule_.cached >= 0);
@@ -404,14 +390,16 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // the blocks can still be preempted later
     VerifyAndLockCached(sequences);
 
+    // verify blocks in trie cache
+    block_trie_->verify();
+
     // match prefix cache
     if (block_trie_->enabled()) {
         for (int i = 0; i < sequences.size(); i++) {
-            if (sequences[i]->blocks.size() == 0) {
+            if (!sequences[i]->prompt.empty() && sequences[i]->blocks.empty()) {
                 auto& seq = const_cast<Sequence&>(*sequences[i]);
-                seq.last_matched_node = nullptr; // for history cache evicted case
                 block_trie_->match(seq);
-                seq.cache_len = seq.last_matched_node->num_matched;
+                seq.cache_len = seq.blocks.size() * block_seq_len_;
             }
         }
     }
@@ -426,7 +414,7 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // `schedule.last` is decreasing in the loop
     for (int i = 0; i < schedule.last; ++i) {
         const int input_length = context_lengths[i] - sequences[i]->cache_len;
-        Transaction{sequences, i, required[i], input_length, schedule, block_trie_}.Process();
+        Transaction{sequences, i, required[i], input_length, schedule}.Process();
     }
 
     // mark remaining sequences invalid

@@ -17,12 +17,6 @@ struct Sequence {
         kActive
     };
 
-    enum Stage
-    {
-        kPrefill,
-        kDecoding
-    };
-
     uint64_t id;
     Status   status = kCached;
 
@@ -30,6 +24,8 @@ struct Sequence {
     UniqueIds block_unique_ids;
 
     int input_length = 0;
+
+    mutable std::vector<int> prompt;
 
     mutable std::vector<int> tokens;  // update by user
 
@@ -40,18 +36,9 @@ struct Sequence {
 
     mutable float rope_theta = 0.f;
 
-    // interact count in stateful inference
-    mutable int interact_count = 0;
-
-    // sequence inference stage
-    mutable Stage stage = kPrefill;
-
     // embedding data
     mutable std::vector<std::vector<std::byte>> input_embeddings;
     mutable std::vector<std::pair<int, int>>    input_embedding_ranges;
-
-    // last matched node in block trie
-    mutable std::shared_ptr<TrieNode> last_matched_node = nullptr;
 
     explicit Sequence(uint64_t _id): id(_id) {}
 

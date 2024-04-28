@@ -260,12 +260,6 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             }
         }
 
-        // update stage and interact count for stateful inference
-        seq.stage = Sequence::kPrefill;
-        seq.interact_count++;
-
-        const int history_length = seq.tokens.size();
-
         const int  input_length = r->inputs[rank_].getVal<int>("input_lengths");
         const int* input_ids    = r->inputs[rank_].getPtr<int>("input_ids");
 
@@ -273,14 +267,21 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         const auto output_ids_base = state.output_ids + session_len_ * idx;
         auto       output_ids      = output_ids_base;
 
-        if (input_length) {
-            // update tokens in sequence
-            seq.tokens.resize(history_length+input_length);
-            std::copy_n(input_ids, input_length, &seq.tokens[history_length]);
+        // copy history tokens
+        if (!seq.tokens.empty()) {
+            output_ids = Copy(seq.tokens.data(), seq.tokens.size(), output_ids);
         }
 
-        if (history_length || input_length) {
-            output_ids = Copy(seq.tokens.data(), history_length+input_length, output_ids);
+        // copy input tokens
+        if (input_length) {
+            output_ids = Copy(input_ids, input_length, output_ids);
+        }
+
+        // copy input tokens to prompt for prefix matching
+        if (input_length && r->start_flag && !r->inputs[rank_].isExist("input_embedding_ranges")) {
+            // TODO: truncate prompt to enable prefix caching for VLM
+            seq.prompt.resize(input_length);
+            std::copy_n(input_ids, input_length, seq.prompt.data());
         }
 
         // copy input embeddings
@@ -1280,9 +1281,9 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
     for (int i = 0; i < batch_size; ++i) {
         auto& seq = *state_->sequences[i];
         // only cache prompt blocks
-        if (seq.stage == Sequence::kPrefill && seq.interact_count == 1) {
+        if (!seq.prompt.empty()) {
             sequence_manager_->CacheIfEnabled(seq);
-            seq.stage = Sequence::kDecoding;
+            seq.prompt.clear();
         }
     }
 

@@ -3,11 +3,8 @@
 #pragma once
 
 #include "src/turbomind/models/llama/BlockManager.h"
-#include <algorithm>
 #include <memory>
-#include <queue>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace turbomind {
@@ -21,13 +18,11 @@ struct TrieNode {
     int                                                   block_id;
     uint64_t                                              block_unique_id;
     int                                                   num_matched;
-    std::shared_ptr<TrieNode>                             parent;
 };
 
 class BlockTrie {
 public:
     explicit BlockTrie(size_t block_len_, std::shared_ptr<BlockManager> block_manager, bool enable_prefix_caching);
-    ~BlockTrie();
 
     bool enabled()
     {
@@ -40,18 +35,19 @@ public:
     // cache computed blocks for sequence
     void cache(const Sequence& seq);
 
-    // evict unused nodes
-    int evict(const int num);
+    // remove invalid nodes, return valid count
+    int verify();
+
+private:
+    int verify_traverse(std::shared_ptr<TrieNode>& node);
 
 private:
     bool   enable_prefix_caching_;
-    int    cached_block_num_;
     size_t block_seq_len_;
 
     std::shared_ptr<BlockManager> block_manager_;
 
-    std::unordered_set<std::shared_ptr<TrieNode>> leaves_;
-    std::shared_ptr<TrieNode>                     root_;
+    std::shared_ptr<TrieNode> root_;
 };
 
 }  // namespace turbomind
