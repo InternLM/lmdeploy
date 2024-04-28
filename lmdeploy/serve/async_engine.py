@@ -609,6 +609,7 @@ class AsyncEngine:
             generator = await self.get_generator(False, session_id)
             async with self.safe_run(session_id):
                 state = DetokenizeState()
+                response = ''
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
                         **prompt_input,
