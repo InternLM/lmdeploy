@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'
       default_tp:
         required: true
         description: 'Default tp value'
@@ -694,7 +694,7 @@ jobs:
 
 
   get_result_overview:
-    if: always()
+    if: always() && !cancelled()
     needs: [generation_benchmark, throughput_benchmark, restful_benchmark, triton_benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
