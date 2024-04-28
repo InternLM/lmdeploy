@@ -1114,7 +1114,7 @@ class InternVLZH(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'internvl-chat-chinese' in path and 'v1-1' in path:
+        if 'internvl-chat' in path and 'v1-1' in path:
             return 'internvl-zh'
 
 
@@ -1316,7 +1316,7 @@ class ChatmlDirect(BaseChatTemplate):
         path = model_path.lower()
         if 'llava' in path and 'v1.6-34b' in path:
             return 'llava-chatml'
-        if 'internvl-chat-chinese' in path and 'v1-2' in path:
+        if 'internvl-chat' in path and 'v1-2' in path:
             return 'internvl-zh-hermes2'
 
 
