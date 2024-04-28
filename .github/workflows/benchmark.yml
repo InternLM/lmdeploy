@@ -62,6 +62,7 @@ env:
   DATASET_FILE: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
   TP_INFO: --tp 1
   LOOP_NUM: 3
+  TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
 
 
 jobs:
@@ -693,7 +694,7 @@ jobs:
 
 
   get_result_overview:
-    if: always() && !cancelled()
+    if: always() 
     needs: [generation_benchmark, throughput_benchmark, restful_benchmark, triton_benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]

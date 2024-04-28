@@ -55,6 +55,7 @@ env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
+  TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
 
 
 jobs:
@@ -103,7 +104,6 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
-      TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
