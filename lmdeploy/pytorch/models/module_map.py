@@ -207,12 +207,10 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
     'transformers.models.mixtral.modeling_mixtral.MixtralModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralModel',
-    'transformers.models.mixtral.modeling_mixtral.MixtralBLockSparseTop2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
-    'transformers.models.mixtral.modeling_mixtral.MixtralBlockSparseTop2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
     'transformers.models.mixtral.modeling_mixtral.MixtralRMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'transformers.models.mixtral.modeling_mixtral.MixtralSparseMoeBlock':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralSparseMoeBlock',
 })
 
 # dbrx

@@ -53,6 +53,7 @@ class PatchedMixtralAttention(nn.Module):
         block_offsets = context.block_offsets
         max_q_seq_length = context.max_q_seq_length
         max_kv_seq_length = context.max_kv_seq_length
+        position_ids_1d = context.position_ids_1d
 
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_key_value_heads // world_size
@@ -72,7 +73,7 @@ class PatchedMixtralAttention(nn.Module):
                                            seq_len=max_kv_seq_length)
                 query_states, key_states = apply_rotary_pos_emb(
                     query_states, key_states, cos, sin, position_ids,
-                    getattr(context, 'position_ids_1d', None))
+                    position_ids_1d)
             return query_states, key_states, value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
@@ -141,26 +142,105 @@ class PatchedMixtralAttention(nn.Module):
         )
 
 
-class PatchedMixtralBLockSparseTop2MLP(nn.Module):
+def _div_up(a, b):
+    """div up."""
+    return (a + b - 1) // b
 
-    @classmethod
-    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
+
+class PatchedMixtralSparseMoeBlock(nn.Module):
+
+    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
                                  device_mesh: DeviceMesh):
         """Distribution partition callback."""
-        if mod_name in ['w1', 'w3']:
-            colwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
-        elif mod_name in ['w2']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+
+        if mod_name == 'experts':
+            world_size = dist.get_world_size()
+            rank = dist.get_rank()
+            num_experts: int = self.num_experts
+            assert num_experts > rank
+            num_experts_per_rank = _div_up(num_experts, world_size)
+
+            first_experts_id = rank * num_experts_per_rank
+            last_experts_id = min(num_experts,
+                                  first_experts_id + num_experts_per_rank)
+            for i in range(num_experts):
+                if i >= first_experts_id and i < last_experts_id:
+                    continue
+                mod[i] = nn.Identity()
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
         """Distribution output hook."""
-        dist.all_reduce(outputs)
+        dist.all_reduce(outputs[0])
         return outputs
+
+    def forward_naive(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """miaxtral forward."""
+        import torch.nn.functional as F
+
+        def __get_expert_index(selected_experts, num_experts, first_experts_id,
+                               last_experts_id):
+            """get expert index."""
+            idxs, top_xs = [None] * num_experts, [None] * num_experts
+            # Loop over all available experts in the model
+            for expert_idx in range(first_experts_id, last_experts_id):
+                pos = torch.nonzero(selected_experts == expert_idx)
+                if pos.numel() > 0:
+                    top_x, idx = pos.t()
+                    idxs[expert_idx] = idx
+                    top_xs[expert_idx] = top_x
+            return idxs, top_xs
+
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+        # router_logits: (batch * sequence_length, n_experts)
+        router_logits = self.gate(hidden_states)
+
+        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
+        routing_weights, selected_experts = torch.topk(routing_weights,
+                                                       self.top_k,
+                                                       dim=-1)
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        # we cast back to the input dtype
+        routing_weights = routing_weights.to(hidden_states.dtype)
+
+        final_hidden_states = torch.zeros(
+            (batch_size * sequence_length, hidden_dim),
+            dtype=hidden_states.dtype,
+            device=hidden_states.device)
+
+        rank = 0
+        world_size = 1
+        if dist.is_initialized():
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+        num_experts = self.num_experts
+        num_experts_per_rank = _div_up(num_experts, world_size)
+        first_experts_id = rank * num_experts_per_rank
+        last_experts_id = min(num_experts,
+                              first_experts_id + num_experts_per_rank)
+
+        idxs, top_xs = __get_expert_index(selected_experts, num_experts,
+                                          first_experts_id, last_experts_id)
+
+        for expert_idx in range(first_experts_id, last_experts_id):
+            idx, top_x = idxs[expert_idx], top_xs[expert_idx]
+            if idx is None:
+                continue
+            expert_layer = self.experts[expert_idx]
+
+            current_state = hidden_states.index_select(dim=0, index=top_x)
+            current_hidden_states = expert_layer(
+                current_state) * routing_weights[top_x, idx, None]
+
+            final_hidden_states.index_add_(0, top_x, current_hidden_states)
+        final_hidden_states = final_hidden_states.unflatten(
+            0, (-1, sequence_length))
+        return final_hidden_states, router_logits
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """forward."""
+        return self.forward_naive(hidden_states)
 
 
 class PatchedMixtralModel(nn.Module):
