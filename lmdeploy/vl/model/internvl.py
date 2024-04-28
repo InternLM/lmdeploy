@@ -88,6 +88,8 @@ class InternVLVisionModel(VisonModel):
         with init_empty_weights():
             config = AutoConfig.from_pretrained(self.model_path,
                                                 trust_remote_code=True)
+            # transformers below 4.37.0 may raise error about flash_attn
+            config.llm_config.attn_implementation = 'eager'
             model = AutoModel.from_config(config, trust_remote_code=True)
             del model.language_model
             model.half()
@@ -137,7 +139,7 @@ class InternVLVisionModel(VisonModel):
         outputs = [x.reshape(-1, x.shape[-1]) for x in outputs]
         return outputs
 
-    def _foward(self, images: List[Image]):
+    def _forward(self, images: List[Image]):
         """forward for internvl-chat-v1-1, internvl-chat-v1-2."""
         pixel_values = self.image_processor(images=images,
                                             return_tensors='pt').pixel_values
