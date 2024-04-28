@@ -104,7 +104,7 @@ jobs:
   generation_benchmark:
     needs: linux-build
     if: ${{github.event_name == 'schedule' || (!cancelled() && contains(fromJSON(github.event.inputs.benchmark_type), 'generation'))}}
-    runs-on: [self-hosted, linux-a100-2]
+    runs-on: [self-hosted, linux-a100]
     strategy:
       fail-fast: false
       matrix:
@@ -112,7 +112,7 @@ jobs:
     timeout-minutes: 120
     env:
       MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
-      CUDA_VISIBLE_DEVICES: 4,5
+      CUDA_VISIBLE_DEVICES: 6,7
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
@@ -530,7 +530,7 @@ jobs:
       WORKDIR: /nvme/qa_test_models/triton_workspace
       OFFLINE_PKGS: /nvme/qa_test_models/offline_pkg
       MODEL_PATH: /nvme/qa_test_models/autotest_model/workspace_${{matrix.model}}
-      DEVICE: device=7
+      DEVICE: device=4
       GRPC_PORT: 33337
     strategy:
       fail-fast: false
@@ -546,7 +546,7 @@ jobs:
       - name: Set params
         if: (contains( matrix.model, 'internlm2-chat-20b'))
         run: |
-          echo 'DEVICE="device=6,7"' >> "$GITHUB_ENV"
+          echo 'DEVICE="device=4,5"' >> "$GITHUB_ENV"
       - name: Create test container
         run: |
           export date_today="$(date +'%H%M%S')"
@@ -694,7 +694,7 @@ jobs:
 
 
   get_result_overview:
-    if: always() 
+    if: always()
     needs: [generation_benchmark, throughput_benchmark, restful_benchmark, triton_benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
