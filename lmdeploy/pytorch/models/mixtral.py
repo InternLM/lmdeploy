@@ -69,11 +69,23 @@ class PatchedMixtralAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             if hasattr(self, 'rotary_emb'):
-                cos, sin = self.rotary_emb(value_states,
-                                           seq_len=max_kv_seq_length)
+                if not hasattr(context, '_cos'):
+                    cos, sin = self.rotary_emb(value_states,
+                                               seq_len=max_kv_seq_length)
+                    context._cos = cos
+                    context._sin = sin
+                else:
+                    cos = context._cos
+                    sin = context._sin
                 query_states, key_states = apply_rotary_pos_emb(
-                    query_states, key_states, cos, sin, position_ids,
-                    position_ids_1d)
+                    query_states,
+                    key_states,
+                    cos,
+                    sin,
+                    position_ids,
+                    position_ids_1d,
+                    q_embed=query_states,
+                    k_embed=key_states)
             return query_states, key_states, value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
@@ -157,7 +169,9 @@ class PatchedMixtralSparseMoeBlock(nn.Module):
             world_size = dist.get_world_size()
             rank = dist.get_rank()
             num_experts: int = self.num_experts
-            assert num_experts > rank
+            assert num_experts > world_size, (
+                f'world_size: {world_size} should not greater than '
+                f'num_experts: {num_experts}')
             num_experts_per_rank = _div_up(num_experts, world_size)
 
             first_experts_id = rank * num_experts_per_rank
@@ -185,7 +199,7 @@ class PatchedMixtralSparseMoeBlock(nn.Module):
             # Loop over all available experts in the model
             for expert_idx in range(first_experts_id, last_experts_id):
                 pos = torch.nonzero(selected_experts == expert_idx)
-                if pos.numel() > 0:
+                if pos.size(0) > 0:
                     top_x, idx = pos.t()
                     idxs[expert_idx] = idx
                     top_xs[expert_idx] = top_x
@@ -238,9 +252,61 @@ class PatchedMixtralSparseMoeBlock(nn.Module):
             0, (-1, sequence_length))
         return final_hidden_states, router_logits
 
+    def forward_all(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """forward all."""
+        import torch.nn.functional as F
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+        # router_logits: (batch * sequence_length, n_experts)
+        router_logits = self.gate(hidden_states)
+
+        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
+        routing_weights, selected_experts = torch.topk(routing_weights,
+                                                       self.top_k,
+                                                       dim=-1)
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        # we cast back to the input dtype
+        routing_weights = routing_weights.to(hidden_states.dtype)
+
+        final_hidden_states = torch.zeros(
+            (batch_size * sequence_length, hidden_dim),
+            dtype=hidden_states.dtype,
+            device=hidden_states.device)
+
+        rank = 0
+        world_size = 1
+        if dist.is_initialized():
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+        num_experts = self.num_experts
+        num_experts_per_rank = _div_up(num_experts, world_size)
+        first_experts_id = rank * num_experts_per_rank
+        last_experts_id = min(num_experts,
+                              first_experts_id + num_experts_per_rank)
+
+        for expert_idx in range(first_experts_id, last_experts_id):
+            expert_layer = self.experts[expert_idx]
+            valid_mask = (selected_experts == expert_idx)
+            weights = routing_weights * valid_mask
+            weights = weights.sum(1, keepdim=True)
+            current_hidden_states = expert_layer(hidden_states) * weights
+            final_hidden_states.add_(current_hidden_states)
+        final_hidden_states = final_hidden_states.unflatten(
+            0, (-1, sequence_length))
+        return final_hidden_states, router_logits
+
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """forward."""
-        return self.forward_naive(hidden_states)
+        context = self.context.context
+
+        # naive implementation is faster but require synchronize.
+        if context.enable_naive_moe:
+            return self.forward_naive(hidden_states)
+        else:
+            # synchronize has negative effect on engine pipeline
+            # compute all tokens with all experts is better
+            # than stream sync
+            return self.forward_all(hidden_states)
 
 
 class PatchedMixtralModel(nn.Module):
@@ -252,31 +318,13 @@ class PatchedMixtralModel(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite implementation of LlamaModel.forward."""
 
         from transformers.modeling_outputs import MoeModelOutputWithPast
-
-        output_attentions = (output_attentions if output_attentions is not None
-                             else self.config.output_attentions)
-        output_hidden_states = (output_hidden_states
-                                if output_hidden_states is not None else
-                                self.config.output_hidden_states)
-
-        if use_cache is None:
-            use_cache = self.config.use_cache
-
-        return_dict = (return_dict if return_dict is not None else
-                       self.config.use_return_dict)
-
-        assert (
-            position_ids is not None
-        ), 'position_ids can not be none when using continuous batching mode.'
-        assert position_ids.dim() == 2
+        context = self.context.context
+        output_attentions = False
+        use_cache = True
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
@@ -286,17 +334,11 @@ class PatchedMixtralModel(nn.Module):
 
         hidden_states = inputs_embeds
 
-        # decoder layers
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
-        next_decoder_cache = () if use_cache else None
-
+        moe_threshold = len(self.layers) // 2
         for idx, decoder_layer in enumerate(self.layers):
-            if output_hidden_states:
-                all_hidden_states += (hidden_states, )
-
-            past_key_value = (past_key_values[idx]
-                              if past_key_values is not None else None)
+            context.enable_naive_moe = (not context.is_decoding
+                                        or idx < moe_threshold)
+            past_key_value = past_key_values[idx]
             layer_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -306,31 +348,12 @@ class PatchedMixtralModel(nn.Module):
                 use_cache=use_cache,
             )
             hidden_states = layer_outputs[0]
-
-            if use_cache:
-                next_decoder_cache += (
-                    layer_outputs[2 if output_attentions else 1], )
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1], )
-
         hidden_states = self.norm(hidden_states)
 
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states, )
-
-        next_cache = next_decoder_cache if use_cache else None
-        if not return_dict:
-            return tuple(
-                v for v in
-                [hidden_states, next_cache, all_hidden_states, all_self_attns]
-                if v is not None)
-
         return MoeModelOutputWithPast(last_hidden_state=hidden_states,
-                                      past_key_values=next_cache,
-                                      hidden_states=all_hidden_states,
-                                      attentions=all_self_attns,
+                                      past_key_values=past_key_values,
+                                      hidden_states=None,
+                                      attentions=None,
                                       router_logits='')
 
     def forward(self,
@@ -351,8 +374,4 @@ class PatchedMixtralModel(nn.Module):
             position_ids,
             past_key_values,
             inputs_embeds,
-            use_cache,
-            output_attentions,
-            output_hidden_states,
-            return_dict,
         )
