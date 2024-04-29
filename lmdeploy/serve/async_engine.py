@@ -442,7 +442,9 @@ class AsyncEngine:
             self,
             prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
             gen_config: Optional[Union[GenerationConfig,
-                                       EngineGenerationConfig]] = None,
+                                       List[GenerationConfig],
+                                       EngineGenerationConfig,
+                                       List[EngineGenerationConfig]]] = None,
             do_preprocess: bool = True,
             adapter_name: Optional[str] = None,
             **kwargs):
@@ -452,7 +454,7 @@ class AsyncEngine:
             prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
                 prompts. It accepts: string prompt, a list of string prompts,
                 a chat history in OpenAI format or a list of chat history.
-            gen_config (GenerationConfig | None): a instance of
+            gen_config (GenerationConfig | None): a instance of or a list of
                 GenerationConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
@@ -465,19 +467,20 @@ class AsyncEngine:
         assert isinstance(prompts, List), 'prompts should be a list'
         if gen_config is None:
             gen_config = GenerationConfig()
-        if type(gen_config) is GenerationConfig:
-            gen_config = EngineGenerationConfig.From(gen_config,
-                                                     self.tokenizer)
         # set random if it is not set
-        if gen_config.random_seed is None:
+        if not isinstance(gen_config, List) and gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
+        if not isinstance(gen_config, List):
+            gen_config = [gen_config] * len(prompts)
+        assert len(prompts) == len(gen_config),\
+                'input gen_confg length differs from the length of prompts' # noqa
         outputs = Queue()
         generators = []
         for i, prompt in enumerate(prompts):
             generators.append(
                 self.generate(prompt,
                               i,
-                              gen_config=gen_config,
+                              gen_config=gen_config[i],
                               stream_response=True,
                               sequence_start=True,
                               sequence_end=True,
