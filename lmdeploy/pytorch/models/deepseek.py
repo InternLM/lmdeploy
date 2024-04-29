@@ -137,3 +137,71 @@ class PatchedDeepseekAttention(nn.Module):
             output_attentions,
             world_size=world_size,
         )
+
+
+def _div_up(a, b):
+    """div up."""
+    return (a + b - 1) // b
+
+
+class PatchedDeepseekMoE(nn.Module):
+
+    @classmethod
+    def _get_expert_range(cls, num_experts: int):
+        rank = 0
+        world_size = 1
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+            rank = dist.get_rank()
+        num_experts_per_rank = _div_up(num_experts, world_size)
+        first_experts_id = rank * num_experts_per_rank
+        last_experts_id = min(num_experts,
+                              first_experts_id + num_experts_per_rank)
+        return first_experts_id, last_experts_id
+
+    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
+                                 device_mesh: DeviceMesh):
+        """Distribution partition callback."""
+        if mod_name == 'experts':
+            world_size = dist.get_world_size()
+            num_experts: int = len(self.experts)
+            assert num_experts > world_size, (
+                f'world_size: {world_size} should not greater than '
+                f'num_experts: {num_experts}')
+            first_experts_id, last_experts_id = self._get_expert_range(
+                num_experts)
+            for i in range(num_experts):
+                if i >= first_experts_id and i < last_experts_id:
+                    continue
+                mod[i] = nn.Identity()
+
+    def moe_infer(self, x, flat_expert_indices, flat_expert_weights):
+        """moe infer."""
+        expert_cache = torch.zeros_like(x)
+        idxs = flat_expert_indices.argsort()
+        tokens_per_expert = flat_expert_indices.bincount().cpu().numpy(
+        ).cumsum(0)
+        token_idxs = idxs // self.num_experts_per_tok
+
+        num_experts: int = len(self.experts)
+        first_experts_id, last_experts_id = self._get_expert_range(num_experts)
+        for i in range(first_experts_id, last_experts_id):
+            if i >= len(tokens_per_expert):
+                break
+            start_idx = 0 if i == 0 else tokens_per_expert[i - 1]
+            end_idx = tokens_per_expert[i]
+            if start_idx == end_idx:
+                continue
+            expert = self.experts[i]
+            exp_token_idx = token_idxs[start_idx:end_idx]
+            expert_tokens = x[exp_token_idx]
+            expert_out = expert(expert_tokens)
+            expert_out.mul_(flat_expert_weights[idxs[start_idx:end_idx]])
+            expert_cache.scatter_reduce_(0,
+                                         exp_token_idx.view(-1, 1).expand(
+                                             -1, x.shape[-1]),
+                                         expert_out,
+                                         reduce='sum')
+        if dist.is_initialized():
+            dist.all_reduce(expert_cache)
+        return expert_cache

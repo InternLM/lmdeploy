@@ -168,37 +168,100 @@ class PatchedDbrxAttention(nn.Module):
         )
 
 
-class PatchedDbrxExpertGLU(nn.Module):
+def _div_up(a, b):
+    """div up."""
+    return (a + b - 1) // b
+
+
+class PatchedDbrxExperts(nn.Module):
+
+    @classmethod
+    def _get_expert_range(cls, num_experts: int):
+        rank = 0
+        world_size = 1
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+            rank = dist.get_rank()
+        num_experts_per_rank = _div_up(num_experts, world_size)
+        first_experts_id = rank * num_experts_per_rank
+        last_experts_id = min(num_experts,
+                              first_experts_id + num_experts_per_rank)
+        return first_experts_id, last_experts_id
 
     def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
                                  device_mesh: DeviceMesh):
         """Distribution partition callback."""
 
-        world_size = dist.get_world_size()
+        def __colwise_partition(name, param):
+            dist_tensor = distribute_tensor(param, device_mesh, [Shard(0)])
+            dist_tensor = try_to_local(dist_tensor)
+            dist_param = torch.nn.Parameter(dist_tensor)
+            mod.register_parameter(name, dist_param)
 
-        def __partiton_moe(weight: nn.Parameter, name: str):
-            weight = weight.view(self.moe_num_experts, self.ffn_hidden_size,
-                                 self.hidden_size)
-            weight = distribute_tensor(weight, device_mesh, [Shard(1)])
-            weight = try_to_local(weight)
-            weight = weight.flatten(0, 1)
-            self.register_parameter(name, nn.Parameter(weight))
-
-        if getattr(self, '__finish_partition', False):
-            return
-
-        __partiton_moe(self.w1, 'w1')
-        __partiton_moe(self.v1, 'v1')
-        __partiton_moe(self.w2, 'w2')
-
-        self.ffn_hidden_size = self.ffn_hidden_size // world_size
-        self.__finish_partition = True
+        if mod_name == 'mlp':
+            __colwise_partition('w1', mod.w1)
+            __colwise_partition('v1', mod.v1)
+            __colwise_partition('w2', mod.w2)
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
         """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs
+
+    def forward(self, x: torch.Tensor, weights: torch.Tensor,
+                top_weights: torch.Tensor,
+                top_experts: torch.LongTensor) -> torch.Tensor:
+        """moe forward."""
+
+        def __get_expert_index(num_experts, first_experts_id, last_experts_id):
+            """get expert index."""
+            idxs, top_xs = [None] * num_experts, [None] * num_experts
+            # Loop over all available experts in the model
+            for expert_idx in range(first_experts_id, last_experts_id):
+                pos = torch.nonzero(top_experts == expert_idx)
+                if pos.size(0) > 0:
+                    top_x, idx = pos.t()
+                    idxs[expert_idx] = idx
+                    top_xs[expert_idx] = top_x
+            return idxs, top_xs
+
+        bsz, q_len, hidden_size = x.shape
+        x = x.view(-1, hidden_size)
+        out = torch.zeros_like(x)
+
+        num_experts = self.mlp.moe_num_experts
+
+        first_experts_id, last_experts_id = self._get_expert_range(num_experts)
+
+        idxs, top_xs = __get_expert_index(num_experts, first_experts_id,
+                                          last_experts_id)
+
+        ffn_hidden_size = self.mlp.ffn_hidden_size
+
+        w1_chunked = self.mlp.w1.flatten(0, (-1, ffn_hidden_size))
+        v1_chunked = self.mlp.v1.flatten(0, (-1, ffn_hidden_size))
+        w2_chunked = self.mlp.w2.flatten(0, (-1, ffn_hidden_size))
+
+        for expert_idx in range(first_experts_id, last_experts_id):
+            idx, top_x = idxs[expert_idx], top_xs[expert_idx]
+            if idx is None:
+                continue
+
+            mlp_idx = expert_idx - first_experts_id
+            current_state = x.index_select(dim=0, index=top_x)
+            expert_out = self.mlp(
+                current_state,
+                w1_chunked[mlp_idx],
+                v1_chunked[mlp_idx],
+                w2_chunked[mlp_idx],
+            )
+            expert_out *= top_weights[top_x, idx, None]
+
+            out.index_add_(0, top_x, expert_out)
+
+        out = out.reshape(bsz, q_len, hidden_size)
+        return out
 
 
 class PatchedDbrxModel(nn.Module):

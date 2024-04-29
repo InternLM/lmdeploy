@@ -195,7 +195,8 @@ def get_hf_config_content(pretrained_model_name_or_path: str,
 
 def get_model(pretrained_model_name_or_path: str,
               download_dir: str = None,
-              revision: str = None):
+              revision: str = None,
+              token: str = None):
     """Get model from huggingface or modelscope."""
     import os
     if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
@@ -208,6 +209,8 @@ def get_model(pretrained_model_name_or_path: str,
         download_kwargs['cache_dir'] = download_dir
     if revision is not None:
         download_kwargs['revision'] = revision
+    if token is not None:
+        download_kwargs['token'] = token
 
     model_path = snapshot_download(pretrained_model_name_or_path,
                                    **download_kwargs)

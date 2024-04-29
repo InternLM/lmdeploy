@@ -139,10 +139,10 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
     'modeling_deepseek.DeepseekModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
-    'modeling_deepseek.DeepseekMLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
     'modeling_deepseek.DeepseekRMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'modeling_deepseek.DeepseekMoE':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekMoE',
 })
 
 # qwen
@@ -185,8 +185,8 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2.PatchedQwen2Attention',
     'transformers.models.qwen2_moe.modeling_qwen2_moe.Qwen2MoeModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_moe.PatchedQwen2MoeModel',
-    'transformers.models.qwen2_moe.modeling_qwen2_moe.Qwen2MoeMLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'transformers.models.qwen2_moe.modeling_qwen2_moe.Qwen2MoeSparseMoeBlock':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_moe.PatchedQwen2MoeSparseMoeBlock',
     'transformers.models.qwen2_moe.modeling_qwen2_moe.Qwen2MoeRMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
@@ -223,11 +223,11 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxAttention',
     'modeling_dbrx.DbrxModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxModel',
-    'modeling_dbrx.DbrxExpertGLU':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxExpertGLU'
+    'modeling_dbrx.DbrxExperts':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxExperts',
 })
 
-# starcode2
+# starcoder2
 MODULE_MAP.update({
     'transformers.models.starcoder2.modeling_starcoder2.Starcoder2Attention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2Attention',
