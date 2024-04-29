@@ -390,11 +390,11 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // the blocks can still be preempted later
     VerifyAndLockCached(sequences);
 
-    // verify blocks in trie cache
-    block_trie_->verify();
-
-    // match prefix cache
     if (block_trie_->enabled()) {
+        // verify blocks in trie cache
+        block_trie_->verify();
+
+        // match prefix cache
         for (int i = 0; i < sequences.size(); i++) {
             if (!sequences[i]->prompt.empty() && sequences[i]->blocks.empty()) {
                 auto& seq = const_cast<Sequence&>(*sequences[i]);
