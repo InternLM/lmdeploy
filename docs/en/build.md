@@ -55,10 +55,8 @@ Then, follow the steps below to set up the compilation environment:
   ```
 - install [nccl](https://docs.nvidia.com/deeplearning/nccl/install-guide/index.html), and set environment variables:
   ```shell
-  git clone https://github.com/NVIDIA/nccl.git
-  cd nccl && make -j src.build
-  export NCCL_ROOT_DIR=/path/to/nccl/build
-  export NCCL_LIBRARIES=/path/to/nccl/build/lib
+  export NCCL_ROOT_DIR=/path/to/nccl
+  export NCCL_LIBRARIES=/path/to/nccl/lib
   ```
 - install openmpi from source:
   ```shell

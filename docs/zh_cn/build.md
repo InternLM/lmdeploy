@@ -55,10 +55,8 @@ wheel 文件存放在目录 `builder/manywheel/cuda11.8_dist` 下。
   ```
 - 安装 [nccl](https://docs.nvidia.com/deeplearning/nccl/install-guide/index.html),设置环境变量
   ```shell
-  git clone https://github.com/NVIDIA/nccl.git
-  cd nccl && make -j src.build
-  export NCCL_ROOT_DIR=/path/to/nccl/build
-  export NCCL_LIBRARIES=/path/to/nccl/build/lib
+  export NCCL_ROOT_DIR=/path/to/nccl
+  export NCCL_LIBRARIES=/path/to/nccl/lib
   ```
 - 源码编译安装 openmpi:
   ```shell
