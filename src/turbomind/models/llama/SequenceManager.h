@@ -108,7 +108,7 @@ public:
                                       int                          step_length,
                                       AdjustInputCount             adjust);
 
-    void CacheIfEnabled(const Sequence& sequence);
+    void CacheIfEnabled(const Sequences& sequence, int active_size);
 
     [[nodiscard]] void* GetBlockPtr(int block_id)
     {

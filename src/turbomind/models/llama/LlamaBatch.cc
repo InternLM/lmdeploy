@@ -1278,14 +1278,7 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
     }
 
     // Cache computed blocks to block trie
-    for (int i = 0; i < batch_size; ++i) {
-        auto& seq = *state_->sequences[i];
-        // only cache prompt blocks
-        if (!seq.prompt.empty()) {
-            sequence_manager_->CacheIfEnabled(seq);
-            seq.prompt.clear();
-        }
-    }
+    sequence_manager_->CacheIfEnabled(state_->sequences, batch_size);
 
     if (debug_ && rank_ == 0) {
         for (int i = 0; i < batch_size; ++i) {

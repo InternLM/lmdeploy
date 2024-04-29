@@ -86,9 +86,17 @@ bool SequenceManager::Erase(uint64_t id)
     return false;
 }
 
-void SequenceManager::CacheIfEnabled(const Sequence& sequence) {
+void SequenceManager::CacheIfEnabled(const Sequences& sequences, int active_size) {
     if (block_trie_->enabled()) {
-        block_trie_->cache(sequence);
+        block_trie_->verify();
+        for (int i = 0; i < active_size; ++i) {
+            auto& seq = *sequences[i];
+            // only cache prompt blocks
+            if (!seq.prompt.empty()) {
+                block_trie_->cache(seq);
+                seq.prompt.clear();
+            }
+        }
     }
 }
 
