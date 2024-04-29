@@ -297,6 +297,7 @@ void Run(int m, int n, int k, int g = 128)
 template<class T, class Tb>
 void Test(int bsz, int tp)
 {
+    // Run<T, Tb>(8192 - 64, 8192 - 64, 8192);
     Run<T, Tb>(8192, 8192, 8192);
     // Run<T, Tb>(4096, 4096, 4096);
     // Run<half, uint4_t>(64, 11008, 4096);
@@ -304,10 +305,10 @@ void Test(int bsz, int tp)
     // Run<half, uint4_t>(128, 128, 1024);
 
     // llama2-7b
-    // Run<T, Tb>(bsz, 11008 * 2 / tp, 4096); // mlp.up/gate
+    // Run<T, Tb>(bsz, 11008 / tp, 4096); // mlp.up/gate
     // Run<T, Tb>(bsz, 4096, 11008 / tp);  // mlp.down
 
-    // llama2-7b
+    // llama2-70b
     // Run<T, Tb>(bsz, 10240 / tp, 8192);  // attn.qkv
 
     // Run<T, Tb>(8, 128, 512);
@@ -315,6 +316,6 @@ void Test(int bsz, int tp)
 
 int main(int argc, char* argv[])
 {
-    Test<half, uint4_t>(8, 1);
+    Test<half, half>(8, 1);
     return 0;
 }

@@ -3,10 +3,12 @@
 #pragma once
 
 #include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/smem.h"
 #include <cassert>
+#include <type_traits>
 
 namespace turbomind::gemm {
 
@@ -16,7 +18,60 @@ namespace turbomind::gemm {
 #define L2_CACHEHINT(size)
 #endif
 
-template<class T, class Map, class SmemLayout, int Idx, int G_CTA = 1, bool Disable = false>
+template<int S, int C, bool AlignedS, bool AlignedC>
+struct Predicate {
+
+    static constexpr int kSizeC = AlignedC ? 1 : C;
+
+    static_assert(S * kSizeC <= 32);
+
+    uint32_t pred_{};
+
+    static constexpr std::true_type active()
+    {
+        return {};
+    }
+
+    __device__ int operator()(int s, int c) const
+    {
+        return pred_ & (1 << (s * kSizeC + c));
+    }
+
+    __device__ void set(int s, int c)
+    {
+        pred_ |= (1 << (s * kSizeC + c));
+    }
+
+    __device__ void clear()
+    {
+        pred_ = 0;
+    }
+};
+
+template<int S, int C>
+struct Predicate<S, C, true, true> {
+
+    static constexpr std::false_type active()
+    {
+        return {};
+    }
+
+    __device__ constexpr std::integral_constant<int, 1> operator()(int, int) const
+    {
+        return {};
+    }
+
+    __device__ void set(int, int) {}
+};
+
+template<class T,
+         class Map,
+         class SmemLayout,
+         bool AlignedC,
+         bool AlignedS,
+         int  Idx,
+         int  G_CTA   = 1,
+         bool Disable = false>
 struct GmemIteratorSm80 {
 
     using AccessType = Array<T, Map::kAccessC>;
@@ -43,14 +98,17 @@ struct GmemIteratorSm80 {
     int stride_k_;
     // int smem_offset_ = 0;
 
+    Predicate<Map::kIterS, Map::kIterC, (AlignedC && Map::kAlignedC), (AlignedS && Map::kAlignedS)> pred_;
+
     int  g_counter_{};
     bool g_mask_{true};
 
     SmemAccessor<T, SmemLayout> smem_data_;
 
-    static_assert(!Map::kPartialC);
+    // static_assert(!Map::kPartialC);
 
-    __device__ GmemIteratorSm80(Pointer data, int stride_s, int stride_k): smem_data_{Pointer{nullptr}}
+    __device__ GmemIteratorSm80(Pointer data, int stride_s, int stride_k, int max_s, int max_c):
+        smem_data_{Pointer{nullptr}}
     {
         if constexpr (Disable) {
             return;
@@ -66,6 +124,20 @@ struct GmemIteratorSm80 {
         offset_s_ = offsets.y;
 
         src_ptr_ = reinterpret_cast<const char*>((T*)data);
+
+        if constexpr (pred_.active()) {
+            PRAGMA_UNROLL
+            for (int s = 0; s < Map::kIterS; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < Map::kIterC; ++c) {
+                    int ss = offset_s_ + s * Map::kDeltaS;
+                    int cc = offset_c_ + c * Map::kDeltaC;
+                    if (ss < max_s && cc < max_c) {
+                        pred_.set(s, c);
+                    }
+                }
+            }
+        }
 
         stride_s_   = stride_s * bitsof<T> / bitsof<char>;
         stride_k_   = stride_k * bitsof<T> / bitsof<char>;
@@ -127,7 +199,7 @@ struct GmemIteratorSm80 {
                 //     smem_data_.ptr_ += Map::kDeltaC;
                 // }
 
-                CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, g_mask_ && tile_mask);
+                CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, g_mask_ && tile_mask && pred_(s, c));
 
                 // if (g_mask_ && tile_mask) {
                 //     AccessType tmp;

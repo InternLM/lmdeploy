@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/math.h"
 
 #include <iostream>
 
@@ -24,15 +25,15 @@ struct ThreadMap {
     static constexpr int kWarpAccessC = kWarpThreadC * kAccessC;
     static constexpr int kWarpAccessS = kWarpThreadS;
 
-    static constexpr int kWarpIterC = (kDimC + kWarpAccessC - 1) / kWarpAccessC;
-    static constexpr int kWarpIterS = kDimS / kWarpAccessS;
+    static constexpr int kWarpIterC = ceil_div(kDimC, kWarpAccessC);
+    static constexpr int kWarpIterS = ceil_div(kDimS, kWarpAccessS);
 
     // Partition warps along the strided axis first to reduce strided iters
     static constexpr int kWarpS = kWarpIterS >= kWarpCount ? kWarpCount : kWarpIterS;
     static constexpr int kWarpC = kWarpCount > kWarpIterS ? kWarpCount / kWarpS : 1;
 
-    static constexpr int kIterC = kWarpIterC / kWarpC;
-    static constexpr int kIterS = std::max(kWarpIterS / kWarpS, 1);
+    static constexpr int kIterC = ceil_div(kWarpIterC, kWarpC);
+    static constexpr int kIterS = ceil_div(kWarpIterS, kWarpS);
 
     // Allow partial tile when there is ONLY 1 iteration
     static_assert(kDimC % kWarpAccessC == 0 || kIterC == 1);
@@ -40,7 +41,8 @@ struct ThreadMap {
     // static_assert(kIterC > 0);
     // static_assert(kIterS > 0);
 
-    static constexpr bool kPartialC = kDimC % kWarpAccessC != 0;
+    static constexpr bool kAlignedC = (kDimC % kWarpAccessC == 0) && (kWarpIterC % kWarpC == 0);
+    static constexpr bool kAlignedS = (kDimS % kWarpAccessS == 0) && (kWarpIterS % kWarpS == 0);
 
     static constexpr int kFootprintC = kWarpAccessC * kIterC;
     static constexpr int kFootprintS = kWarpAccessS * kIterS;
@@ -84,7 +86,7 @@ void Print(TMap)
     std::cout << "      iter: (" << TMap::kIterC << ", " << TMap::kIterS << ")\n";
     std::cout << " footprint: (" << TMap::kFootprintC << ", " << TMap::kFootprintS << ")\n";
     std::cout << "     delta: (" << TMap::kDeltaC << ", " << TMap::kDeltaS << ")\n";
-    std::cout << "  partialC: " << TMap::kPartialC << "\n";
+    std::cout << "   aligned: (" << TMap::kAlignedC << "," << TMap::kAlignedS << ")\n";
 }
 
 }  // namespace

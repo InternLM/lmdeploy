@@ -37,8 +37,8 @@ struct Transcript {
     using SmemLayoutB = typename Gemm::SmemLayoutB;
     using SmemLayoutQ = typename Gemm::SmemLayoutQ;
 
-    using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, 100>;
-    using GmemIterQ = GmemIteratorSm80<Tq, ThreadMapQ, SmemLayoutQ, 101>;
+    using GmemIterB = GmemIteratorSm80<T, ThreadMapB, SmemLayoutB, false, false, 100>;
+    using GmemIterQ = GmemIteratorSm80<Tq, ThreadMapQ, SmemLayoutQ, false, false, 101>;
 
     struct SharedStorage {
         __align__(16) Array<T, Gemm::SmemLayoutB::kSize> B;
@@ -87,8 +87,8 @@ struct Transcript {
         [[maybe_unused]] const int packed_n   = cta_cnt_n * MMA_CNT_N / P_N;
         const int                  q_packed_n = cta_cnt_n * MMA_CNT_N / P_Q_N;
 
-        GmemIterB gmem_B{(T*)param.B + cta_idx_n * CTA_N * param.k, param.k, CTA_K};
-        GmemIterQ gmem_Q{(Tq*)param.Q + cta_idx_n * CTA_N, param.n, CTA_G * param.n};
+        GmemIterB gmem_B{(T*)param.B + cta_idx_n * CTA_N * param.k, param.k, CTA_K, CTA_N, CTA_K};
+        GmemIterQ gmem_Q{(Tq*)param.Q + cta_idx_n * CTA_N, param.n, CTA_G * param.n, CTA_G, CTA_N};
 
         if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
             printf("P_Q_K=%d, P_Q_N=%d, q_packed_n=%d\n", P_Q_K, P_Q_N, q_packed_n);

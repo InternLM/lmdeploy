@@ -6,12 +6,13 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/sync.h"
 #include "src/turbomind/kernels/gemm/thread_map.h"
 
 namespace turbomind::gemm {
 
-template<class Arch_, class Mainloop, class CtaMap_, bool SplitK>
+template<class Arch_, class Mainloop, class CtaMap_, bool AlignedM, bool AlignedN, bool SplitK>
 struct GemmUniversal {
 
     using Impl = typename Mainloop::Impl;
@@ -31,6 +32,10 @@ struct GemmUniversal {
     using FragC = typename Impl::FragC;
 
     static constexpr int WARP_CNT = Impl::WARP_CNT;
+
+    using IteratorA = typename Mainloop::template GmemIterA<AlignedM, true>;
+    using IteratorB = typename Mainloop::template GmemIterB<AlignedN, true>;
+    using IteratorQ = typename Mainloop::template GmemIterQ<true, AlignedN>;
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
@@ -66,26 +71,36 @@ struct GemmUniversal {
         const int offset_m = tile_offset.x * CTA_M;
         const int offset_n = tile_offset.y * CTA_N;
 
+        const int end_m = min(CTA_M, param.m - offset_m);
+        const int end_n = min(CTA_N, param.n - offset_n);
+
         SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
         FragC frag_C{};
 
         int tile_iter = (gemm_k_size + CTA_K - 1) / CTA_K;
 
-        typename Mainloop::GmemIterA gmem_A{
+        IteratorA gmem_A{
             param.A + offset_m * param.k + offset_k,  // ptr
             param.k,                                  // stride s
-            CTA_K                                     // stride k
+            CTA_K,                                    // stride k
+            AlignedM ? CTA_M : end_m,                 // max s
+            CTA_K,                                    // max c
         };
-        typename Mainloop::GmemIterB gmem_B{
-            param.B + offset_n * param.k + offset_k * Impl::kPackedN,  // ptr
-            param.k * Impl::kPackedN,                                  // stride s
-            CTA_K * Impl::kPackedN                                     // stride k
+        constexpr int packed_n = Impl::kPackedN;
+        IteratorB     gmem_B{
+            param.B + offset_n * param.k + offset_k * packed_n,  // ptr
+            param.k * packed_n,                                  // stride s
+            CTA_K * packed_n,                                    // stride k
+            ceil_div(AlignedN ? CTA_N : end_n, packed_n),        // max s
+            CTA_K * packed_n,                                    // max c
         };
-        typename Mainloop::GmemIterQ gmem_Q{
+        IteratorQ gmem_Q{
             param.Q + offset_n + offset_k / Impl::G * param.n,  // ptr
             param.n,                                            // stride s
-            CTA_G * param.n                                     // stride k
+            CTA_G * param.n,                                    // stride k
+            CTA_G,                                              // max s
+            AlignedN ? CTA_N : end_n,                           // max c
         };
 
         Mainloop mainloop{};
@@ -93,13 +108,15 @@ struct GemmUniversal {
         mainloop(gmem_A, gmem_B, gmem_Q, frag_C, tile_iter, storage);
 
         if (!SplitK || tiled_shape.z == 1) {
-            StoreC(frag_C, offset_m, offset_n, param, storage);
+            StoreC(frag_C, offset_m, offset_n, end_m, end_n, param, storage);
         }
         else {
             // store partial
             Impl::template StoreC<float>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
                 const int idx = tile_offset.z * param.m * param.n + (offset_m + mi) * param.n + offset_n + ni;
-                Store(&param.partial_C[idx], cast<float>(vec));
+                if (check_m(mi, end_m) && check_n(ni, end_n)) {
+                    Store(&param.partial_C[idx], cast<float>(vec));
+                }
             });
 
             int* locks = &param.locks[(tile_offset.x * tiled_shape.y + tile_offset.y) * tiled_shape.z];
@@ -113,7 +130,7 @@ struct GemmUniversal {
             else {
                 sem_wait_many(&locks[thread_idx], tiled_shape.z - 1, thread_idx < tiled_shape.z - 1);
 
-                Reduce(tile_offset, param);
+                Reduce(tile_offset, param, end_m, end_n);
 
                 if (thread_idx < tiled_shape.z) {
                     locks[thread_idx] = 0;
@@ -122,14 +139,37 @@ struct GemmUniversal {
         }
     }
 
-    __device__ void StoreC(FragC& frag_C, int offset_m, int offset_n, const Param& param, SharedStorage& storage)
+    __device__ static constexpr int check_m(int mi, int end_m)
+    {
+        if constexpr (AlignedM) {
+            return 1;
+        }
+        else {
+            return mi < end_m;
+        }
+    }
+
+    __device__ static constexpr int check_n(int ni, int end_n)
+    {
+        if constexpr (AlignedN) {
+            return 1;
+        }
+        else {
+            return ni < end_n;
+        }
+    }
+
+    __device__ void
+    StoreC(FragC& frag_C, int offset_m, int offset_n, int end_m, int end_n, const Param& param, SharedStorage& storage)
     {
         Impl::template StoreC<T>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
-            Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<T>(vec));  //
+            if (check_m(mi, end_m) && check_n(ni, end_n)) {
+                Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<T>(vec));  //
+            }
         });
     }
 
-    __device__ void Reduce(const int3& tile_offset, const Param& param)
+    __device__ void Reduce(const int3& tile_offset, const Param& param, int end_m, int end_n)
     {
         constexpr int kVecSize = std::min(4, std::max(1, (CTA_K * CTA_M) / (WARP_CNT * WARP_SIZE)));
 
@@ -157,8 +197,10 @@ struct GemmUniversal {
                 PRAGMA_UNROLL
                 for (int c = 0; c < C; ++c) {
                     const int ni = d.x + c * Map::kDeltaC;
-                    Ldg(frag_C[s][c],
-                        &param.partial_C[k * param.m * param.n + (offset_m + mi) * param.n + offset_n + ni]);
+                    if (check_m(mi, end_m) && check_n(ni, end_n)) {
+                        Ldg(frag_C[s][c],
+                            &param.partial_C[k * param.m * param.n + (offset_m + mi) * param.n + offset_n + ni]);
+                    }
                 }
             }
 
@@ -178,7 +220,9 @@ struct GemmUniversal {
             PRAGMA_UNROLL
             for (int c = 0; c < C; ++c) {
                 const int ni = d.x + c * Map::kDeltaC;
-                Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<T>(accu_C[s][c]));
+                if (check_m(mi, end_m) && check_n(ni, end_n)) {
+                    Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<T>(accu_C[s][c]));
+                }
             }
         }
     }

@@ -29,9 +29,15 @@ struct Mainloop_sm80 {
     using SmemLayoutB = typename Impl::SmemLayoutB;
     using SmemLayoutQ = typename Impl::SmemLayoutQ;
 
-    using GmemIterA = GmemIteratorSm80<T, ThreadMapA, SmemLayoutA, 0>;
-    using GmemIterB = GmemIteratorSm80<Tb, ThreadMapB, SmemLayoutB, 1>;
-    using GmemIterQ = GmemIteratorSm80<Tq, ThreadMapQ, SmemLayoutQ, 2, Impl::G_CTA, std::is_same_v<T, Tb>>;
+    template<bool AlignedS, bool AlignedC>
+    using GmemIterA = GmemIteratorSm80<T, ThreadMapA, SmemLayoutA, AlignedS, AlignedC, 0>;
+
+    template<bool AlignedS, bool AlignedC>
+    using GmemIterB = GmemIteratorSm80<Tb, ThreadMapB, SmemLayoutB, AlignedS, AlignedC, 1>;
+
+    template<bool AlignedS, bool AlignedC>
+    using GmemIterQ =
+        GmemIteratorSm80<Tq, ThreadMapQ, SmemLayoutQ, AlignedS, AlignedC, 2, Impl::G_CTA, std::is_same_v<T, Tb>>;
 
     static constexpr bool kUseGmemQ = !std::is_same_v<T, Tb>;
 
@@ -54,8 +60,9 @@ struct Mainloop_sm80 {
         smem_iter.Advance();
     }
 
+    template<class IteratorA, class IteratorB, class IteratorQ>
     __device__ void operator()(
-        GmemIterA& gmem_A, GmemIterB& gmem_B, GmemIterQ& gmem_Q, FragC& frag_C, int tile_iter, SharedStorage& storage)
+        IteratorA& gmem_A, IteratorB& gmem_B, IteratorQ& gmem_Q, FragC& frag_C, int tile_iter, SharedStorage& storage)
     {
         typename Impl::StateA state_A{storage};
         typename Impl::StateQ state_Q{storage};
