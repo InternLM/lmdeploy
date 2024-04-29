@@ -192,6 +192,6 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return InternLMXComposer2TemplateWrapper(chat_template)
     elif arch == 'InternVLChatModel':
         return InternVLChatTemplateWrapper(chat_template)
-    elif arch == 'MiniGeminiLlamaForCausalLM':
+    elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiLlamaTempateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')

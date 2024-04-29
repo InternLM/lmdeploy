@@ -6,7 +6,7 @@ import torch.nn as nn
 
 from lmdeploy.vl.model.llava import LlavaVisionModel, check_llava_install
 
-from .utils import _set_function, disable_transformers_logging
+from .utils import disable_transformers_logging, rewrite_ctx
 
 _model_path = None
 
@@ -71,16 +71,13 @@ def _build_vision_tower(vision_tower_cfg, **kwargs):
 
 @contextmanager
 def init_yi_model():
-    import llava  # noqa: F401
-    old_projector = eval(
-        'llava.model.multimodal_projector.builder.build_vision_projector')
-    _set_function(old_projector, _build_vision_projector)
-    old_vision_tower = eval(
-        'llava.model.multimodal_encoder.builder.build_vision_tower')
-    _set_function(old_vision_tower, _build_vision_tower)
-    yield
-    _set_function(_build_vision_projector, old_projector)
-    _set_function(_build_vision_tower, old_vision_tower)
+    origin_func_path = [
+        'llava.model.multimodal_projector.builder.build_vision_projector',
+        'llava.model.multimodal_encoder.builder.build_vision_tower'
+    ]
+    rewrite_func = [_build_vision_projector, _build_vision_tower]
+    with rewrite_ctx(origin_func_path, rewrite_func):
+        yield
 
 
 class YiVisionModel(LlavaVisionModel):

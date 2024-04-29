@@ -262,6 +262,8 @@ class Vicuna(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
+        if 'llava' in path and 'v1.5' in path:
+            return 'vicuna'
         if 'vicuna' in path:
             return 'vicuna'
         if 'wizardlm' in path:
@@ -289,6 +291,8 @@ class MiniGemini(Vicuna):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
+        if 'mgm-7b' in path or 'mgm-13b' in path or 'mgm-34b' in path:
+            return 'mini-gemini-vicuna'
         if 'mini-gemini-7b' in path or 'mini-gemini-13b' in path:
             return 'mini-gemini-vicuna'
 
