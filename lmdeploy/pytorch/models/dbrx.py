@@ -59,7 +59,6 @@ class PatchedDbrxAttention(nn.Module):
     def _contiguous_batching_forward_impl(
         self,
         hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         world_size: int = 1,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
@@ -99,7 +98,15 @@ class PatchedDbrxAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             scaling_factor = 1.0
-            inv_freq = self.rotary_emb.inv_freq
+            rotary_emb = self.rotary_emb
+            if rotary_emb.inv_freq is None:
+                rotary_emb.inv_freq = 1.0 / (rotary_emb.base**(torch.arange(
+                    0,
+                    rotary_emb.dim,
+                    2,
+                    dtype=torch.int64,
+                    device=query_states.device).float() / rotary_emb.dim))
+            inv_freq = rotary_emb.inv_freq
             query_states, key_states = fused_rotary_emb(
                 query_states[None],
                 key_states[None],
@@ -162,10 +169,38 @@ class PatchedDbrxAttention(nn.Module):
             world_size = dist.get_world_size()
         return self._contiguous_batching_forward_impl(
             hidden_states,
-            position_ids,
             past_key_value,
             world_size=world_size,
         )
+
+
+class PatchedDbrxExpertGLU(nn.Module):
+
+    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
+                                 device_mesh: DeviceMesh):
+        """Distribution partition callback."""
+
+        def __colwise_partition(name, param):
+            dist_tensor = distribute_tensor(param, device_mesh, [Shard(0)])
+            dist_tensor = try_to_local(dist_tensor)
+            dist_param = torch.nn.Parameter(dist_tensor)
+            mod.register_parameter(name, dist_param)
+
+        if mod_name == '':
+            __colwise_partition('w1', mod.w1)
+            __colwise_partition('v1', mod.v1)
+            __colwise_partition('w2', mod.w2)
+
+    def forward(self, x: torch.Tensor, expert_w1: torch.Tensor,
+                expert_v1: torch.Tensor,
+                expert_w2: torch.Tensor) -> torch.Tensor:
+        """remote code and transformers has different implementation."""
+        gate_proj = x.matmul(expert_w1.t())
+        up_proj = x.matmul(expert_v1.t())
+        gate_proj = self.activation_fn(gate_proj)
+        intermediate_states = gate_proj * up_proj
+        down_proj = intermediate_states.matmul(expert_w2)
+        return down_proj
 
 
 def _div_up(a, b):
@@ -187,21 +222,6 @@ class PatchedDbrxExperts(nn.Module):
         last_experts_id = min(num_experts,
                               first_experts_id + num_experts_per_rank)
         return first_experts_id, last_experts_id
-
-    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-
-        def __colwise_partition(name, param):
-            dist_tensor = distribute_tensor(param, device_mesh, [Shard(0)])
-            dist_tensor = try_to_local(dist_tensor)
-            dist_param = torch.nn.Parameter(dist_tensor)
-            mod.register_parameter(name, dist_param)
-
-        if mod_name == 'mlp':
-            __colwise_partition('w1', mod.w1)
-            __colwise_partition('v1', mod.v1)
-            __colwise_partition('w2', mod.w2)
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
@@ -239,9 +259,9 @@ class PatchedDbrxExperts(nn.Module):
 
         ffn_hidden_size = self.mlp.ffn_hidden_size
 
-        w1_chunked = self.mlp.w1.flatten(0, (-1, ffn_hidden_size))
-        v1_chunked = self.mlp.v1.flatten(0, (-1, ffn_hidden_size))
-        w2_chunked = self.mlp.w2.flatten(0, (-1, ffn_hidden_size))
+        w1_chunked = self.mlp.w1.unflatten(0, (-1, ffn_hidden_size))
+        v1_chunked = self.mlp.v1.unflatten(0, (-1, ffn_hidden_size))
+        w2_chunked = self.mlp.w2.unflatten(0, (-1, ffn_hidden_size))
 
         for expert_idx in range(first_experts_id, last_experts_id):
             idx, top_x = idxs[expert_idx], top_xs[expert_idx]
