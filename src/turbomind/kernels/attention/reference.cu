@@ -70,10 +70,11 @@ template void invokeApplyRotaryEmbedding(nv_bfloat16* k_cache,
 #endif
 
 template<class T>
-__global__ void processQKV(T*       q_out,    // [B, H, s, D]
-                           T*       k_cache,  // [B, H, S, D]
-                           T*       v_cache,  // [B, H, S, D]
-                           const T* qkv,      // [B, s, H, D]
+__global__ void processQKV(T*       q_out,     // [B, H, s, D]
+                           T*       k_cache,   // [B, H, S, D]
+                           T*       v_cache,   // [B, H, S, D]
+                           const T* qkv,       // [B, s, H, D]
+                           const T* qkv_bias,  // [Q; K; V]
                            int      max_q_len,
                            int      max_k_len,
                            int      head_num,
@@ -93,16 +94,28 @@ __global__ void processQKV(T*       q_out,    // [B, H, s, D]
     auto k = q + head_num * head_dim;
     auto v = k + kv_head_num * head_dim;
 
+    auto q_bias = qkv_bias ? qkv_bias + hi * head_dim : nullptr;
+    auto k_bias = qkv_bias ? q_bias + head_num * head_dim : nullptr;
+    auto v_bias = qkv_bias ? k_bias + kv_head_num * head_dim : nullptr;
+
     constexpr int kVecSize = 2;
+
+    using namespace ops;
 
     for (int d = threadIdx.x * kVecSize; d < head_dim; d += blockDim.x * kVecSize) {
         const auto         idx = bi * head_num * max_q_len * head_dim + hi * max_q_len * head_dim + ti * head_dim + d;
         Array<T, kVecSize> vec;
         Ldg(vec, &q[hi * head_dim + d]);
+        if (qkv_bias) {
+            Array<T, kVecSize> bias;
+            Load(bias, &q_bias[d]);
+            vec = vec + bias;
+        }
         if (rope_theta) {
             RotaryEmbedding<kVecSize> rope(rope_theta, head_dim, history + ti, {d, 0});
             rope.apply(vec);
         }
+
         Store(&q_out[idx], vec);
     }
 
@@ -117,6 +130,14 @@ __global__ void processQKV(T*       q_out,    // [B, H, s, D]
         Array<T, kVecSize> vec_V;
         Ldg(vec_K, &k[hi * head_dim + d]);
         Ldg(vec_V, &v[hi * head_dim + d]);
+        if (qkv_bias) {
+            Array<T, kVecSize> bias_K;
+            Array<T, kVecSize> bias_V;
+            Load(bias_K, &k_bias[d]);
+            Load(bias_V, &v_bias[d]);
+            vec_K = vec_K + bias_K;
+            vec_V = vec_V + bias_V;
+        }
         if (rope_theta) {
             RotaryEmbedding<kVecSize> rope(rope_theta, head_dim, history + ti, {d, 0});
             rope.apply(vec_K);
@@ -176,7 +197,7 @@ void Reference<T>::Reshape(
 }
 
 template<class T>
-void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv)
+void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv, const T* qkv_bias)
 {
     {
         int  threads = 128;
@@ -187,6 +208,7 @@ void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv)
                                                     k_cache,
                                                     v_cache,
                                                     qkv,
+                                                    qkv_bias,
                                                     max_q_len_,
                                                     max_k_len_,
                                                     head_num_,
