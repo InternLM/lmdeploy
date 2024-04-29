@@ -454,6 +454,27 @@ class InternLM2Chat7B(InternLMChat7B):
         return ret
 
 
+@MODELS.register_module(name='internvl-internlm2')
+class InternVLInternLM2Chat(InternLM2Chat7B):
+
+    def __init__(
+            self,
+            meta_instruction='You are an AI assistant whose name is InternLM (书生·浦语).',
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'internvl' in path and 'v1-5' in path:
+            return 'internvl-internlm2'
+
+
 @MODELS.register_module(name='internlm-xcomposer2')
 class InternLMXComposer2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM-XComposer2-7b."""
@@ -1093,7 +1114,7 @@ class InternVLZH(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'internvl-chat-chinese' in path and 'v1-1' in path:
+        if 'internvl-chat' in path and 'v1-1' in path:
             return 'internvl-zh'
 
 
@@ -1295,7 +1316,7 @@ class ChatmlDirect(BaseChatTemplate):
         path = model_path.lower()
         if 'llava' in path and 'v1.6-34b' in path:
             return 'llava-chatml'
-        if 'internvl-chat-chinese' in path and 'v1-2' in path:
+        if 'internvl-chat' in path and 'v1-2' in path:
             return 'internvl-zh-hermes2'
 
 
