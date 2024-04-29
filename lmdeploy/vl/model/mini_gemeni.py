@@ -11,7 +11,7 @@ from PIL.Image import Image
 from lmdeploy.vl.model.base import VisonModel
 from lmdeploy.vl.model.utils import (disable_transformers_logging,
                                      hack_import_with,
-                                     load_model_from_weight_files, rewrite_ctx)
+                                     load_model_from_weight_files)
 
 
 def check_mini_gemini_install():
@@ -83,9 +83,8 @@ def _clip_vision_tower__init__(self, vision_tower, args, delay_load=False):
 
 
 def _clip_vision_tower_load_model(self):
-    from mgm.model.multimodal_encoder.clip_encoder import (CLIPVisionModel,
-                                                           VideoFramesProcessor
-                                                           )
+    from mgm.model.multimodal_encoder.clip_encoder import (  # noqa
+        CLIPVisionModel, VideoFramesProcessor)
     self.image_processor = VideoFramesProcessor.from_pretrained(
         self.vision_tower_name)
     from transformers import CLIPVisionConfig
@@ -122,9 +121,8 @@ def _openclip_vision_tower_load_model(self):
             self.model_type = 'convnext_xxlarge'
             self.model_channel = [384, 768, 1536, 3072]
 
-    from mgm.model.multimodal_encoder.openclip_encoder import (CLIP,
-                                                               get_model_config
-                                                               )
+    from mgm.model.multimodal_encoder.openclip_encoder import (  # noqa
+        CLIP, get_model_config)
     clip_model = CLIP(**get_model_config(self.model_type))
     clip_model.visual.trunk.norm_pre = None
     clip_model.visual.trunk.head = None
@@ -156,6 +154,7 @@ def init_mini_gemini_model():
         _openclip_vision_tower__init__,
         _openclip_vision_tower_load_model,
     ]
+    from lmdeploy.vl.model.utils import rewrite_ctx
     with rewrite_ctx(origin_func_path, rewrite_func):
         yield
 
