@@ -142,5 +142,7 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
         BLOCK=BLOCK,
         BLOCK_D=BLOCK_D,
         BLOCK_H=BLOCK_H,
+        num_warps=4,
+        num_stages=3,
         **kernel_meta,
     )

@@ -68,10 +68,10 @@ class JitFunction220Wrapper:
 
         def _make_spec_key_str(anno, key):
             if 'Tensor' in anno:
-                return f'({key}.data_ptr() % TRITON_DIVIIBILITY == 0, )'
+                return f'({key}.data_ptr() % {TRITON_DIVIIBILITY} == 0, )'
             if anno == 'int' or anno == 'bool':
-                return (f'({key} % TRITON_DIVIIBILITY == 0, '
-                        f'{key} % TRITON_DIVIIBILITY_8 == 0, '
+                return (f'({key} % {TRITON_DIVIIBILITY} == 0, '
+                        f'{key} % {TRITON_DIVIIBILITY_8} == 0, '
                         f'{key} == 1, )')
             return f'_specialization_key({key})'
 
@@ -210,8 +210,6 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, *
             kernel_cache=jit_func.cache,
             launch_enter_hook=CompiledKernel.launch_enter_hook,
             launch_exit_hook=CompiledKernel.launch_exit_hook,
-            TRITON_DIVIIBILITY=TRITON_DIVIIBILITY,
-            TRITON_DIVIIBILITY_8=TRITON_DIVIIBILITY_8,
         )
         exec(src, scope)
         return scope[f'_{fn.__name__}_launcher']
@@ -258,6 +256,12 @@ class JitFunction230Wrapper:
         from triton.runtime.driver import driver
 
         def _make_spec_key_str(anno, key):
+            if 'Tensor' in anno:
+                return f'({key}.data_ptr() % {TRITON_DIVIIBILITY} == 0, )'
+            if anno == 'int' or anno == 'bool':
+                return (f'({key} % {TRITON_DIVIIBILITY} == 0, '
+                        f'{key} % {TRITON_DIVIIBILITY_8} == 0, '
+                        f'{key} == 1, )')
             return f'_specialization_key({key})'
 
         def _make_sig_key_str(anno, key):
