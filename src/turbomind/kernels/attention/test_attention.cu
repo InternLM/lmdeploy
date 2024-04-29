@@ -194,11 +194,11 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     }
 }
 
-#define KV_INT8 0
+#define KV_INT8 1
 
 #define KV_INT4 0
 
-#define DECODING 0
+#define DECODING 1
 
 template<class T>
 int test_attention()
@@ -210,14 +210,16 @@ int test_attention()
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
-    constexpr size_t kHeadNum   = 80;
-    constexpr size_t KvHeadNum  = kHeadNum / 8;
-    constexpr size_t kBatchSize = 256;
+    constexpr size_t kHeadNum   = 40;
+    constexpr size_t KvHeadNum  = kHeadNum / 5;
+    constexpr size_t kBatchSize = 128;
     constexpr size_t kInputLen  = 1;
     // constexpr size_t kSequenceLen = 63;
     // constexpr size_t kSequenceLen = 4095;
     // constexpr size_t kSequenceLen = 511;
-    constexpr size_t kSequenceLen = 2047;
+    // constexpr size_t kSequenceLen = 2047;
+    constexpr size_t kSequenceLen = 4095;
+    // constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;
@@ -345,6 +347,10 @@ int test_attention()
     thrust::universal_vector<void*> k_cache_ref_ptrs(kBatchSize);
     thrust::universal_vector<void*> v_cache_ref_ptrs(kBatchSize);
 
+    thrust::universal_vector<T> bias_QKV(kHeadNum * kHeadDim + 2 * KvHeadNum * kHeadDim);
+
+    rng.GenerateNormal(bias_QKV.data().get(), bias_QKV.size(), 0.1f, 0.f);
+
     cudaDeviceSynchronize();
 
     for (size_t i = 0; i <= kBatchSize; ++i) {
@@ -368,6 +374,10 @@ int test_attention()
     params.k   = params.q + kHeadNum * kHeadDim;
     params.v   = params.k + KvHeadNum * kHeadDim;
 
+    params.q_bias = bias_QKV.data().get();
+    params.k_bias = params.q_bias + kHeadNum * kHeadDim;
+    params.v_bias = params.k_bias + KvHeadNum * kHeadDim;
+
     params.stride = (kHeadNum + 2 * KvHeadNum) * kHeadDim;
 
     params.token_num  = kTokenNum;
@@ -385,8 +395,6 @@ int test_attention()
                                                      int(kBatchSize * kContextLen * kHeadDim)};
 
     params.quant_policy = kQuantPolicy;
-
-    // std::copy_n(quant_params_kv.data(), 4, &params.kv_quant_params[0]);
 
     params.finished   = finished.data().get();
     params.rope_theta = rope_base.data().get();
@@ -419,7 +427,11 @@ int test_attention()
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
 
     for (int i = 0; i < 1; ++i) {
-        reference.Execute(params.out, k_cache_ref.data().get(), v_cache_ref.data().get(), qkv.data().get());
+        reference.Execute(params.out,  //
+                          k_cache_ref.data().get(),
+                          v_cache_ref.data().get(),
+                          qkv.data().get(),
+                          bias_QKV.data().get());
     }
 
     cudaDeviceSynchronize();

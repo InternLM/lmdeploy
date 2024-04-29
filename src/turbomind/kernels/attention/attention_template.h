@@ -4,7 +4,7 @@
 
 #include "attention_params.h"
 #include "attention_universal.h"
-#include "reduce_template.h"
+#include "reduce.h"
 #include "utils.h"
 
 namespace turbomind {
@@ -62,7 +62,15 @@ void invokeAttention(const typename Kernel::ParamType& params)
 
     auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
 
-    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cache_iter_factory, cta_map);
+    const int q_group_size = params.num_heads / params.num_kv_heads;
+
+    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params,
+                                                           cache_iter_factory,
+                                                           cta_map,
+                                                           q_group_size,
+                                                           1,            // q_head_per_cta
+                                                           q_group_size  // cta_per_q_group
+    );
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
         std::cout << cudaGetErrorString(err) << "\n";
@@ -70,17 +78,17 @@ void invokeAttention(const typename Kernel::ParamType& params)
     }
 
     if (split_cnt > 1 && Kernel::need_separate_reduce(split_cnt)) {
-        attention::dispatchReduce<Kernel::kHeadDim>(params.out,
-                                                    params.partial_M,
-                                                    params.partial_L,
-                                                    params.partial_O,
-                                                    params.split_cnt,
-                                                    params.max_split_k,
-                                                    split_cnt,
-                                                    params.token_num,
-                                                    params.num_heads,
-                                                    params.inv_sqrt_dh,
-                                                    params.stream);
+        attention::invokeReduce<Kernel::kHeadDim>(params.out,
+                                                  params.partial_M,
+                                                  params.partial_L,
+                                                  params.partial_O,
+                                                  params.split_cnt,
+                                                  params.max_split_k,
+                                                  split_cnt,
+                                                  params.token_num,
+                                                  params.num_heads,
+                                                  params.inv_sqrt_dh,
+                                                  params.stream);
     }
 }
 
