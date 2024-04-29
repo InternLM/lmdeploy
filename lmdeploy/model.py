@@ -291,6 +291,8 @@ class MiniGemini(Vicuna):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
+        if 'mgm-7b' in path or 'mgm-13b' in path or 'mgm-34b' in path:
+            return 'mini-gemini-vicuna'
         if 'mini-gemini-7b' in path or 'mini-gemini-13b' in path:
             return 'mini-gemini-vicuna'
 
