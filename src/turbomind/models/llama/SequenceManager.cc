@@ -86,7 +86,8 @@ bool SequenceManager::Erase(uint64_t id)
     return false;
 }
 
-void SequenceManager::CacheIfEnabled(const Sequences& sequences, int active_size) {
+void SequenceManager::CacheIfEnabled(const Sequences& sequences, int active_size)
+{
     if (block_trie_->enabled()) {
         block_trie_->verify();
         for (int i = 0; i < active_size; ++i) {
