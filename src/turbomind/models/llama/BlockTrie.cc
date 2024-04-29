@@ -70,14 +70,17 @@ void BlockTrie::cache(const Sequence& seq)
 
         auto it = curr_node->children.find(hash_key);
 
+        int block_id = seq.blocks[idx];
+        uint64_t block_unique_id = seq.block_unique_ids[idx];
+
         if (it != curr_node->children.end()) {
             if (curr_tokens != it->second->tokens) {
                 break;
             }
             curr_node = it->second;
+            curr_node->block_id = block_id;
+            curr_node->block_unique_id = block_unique_id;
         } else {
-            int block_id = seq.blocks[idx];
-            uint64_t block_unique_id = seq.block_unique_ids[idx];
             // insert new node
             std::shared_ptr<TrieNode> node = std::make_shared<TrieNode>();
             node->hash_key = hash_key;
