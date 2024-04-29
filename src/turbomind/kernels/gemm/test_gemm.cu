@@ -297,7 +297,7 @@ void Run(int m, int n, int k, int g = 128)
 template<class T, class Tb>
 void Test(int bsz, int tp)
 {
-    // Run<T, Tb>(8192 - 64, 8192 - 64, 8192);
+    // Run<T, Tb>(8192 - 64, 8192 , 8192);
     Run<T, Tb>(8192, 8192, 8192);
     // Run<T, Tb>(4096, 4096, 4096);
     // Run<half, uint4_t>(64, 11008, 4096);
@@ -316,6 +316,6 @@ void Test(int bsz, int tp)
 
 int main(int argc, char* argv[])
 {
-    Test<half, half>(8, 1);
+    Test<half, uint4_t>(8, 1);
     return 0;
 }

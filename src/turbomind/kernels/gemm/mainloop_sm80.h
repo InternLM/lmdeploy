@@ -41,9 +41,12 @@ struct Mainloop_sm80 {
 
     static constexpr bool kUseGmemQ = !std::is_same_v<T, Tb>;
 
-    static constexpr int kBatchA = (ThreadMapA::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
-    static constexpr int kBatchB = (ThreadMapB::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
-    static constexpr int kBatchQ = (ThreadMapQ::kIterS + Impl::ITER_K - 1) / Impl::ITER_K;
+    static constexpr int kMaxPrefetchIter =
+        std::min(ceil_div(std::max(ThreadMapA::kIterS, ThreadMapB::kIterS), 4), Impl::ITER_K);
+
+    static constexpr int kBatchA = ceil_div(ThreadMapA::kIterS, kMaxPrefetchIter);
+    static constexpr int kBatchB = ceil_div(ThreadMapB::kIterS, kMaxPrefetchIter);
+    static constexpr int kBatchQ = ceil_div(ThreadMapQ::kIterS, kMaxPrefetchIter);
 
     static constexpr int G_CTA = Impl::G_CTA;
 

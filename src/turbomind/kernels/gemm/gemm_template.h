@@ -84,7 +84,7 @@ void invoke(
     using Tq = half2;
 
     using Impl   = Impl<MMA_81616, T, Tb, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, Stages, 1>;
-    using Kernel = GemmUniversal<void, Mainloop_sm80<Impl>, CtaSwizzleMap<Swizzle>, true, true, SplitK>;
+    using Kernel = GemmUniversal<void, Mainloop_sm80<Impl>, CtaSwizzleMap<Swizzle>, false, true, SplitK>;
 
     using Map = typename Kernel::CtaMap;
 

@@ -34,7 +34,7 @@ struct Predicate {
 
     __device__ int operator()(int s, int c) const
     {
-        return pred_ & (1 << (s * kSizeC + c));
+        return (pred_ & (1 << (s * kSizeC + c))) != 0;
     }
 
     __device__ void set(int s, int c)
@@ -62,6 +62,11 @@ struct Predicate<S, C, true, true> {
     }
 
     __device__ void set(int, int) {}
+
+    __device__ void clear()
+    {
+        // pred_ = 0;
+    }
 };
 
 template<class T,
@@ -189,6 +194,11 @@ struct GmemIteratorSm80 {
         //     return;
         // }
 
+        int mask = tile_mask;
+        if constexpr (G_CTA > 1) {
+            mask = mask & g_mask_;
+        }
+
         PRAGMA_UNROLL
         for (int s = begin; s < begin + count && s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
@@ -199,7 +209,13 @@ struct GmemIteratorSm80 {
                 //     smem_data_.ptr_ += Map::kDeltaC;
                 // }
 
-                CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, g_mask_ && tile_mask && pred_(s, c));
+                // CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, g_mask_ && tile_mask && pred_(s, c));
+
+                bool mask = tile_mask && pred_(s, c);
+                if constexpr (G_CTA > 1) {
+                    mask = mask & g_mask_;
+                }
+                CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, mask);
 
                 // if (g_mask_ && tile_mask) {
                 //     AccessType tmp;
