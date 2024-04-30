@@ -111,11 +111,29 @@ def create_error_response(status: HTTPStatus, message: str):
 
 async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
-    if request.model in get_model_list():
-        return
-    ret = create_error_response(
-        HTTPStatus.NOT_FOUND, f'The model `{request.model}` does not exist.')
-    return ret
+    if hasattr(request, 'model') and request.model not in get_model_list():
+        return create_error_response(
+            HTTPStatus.NOT_FOUND,
+            f'The model `{request.model}` does not exist.')
+    if hasattr(request, 'n') and request.n <= 0:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The n `{request.n}` must be a positive int.')
+    if hasattr(request,
+               'top_p') and not (request.top_p > 0 and request.top_p <= 1):
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The top_p `{request.top_p}` must be in (0, 1].')
+    if hasattr(request, 'top_k') and request.top_k < 1:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The top_k `{request.top_p}` must be a positive integer.')
+    if hasattr(request, 'temperature') and not (request.temperature <= 1
+                                                and request.temperature >= 0):
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The temperature `{request.temperature}` must be in [0, 1]')
+    return
 
 
 def _create_completion_logprobs(tokenizer: Tokenizer,
@@ -957,6 +975,9 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
     - ignore_eos (bool): indicator for ignoring eos
     - user_id (str): for qos; if not specified, will set to "default"
     """
+    error_check_ret = await check_request(request)
+    if error_check_ret is not None:
+        return error_check_ret
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -1053,6 +1074,9 @@ async def chat_interactive_v1(request: GenerateRequest,
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
                 'please set a session_id to cancel a request')
+    error_check_ret = await check_request(request)
+    if error_check_ret is not None:
+        return error_check_ret
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
