@@ -14,5 +14,5 @@ shortuuid
 tiktoken
 torch<=2.2.2,>=2.0.0
 transformers
-triton>=2.1.0,<=2.2.0
+triton>=2.1.0,<=2.2.0; sys_platform == "linux"
 uvicorn
