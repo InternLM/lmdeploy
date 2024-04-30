@@ -244,19 +244,11 @@ def calibrate(model: str,
                            HEAD_NAME_MAP[type(model).__name__], device)
 
     print('Loading calibrate dataset ...')
-    # calib_loader, _ = get_calib_loaders(calib_dataset,
-    #                                     tokenizer,
-    #                                     nsamples=calib_samples,
-    #                                     seqlen=calib_seqlen)
+    calib_loader, _ = get_calib_loaders(calib_dataset,
+                                        tokenizer,
+                                        nsamples=calib_samples,
+                                        seqlen=calib_seqlen)
 
-    calib_loader = get_calib_dataset(
-        data='pileval',
-        tokenizer=tokenizer,
-        n_samples=128,
-        block_size=512,
-        split='train',
-        text_column='text',
-    )
     # Initialize calibration context
     from lmdeploy.lite.quantization.calibration import AWQCalibrationContext
     calib_ctx = AWQCalibrationContext(model,

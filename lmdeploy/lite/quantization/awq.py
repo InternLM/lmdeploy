@@ -181,48 +181,6 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     return scales
 
 
-@torch.no_grad()
-def scale_ln_fcs(ln, fcs, scales):
-    if not isinstance(fcs, list):
-        fcs = [fcs]
-
-    scales = scales.to(ln.weight.device)
-
-    ln.weight.div_(scales)
-    if hasattr(ln, 'bias') and ln.bias is not None:
-        ln.bias.div_(scales)
-
-    for fc in fcs:
-        fc.weight.mul_(scales.view(1, -1))
-
-    for p in ln.parameters():
-        assert torch.isnan(p).sum() == 0
-    for fc in fcs:
-        for p in fc.parameters():
-            assert torch.isnan(p).sum() == 0
-
-
-@torch.no_grad()
-def scale_fc_fc(fc1, fc2, scales):
-    assert isinstance(fc1, nn.Linear)
-    assert isinstance(fc2, nn.Linear)
-    # assert fc1.out_features == fc2.in_features
-
-    scales = scales.to(fc1.weight.device)
-
-    # fc1.weight.div_(scales.view(-1, 1))
-    fc1.weight[-scales.size(0):].div_(scales.view(-1, 1))
-    if fc1.bias is not None:
-        fc1.bias.div_(scales.view(-1))
-
-    fc2.weight.mul_(scales.view(1, -1))
-
-    for p in fc1.parameters():
-        assert torch.isnan(p).sum() == 0
-    for p in fc2.parameters():
-        assert torch.isnan(p).sum() == 0
-
-
 def check_awq_supported(layer_type):
     """Check if the smooth function is supported by inspecting layer type."""
     norm_fcs_found = False
@@ -310,29 +268,22 @@ def awq_layers(layers,
         for ln_name, fc_names in norm2fcs.items():
             a_name = [f'{l_name}.{n}' for n in fc_names][0]
             ratios = [a_ratios[f'{l_name}.{n}'] for n in fc_names]
-            ratios = [s for s in ratios if s is not None]
+            ratio = [s for s in ratios if s is not None][0]
 
             ln = layer.get_submodule(ln_name)
             fcs = [layer.get_submodule(n) for n in fc_names]
-            smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size, ratios[0])
+            smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size, ratio)
 
         for f_name, fc_names in fc2fcs.items():
             a_name = [f'{l_name}.{n}' for n in fc_names][0]
             ratios = [a_ratios[f'{l_name}.{n}'] for n in fc_names]
             ratios = [s for s in ratios if s is not None]
-            if not len(ratios):
-                ratios = [0.5]
+            ratio = 0.5 if not len(ratios) else ratios[0]
 
             fc = layer.get_submodule(f_name)
             fcs = [layer.get_submodule(n) for n in fc_names]
 
-            smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size, ratios[0])
+            smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size, ratio)
 
         layer.to('cpu')
         print(f'{l_name} smooth weight done.')
-
-
-# class AWQPipeline(nn.Module):
-#     def __init__(self, hf_model: nn.Module, *args, **kwargs) -> None:
-#         super().__init__(*args, **kwargs)
-#         self.hf_model = hf_model

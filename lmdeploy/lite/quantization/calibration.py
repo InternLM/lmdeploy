@@ -335,14 +335,6 @@ class CalibrationContext():
             layer.forward = self._ori_forwards[layer]
 
 
-def get_op_name(module, op):
-    # get the name of the op relative to the module
-    for name, m in module.named_modules():
-        if m is op:
-            return name
-    raise ValueError(f'Cannot find op {op} in module {module}')
-
-
 # core quantization method (simulated quantization)
 def pseudo_quantize_tensor(w,
                            n_bit=8,
@@ -391,21 +383,8 @@ def pseudo_quantize_tensor(w,
 
 
 @torch.no_grad()
-def get_act_scale(x):
-    return x.abs().view(-1, x.shape[-1]).mean(0)
-
-
-@torch.no_grad()
 def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat,
                      mod_name):
-    # firstly, get the weight quantize function
-    def w_quantize_func(p):
-        return pseudo_quantize_tensor(
-            p,
-            n_bit=w_bit,
-            **q_config,
-        ).detach()
-
     if 'use_cache' in module_kwargs:
         module_kwargs.pop('use_cache')
 
@@ -419,11 +398,10 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat,
             if isinstance(org_out, tuple):
                 org_out = org_out[0]
 
-        x_max = get_act_scale(x)
+        x_max = x.abs().view(-1, x.shape[-1]).mean(0)
 
         best_error = float('inf')
         best_ratio = -1
-
         n_grid = 20
         history = []
 
@@ -434,14 +412,15 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat,
             scales = scales / (scales.max() * scales.min()).sqrt()
             for fc in linears2scale:
                 fc.weight.mul_(scales.view(1, -1).to(fc.weight.device))
-                fc.weight.data = w_quantize_func(
-                    fc.weight.data) / (scales.view(1, -1))
+                fc.weight.data = pseudo_quantize_tensor(
+                    fc.weight.data, n_bit=w_bit, **q_config) / (scales.view(
+                        1, -1))
             out = block(x, **kwargs)
             if isinstance(out, tuple):
                 out = out[0]
 
-            loss = ((org_out - out).float().pow(2).mean().item()
-                    )  # float prevents overflow
+            # float prevents overflow
+            loss = (org_out - out).float().pow(2).mean().item()
             history.append(loss)
             if loss < best_error:
                 best_error = loss
@@ -452,7 +431,7 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat,
             raise Exception
         return best_ratio
 
-    def _auto_get_scale(prev_op, layers, inp, module2inspect=None, kwargs={}):
+    def _auto_get_scale(layers, inp, module2inspect=None, kwargs={}):
         # module2inspect: if given, we will check the output diff of this module instead of layers
         if module2inspect is None:
             assert len(layers) == 1
@@ -461,52 +440,36 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat,
         best_ratio = _search_module_scale(module2inspect, layers, inp.value,
                                           kwargs)
         inp.save_ratio(best_ratio)
-        # prev_op_name, [layer_name], scale
-        return (
-            get_op_name(module, prev_op),
-            tuple([get_op_name(module, m) for m in layers]),
-            best_ratio,
-        )
 
-    scales_list = []  # return the searched scales
     # attention input
-    scales_list.append(
-        _auto_get_scale(
-            prev_op=module.input_layernorm,
-            layers=[
-                module.self_attn.q_proj,
-                module.self_attn.k_proj,
-                module.self_attn.v_proj,
-            ],
-            inp=input_feat[mod_name + '.self_attn.q_proj'],
-            module2inspect=module.self_attn,
-            kwargs=module_kwargs,
-        ))
+    _auto_get_scale(
+        layers=[
+            module.self_attn.q_proj,
+            module.self_attn.k_proj,
+            module.self_attn.v_proj,
+        ],
+        inp=input_feat[mod_name + '.self_attn.q_proj'],
+        module2inspect=module.self_attn,
+        kwargs=module_kwargs,
+    )
     # attn out
     # Please refer to https://github.com/mit-han-lab/llm-awq/pull/67#issue-1850622696
     if module.self_attn.v_proj.weight.shape == module.self_attn.o_proj.weight.shape:
-        scales_list.append(
-            _auto_get_scale(
-                prev_op=module.self_attn.v_proj,
-                layers=[module.self_attn.o_proj],
-                inp=input_feat[mod_name + '.self_attn.o_proj'],
-            ))
+        _auto_get_scale(
+            layers=[module.self_attn.o_proj],
+            inp=input_feat[mod_name + '.self_attn.o_proj'],
+        )
     # fc1
-    scales_list.append(
-        _auto_get_scale(
-            prev_op=module.post_attention_layernorm,
-            layers=[module.mlp.gate_proj, module.mlp.up_proj],
-            inp=input_feat[mod_name + '.mlp.gate_proj'],
-            module2inspect=module.mlp,
-        ))
+    _auto_get_scale(
+        layers=[module.mlp.gate_proj, module.mlp.up_proj],
+        inp=input_feat[mod_name + '.mlp.gate_proj'],
+        module2inspect=module.mlp,
+    )
     # fc2
-    scales_list.append(
-        _auto_get_scale(
-            prev_op=module.mlp.up_proj,
-            layers=[module.mlp.down_proj],
-            inp=input_feat[mod_name + '.mlp.down_proj'],
-        ))
-    return scales_list
+    _auto_get_scale(
+        layers=[module.mlp.down_proj],
+        inp=input_feat[mod_name + '.mlp.down_proj'],
+    )
 
 
 class AWQCalibrationContext(CalibrationContext):
@@ -586,9 +549,9 @@ class AWQCalibrationContext(CalibrationContext):
             out = self._ori_forwards[mod](*args, **kwargs)
             obs_group = ActivationObserver.find_group(self.inp_obs_group)
             mod_name = self.mod2name[mod]
-            scales_list = auto_scale_block(
-                mod, kwargs, self.w_bits,
-                dict(zero_point=True, q_group_size=128), obs_group, mod_name)
+            auto_scale_block(mod, kwargs, self.w_bits,
+                             dict(zero_point=True, q_group_size=128),
+                             obs_group, mod_name)
             for key, item in obs_group.items():
                 if key.startswith(f'{mod_name}.'):
                     item.value.cpu()
