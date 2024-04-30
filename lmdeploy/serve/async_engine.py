@@ -503,8 +503,8 @@ class AsyncEngine:
                 *[_inner_call(i, generators[i]) for i in range(len(prompts))])
             outputs.put(None)
 
-        proc = Thread(
-            target=lambda: _get_event_loop().run_until_complete(gather()))
+        loop = _get_event_loop()
+        proc = Thread(target=lambda: loop.run_until_complete(gather()))
         proc.start()
 
         while True:
