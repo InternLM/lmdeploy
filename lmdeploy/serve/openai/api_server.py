@@ -287,19 +287,6 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
-        # First chunk with role
-        for i in range(request.n):
-            choice_data = ChatCompletionResponseStreamChoice(
-                index=i,
-                delta=DeltaMessage(role='assistant'),
-                finish_reason=None,
-            )
-            chunk = ChatCompletionStreamResponse(id=request_id,
-                                                 choices=[choice_data],
-                                                 model=model_name)
-            data = chunk.model_dump_json(exclude_unset=True)
-            yield f'data: {data}\n\n'
-
         async for res in result_generator:
             response_json = create_stream_response_json(
                 index=0,
