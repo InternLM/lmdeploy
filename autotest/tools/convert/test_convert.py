@@ -21,7 +21,6 @@ def test_convert(config, model, worker_id):
 @pytest.mark.order(5)
 @pytest.mark.convert
 @pytest.mark.pr_test
-@pytest.mark.xdist_group(name='pr_test')
 @pytest.mark.parametrize(
     'model',
     ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])

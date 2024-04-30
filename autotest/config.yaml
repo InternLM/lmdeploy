@@ -14,6 +14,7 @@ tp_config:
 
 turbomind_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
+    - meta-llama/Meta-Llama-3-8B-Instruct
     - internlm/internlm2-chat-1_8b
     - internlm/internlm-chat-7b
     - internlm/internlm-chat-20b
@@ -39,6 +40,7 @@ turbomind_chat_model:
 
 pytorch_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
+    - meta-llama/Meta-Llama-3-8B-Instruct
     - internlm/internlm-chat-7b
     - internlm/internlm-chat-20b
     - internlm/internlm2-chat-7b
@@ -81,8 +83,10 @@ quatization_case_config:
         - internlm/internlm2-chat-20b
         - baichuan-inc/Baichuan2-7B-Chat
         - internlm/internlm2-20b
+        - Qwen/Qwen1.5-7B-Chat
     kvint:
         - meta-llama/Llama-2-7b-chat-hf
+        - meta-llama/Meta-Llama-3-8B-Instruct
         - internlm/internlm2-chat-1_8b
         - internlm/internlm-chat-7b
         - internlm/internlm-chat-20b
@@ -101,6 +105,8 @@ quatization_case_config:
         - codellama/CodeLlama-7b-Instruct-hf
     w8a8:
         - meta-llama/Llama-2-7b-chat-hf
+        - meta-llama/Meta-Llama-3-8B-Instruct
+        - internlm/internlm-chat-7b
         - internlm/internlm-chat-20b
         - internlm/internlm2-chat-20b
         - internlm/internlm2-chat-7b

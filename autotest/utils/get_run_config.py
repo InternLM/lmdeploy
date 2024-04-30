@@ -117,4 +117,5 @@ def _simple_model_name(model):
     else:
         model_name = model
     model_name = model_name.replace('-inner-4bits', '')
+    model_name = model_name.replace('-inner-w8a8', '')
     return model_name
