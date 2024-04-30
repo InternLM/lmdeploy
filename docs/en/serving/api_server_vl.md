@@ -37,6 +37,27 @@ docker run --runtime nvidia --gpus all \
 
 The parameters of `api_server` are the same with that mentioned in "[option 1](#option-1-launching-with-lmdeploy-cli)" section
 
+Each model may require specific dependencies not included in the Docker image. If you run into issues, you may need to install those yourself
+on a case-by-case basis. If in doubt, refer to the specific model's project for documentation. 
+
+For example, for Llava:
+
+```
+FROM openmmlab/lmdeploy:latest 
+
+RUN apt-get update && apt-get install -y python3 python3-pip git
+
+WORKDIR /app
+
+RUN pip3 install --upgrade pip
+RUN pip3 install timm
+RUN pip3 install git+https://github.com/haotian-liu/LLaVA.git --no-deps
+
+COPY . .
+
+CMD ["lmdeploy", "serve", "api_server", "liuhaotian/llava-v1.6-34b"]
+```
+
 ## RESTful API
 
 LMDeploy's RESTful API is compatible with the following three OpenAI interfaces:
