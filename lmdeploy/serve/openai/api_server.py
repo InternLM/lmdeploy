@@ -113,7 +113,7 @@ async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
         return create_error_response(
-            HTTPStatus.NOT_FOUND,
+            HTTPStatus.BAD_REQUEST,
             f'The model `{request.model}` does not exist.')
     if hasattr(request, 'n') and request.n <= 0:
         return create_error_response(
