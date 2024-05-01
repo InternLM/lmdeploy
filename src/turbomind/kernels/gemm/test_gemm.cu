@@ -71,6 +71,12 @@ RNG& gRNG()
     return inst;
 }
 
+gemm::Gemm& gGemm()
+{
+    static gemm::Gemm inst;
+    return inst;
+}
+
 // quantize using `scale` and `zeros`,
 template<class T>
 __global__ void find_stats(Array<T, 2>* minmax, const T* src, int N, int K, int G)
@@ -275,10 +281,40 @@ void Run(int m, int n, int k, int g = 128)
         //     std::cout << "q_BBB: " << (float)q[i] << " " << (float)q[i + 1] << std::endl;
         // }
 
+        using namespace gemm;
+
         for (int i = 0; i < 10; ++i) {
             gemm::CacheFlushing::flush();
-            gemm::invoke(
-                c.data().get(), a.data().get(), B1, q_pack.data().get(), m, n, k, 1, workspace.data().get(), 0);
+            // gemm::invoke(
+            //     c.data().get(), a.data().get(), B1, q_pack.data().get(), m, n, k, 1, workspace.data().get(), 0);
+
+            const float beta = 0;
+
+            gGemm().Run(LayoutType::kRowMajor,
+                        LayoutType::kFragment_81616,
+                        LayoutType::kRowMajor,
+                        EpilogueType::kNone,
+                        m,
+                        n,
+                        k,
+                        a.data().get(),
+                        DataType::F16,
+                        0,
+                        B1,
+                        DataType::U4,
+                        0,
+                        q_pack.data().get(),
+                        QuantType::kAsym_FMA,
+                        0,
+                        &beta,
+                        c.data().get(),
+                        DataType::F16,
+                        0,
+                        (int*)workspace.data().get(),
+                        sizeof(int) * m * n,
+                        workspace.data().get() + m * n,
+                        sizeof(float) * c_ref.size() * kMaxSplits,
+                        0);
         }
 
         // for (int i = 0; i < 5; ++i) {
@@ -298,8 +334,8 @@ template<class T, class Tb>
 void Test(int bsz, int tp)
 {
     // Run<T, Tb>(8192 - 64, 8192 , 8192);
-    Run<T, Tb>(8192, 8192, 8192);
-    // Run<T, Tb>(4096, 4096, 4096);
+    Run<T, Tb>(bsz, 8192, 8192);
+    // Run<T, Tb>(bsz, 4096, 4096);
     // Run<half, uint4_t>(64, 11008, 4096);
     // Run<half, uint4_t>(128, 128, 32);
     // Run<half, uint4_t>(128, 128, 1024);

@@ -23,8 +23,11 @@ struct CtaMap2 {
     }
 };
 
-template<int N>
+template<int N_>
 struct CtaSwizzleMap {
+
+    static constexpr int N = N_;
+
     TM_HOST_DEVICE static int3 get_tiled_shape(int m, int n, int k, int cta_m, int cta_n, int split_cnt)
     {
         return {(m + cta_m - 1) / cta_m, (n + cta_n - 1) / cta_n, split_cnt};

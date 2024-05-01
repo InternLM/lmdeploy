@@ -4,6 +4,7 @@
 
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
+#include "src/turbomind/kernels/core/sub_byte_ptr.h"
 #include <iostream>
 #include <type_traits>
 

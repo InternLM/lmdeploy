@@ -12,7 +12,7 @@
 
 namespace turbomind::gemm {
 
-template<class Arch_, class Mainloop, class CtaMap_, bool AlignedM, bool AlignedN, bool SplitK>
+template<class Arch_, class Mainloop, class CtaMap_, bool AlignedM_, bool AlignedN_, bool SplitK_>
 struct GemmUniversal {
 
     using Impl = typename Mainloop::Impl;
@@ -28,6 +28,13 @@ struct GemmUniversal {
     static constexpr int CTA_N = Impl::CTA_N;
     static constexpr int CTA_K = Impl::CTA_K;
     static constexpr int CTA_G = Impl::CTA_G;
+
+    static constexpr bool AlignedM = AlignedM_;
+    static constexpr bool AlignedN = AlignedN_;
+
+    static constexpr bool SplitK = SplitK_;
+
+    static constexpr int kChunkSizeK = std::max(Impl::G, CTA_K);
 
     using FragC = typename Impl::FragC;
 
@@ -60,13 +67,12 @@ struct GemmUniversal {
 
         const auto& tiled_shape = param.tiled_shape;
 
-        constexpr int chunk_size = std::max(Impl::G, CTA_K);
-        const int     chunk_cnt  = (param.k + chunk_size - 1) / chunk_size;
+        const int chunk_cnt = (param.k + kChunkSizeK - 1) / kChunkSizeK;
 
         const int chunk_per_split = (chunk_cnt + tiled_shape.z - 1) / tiled_shape.z;
 
-        const int offset_k    = chunk_per_split * chunk_size * tile_offset.z;
-        const int gemm_k_size = std::min(offset_k + chunk_per_split * chunk_size, param.k) - offset_k;
+        const int offset_k    = chunk_per_split * kChunkSizeK * tile_offset.z;
+        const int gemm_k_size = std::min(offset_k + chunk_per_split * kChunkSizeK, param.k) - offset_k;
 
         const int offset_m = tile_offset.x * CTA_M;
         const int offset_n = tile_offset.y * CTA_N;
