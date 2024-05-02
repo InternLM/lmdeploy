@@ -41,7 +41,6 @@ docker run --runtime nvidia --gpus all \
 
 例如，对于 Llava
 
-
 ```
 FROM openmmlab/lmdeploy:latest
 
