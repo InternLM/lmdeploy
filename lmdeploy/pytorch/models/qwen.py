@@ -11,6 +11,7 @@ from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn, try_to_local)
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
 
+
 def _attention_partition_fn(mod_name: str, mod: nn.Module,
                             device_mesh: DeviceMesh):
     """A function for attention partition."""
@@ -49,6 +50,7 @@ def _attention_partition_fn(mod_name: str, mod: nn.Module,
         rowwise_parallelize_linear_fn(mod,
                                       device_mesh=device_mesh,
                                       to_local=True)
+
 
 class PatchedQWenAttention(nn.Module):
 
