@@ -378,6 +378,7 @@ class AsyncEngine:
                                        List[EngineGenerationConfig]]] = None,
             do_preprocess: bool = True,
             adapter_name: Optional[str] = None,
+            progress_bar: Literal['tqdm'] = None,
             **kwargs):
         """Inference a batch of prompts.
 
@@ -391,6 +392,7 @@ class AsyncEngine:
                 True, which means chat_template will be applied.
             adapter_name (str): the adapter name of slora for pytorch backend.
                 Pick one from adapters. Default to None, using the base model.
+            progress_bar (tqdm): the progress bar used in pipeline benchmark
         """
         need_list_wrap = isinstance(prompts, str) or isinstance(
             prompts[0], Dict)
@@ -432,6 +434,8 @@ class AsyncEngine:
                     if outputs[i].logprobs is None:
                         outputs[i].logprobs = []
                     outputs[i].logprobs.extend(out.logprobs)
+                if progress_bar and out.finish_reason is not None:
+                    progress_bar.update(1)
 
         async def gather():
             await asyncio.gather(

@@ -82,9 +82,9 @@ class Engine:
             for _, _, output_len in requests
         ]
 
+        self.pbar = tqdm(total=len(requests))
         start = time.perf_counter()
         if stream_output:
-            self.pbar = tqdm(total=len(requests))
             for output in self.pipe.stream_infer(prompts,
                                                  gen_configs,
                                                  do_preprocess=False):
@@ -95,7 +95,10 @@ class Engine:
                 if finish_reason is not None:
                     self.pbar.update(1)
         else:
-            for output in self.pipe(prompts, gen_configs, do_preprocess=False):
+            for output in self.pipe(prompts,
+                                    gen_configs,
+                                    do_preprocess=False,
+                                    progress_bar=self.pbar):
                 session_id = output.session_id
                 n_token = output.generate_token_len
                 finish_reason = output.finish_reason
@@ -127,6 +130,7 @@ class Engine:
               f'elapsed_time: {elapsed_time:.3f}s\n')
 
         print(
+            f'number of prompts: {len(requests)}\n'
             f'number of prompt tokens: {prompt_tokens:.0f}\n'
             f'number of completion tokens: {completion_tokens:.0f}\n'
             f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
@@ -233,7 +237,7 @@ def main():
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
-            thread_safe=True)
+            thread_safe=False)
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)
 
