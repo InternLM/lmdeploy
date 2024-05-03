@@ -177,7 +177,7 @@ def run_api_server(api_server_url: str,
             state_session_id, top_p, temperature, request_output_len
         ], [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
-            lambda: gr.Textbox.update(value=''),
+            lambda: gr.Textbox.postprocess(instruction_txtbox, value=''),
             [],
             [instruction_txtbox],
         )
@@ -201,7 +201,7 @@ def run_api_server(api_server_url: str,
         demo.load(init, inputs=None, outputs=[state_session_id])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
-    demo.queue(concurrency_count=batch_size, max_size=100,
+    demo.queue(max_size=100,
                api_open=True).launch(
                    max_threads=10,
                    share=True,
