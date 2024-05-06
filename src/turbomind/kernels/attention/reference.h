@@ -28,7 +28,7 @@ public:
     void Reshape(
         size_t max_q_len, size_t max_k_len, size_t head_num, size_t head_dim, size_t kv_head_num, size_t batch_size);
 
-    void Execute(T* output, T* k_cache, T* v_cache, const T* qkv);
+    void Execute(T* output, T* k_cache, T* v_cache, const T* qkv, const T* qkv_bias);
 
     const float* qk() const
     {

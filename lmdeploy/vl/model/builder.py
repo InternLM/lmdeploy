@@ -40,6 +40,6 @@ def load_vl_model(model_path: str):
         return Xcomposer2VisionModel(model_path)
     if arch == 'InternVLChatModel':
         return InternVLVisionModel(model_path)
-    if arch == 'MiniGeminiLlamaForCausalLM':
+    if arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiVisionModel(model_path)
     raise ValueError(f'unsupported vl model with arch {arch}')

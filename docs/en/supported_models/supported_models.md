@@ -20,7 +20,7 @@
 |     Code Llama      |  7B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |         YI          |  6B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |   LLaVA(1.5,1.6)    |  7B - 34B   |    Yes    |    -    |    -    |   -   |
-|    InternVL-Chat    |      -      |    Yes    |    -    |    -    |   -   |
+|    InternVL-Chat    | v1.1- v1.5  |    Yes    |    -    |    -    |   -   |
 |   MiniGeminiLlama   |     7B      |    Yes    |   No    |   No    |  No   |
 
 "-" means not verified yet.
@@ -50,3 +50,4 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 | DeepSeek-MoE |    16B     |    Yes    |   No    |  No  |
 |    Gemma     |   2B-7B    |    Yes    |   No    |  No  |
 |     Dbrx     |    132B    |    Yes    |   No    |  No  |
+|  StarCoder2  |   3B-15B   |    Yes    |   No    |  No  |

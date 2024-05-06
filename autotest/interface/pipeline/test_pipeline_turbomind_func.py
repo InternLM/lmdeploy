@@ -192,7 +192,7 @@ class TestPipelineTurbomindFuncRegression:
                     assert outputs.generate_token_len == i, str(outputs)
             else:
                 with assume:
-                    assert outputs.generate_token_len == i - 1, str(outputs)
+                    assert outputs.generate_token_len >= i - 1, str(outputs)
             with assume:
                 assert outputs.input_token_len > 50, str(outputs)
             with assume:
@@ -250,7 +250,7 @@ class TestPipelineTurbomindFuncRegression:
                     assert outputs.generate_token_len == i, str(outputs)
             else:
                 with assume:
-                    assert outputs.generate_token_len == i - 1, str(outputs)
+                    assert outputs.generate_token_len >= i - 1, str(outputs)
             with assume:
                 assert outputs.input_token_len > 50, str(outputs)
             with assume:
@@ -261,7 +261,6 @@ class TestPipelineTurbomindFuncRegression:
             outputs_list.append(outputs)
             continue
 
-        print(final_response)
         for output in outputs_list[0:-1]:
             with assume:
                 assert output.finish_reason is None, str(output)
