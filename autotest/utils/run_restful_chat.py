@@ -29,6 +29,12 @@ def start_restful_api(config, param, model, model_path, backend_tpye,
     else:
         extra = None
 
+    if 'modelscope' in param.keys():
+        modelscope = param['modelscope']
+        if modelscope:
+            os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
+            model_path = model
+
     if cuda_prefix is None:
         cuda_prefix = get_cuda_prefix_by_workerid(worker_id, tp_num=tp_num)
 
@@ -84,9 +90,13 @@ def start_restful_api(config, param, model, model_path, backend_tpye,
     return pid, startRes
 
 
-def stop_restful_api(pid, startRes):
+def stop_restful_api(pid, startRes, param):
     if pid > 0:
         startRes.terminate()
+    if 'modelscope' in param.keys():
+        modelscope = param['modelscope']
+        if modelscope:
+            del os.environ['LMDEPLOY_USE_MODELSCOPE']
 
 
 def run_all_step(config,

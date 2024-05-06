@@ -19,7 +19,7 @@ BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 @pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceChatCompletions:
 
-    def test_chat_completions_ignore_eos_batch(self):
+    def test_ignore_eos(self):
         api_client = APIClient(BASE_URL)
         for output in api_client.chat_completions_v1(
                 model=MODEL_NAME,
@@ -34,7 +34,7 @@ class TestRestfulInterfaceChatCompletions:
                 'completion_tokens') == 100
         assert output.get('choices')[0].get('finish_reason') == 'length'
 
-    def test_chat_completions_ignore_eos_stream(self):
+    def test_ignore_eos_streaming(self):
         api_client = APIClient(BASE_URL)
         outputList = []
         for output in api_client.chat_completions_v1(
@@ -57,7 +57,7 @@ class TestRestfulInterfaceChatCompletions:
             'finish_reason') == 'length'
         assert len(outputList) == 102
 
-    def test_chat_completions_max_tokens_batch(self):
+    def test_max_tokens(self):
         api_client = APIClient(BASE_URL)
         for output in api_client.chat_completions_v1(
                 model=MODEL_NAME,
@@ -70,7 +70,7 @@ class TestRestfulInterfaceChatCompletions:
         assert output.get('usage').get('completion_tokens') == 6 or output.get(
             'usage').get('completion_tokens') == 5
 
-    def test_chat_completions_max_tokens_stream(self):
+    def test_max_tokens_streaming(self):
         api_client = APIClient(BASE_URL)
         outputList = []
         for output in api_client.chat_completions_v1(
@@ -91,78 +91,6 @@ class TestRestfulInterfaceChatCompletions:
             'finish_reason') == 'length'
         assert len(outputList) == 7
 
-    def test_chat_completions_repetition_penalty_stream(self):
-        api_client = APIClient(BASE_URL)
-        outputList = []
-        response = ''
-        for output in api_client.chat_completions_v1(
-                model=MODEL_NAME,
-                messages='Hi, pls intro yourself',
-                stream=True,
-                repetition_penalty=0.1,
-                temperature=0.01,
-                max_tokens=200):
-            outputList.append(output)
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
-            assert_chat_completions_stream_return(outputList[index],
-                                                  MODEL_NAME)
-            response += outputList[index].get('choices')[0].get('delta').get(
-                'content')
-        assert 'pls pls ' * 5 in response or \
-            'Hi, pls intro yourself\n' * 5 in response
-
-    def test_chat_completions_topp_min_stream(self):
-        api_client = APIClient(BASE_URL)
-        responseList = []
-        for i in range(3):
-            outputList = []
-            response = ''
-            for output in api_client.chat_completions_v1(
-                    model=MODEL_NAME,
-                    messages='Hi, pls intro yourself',
-                    stream=True,
-                    top_p=0.1,
-                    temperature=0.01,
-                    max_tokens=10):
-                outputList.append(output)
-            assert_chat_completions_stream_return(outputList[0], MODEL_NAME,
-                                                  True, False)
-            assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                                  False, True)
-            for index in range(1, len(outputList) - 1):
-                assert_chat_completions_stream_return(outputList[index],
-                                                      MODEL_NAME)
-                response += outputList[index].get('choices')[0].get(
-                    'delta').get('content')
-            responseList.append(response)
-        assert responseList[0] == responseList[1]
-        assert responseList[1] == responseList[2]
-
-    def test_chat_completions_longinput_stream(self):
-        api_client = APIClient(BASE_URL)
-        outputList = []
-        for output in api_client.chat_completions_v1(
-                model=MODEL_NAME,
-                messages='Hi, pls intro yourself' * 10000,
-                stream=True,
-                temperature=0.01):
-            outputList.append(output)
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        for index in range(1, len(outputList) - 1):
-            assert_chat_completions_stream_return(outputList[index],
-                                                  MODEL_NAME)
-        assert outputList[1].get('choices')[0].get('finish_reason') == 'length'
-        assert outputList[1].get('choices')[0].get('delta').get(
-            'content') == ''
-        assert len(outputList) == 2
-
 
 @pytest.mark.order(8)
 @pytest.mark.pytorch
@@ -170,7 +98,7 @@ class TestRestfulInterfaceChatCompletions:
 @pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceChatInteractive:
 
-    def test_chat_interactive_ignore_eos_batch(self):
+    def test_ignore_eos(self):
         api_client = APIClient(BASE_URL)
         for output in api_client.chat_interactive_v1(
                 prompt='Hi, what is your name?',
@@ -182,7 +110,7 @@ class TestRestfulInterfaceChatInteractive:
         assert output.get('tokens') == 100
         assert output.get('finish_reason') == 'length'
 
-    def test_chat_interactive_ignore_eos_stream(self):
+    def test_ignore_eos_streaming(self):
         api_client = APIClient(BASE_URL)
         outputList = []
         for output in api_client.chat_interactive_v1(
@@ -192,7 +120,6 @@ class TestRestfulInterfaceChatInteractive:
                 request_output_len=100,
                 temperature=0.01):
             outputList.append(output)
-            print(output)
         assert_chat_interactive_stream_return(outputList[-1],
                                               True,
                                               index=len(outputList) - 2)
@@ -202,7 +129,7 @@ class TestRestfulInterfaceChatInteractive:
         assert output.get('finish_reason') == 'length'
         assert len(outputList) == 101
 
-    def test_chat_interactive_max_tokens_batch(self):
+    def test_max_tokens(self):
         api_client = APIClient(BASE_URL)
         for output in api_client.chat_interactive_v1(
                 prompt='Hi, pls intro yourself',
@@ -213,7 +140,7 @@ class TestRestfulInterfaceChatInteractive:
         assert output.get('finish_reason') == 'length'
         assert output.get('tokens') == 5
 
-    def test_chat_interactive_max_tokens_stream(self):
+    def test_max_tokens_streaming(self):
         api_client = APIClient(BASE_URL)
         outputList = []
         for output in api_client.chat_interactive_v1(

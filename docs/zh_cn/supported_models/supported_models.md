@@ -20,7 +20,7 @@
 |     Code Llama      |  7B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |         YI          |  6B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |   LLaVA(1.5,1.6)    |  7B - 34B   |    Yes    |    -    |    -    |   -   |
-|    InternVL-Chat    |      -      |    Yes    |    -    |    -    |   -   |
+|    InternVL-Chat    | v1.1- v1.5  |    Yes    |    -    |    -    |   -   |
 |   MiniGeminiLlama   |     7B      |    Yes    |   No    |   No    |  No   |
 
 “-” 表示还没有验证。

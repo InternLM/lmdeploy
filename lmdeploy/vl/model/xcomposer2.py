@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import warnings
+from contextlib import contextmanager
 from typing import List
 
 import torch
@@ -8,7 +9,27 @@ from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import add_sys_path
+from lmdeploy.vl.model.utils import add_sys_path, rewrite_ctx
+
+
+def _CLIPVisionModel_from_pretrained(vision_tower_name):
+    from transformers import CLIPVisionConfig, CLIPVisionModel
+    config = CLIPVisionConfig.from_pretrained(vision_tower_name)
+    model = CLIPVisionModel._from_config(config)
+    return model
+
+
+@contextmanager
+def init_empty_vit():
+    """skip download vision model."""
+    origin_func_path = [
+        'transformers.CLIPVisionModel.from_pretrained',
+    ]
+    rewrite_func = [
+        _CLIPVisionModel_from_pretrained,
+    ]
+    with rewrite_ctx(origin_func_path, rewrite_func):
+        yield
 
 
 class Xcomposer2VisionModel(VisonModel):
@@ -21,7 +42,7 @@ class Xcomposer2VisionModel(VisonModel):
 
     def build_model(self):
         from accelerate import init_empty_weights, load_checkpoint_in_model
-        with init_empty_weights(), warnings.catch_warnings():
+        with init_empty_weights(), warnings.catch_warnings(), init_empty_vit():
             warnings.simplefilter('ignore')
             config = AutoConfig.from_pretrained(self.model_path,
                                                 trust_remote_code=True)
@@ -34,12 +55,11 @@ class Xcomposer2VisionModel(VisonModel):
         model.to_empty(device='cpu')
 
         # additional components.
-        with add_sys_path(self.model_path):
+        with add_sys_path(self.model_path), init_empty_vit():
             # CLIPVisionModel embedding layer won't init right
             # with init_empty_weights
-            from build_mlp import build_vision_tower
-            model.vit = build_vision_tower()
-
+            model.vit.load_model()
+            model.vit.resize_pos()
             if config.architectures[0] == 'InternLM2ForCausalLM':
                 # internlm-xcomposer2-4khd-7b
                 from ixc_utils import HD_transform
