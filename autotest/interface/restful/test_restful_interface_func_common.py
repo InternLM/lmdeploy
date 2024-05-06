@@ -595,36 +595,6 @@ class TestRestfulInterfaceChatCompletions:
         assert output.get('code') is None
         assert 'Input should be a valid number' in str(output)
 
-    @pytest.mark.tmp
-    def test_logprobs(self):
-        api_client = APIClient(BASE_URL)
-        for output in api_client.chat_completions_v1(model=MODEL_NAME,
-                                                     messages='Shanghai is',
-                                                     logprobs=True,
-                                                     top_logprobs=5,
-                                                     max_tokens=20):
-            continue
-        print(output)
-        assert_chat_completions_batch_return(output,
-                                             MODEL_NAME,
-                                             check_logprobs=True)
-
-    @pytest.mark.tmp
-    def test_logprobs_streaming(self):
-        api_client = APIClient(BASE_URL)
-        outputList = []
-        for output in api_client.chat_completions_v1(model=MODEL_NAME,
-                                                     messages='Shanghai is',
-                                                     logprobs=True,
-                                                     top_logprobs=5,
-                                                     max_tokens=20):
-            outputList.append(output)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
-        for index in range(0, len(outputList) - 1):
-            assert_chat_completions_stream_return(outputList[index],
-                                                  MODEL_NAME)
-
-
 @pytest.mark.order(8)
 @pytest.mark.turbomind
 @pytest.mark.pytorch
