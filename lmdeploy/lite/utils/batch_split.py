@@ -29,14 +29,15 @@ def split_decoder_layer_inputs(
 
     batch_args = []
     batch_kwargs = []
-    for i in range(bs):
+    chunk_size = 8
+    for i in range(0, bs, chunk_size):
         new_args = []
         # Iterate over each argument. If it's a torch.Tensor and its first
         # dimension equals the batch size, then get the value corresponding
         # to the current index, else directly add the whole value.
         for val in args:
             if isinstance(val, torch.Tensor) and val.size(0) == bs:
-                new_args.append(val[i:i + 1])
+                new_args.append(val[i:i + chunk_size])
             else:
                 new_args.append(val)
 
@@ -44,7 +45,7 @@ def split_decoder_layer_inputs(
         # Execute the same operation for the keyword arguments.
         for name, val in kwargs.items():
             if isinstance(val, torch.Tensor) and val.size(0) == bs:
-                new_kwargs[name] = val[i:i + 1]
+                new_kwargs[name] = val[i:i + chunk_size]
             else:
                 new_kwargs[name] = val
 

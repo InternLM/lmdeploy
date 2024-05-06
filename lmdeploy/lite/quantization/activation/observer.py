@@ -78,6 +78,7 @@ class ActivationObserver(GlobalAvailMixin):
         self.num_batches_tracked = 0
         self.value = None
         self.ratio = None
+        self.num_ratio_tracked = 0
 
     @torch.no_grad()
     def observe(self, x: torch.Tensor) -> None:
@@ -117,4 +118,7 @@ class ActivationObserver(GlobalAvailMixin):
 
     @torch.no_grad()
     def save_ratio(self, ratio: float) -> None:
-        self.ratio = ratio
+        if self.ratio is None:
+            self.ratio = 0
+        self.ratio = (self.ratio * self.num_ratio_tracked + ratio) / (self.num_ratio_tracked + 1)
+        self.num_ratio_tracked+=1

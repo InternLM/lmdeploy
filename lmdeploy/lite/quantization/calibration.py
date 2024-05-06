@@ -402,11 +402,11 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat,
 
         best_error = float('inf')
         best_ratio = -1
-        n_grid = 20
+        n_grid = 10
         history = []
 
         org_sd = {k: v.cpu() for k, v in block.state_dict().items()}
-        for ratio in range(n_grid):
+        for ratio in range(1, n_grid):
             ratio = ratio * 1 / n_grid
             scales = x_max.pow(ratio).clamp(min=1e-4).view(-1)
             scales = scales / (scales.max() * scales.min()).sqrt()
@@ -534,6 +534,35 @@ class AWQCalibrationContext(CalibrationContext):
             inputs_stats['ratios'][name] = obs.ratio
         torch.save(inputs_stats, out_dir / 'inputs_stats.pth')
 
+        def _forward(mod, *args, **kwargs):
+
+            mod.to(self.device)
+            batch_args, batch_kwargs = split_decoder_layer_inputs(
+                *args, **kwargs)
+            batch_outputs = []
+            samples = len(batch_args)
+
+            m_name = self.mod2name[mod]
+
+            for i in range(len(batch_args)):
+                batch_outputs.append(self._ori_forwards[mod](
+                        *batch_args[i], **batch_kwargs[i]))
+
+            outputs = concat_decoder_layer_outputs(batch_outputs)
+
+            del batch_outputs, batch_args, batch_kwargs, args
+            mod.to('cpu')
+            torch.cuda.empty_cache()
+            max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+            print(f'{m_name}, samples: {samples}, '
+                  f'max gpu memory: {max_memory:.2f} GB')
+            return outputs
+
+        for layer in self.name2layer.values():
+            self._ori_forwards[layer] = layer.forward
+            layer.forward = partial(_forward, layer)
+
+
     def _wrap_decoder_layers_for_search(self):
         """Method to wrap the decoder layers' forward functions for observing
         their key/value cache during batched forward passes."""
@@ -542,22 +571,28 @@ class AWQCalibrationContext(CalibrationContext):
         def _forward(mod, *args, **kwargs):
 
             mod.to(self.device)
-            samples = args[0].shape[0]
+            batch_args, batch_kwargs = split_decoder_layer_inputs(
+                *args, **kwargs)
+            batch_outputs = []
+            samples = len(batch_args)
 
             m_name = self.mod2name[mod]
-
-            out = self._ori_forwards[mod](*args, **kwargs)
-            obs_group = ActivationObserver.find_group(self.inp_obs_group)
-            mod_name = self.mod2name[mod]
-            auto_scale_block(mod, kwargs, self.w_bits,
-                             dict(zero_point=True, q_group_size=128),
-                             obs_group, mod_name)
+            for i in range(len(batch_args)):
+                batch_outputs.append(self._ori_forwards[mod](
+                        *batch_args[i], **batch_kwargs[i]))
+                obs_group = ActivationObserver.find_group(self.inp_obs_group)
+                mod_name = self.mod2name[mod]
+                auto_scale_block(mod, batch_kwargs[i], self.w_bits,
+                                dict(zero_point=True, q_group_size=128),
+                                obs_group, mod_name)
             for key, item in obs_group.items():
                 if key.startswith(f'{mod_name}.'):
                     item.value.cpu()
                     del item.value
 
-            del args
+            outputs = concat_decoder_layer_outputs(batch_outputs)
+
+            del batch_outputs, batch_args, batch_kwargs, args
             mod.cpu()
             import gc
             gc.collect()
@@ -565,7 +600,7 @@ class AWQCalibrationContext(CalibrationContext):
             max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
             print(f'{m_name}, samples: {samples}, '
                   f'max gpu memory: {max_memory:.2f} GB')
-            return out
+            return outputs
 
         for layer in self.name2layer.values():
             self._ori_forwards[layer] = layer.forward
