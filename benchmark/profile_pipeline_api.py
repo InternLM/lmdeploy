@@ -65,7 +65,6 @@ class Engine:
                                                        trust_remote_code=True)
 
         self.csv = csv
-        self.pbar = None
 
     def process_request(self, requests, concurrency, temperature, top_p, top_k,
                         stream_output):
@@ -82,9 +81,9 @@ class Engine:
             for _, _, output_len in requests
         ]
 
-        self.pbar = tqdm(total=len(requests))
         start = time.perf_counter()
         if stream_output:
+            pbar = tqdm(total=len(requests))
             for output in self.pipe.stream_infer(prompts,
                                                  gen_configs,
                                                  do_preprocess=False):
@@ -93,12 +92,12 @@ class Engine:
                 finish_reason = output.finish_reason
                 stats[session_id] = (n_token, finish_reason)
                 if finish_reason is not None:
-                    self.pbar.update(1)
+                    pbar.update(1)
         else:
             for output in self.pipe(prompts,
                                     gen_configs,
                                     do_preprocess=False,
-                                    progress_bar=self.pbar):
+                                    use_tqdm=True):
                 session_id = output.session_id
                 n_token = output.generate_token_len
                 finish_reason = output.finish_reason
