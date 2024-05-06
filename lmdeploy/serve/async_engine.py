@@ -288,6 +288,7 @@ class AsyncEngine:
                  ignore_eos: bool = False,
                  do_preprocess: bool = True,
                  adapter_name: Optional[str] = None,
+                 use_tqdm: bool = False,
                  **kwargs):
         """Inference a batch of prompts.
 
@@ -313,6 +314,7 @@ class AsyncEngine:
                 True, which means chat_template will be applied.
             adapter_name (str): the adapter name of slora for pytorch backend.
                 Pick one from adapters. Default to None, using the base model.
+            use_tqdm (bool): Whether use the progress bar. Default to False
         """
         if gen_config is None:
             gen_config = GenerationConfig(
@@ -326,6 +328,7 @@ class AsyncEngine:
                                 gen_config=gen_config,
                                 do_preprocess=do_preprocess,
                                 adapter_name=adapter_name,
+                                use_tqdm=use_tqdm,
                                 **kwargs)
 
     async def stop_session(self, session_id: int):
@@ -378,6 +381,7 @@ class AsyncEngine:
                                        List[EngineGenerationConfig]]] = None,
             do_preprocess: bool = True,
             adapter_name: Optional[str] = None,
+            use_tqdm: bool = False,
             **kwargs):
         """Inference a batch of prompts.
 
@@ -391,6 +395,7 @@ class AsyncEngine:
                 True, which means chat_template will be applied.
             adapter_name (str): the adapter name of slora for pytorch backend.
                 Pick one from adapters. Default to None, using the base model.
+            use_tqdm (bool): Whether use the progress bar. Default to False
         """
         need_list_wrap = isinstance(prompts, str) or isinstance(
             prompts[0], Dict)
@@ -408,6 +413,9 @@ class AsyncEngine:
         prompt_num = len(prompts)
         outputs = [Response('', 0, 0, i) for i in range(prompt_num)]
         generators = []
+        if use_tqdm:
+            import tqdm
+            pbar = tqdm.tqdm(total=len(prompts))
         for i, prompt in enumerate(prompts):
             generators.append(
                 self.generate(prompt,
@@ -432,6 +440,8 @@ class AsyncEngine:
                     if outputs[i].logprobs is None:
                         outputs[i].logprobs = []
                     outputs[i].logprobs.extend(out.logprobs)
+                if use_tqdm and out.finish_reason is not None:
+                    pbar.update(1)
 
         async def gather():
             await asyncio.gather(
