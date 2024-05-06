@@ -42,7 +42,8 @@ The parameters of `api_server` are the same with that mentioned in "[option 1](#
 Connect to a running Kubernetes cluster and deploy the internlm2-chat-7b model service with [kubectl](https://kubernetes.io/docs/reference/kubectl/) command-line tool (replace `<your token>` with your huggingface hub token):
 
 ```shell
-sed 's/{{HUGGING_FACE_HUB_TOKEN}}/<your token>/' k8s/api_server.yaml | kubectl create -f -
+sed 's/{{HUGGING_FACE_HUB_TOKEN}}/<your token>/' k8s/api_server/deployment.yaml | kubectl create -f - \
+    && kubectl create -f k8s/api_server/service.yaml
 ```
 
 In the example above the model data is placed on the local disk of the node (hostPath). Consider replacing it with high-availability shared storage if multiple replicas are desired, and the storage can be mounted into container using [PersistentVolume](https://kubernetes.io/docs/concepts/storage/persistent-volumes/).
