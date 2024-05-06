@@ -10,6 +10,7 @@ from transformers import PreTrainedTokenizer
 
 from lmdeploy.lite.quantization.activation import (ActivationObserver,
                                                    KVCacheObserver)
+from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP
 from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules,
                                  concat_decoder_layer_outputs,
                                  split_decoder_layer_inputs)
@@ -390,7 +391,8 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
         return best_ratio
 
     def _auto_get_scale(layers, inp, module2inspect=None, kwargs={}):
-        # module2inspect: if given, we will check the output diff of this module instead of layers
+        # module2inspect: if given, we will check the output diff of
+        #  this module instead of layers
         if module2inspect is None:
             assert len(layers) == 1
             module2inspect = layers[0]
@@ -399,35 +401,22 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
                                           kwargs)
         inp.save_ratio(best_ratio)
 
-    # attention input
-    _auto_get_scale(
-        layers=[
-            module.self_attn.q_proj,
-            module.self_attn.k_proj,
-            module.self_attn.v_proj,
-        ],
-        inp=input_feat[mod_name + '.self_attn.q_proj'],
-        module2inspect=module.self_attn,
-        kwargs=module_kwargs,
-    )
-    # attn out
-    # Please refer to https://github.com/mit-han-lab/llm-awq/pull/67#issue-1850622696
-    if module.self_attn.v_proj.weight.shape == module.self_attn.o_proj.weight.shape:
+    for i, (prev_name, layer_names) in enumerate(
+            NORM_FCS_MAP[module._get_name()].items()):
+        # attention input
         _auto_get_scale(
-            layers=[module.self_attn.o_proj],
-            inp=input_feat[mod_name + '.self_attn.o_proj'],
+            layers=[module.get_submodule(name) for name in layer_names],
+            inp=input_feat[f'{mod_name}.{layer_names[0]}'],
+            module2inspect=module.get_submodule(layer_names[0].split('.')[0]),
+            kwargs=module_kwargs
+            if i == 0 else {},  # only attention input need
         )
-    # fc1
-    _auto_get_scale(
-        layers=[module.mlp.gate_proj, module.mlp.up_proj],
-        inp=input_feat[mod_name + '.mlp.gate_proj'],
-        module2inspect=module.mlp,
-    )
-    # fc2
-    _auto_get_scale(
-        layers=[module.mlp.down_proj],
-        inp=input_feat[mod_name + '.mlp.down_proj'],
-    )
+    for prev_name, layer_names in FC_FCS_MAP[module._get_name()].items():
+        # attention input
+        _auto_get_scale(
+            layers=[module.get_submodule(name) for name in layer_names],
+            inp=input_feat[f'{mod_name}.{layer_names[0]}'],
+        )
 
 
 class AWQCalibrationContext(CalibrationContext):
