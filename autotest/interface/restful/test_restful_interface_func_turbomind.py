@@ -3,8 +3,6 @@ from utils.restful_return_check import (assert_chat_completions_batch_return,
                                         assert_chat_completions_stream_return,
                                         assert_chat_interactive_batch_return,
                                         assert_chat_interactive_stream_return)
-from openai import OpenAI
-
 
 from lmdeploy.serve.openai.api_client import APIClient
 
@@ -146,4 +144,3 @@ class TestRestfulInterfaceChatInteractive:
                                                   index=index)
         assert output.get('finish_reason') == 'length'
         assert len(outputList) == 7
-

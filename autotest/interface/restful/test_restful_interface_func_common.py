@@ -595,6 +595,7 @@ class TestRestfulInterfaceChatCompletions:
         assert output.get('code') is None
         assert 'Input should be a valid number' in str(output)
 
+
 @pytest.mark.order(8)
 @pytest.mark.turbomind
 @pytest.mark.pytorch
