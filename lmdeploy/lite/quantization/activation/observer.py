@@ -120,5 +120,6 @@ class ActivationObserver(GlobalAvailMixin):
     def save_ratio(self, ratio: float) -> None:
         if self.ratio is None:
             self.ratio = 0
-        self.ratio = (self.ratio * self.num_ratio_tracked + ratio) / (self.num_ratio_tracked + 1)
-        self.num_ratio_tracked+=1
+        self.ratio = (self.ratio * self.num_ratio_tracked +
+                      ratio) / (self.num_ratio_tracked + 1)
+        self.num_ratio_tracked += 1

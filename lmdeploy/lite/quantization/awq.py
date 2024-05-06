@@ -2,7 +2,6 @@
 from typing import List
 
 import torch
-from torch import nn
 
 # Maps that describe the structure of your model.
 NORM_FCS_MAP = {
@@ -252,6 +251,30 @@ def smooth_layers(layers,
 
         layer.to('cpu')
         print(f'{l_name} smooth weight done.')
+
+
+def pseudo_quantize_tensor(w, w_bit=8, w_group_size=-1):
+    """Pseudo quantize tensor."""
+    org_w_shape = w.shape
+    if w_group_size > 0:
+        assert org_w_shape[-1] % w_group_size == 0
+        w = w.reshape(-1, w_group_size)
+    assert w.dim() == 2
+    max_val = w.amax(dim=1, keepdim=True)
+    min_val = w.amin(dim=1, keepdim=True)
+    max_int = 2**w_bit - 1
+    min_int = 0
+    scales = (max_val - min_val).clamp(min=1e-5) / max_int
+    zeros = (-torch.round(min_val / scales)).clamp_(min_int, max_int)
+    assert torch.isnan(scales).sum() == 0
+    assert torch.isnan(w).sum() == 0
+
+    w = (torch.clamp(torch.round(w / scales) + zeros, min_int, max_int) -
+         zeros) * scales
+    assert torch.isnan(w).sum() == 0
+
+    w = w.reshape(org_w_shape)
+    return w
 
 
 def awq_layers(layers,

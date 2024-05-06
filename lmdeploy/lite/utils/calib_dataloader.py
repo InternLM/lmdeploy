@@ -247,9 +247,8 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
     from datasets import load_dataset
     from datasets.builder import DatasetGenerationError
     try:
-        dataset = load_dataset(
-            'mit-han-lab/pile-val-backup',
-            split='validation')
+        dataset = load_dataset('mit-han-lab/pile-val-backup',
+                               split='validation')
     except DatasetGenerationError:
         raise InterruptedError('There have been some issues when generating '
                                'the dataset, you could try to download it '

@@ -36,7 +36,9 @@ class CalibrationContext():
                  tokenizer: PreTrainedTokenizer,
                  layer_type: Union[str, type],
                  norm_type: Union[str, type],
-                 device: str = 'cuda') -> None:
+                 batch_size: int = 1,
+                 device: str = 'cuda',
+                 **kwargs) -> None:
         """Initiate calibration context.
 
         Args:
@@ -50,6 +52,7 @@ class CalibrationContext():
 
         self.layer_type = layer_type
         self.norm_type = norm_type
+        self.batch_size = batch_size
 
         num_kv_heads, num_attn_heads = self._guess_num_heads(model)
         self.num_kv_heads = num_kv_heads
@@ -152,7 +155,7 @@ class CalibrationContext():
 
             mod.to(self.device)
             batch_args, batch_kwargs = split_decoder_layer_inputs(
-                *args, **kwargs)
+                self.batch_size, *args, **kwargs)
             batch_outputs = []
             samples = len(batch_args)
 
@@ -335,63 +338,14 @@ class CalibrationContext():
             layer.forward = self._ori_forwards[layer]
 
 
-# core quantization method (simulated quantization)
-def pseudo_quantize_tensor(w,
-                           n_bit=8,
-                           zero_point=True,
-                           q_group_size=-1,
-                           inplace=False,
-                           get_scale_zp=False):
-    org_w_shape = w.shape
-    if q_group_size > 0:
-        assert org_w_shape[-1] % q_group_size == 0
-        w = w.reshape(-1, q_group_size)
-    assert w.dim() == 2
-    if zero_point:
-        max_val = w.amax(dim=1, keepdim=True)
-        min_val = w.amin(dim=1, keepdim=True)
-        max_int = 2**n_bit - 1
-        min_int = 0
-        scales = (max_val - min_val).clamp(min=1e-5) / max_int
-        zeros = (-torch.round(min_val / scales)).clamp_(min_int, max_int)
-    else:  # we actually never used this
-        assert min_val is None
-        max_val = w.abs().amax(dim=1, keepdim=True)
-        max_val = max_val.clamp(min=1e-5)
-        max_int = 2**(n_bit - 1) - 1
-        min_int = -(2**(n_bit - 1))
-        scales = max_val / max_int
-        zeros = 0
-
-    assert torch.isnan(scales).sum() == 0
-    assert torch.isnan(w).sum() == 0
-
-    if inplace:
-        ((w.div_(scales).round_().add_(zeros)).clamp_(
-            min_int, max_int).sub_(zeros)).mul_(scales)
-    else:
-        w = (torch.clamp(torch.round(w / scales) + zeros, min_int, max_int) -
-             zeros) * scales
-    assert torch.isnan(w).sum() == 0
-
-    w = w.reshape(org_w_shape)
-
-    if get_scale_zp:
-        return w, scales.view(w.shape[0], -1), zeros.view(w.shape[0], -1)
-    else:
-        return w
-
-
 @torch.no_grad()
-def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat,
+def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
                      mod_name):
     if 'use_cache' in module_kwargs:
         module_kwargs.pop('use_cache')
 
     # find the best scale ratio
     def _search_module_scale(block, linears2scale: list, x, kwargs={}):
-        # w: co, ci
-        # x: n, ci
         x = x.to(next(block.parameters()).device)
         with torch.no_grad():
             org_out = block(x, **kwargs)
@@ -402,19 +356,23 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat,
 
         best_error = float('inf')
         best_ratio = -1
-        n_grid = 10
+        n_grid = 20
         history = []
 
+        concat_w = torch.cat([_m.weight for _m in linears2scale], dim=0)
+        from .awq import get_weight_scale, pseudo_quantize_tensor
+        w_mean = get_weight_scale(concat_w, w_group_size)
+
         org_sd = {k: v.cpu() for k, v in block.state_dict().items()}
-        for ratio in range(1, n_grid):
+        for ratio in range(0, n_grid):
             ratio = ratio * 1 / n_grid
-            scales = x_max.pow(ratio).clamp(min=1e-4).view(-1)
+            scales = (x_max.pow(ratio) /
+                      w_mean.pow(1 - ratio)).clamp(min=1e-4).view(-1)
             scales = scales / (scales.max() * scales.min()).sqrt()
             for fc in linears2scale:
                 fc.weight.mul_(scales.view(1, -1).to(fc.weight.device))
                 fc.weight.data = pseudo_quantize_tensor(
-                    fc.weight.data, n_bit=w_bit, **q_config) / (scales.view(
-                        1, -1))
+                    fc.weight.data, w_bit, w_group_size) / (scales.view(1, -1))
             out = block(x, **kwargs)
             if isinstance(out, tuple):
                 out = out[0]
@@ -479,16 +437,17 @@ class AWQCalibrationContext(CalibrationContext):
                  tokenizer: PreTrainedTokenizer,
                  layer_type: Union[str, type],
                  norm_type: Union[str, type],
+                 batch_size: int = 1,
                  device: str = 'cuda',
                  search_scale: bool = True,
-                 search_clip: bool = True,
-                 w_bits: int = 4) -> None:
-        super().__init__(model, tokenizer, layer_type, norm_type, device)
+                 w_bits: int = 4,
+                 w_group_size: int = 128,
+                 **kwargs) -> None:
+        super().__init__(model, tokenizer, layer_type, norm_type, batch_size,
+                         device)
         self.w_bits = w_bits
+        self.w_group_size = w_group_size
         self.search_scale = search_scale
-        self.search_clip = search_clip
-        assert not (not search_scale and search_clip
-                    ), 'search_clip can\'t be True if search_scale is False'
 
     def _insert_input_observers(self):
         """Insert input observers into the target modules.
@@ -534,35 +493,6 @@ class AWQCalibrationContext(CalibrationContext):
             inputs_stats['ratios'][name] = obs.ratio
         torch.save(inputs_stats, out_dir / 'inputs_stats.pth')
 
-        def _forward(mod, *args, **kwargs):
-
-            mod.to(self.device)
-            batch_args, batch_kwargs = split_decoder_layer_inputs(
-                *args, **kwargs)
-            batch_outputs = []
-            samples = len(batch_args)
-
-            m_name = self.mod2name[mod]
-
-            for i in range(len(batch_args)):
-                batch_outputs.append(self._ori_forwards[mod](
-                        *batch_args[i], **batch_kwargs[i]))
-
-            outputs = concat_decoder_layer_outputs(batch_outputs)
-
-            del batch_outputs, batch_args, batch_kwargs, args
-            mod.to('cpu')
-            torch.cuda.empty_cache()
-            max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
-            print(f'{m_name}, samples: {samples}, '
-                  f'max gpu memory: {max_memory:.2f} GB')
-            return outputs
-
-        for layer in self.name2layer.values():
-            self._ori_forwards[layer] = layer.forward
-            layer.forward = partial(_forward, layer)
-
-
     def _wrap_decoder_layers_for_search(self):
         """Method to wrap the decoder layers' forward functions for observing
         their key/value cache during batched forward passes."""
@@ -572,19 +502,18 @@ class AWQCalibrationContext(CalibrationContext):
 
             mod.to(self.device)
             batch_args, batch_kwargs = split_decoder_layer_inputs(
-                *args, **kwargs)
+                self.batch_size, *args, **kwargs)
             batch_outputs = []
             samples = len(batch_args)
 
             m_name = self.mod2name[mod]
             for i in range(len(batch_args)):
                 batch_outputs.append(self._ori_forwards[mod](
-                        *batch_args[i], **batch_kwargs[i]))
+                    *batch_args[i], **batch_kwargs[i]))
                 obs_group = ActivationObserver.find_group(self.inp_obs_group)
                 mod_name = self.mod2name[mod]
                 auto_scale_block(mod, batch_kwargs[i], self.w_bits,
-                                dict(zero_point=True, q_group_size=128),
-                                obs_group, mod_name)
+                                 self.w_group_size, obs_group, mod_name)
             for key, item in obs_group.items():
                 if key.startswith(f'{mod_name}.'):
                     item.value.cpu()
@@ -597,7 +526,7 @@ class AWQCalibrationContext(CalibrationContext):
             import gc
             gc.collect()
             torch.cuda.empty_cache()
-            max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+            max_memory = torch.cuda.max_memory_allocated() / (1 << 30)
             print(f'{m_name}, samples: {samples}, '
                   f'max gpu memory: {max_memory:.2f} GB')
             return outputs
@@ -618,4 +547,5 @@ class AWQCalibrationContext(CalibrationContext):
         for layer in self.name2layer.values():
             self._ori_forwards[layer] = layer.forward
 
-        self._wrap_decoder_layers_for_search()
+        if self.search_scale:
+            self._wrap_decoder_layers_for_search()
