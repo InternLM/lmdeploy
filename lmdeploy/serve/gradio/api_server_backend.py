@@ -177,7 +177,7 @@ def run_api_server(api_server_url: str,
             state_session_id, top_p, temperature, request_output_len
         ], [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
-            lambda: gr.Textbox.postprocess(instruction_txtbox, value=''),
+            lambda: gr.Textbox.postprocess(instruction_txtbox, ''),
             [],
             [instruction_txtbox],
         )
