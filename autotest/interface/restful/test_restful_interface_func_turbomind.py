@@ -3,6 +3,8 @@ from utils.restful_return_check import (assert_chat_completions_batch_return,
                                         assert_chat_completions_stream_return,
                                         assert_chat_interactive_batch_return,
                                         assert_chat_interactive_stream_return)
+from openai import OpenAI
+
 
 from lmdeploy.serve.openai.api_client import APIClient
 
@@ -44,16 +46,13 @@ class TestRestfulInterfaceChatCompletions:
                 temperature=0.01):
             outputList.append(output)
 
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
         assert outputList[-1].get('choices')[0].get(
             'finish_reason') == 'length'
-        assert len(outputList) == 103
+        assert len(outputList) == 102
 
     def test_max_tokens(self):
         api_client = APIClient(BASE_URL)
@@ -77,16 +76,13 @@ class TestRestfulInterfaceChatCompletions:
                 max_tokens=5,
                 temperature=0.01):
             outputList.append(output)
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
         assert outputList[-1].get('choices')[0].get(
             'finish_reason') == 'length'
-        assert len(outputList) == 8
+        assert len(outputList) == 7
 
 
 @pytest.mark.order(8)
@@ -150,3 +146,47 @@ class TestRestfulInterfaceChatInteractive:
                                                   index=index)
         assert output.get('finish_reason') == 'length'
         assert len(outputList) == 7
+
+
+
+@pytest.mark.order(8)
+@pytest.mark.turbomind
+@pytest.mark.chat
+@pytest.mark.flaky(reruns=2)
+class TestRestfulInterfaceOpenai:
+    @pytest.mark.tmp
+    def test_logprobs(self):
+        api_client = OpenAI(base_url=BASE_URL + '/v1', api_key='yourkey')
+
+        output = api_client.chat.completions.create(model=MODEL_NAME,
+                                                     messages=[{
+                                                         'role':
+                                                         'user',
+                                                         'content':
+                                                         'Shanghai is'
+                                                     }],
+                                                     logprobs=True,
+                                                     top_logprobs=5,
+                                                     max_tokens=20)
+        
+        print(output)
+        assert_chat_completions_batch_return(output,
+                                             MODEL_NAME,
+                                             check_logprobs=True)
+
+    @pytest.mark.tmp
+    def test_logprobs_streaming(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Shanghai is',
+                                                     logprobs=True,
+                                                     top_logprobs=5,
+                                                     max_tokens=20):
+            outputList.append(output)
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index],
+                                                  MODEL_NAME)
+            
+

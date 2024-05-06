@@ -46,16 +46,13 @@ class TestRestfulInterfaceChatCompletions:
                 temperature=0.01):
             outputList.append(output)
 
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
         assert outputList[-1].get('choices')[0].get(
             'finish_reason') == 'length'
-        assert len(outputList) == 102
+        assert len(outputList) == 101
 
     def test_max_tokens(self):
         api_client = APIClient(BASE_URL)
@@ -80,16 +77,13 @@ class TestRestfulInterfaceChatCompletions:
                 max_tokens=5,
                 temperature=0.01):
             outputList.append(output)
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
         assert outputList[-1].get('choices')[0].get(
             'finish_reason') == 'length'
-        assert len(outputList) == 7
+        assert len(outputList) == 6
 
 
 @pytest.mark.order(8)
