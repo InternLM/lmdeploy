@@ -57,6 +57,17 @@ COPY . .
 CMD ["lmdeploy", "serve", "api_server", "liuhaotian/llava-v1.6-34b"]
 ```
 
+### 方式三：部署到Kubernetes集群
+
+使用[kubectl](https://kubernetes.io/docs/reference/kubectl/)命令行工具，连接到一个运行中Kubernetes集群并部署internlm2-chat-7b模型服务。下面是使用示例（需要替换`<your token>`为你的huggingface hub token）：
+
+```shell
+sed 's/{{HUGGING_FACE_HUB_TOKEN}}/<your token>/' k8s/deployment.yaml | kubectl create -f - \
+    && kubectl create -f k8s/service.yaml
+```
+
+示例中模型数据来源于node上的本地磁盘（hostPath），多副本部署时考虑替换为高可用共享存储，通过[PersistentVolume](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)方式挂载到容器中。
+
 ## RESTful API
 
 LMDeploy 的 RESTful API 兼容了 OpenAI 以下 3 个接口：
