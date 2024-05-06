@@ -7,13 +7,13 @@ namespace turbomind::gemm {
 
 std::pair<int, int64_t> Kernel::FindSplitCount(int m, int n, int k, int max_split_k, int sm_count, int max_wave_count)
 {
-    const int tiled_shape_m = ceil_div(m, cta_tile_size_.x);
-    const int tiled_shape_n = ceil_div(n, cta_tile_size_.y);
+    const int tiled_shape_m = ceil_div(m, desc_.cta_tile.x);
+    const int tiled_shape_n = ceil_div(n, desc_.cta_tile.y);
     const int chunk_cnt_k   = ceil_div(k, chunk_size_k_);
 
     std::cout << tiled_shape_m << " " << tiled_shape_n << " " << chunk_cnt_k << std::endl;
 
-    const int64_t cta_mn = cta_tile_size_.x * cta_tile_size_.y;
+    const int64_t cta_mn = desc_.cta_tile.x * desc_.cta_tile.y;
 
     const float wave_per_split = float(tiled_shape_m * tiled_shape_n) / float(sm_count * max_active_ctas_);
 
@@ -50,25 +50,25 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
 {
     // printf("S\n");
 
-    if (std::tie(desc.layout_A, desc.layout_B, desc.layout_C) != std::tie(layout_A_, layout_B_, layout_C_)) {
+    if (std::tie(desc.order_a, desc.order_b, desc.order_c) != std::tie(desc_.order_a, desc_.order_b, desc_.order_c)) {
         return false;
     }
 
     // printf("A\n");
 
-    if (std::tie(desc.type_A, desc.type_B, desc.type_C) != std::tie(type_A_, type_B_, type_C_)) {
+    if (std::tie(desc.type_a, desc.type_b, desc.type_c) != std::tie(desc_.type_a, desc_.type_b, desc_.type_c)) {
         return false;
     }
 
     // printf("B\n");
 
-    if (desc.quant_type != quant_type_) {
+    if (desc.quant_b.type != desc_.quant_b.type || desc.quant_b.group_size != desc_.quant_b.group_size) {
         return false;
     }
 
     // printf("C\n");
 
-    if (desc.k % cta_tile_size_.z) {
+    if (desc.k % desc_.cta_tile.z) {
         return false;
     }
 
@@ -80,13 +80,13 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
 
     // printf("E\n");
 
-    if (align_m_ && desc.m % cta_tile_size_.x) {
+    if (desc_.align_m && desc.m % desc_.cta_tile.x) {
         return false;
     }
 
     // printf("F\n");
 
-    if (align_n_ && desc.n % cta_tile_size_.y) {
+    if (desc_.align_n && desc.n % desc_.cta_tile.y) {
         return false;
     }
 
@@ -99,8 +99,12 @@ std::string Kernel::GetName() const
 {
     std::stringstream ss;
 
-    ss << "gemm_" << to_string(type_A_) << "_" << to_string(type_B_) << "_" << to_string(type_C_) << "_"
-       << cta_tile_size_.x << "x" << cta_tile_size_.y << "x" << cta_tile_size_.z << "_" << stages_;
+    ss << "gemm_"                                                                        //
+       << to_string(desc_.type_a) << "_"                                                 //
+       << to_string(desc_.type_b) << "_"                                                 //
+       << to_string(desc_.type_c) << "_"                                                 //
+       << desc_.cta_tile.x << "x" << desc_.cta_tile.y << "x" << desc_.cta_tile.z << "_"  //
+       << desc_.stages;
 
     return ss.str();
 }

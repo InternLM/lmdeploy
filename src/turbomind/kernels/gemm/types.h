@@ -25,9 +25,10 @@ enum class QuantType {
     kAsym_SubMul,
 };
 
-enum class EpilogueType {
-    kNone,
-    kGatedSilu,
+enum class Epilogue {
+    kNone = 0,
+    kChannelwiseLinearCombination,  // D'[i,:] = a[i] * D[i,:] + b[i]
+    kGatedSilu,                     // D'[:,i] = D[:,i*2] * silu(D[:,i*2+1])
     kGatedGelu,
 };
 
@@ -87,5 +88,30 @@ struct get_data_type<uint8_t> {
 
 template<class T>
 inline constexpr auto get_data_type_v = get_data_type<T>::value;
+
+struct QuantDesc {
+    QuantType type;
+    int       group_size;
+};
+
+enum class DispatchType {
+    kDefault = 0,
+    kCached,
+    kMeasure,
+};
+
+struct Operation {
+    QuantDesc    quant_desc;
+    DispatchType dispatch;
+    Epilogue     epilogue;
+};
+
+struct MatrixLayout {
+    DataType   type;
+    LayoutType order;
+    int        rows;
+    int        cols;
+    int        ld;
+};
 
 }  // namespace turbomind::gemm

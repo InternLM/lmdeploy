@@ -19,25 +19,25 @@ class Kernel {
 public:
     virtual ~Kernel() = default;
 
-    virtual int Launch(int          m,
-                       int          n,
-                       int          k,
-                       const void*  A,
-                       int          lda,
-                       const void*  B,
-                       int          ldb,
-                       const void*  Q,
-                       int          ldq,
-                       float        beta,
-                       void*        C,
-                       int          ldc,
-                       int          splits,
-                       EpilogueType epilogue,
-                       int*         barriers,
-                       size_t&      barriers_size,
-                       void*        workspace,
-                       size_t&      workspace_size,
-                       cudaStream_t st) = 0;
+    virtual int Launch(const Operation&    operation,
+                       const void*         alpha,
+                       const void*         A,
+                       const MatrixLayout& Adesc,
+                       const void*         B,
+                       const MatrixLayout& Bdesc,
+                       const void*         Q,
+                       const MatrixLayout& Qdesc,
+                       const void*         beta,
+                       const void*         C,
+                       const MatrixLayout& Cdesc,
+                       void*               D,
+                       const MatrixLayout& Ddesc,
+                       int                 splits,
+                       void*               barriers,
+                       size_t&             barriers_size,
+                       void*               workspace,
+                       size_t&             workspace_size,
+                       cudaStream_t        stream) = 0;
 
     // virtual because different implemntation may have different workspace requeirements
     virtual int GetMaxSplits(int m, int n, size_t barrier_size, size_t workspace_size) = 0;
@@ -49,12 +49,12 @@ public:
 
     int3 cta_tile_size() const noexcept
     {
-        return cta_tile_size_;
+        return desc_.cta_tile;
     }
 
     int3 warp_tile_size() const noexcept
     {
-        return warp_tile_size_;
+        return desc_.warp_tile;
     }
 
     int chunk_size_k() const noexcept
@@ -64,27 +64,27 @@ public:
 
     bool align_m() const noexcept
     {
-        return align_m_;
+        return desc_.align_m;
     }
 
     bool align_n() const noexcept
     {
-        return align_n_;
+        return desc_.align_n;
     }
 
     int stages() const noexcept
     {
-        return stages_;
+        return desc_.stages;
     }
 
     bool split_k() const noexcept
     {
-        return split_k_;
+        return desc_.split_k;
     }
 
     int arch() const noexcept
     {
-        return arch_;
+        return desc_.arch;
     }
 
     int smem_size() const noexcept
@@ -100,30 +100,10 @@ public:
 protected:
     std::string GetName() const;
 
-    LayoutType layout_A_;
-    LayoutType layout_B_;
-    LayoutType layout_C_;
+    KernelDesc desc_;
 
-    DataType type_A_;
-    DataType type_B_;
-    DataType type_C_;
-
-    QuantType quant_type_;
-
-    int3 cta_tile_size_;
-    int3 warp_tile_size_;
-    int  chunk_size_k_;
-
-    bool align_m_;
-    bool align_n_;
-
+    int chunk_size_k_;
     int smem_size_;
-
-    int  stages_;
-    int  swizzle_;
-    bool split_k_;  // has split-k support?
-
-    int arch_;
     int max_active_ctas_;
 
     std::string name_;

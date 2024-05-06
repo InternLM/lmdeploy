@@ -36,12 +36,16 @@ struct Config {
 void Registry::register_sm80_f16_s4_asym_g128()
 {
     // clang-format off
-    Add(std::make_unique<KernelImpl<typename Config<128, 256, 64, 128, 32, 64, 3, false, false, false>::Kernel>>());
-    Add(std::make_unique<KernelImpl<typename Config< 96, 128, 64,  96, 64, 32, 3,  true, false, false>::Kernel>>());
-    Add(std::make_unique<KernelImpl<typename Config< 64, 128, 64,  64, 64, 32, 3,  true, false, false>::Kernel>>());
-    Add(std::make_unique<KernelImpl<typename Config< 32, 128, 64,  32, 64, 32, 3,  true, false, false>::Kernel>>());
-    Add(std::make_unique<KernelImpl<typename Config< 16, 128, 64,  16, 64, 32, 3,  true, false, false>::Kernel>>());
-    Add(std::make_unique<KernelImpl<typename Config<  8, 128, 64,   8, 64, 32, 3,  true, false, false>::Kernel>>());
+    // Add(std::make_unique<KernelImpl<typename Config<256, 128, 64, 64, 64, 64, 3,  false, 0, 1>::Kernel>>());
+    // Add(std::make_unique<KernelImpl<typename Config<192, 128, 64,  96, 32, 64, 3,  true, 0, 1>::Kernel>>());
+    
+    Add(std::make_unique<KernelImpl<typename Config<128, 256, 64, 128, 32, 64, 3,  true, 0, 1>::Kernel>>());
+    Add(std::make_unique<KernelImpl<typename Config<128, 128, 32, 128, 32, 32, 3,  true, 0, 1>::Kernel>>());
+    Add(std::make_unique<KernelImpl<typename Config< 96, 128, 64,  96, 32, 64, 3,  true, 0, 1>::Kernel>>());
+    Add(std::make_unique<KernelImpl<typename Config< 64, 128, 64,  64, 64, 32, 3,  true, 0, 1>::Kernel>>());
+    Add(std::make_unique<KernelImpl<typename Config< 32, 128, 64,  32, 64, 32, 3,  true, 0, 1>::Kernel>>());
+    Add(std::make_unique<KernelImpl<typename Config< 16, 128, 64,  16, 64, 32, 3,  true, 0, 1>::Kernel>>());
+    Add(std::make_unique<KernelImpl<typename Config<  8, 128, 64,   8, 64, 32, 3,  true, 0, 1>::Kernel>>());
     // clang-format on
 }
 

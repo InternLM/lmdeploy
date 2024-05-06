@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -46,8 +47,18 @@ namespace {
 
 inline decltype(auto) as_tuple(const GemmDesc& d)
 {
-    return std::tie(
-        d.layout_A, d.layout_B, d.layout_C, d.type_A, d.type_B, d.type_C, d.quant_type, d.epilogue, d.n, d.k, d.m);
+    return std::tie(d.type_a,
+                    d.type_b,
+                    d.type_c,
+                    d.order_a,
+                    d.order_b,
+                    d.order_c,
+                    d.quant_b.type,
+                    d.quant_b.group_size,
+                    d.epilogue,
+                    d.n,
+                    d.k,
+                    d.m);
 }
 
 }  // namespace
@@ -82,6 +93,8 @@ struct Gemm::Impl {
 
         LaunchSpec spec{kernel, splits};
 
+        std::cout << "dispatch: " << kernel->name() << "\n";
+
         dispatch_cache_.emplace(desc, spec);
 
         return spec;
@@ -91,23 +104,11 @@ struct Gemm::Impl {
     Find(const GemmDesc& desc, size_t barrier_size, size_t workspace_size, int top_k)
     {
         std::vector<Kernel*> kernels;
-        //                    cost     splits
-        std::vector<std::pair<int64_t, int>> costs;
 
         for (const auto& k : registry_.kernels()) {
-            std::cout << k->name() << "\n";
-            if (k->is_feasible(desc) != true) {
-                continue;
+            if (k->is_feasible(desc)) {
+                kernels.push_back(k.get());
             }
-
-            const int max_split_k = k->GetMaxSplits(desc.m, desc.n, barrier_size, workspace_size);
-            printf("max_split_k = %d\n", max_split_k);
-
-            auto [splits, cost] =
-                k->FindSplitCount(desc.m, desc.n, desc.k, max_split_k, props_->multiProcessorCount, 1);
-
-            costs.emplace_back(cost, splits);
-            kernels.push_back(k.get());
         }
 
         // is a better than b
@@ -115,14 +116,31 @@ struct Gemm::Impl {
             const int m_a = a->cta_tile_size().x;
             const int m_b = b->cta_tile_size().x;
             if (std::max(m_a, m_b) <= desc.m) {  // m_0 < m_1 <= M
-                return m_b < m_a;
+                return m_a > m_b;
             }
             if (desc.m <= std::min(m_a, m_b)) {  // M <= m_0 < m_1
                 return m_a < m_b;
             }
             // m_0 <= M <= m_1
-            return round_up(desc.m, m_a) < round_up(desc.m, m_b);
+            return m_a > m_b;
         };
+
+        auto best_cta_m = (*std::min_element(kernels.begin(), kernels.end(), compare))->cta_tile_size().x;
+        kernels.erase(
+            std::remove_if(kernels.begin(), kernels.end(), [&](auto k) { return k->cta_tile_size().x != best_cta_m; }),
+            kernels.end());
+
+        //                    cost     splits
+        std::vector<std::pair<int64_t, int>> costs;
+
+        for (const auto& k : kernels) {
+            std::cout << "\n" << k->name() << "\n";
+            int max_split_k = k->GetMaxSplits(desc.m, desc.n, barrier_size, workspace_size);
+            std::cout << "max_split_k: " << max_split_k << "\n";
+            auto [splits, cost] =
+                k->FindSplitCount(desc.m, desc.n, desc.k, max_split_k, props_->multiProcessorCount, 1);
+            costs.emplace_back(cost, splits);
+        }
 
         std::vector<int> idxs(kernels.size());
         std::iota(idxs.begin(), idxs.end(), 0);
@@ -130,15 +148,7 @@ struct Gemm::Impl {
         top_k = std::min<int>(idxs.size(), top_k);
 
         std::partial_sort(idxs.begin(), idxs.begin() + top_k, idxs.end(), [&](int i, int j) {
-            if (compare(kernels[i], kernels[j])) {
-                return true;
-            }
-            else if (compare(kernels[j], kernels[i])) {
-                return false;
-            }
-            else {
-                return costs[i] < costs[j];  //
-            }
+            return costs[i] < costs[j];  //
         });
 
         std::vector<std::tuple<Kernel*, int, int64_t>> ret;
@@ -176,61 +186,65 @@ Gemm::Gemm(): impl_{new Impl{}} {}
 
 Gemm::~Gemm() = default;
 
-int Gemm::Run(LayoutType   layout_A,
-              LayoutType   layout_B,
-              LayoutType   layout_C,
-              EpilogueType epilogue,
-              int          m,
-              int          n,
-              int          k,
-              const void*  A,
-              DataType     type_A,
-              int          lda,
-              const void*  B,
-              DataType     type_B,
-              int          ldb,
-              const void*  Q,
-              QuantType    quant_type,
-              int          ldq,
-              const float* beta,
-              void*        C,
-              DataType     type_C,
-              int          ldc,
-              int*         barriers,
-              size_t       barriers_size,
-              void*        workspace,
-              size_t       workspace_size,
-              cudaStream_t stream)
+int Gemm::Run(const Operation&    operation,
+              const void*         alpha,
+              const void*         A,
+              const MatrixLayout& Adesc,
+              const void*         B,
+              const MatrixLayout& Bdesc,
+              const void*         Q,
+              const MatrixLayout& Qdesc,
+              const void*         beta,
+              const void*         C,
+              const MatrixLayout& Cdesc,
+              void*               D,
+              const MatrixLayout& Ddesc,
+              void*               barriers,
+              size_t              barriers_size,
+              void*               workspace,
+              size_t              workspace_size,
+              cudaStream_t        stream)
 {
-    const GemmDesc desc{layout_A,  //
-                        layout_B,
-                        layout_C,
-                        type_A,
-                        type_B,
-                        type_C,
-                        quant_type,
-                        epilogue,
-                        m,
-                        n,
-                        k};
+
+    if (Adesc.rows != Ddesc.rows || Bdesc.cols != Ddesc.cols || Adesc.cols != Bdesc.rows) {
+        return -1;
+    }
+
+    const int m = Ddesc.rows;
+    const int n = Ddesc.cols;
+    const int k = Adesc.cols;
+
+    const GemmDesc desc{
+        Adesc.type,
+        Bdesc.type,
+        Cdesc.type,
+        Adesc.order,
+        Bdesc.order,
+        Cdesc.order,
+        operation.quant_desc,
+        operation.epilogue,
+        m,
+        n,
+        k,
+    };
 
     auto spec = impl_->Dispatch(desc, barriers_size, workspace_size);
 
     if (spec.kernel) {
-        return spec.kernel->Launch(m,
-                                   n,
-                                   k,
+        return spec.kernel->Launch(operation,
+                                   alpha,
                                    A,
-                                   lda,
+                                   Adesc,
                                    B,
-                                   ldb,
+                                   Bdesc,
                                    Q,
-                                   ldq,
-                                   *beta,
+                                   Qdesc,
+                                   beta,
                                    C,
-                                   ldc,
+                                   Cdesc,
+                                   D,
+                                   Ddesc,
                                    spec.splits,
-                                   epilogue,
                                    barriers,
                                    barriers_size,
                                    workspace,

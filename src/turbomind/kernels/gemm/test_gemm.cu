@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/test_utils.h"
 #include "src/turbomind/kernels/gemm/transcript.h"
+#include "src/turbomind/kernels/gemm/types.h"
 #include <cublas_v2.h>
 #include <limits>
 #include <thrust/universal_vector.h>
@@ -283,6 +284,8 @@ void Run(int m, int n, int k, int g = 128)
 
         using namespace gemm;
 
+        cudaMemsetAsync(c.data().get(), -1, c.size() * sizeof(T), 0);
+
         for (int i = 0; i < 10; ++i) {
             gemm::CacheFlushing::flush();
             // gemm::invoke(
@@ -290,27 +293,22 @@ void Run(int m, int n, int k, int g = 128)
 
             const float beta = 0;
 
-            gGemm().Run(LayoutType::kRowMajor,
-                        LayoutType::kFragment_81616,
-                        LayoutType::kRowMajor,
-                        EpilogueType::kNone,
-                        m,
-                        n,
-                        k,
+            const MatrixLayout c_desc{DataType::F16, LayoutType::kRowMajor, m, n, n};
+
+            gGemm().Run({QuantDesc{QuantType::kAsym_FMA, g}},
+                        nullptr,
                         a.data().get(),
-                        DataType::F16,
-                        0,
+                        MatrixLayout{DataType::F16, LayoutType::kRowMajor, m, k, k},
                         B1,
-                        DataType::U4,
-                        0,
+                        MatrixLayout{DataType::U4, LayoutType::kFragment_81616, k, n, k},
                         q_pack.data().get(),
-                        QuantType::kAsym_FMA,
-                        0,
-                        &beta,
+                        MatrixLayout{DataType::F16, LayoutType::kColMajor, k / g, n, n},
+                        nullptr,
                         c.data().get(),
-                        DataType::F16,
-                        0,
-                        (int*)workspace.data().get(),
+                        c_desc,
+                        c.data().get(),
+                        c_desc,
+                        workspace.data().get(),
                         sizeof(int) * m * n,
                         workspace.data().get() + m * n,
                         sizeof(float) * c_ref.size() * kMaxSplits,
@@ -338,7 +336,7 @@ void Test(int bsz, int tp)
     // Run<T, Tb>(bsz, 4096, 4096);
     // Run<half, uint4_t>(64, 11008, 4096);
     // Run<half, uint4_t>(128, 128, 32);
-    // Run<half, uint4_t>(128, 128, 1024);
+    // Run<half, uint4_t>(128, 128, 128);
 
     // llama2-7b
     // Run<T, Tb>(bsz, 11008 / tp, 4096); // mlp.up/gate
@@ -352,6 +350,6 @@ void Test(int bsz, int tp)
 
 int main(int argc, char* argv[])
 {
-    Test<half, uint4_t>(8, 1);
+    Test<half, uint4_t>(8192, 1);
     return 0;
 }

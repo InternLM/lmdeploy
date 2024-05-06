@@ -185,9 +185,6 @@ struct GemmUniversal {
         constexpr int S = Map::kIterS;
         constexpr int C = Map::kIterC;
 
-        Vec accu_C[S][C]{};
-        Vec frag_C[S][C];
-
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
@@ -196,26 +193,26 @@ struct GemmUniversal {
 
         const int2 d = Map::get_offset(warp_id, lane_id);
 
+        Vec accu_C[S][C]{};
+
         for (int k = 0; k < param.tiled_shape.z; ++k) {
             PRAGMA_UNROLL
             for (int s = 0; s < S; ++s) {
+                Vec       frag_C[1][C];
                 const int mi = d.y + s * Map::kDeltaS;
                 PRAGMA_UNROLL
                 for (int c = 0; c < C; ++c) {
                     const int ni = d.x + c * Map::kDeltaC;
                     if (check_m(mi, end_m) && check_n(ni, end_n)) {
-                        Ldg(frag_C[s][c],
+                        Ldg(frag_C[0][c],
                             &param.partial_C[k * param.m * param.n + (offset_m + mi) * param.n + offset_n + ni]);
                     }
                 }
-            }
 
-            PRAGMA_UNROLL
-            for (int s = 0; s < S; ++s) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < C; ++c) {
                     using namespace ops;
-                    accu_C[s][c] = accu_C[s][c] + frag_C[s][c];
+                    accu_C[s][c] = accu_C[s][c] + frag_C[0][c];
                 }
             }
         }

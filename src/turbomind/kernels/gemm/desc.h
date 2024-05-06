@@ -7,18 +7,45 @@
 
 namespace turbomind::gemm {
 
+// aggregate that uniquely identifies a GEMM problem
 struct GemmDesc {
-    LayoutType   layout_A;
-    LayoutType   layout_B;
-    LayoutType   layout_C;
-    DataType     type_A;
-    DataType     type_B;
-    DataType     type_C;
-    QuantType    quant_type;
-    EpilogueType epilogue;
-    int          m;
-    int          n;
-    int          k;
+    DataType   type_a;
+    DataType   type_b;
+    DataType   type_c;
+    LayoutType order_a;
+    LayoutType order_b;
+    LayoutType order_c;
+    QuantDesc  quant_b;
+    Epilogue   epilogue;
+    int        m;
+    int        n;
+    int        k;
+};
+
+enum class OpClass {
+    kSIMT,
+    kMMA_884,
+    kMMA_81616,
+    kMMA_16816,
+};
+
+// aggregate that uniquely identifies a kernel
+struct KernelDesc {
+    DataType   type_a;
+    DataType   type_b;
+    DataType   type_c;
+    LayoutType order_a;
+    LayoutType order_b;
+    LayoutType order_c;
+    QuantDesc  quant_b;
+    bool       align_m;
+    bool       align_n;
+    int3       cta_tile;
+    int3       warp_tile;
+    bool       split_k;
+    int        stages;
+    int        swizzle;
+    int        arch;
 };
 
 }  // namespace turbomind::gemm

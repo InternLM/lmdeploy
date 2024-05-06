@@ -432,7 +432,7 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             for (int n = 0; n < ITER_N; ++n) {
                 PRAGMA_UNROLL
                 for (int m = 0; m < ITER_M; ++m) {
-                    const int mm = m ^ (n % 2 ? ITER_M - 1 : 0);
+                    const int mm = n % 2 ? ITER_M - m - 1 : m;
                     mma_m16n8k16_row_col(frag_C[mm][n], state_B.frag_B[k][n], state_A.frag_A[k][mm], frag_C[mm][n]);
                 }
             }

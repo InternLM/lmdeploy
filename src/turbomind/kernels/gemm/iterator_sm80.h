@@ -166,8 +166,12 @@ struct GmemIteratorSm80 {
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                Store(&smem_data_(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC),
-                      Array<T, Map::kAccessC>{});
+                const int pred_s = offset_s_ + s * Map::kDeltaS < Map::kDimS;
+                const int pred_c = offset_c_ + c * Map::kDeltaC < Map::kDimC;
+                auto      ptr    = &smem_data_(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
+                if ((Map::kAlignedC && Map::kAlignedS) || (pred_s && pred_c)) {
+                    Store(ptr, Array<T, Map::kAccessC>{});
+                }
             }
         }
     }
