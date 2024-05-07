@@ -15,7 +15,7 @@ from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.tokenizer import DetokenizeState
-from lmdeploy.utils import _stop_words, get_logger
+from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
 
 logger = get_logger('lmdeploy')
 
@@ -218,7 +218,8 @@ class AsyncEngine:
         logger.info(f'updated backend_config={self.backend_config}')
 
         # parameters for member functions
-        self.session_len = self.backend_config.session_len
+        self.session_len = _get_and_verify_max_len(
+            self.hf_tm_cfg, self.backend_config.session_len)
         self.stop_words = _stop_words(self.chat_template.stop_words,
                                       self.engine.tokenizer)
         if self.stop_words is not None:
@@ -248,8 +249,6 @@ class AsyncEngine:
         assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
             ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
             'turbomind backend'
-        if backend_config.session_len is None:
-            backend_config.session_len = self.chat_template.session_len
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
             model_path,
@@ -257,6 +256,7 @@ class AsyncEngine:
             chat_template_config=chat_template_config,
             **kwargs)
         self.backend_config = backend_config
+        self.hf_tm_cfg = self.engine.config
 
     def _build_pytorch(
             self,
@@ -271,11 +271,10 @@ class AsyncEngine:
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
             'use PytorchEngineConfig imported from lmdeploy.messages for ' \
             'pytorch backend'
-        if backend_config.session_len is None:
-            backend_config.session_len = self.chat_template.session_len
         self.engine = Engine(model_path=model_path,
                              engine_config=backend_config)
         self.backend_config = backend_config
+        self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],

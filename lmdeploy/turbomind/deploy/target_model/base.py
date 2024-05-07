@@ -162,12 +162,12 @@ class BaseOutputModel(ABC):
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
         """Generate turbomind model config (config.ini)."""
         _, bos_id, eos_id = self.input_model.tokenizer_info()
-        model = MODELS.get(cfg.model_name)()
+        model_info = self.input_model.model_info()
+        session_len = model_info.get('max_position_embeddings',
+                                     MODELS.get(cfg.model_name)().session_len)
         final_cfg = cfg.__dict__
         final_cfg.update(
-            dict(start_id=bos_id,
-                 end_id=eos_id,
-                 session_len=model.session_len + 8))
+            dict(start_id=bos_id, end_id=eos_id, session_len=session_len + 8))
         final_cfg.update(self.input_model.model_info())
 
         # head_num, vocab_size

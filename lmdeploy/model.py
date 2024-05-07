@@ -1108,6 +1108,7 @@ class DeepseekVL(BaseChatTemplate):
             eoh='\n\n',
             assistant='Assistant: ',
             eoa='<｜end▁of▁sentence｜>',
+            session_len=16384,
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
                          eosys=eosys,
@@ -1115,6 +1116,7 @@ class DeepseekVL(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
+                         session_len=session_len,
                          **kwargs)
 
     @classmethod
