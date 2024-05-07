@@ -543,6 +543,30 @@ class InternLMXComposer24khdChat7B(InternLMXComposer2Chat7B):
             return 'internlm-xcomposer2-4khd'
 
 
+@MODELS.register_module(name='internlm-chem')
+class InternLMChem(InternLM2Chat7B):
+
+    def __init__(
+            self,
+            meta_instruction="""You are an AI Chemist assistant whose name is ChemLLM (浦科·化学).
+- ChemLLM (浦科·化学) is a conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
+- ChemLLM (浦科·化学) can understand and communicate fluently in the language chosen by the user such as English and 中文.""",
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        import re
+        match = re.search(r'chemllm.*7b.*1_5.*', model_path.lower())
+        if match:
+            return 'internlm-chem'
+
+
 @MODELS.register_module(name='baichuan-7b')
 @MODELS.register_module(name='baichuan-base')
 class Baichuan7B(BaseChatTemplate):

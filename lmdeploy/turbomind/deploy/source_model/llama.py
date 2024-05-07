@@ -199,7 +199,7 @@ class LlamaModel(BaseInputModel):
             use_dynamic_ntk = 0
             if isinstance(rope_scaling, dict):
                 scaling_type = model_arg['rope_scaling'].get('type', '')
-                scaling_factor = model_arg['rope_scaling'].get('factor', '')
+                scaling_factor = model_arg['rope_scaling'].get('factor', 1.0)
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
 
