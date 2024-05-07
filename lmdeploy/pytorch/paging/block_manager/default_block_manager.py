@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import Dict, Union
+from typing import Union
 
 import numpy as np
 
@@ -80,57 +80,6 @@ class DefaultBlockManager(BaseBlockManager):
         self.allocator.free(msg.logical_blocks.get_real_blocks())
         msg.logical_blocks.reset()
 
-    def can_append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
-        """Return true if the message can append new slot."""
-        return self.can_allocate(msg, prealloc_size)
-
-    def append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
-        """Append new slot to message."""
-        return self.allocate(msg, prealloc_size)
-
-    def can_fork(self, from_msg: SchedulerSequence):
-        """Return true if blocks can be folked."""
-        logical_blocks = from_msg.logical_blocks
-        if self.last_block_size(from_msg) == from_msg.block_size:
-            return True
-
-        cpu_mem_offset = self.allocator.cpu_mem_offset()
-        phy_block = self.allocator.get_physical_blocks(logical_blocks[-1])
-        if phy_block < cpu_mem_offset:
-            device = 'gpu'
-        else:
-            device = 'cpu'
-        phy_allocator = self.allocator.get_phy_allocator(device)
-        return phy_allocator.get_num_free_blocks() >= 1
-
-    def fork(self, from_msg: SchedulerSequence, to_msg: SchedulerSequence):
-        """Fork new message."""
-
-        def _copy_lask_block(logical_blocks, copy_map):
-            cpu_mem_offset = self.allocator.cpu_mem_offset()
-            phy_block = self.allocator.get_physical_blocks(logical_blocks[-1])
-            if phy_block < cpu_mem_offset:
-                device = 'gpu'
-            else:
-                device = 'cpu'
-            block = self.allocator.allocate(1, device)
-            new_phy_block = self.allocator.get_physical_blocks(block[0])
-            copy_map[phy_block] = new_phy_block
-            return block[0]
-
-        logical_blocks = from_msg.logical_blocks
-        copy_map: Dict[int, int] = dict()
-        if self.last_block_size(from_msg) == from_msg.block_size:
-            self.allocator.add_ref_count(logical_blocks, 1)
-        else:
-            new_logical_blocks = logical_blocks.clone()
-            self.allocator.add_ref_count(new_logical_blocks[:-1], 1)
-            block = _copy_lask_block(logical_blocks, copy_map)
-            new_logical_blocks[-1] = block
-            to_msg.logical_blocks = new_logical_blocks
-
-        return copy_map
-
     def try_swap_out(self, msg: Union[SchedulerSequence, SchedulerAdapter]):
         """Try swap msg out."""
         swap_map = dict()
@@ -155,7 +104,7 @@ class DefaultBlockManager(BaseBlockManager):
                 return False
 
             # don't swap sequence with multiple reference
-            ref_count = gpu_allocator.get_ref_count(phy_blocks)
+            ref_count = self.allocator.get_ref_count(logical_blocks)
             if np.count_nonzero(ref_count != 1) > 0:
                 return False
 
@@ -204,7 +153,7 @@ class DefaultBlockManager(BaseBlockManager):
                 return False
 
             # don't swap sequence with multiple reference
-            ref_count = cpu_allocator.get_ref_count(phy_blocks)
+            ref_count = self.allocator.get_ref_count(logical_blocks)
             if np.count_nonzero(ref_count != 1) > 0:
                 return False
 

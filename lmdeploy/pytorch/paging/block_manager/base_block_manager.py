@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import time
 from typing import Dict, Union
 
 import numpy as np
@@ -14,6 +15,10 @@ class LogicalMemory:
         self._num_blocks = num_blocks
 
         self.phy_map: np.ndarray = np.zeros(self._num_blocks, dtype=np.int64)
+        self.ref_count: np.ndarray = np.zeros((self._num_blocks, ),
+                                              dtype=np.int64)
+        self.access_time: np.ndarray = np.zeros((self._num_blocks, ),
+                                                dtype=np.int64)
 
     def get_physical_blocks(self, logical_address: np.ndarray):
         """get physical address."""
@@ -34,11 +39,6 @@ class PhysicalMemory:
         self._num_cpu_blocks = num_cpu_blocks
         self._num_gpu_blocks = num_gpu_blocks
         self._num_blocks = num_cpu_blocks + num_gpu_blocks
-
-        self.ref_count: np.ndarray = np.zeros((self._num_blocks, ),
-                                              dtype=np.int64)
-        self.swap_count: np.ndarray = np.zeros((self._num_blocks, ),
-                                               dtype=np.int64)
 
     def num_cpu_blocks(self):
         """get num cpu blocks."""
@@ -72,7 +72,6 @@ class PhysicalAllocator:
         if self.get_num_free_blocks() >= num_blocks:
             num_used = self._num_blocks - self._free_count
             blocks = self._free_blocks[num_used:num_used + num_blocks]
-            self._mem.ref_count.put(blocks, 1)
             self._free_count -= num_blocks
             return blocks
         else:
@@ -80,9 +79,7 @@ class PhysicalAllocator:
 
     def free(self, blocks: np.ndarray):
         """Free block to block pool."""
-        np.add.at(self._mem.ref_count, blocks, -1)
-        ref_count = self.get_ref_count(blocks)
-        freed_blocks = blocks[ref_count == 0]
+        freed_blocks = blocks
         num_freed_blocks = len(freed_blocks)
         if num_freed_blocks > 0:
             num_used = self._num_blocks - self._free_count
@@ -94,10 +91,6 @@ class PhysicalAllocator:
     def get_num_free_blocks(self):
         """Get numbers of free blocks."""
         return self._free_count
-
-    def get_ref_count(self, blocks: np.ndarray):
-        """get ref count."""
-        return self._mem.ref_count[blocks]
 
 
 class LogicalAllocator:
@@ -139,6 +132,8 @@ class LogicalAllocator:
             blocks = self._free_blocks[num_used:num_used + num_blocks]
             phy_blocks = phy_allocator.allocate(num_blocks)
             self._log_mem.phy_map.put(blocks, phy_blocks)
+            self._log_mem.ref_count.put(blocks, 1)
+            self.update_access_time(blocks)
             self._free_count -= num_blocks
             return blocks.copy()
         else:
@@ -146,7 +141,22 @@ class LogicalAllocator:
 
     def free(self, blocks: np.ndarray):
         """Free logical block."""
-        phy_blocks = self.get_physical_blocks(blocks)
+
+        self.add_ref_count(blocks, -1)
+        self.update_access_time(blocks)
+        ref_count = self.get_ref_count(blocks)
+        freed_blocks = blocks[ref_count == 0]
+        num_freed_blocks = len(freed_blocks)
+        if num_freed_blocks <= 0:
+            return
+
+        # free logical
+        num_used = self._num_blocks - self._free_count
+        self._free_blocks[num_used - num_freed_blocks:num_used] = freed_blocks
+        self._free_count += num_freed_blocks
+
+        # free physical
+        phy_blocks = self.get_physical_blocks(freed_blocks)
 
         cpu_blocks = phy_blocks[phy_blocks >= self._cpu_mem_offset]
         gpu_blocks = phy_blocks[phy_blocks < self._cpu_mem_offset]
@@ -154,15 +164,6 @@ class LogicalAllocator:
             self._cpu_allocator.free(cpu_blocks)
         if len(gpu_blocks) > 0:
             self._gpu_allocator.free(gpu_blocks)
-
-        ref_count = self._phy_mem.ref_count[phy_blocks]
-        freed_blocks = blocks[ref_count == 0]
-        num_freed_blocks = len(freed_blocks)
-        if num_freed_blocks > 0:
-            num_used = self._num_blocks - self._free_count
-            self._free_blocks[num_used -
-                              num_freed_blocks:num_used] = freed_blocks
-            self._free_count += num_freed_blocks
 
     def get_num_free_blocks(self):
         """Get numbers of free blocks."""
@@ -174,13 +175,20 @@ class LogicalAllocator:
 
     def get_ref_count(self, blocks: np.ndarray):
         """get ref count."""
-        phy_blocks = self.get_physical_blocks(blocks)
-        return self._phy_mem.ref_count[phy_blocks]
+        return self._log_mem.ref_count[blocks]
 
     def add_ref_count(self, blocks: np.ndarray, value: np.ndarray):
         """update ref count."""
-        phy_blocks = self.get_physical_blocks(blocks)
-        np.add.at(self._phy_mem.ref_count, phy_blocks, value)
+        np.add.at(self._log_mem.ref_count, blocks, value)
+
+    def get_access_time(self, blocks: np.ndarray):
+        """get access time."""
+        return self._log_mem.access_time[blocks]
+
+    def update_access_time(self, blocks: np.ndarray):
+        """update access time."""
+        now = time.perf_counter()
+        self._log_mem.access_time[blocks] = now
 
     def cpu_mem_offset(self):
         """get cpu mem offset in unified physical memory."""
@@ -263,22 +271,6 @@ class BaseBlockManager:
 
     def free(self, msg: SchedulerSequence):
         """Free all physical blocks allocated for the session."""
-        raise NotImplementedError('Not implemented.')
-
-    def can_append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
-        """Return true if the message can append new slot."""
-        raise NotImplementedError('Not implemented.')
-
-    def append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
-        """Append new slot to message."""
-        raise NotImplementedError('Not implemented.')
-
-    def can_fork(self, from_msg: SchedulerSequence):
-        """Return true if blocks can be folked."""
-        raise NotImplementedError('Not implemented.')
-
-    def fork(self, from_msg: SchedulerSequence, to_msg: SchedulerSequence):
-        """Fork new message."""
         raise NotImplementedError('Not implemented.')
 
     def try_swap_out(self, msg: Union[SchedulerSequence, SchedulerAdapter]):
