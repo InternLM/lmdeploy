@@ -1,4 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os.path as osp
+import shutil
+
 import torch
 from torch import nn
 
@@ -30,6 +33,18 @@ NORM_TYPE_MAP = {
 }
 
 
+def save_vl_model(vl_model, model_path, dst_path):
+    if type(vl_model).__name__ == 'MultiModalityCausalLM':  # deepseek vl
+        candidate = ['preprocessor_config.json', 'processor_config.json']
+        for name in candidate:
+            tmp_path = osp.join(model_path, name)
+            if osp.exists(tmp_path):
+                shutil.copy(tmp_path, osp.join(dst_path, name))
+    vl_model.save_pretrained(dst_path,
+                             max_shard_size='2GB',
+                             safe_serialization=False)
+
+
 def auto_awq(model: str,
              work_dir: str = './work_dir',
              calib_dataset: str = 'ptb',
@@ -52,8 +67,11 @@ def auto_awq(model: str,
         w_group_size (int): Group size for weight quantization statistics.
         device (str): Device type of running.
     """
-    model, tokenizer, work_dir = calibrate(model, calib_dataset, calib_samples,
-                                           calib_seqlen, work_dir, device)
+    model_path = model
+    vl_model, model, tokenizer, work_dir = calibrate(model, calib_dataset,
+                                                     calib_samples,
+                                                     calib_seqlen, work_dir,
+                                                     device)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]
@@ -74,9 +92,12 @@ def auto_awq(model: str,
                                zero_point=not w_sym)
     model.config.update(dict(quantization_config=quantization_config))
 
-    model.save_pretrained(work_dir,
-                          max_shard_size='2GB',
-                          safe_serialization=False)
+    if vl_model:
+        save_vl_model(vl_model, model_path, work_dir)
+    else:
+        model.save_pretrained(work_dir,
+                              max_shard_size='2GB',
+                              safe_serialization=False)
     tokenizer.save_pretrained(work_dir)
 
 

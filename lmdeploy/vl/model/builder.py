@@ -43,3 +43,17 @@ def load_vl_model(model_path: str):
     if arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiVisionModel(model_path)
     raise ValueError(f'unsupported vl model with arch {arch}')
+
+
+def vl_model_with_tokenizer(model_path: str, device: str):
+    """load visual model."""
+    if not os.path.exists(model_path):
+        model_path = get_model(model_path)
+    config = get_hf_config_content(model_path)
+    arch = config['architectures'][0]
+    if 'auto_map' in config:
+        for _, v in config['auto_map'].items():
+            if 'InternLMXComposer2ForCausalLM' in v:
+                arch = 'InternLMXComposer2ForCausalLM'
+    if arch == 'MultiModalityCausalLM':
+        return DeepSeekVisionModel.model_with_tokenizer(model_path, device)

@@ -5,6 +5,7 @@ from typing import List
 
 import torch
 from PIL.Image import Image
+from transformers import AutoModelForCausalLM
 
 from lmdeploy.vl.model.base import VisonModel
 from lmdeploy.vl.model.utils import load_model_from_weight_files
@@ -34,7 +35,6 @@ class DeepSeekVisionModel(VisonModel):
         # empty init
         from accelerate import init_empty_weights
         from deepseek_vl.models import VLChatProcessor
-        from transformers import AutoModelForCausalLM
         with init_empty_weights():
             warnings.simplefilter('ignore')
             model = AutoModelForCausalLM.from_pretrained(self.model_path)
@@ -63,3 +63,14 @@ class DeepSeekVisionModel(VisonModel):
         outputs = torch.split(images_embeds, 1, dim=0)
         outputs = [x.squeeze() for x in outputs]
         return outputs
+
+    @staticmethod
+    def model_with_tokenizer(model_path: str, device='cuda:0'):
+        check_deepseek_vl_install()
+        from deepseek_vl.models import VLChatProcessor  # noqa
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path, device_map=device).half().eval()
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model.language_model.config.use_cache = False
+        return model, model.language_model, tokenizer
