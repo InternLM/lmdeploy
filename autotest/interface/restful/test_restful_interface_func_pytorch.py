@@ -45,14 +45,17 @@ class TestRestfulInterfaceChatCompletions:
                 max_tokens=100,
                 temperature=0.01):
             outputList.append(output)
-
+        response = ''
         assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
+            response += outputList[index].get('choices')[0].get('delta').get(
+                'content')
+        input_ids1, length = api_client.encode(response)
         assert outputList[-1].get('choices')[0].get(
             'finish_reason') == 'length'
-        assert len(outputList) == 101
+        assert length == 101
 
     def test_max_tokens(self):
         api_client = APIClient(BASE_URL)
@@ -78,12 +81,16 @@ class TestRestfulInterfaceChatCompletions:
                 temperature=0.01):
             outputList.append(output)
         assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        response = ''
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
+            response += outputList[index].get('choices')[0].get('delta').get(
+                'content')
+        input_ids1, length = api_client.encode(response)
         assert outputList[-1].get('choices')[0].get(
             'finish_reason') == 'length'
-        assert len(outputList) == 6
+        assert length == 6
 
 
 @pytest.mark.order(8)
@@ -121,7 +128,7 @@ class TestRestfulInterfaceChatInteractive:
             assert_chat_interactive_stream_return(outputList[index],
                                                   index=index)
         assert output.get('finish_reason') == 'length'
-        assert len(outputList) == 101
+        assert outputList[-1].get('tokens') == 100
 
     def test_max_tokens(self):
         api_client = APIClient(BASE_URL)
@@ -150,4 +157,4 @@ class TestRestfulInterfaceChatInteractive:
             assert_chat_interactive_stream_return(outputList[index],
                                                   index=index)
         assert output.get('finish_reason') == 'length'
-        assert len(outputList) == 6
+        assert outputList[-1].get('tokens') == 5
