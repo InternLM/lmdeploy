@@ -95,11 +95,25 @@ class LlavaVisionModel(VisonModel):
             vision_tower.load_model()
         # load weight
         load_model_from_weight_files(model, self.model_path)
-        model.to(self.device).eval().half()
+        model.to(self.device).eval()
+        if model.dtype != torch.float16:
+            model.half()
 
         self.model = model.model
         self.vision_tower = model.model.vision_tower
         self.mm_projector = model.model.mm_projector
+
+    @staticmethod
+    def model_with_tokenizer(model_path: str, device='cpu'):
+        check_llava_install()
+        from llava.model.language_model.llava_llama import \
+            LlavaLlamaForCausalLM
+        model = LlavaLlamaForCausalLM.from_pretrained(
+            model_path, device_map=device).half().eval()
+        model.config.use_cache = False
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        return model, model, tokenizer
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """encode images."""

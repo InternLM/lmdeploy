@@ -21,6 +21,7 @@ LAYER_TYPE_MAP = {
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
+    'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
@@ -30,13 +31,14 @@ NORM_TYPE_MAP = {
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
+    'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
 }
 
 
 def save_vl_model(vl_model, model_path, dst_path):
     if type(vl_model).__name__ == 'MultiModalityCausalLM':  # deepseek vl
         candidate = ['preprocessor_config.json', 'processor_config.json']
-        for name in candidate:
+        for name in candidate:  # TODO not only local but also remote path
             tmp_path = osp.join(model_path, name)
             if osp.exists(tmp_path):
                 shutil.copy(tmp_path, osp.join(dst_path, name))

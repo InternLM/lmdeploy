@@ -20,6 +20,7 @@ LAYER_TYPE_MAP = {
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
+    'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
 }
 
 NORM_TYPE_MAP = {
@@ -30,6 +31,7 @@ NORM_TYPE_MAP = {
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
+    'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
 }
 
 HEAD_NAME_MAP = {
@@ -40,6 +42,7 @@ HEAD_NAME_MAP = {
     'BaiChuanForCausalLM': 'lm_head',  # Baichuan 7B
     'BaichuanForCausalLM': 'lm_head',  # Baichuan2 7B
     'LlamaForCausalLM': 'lm_head',
+    'LlavaLlamaForCausalLM': 'lm_head',
 }
 
 

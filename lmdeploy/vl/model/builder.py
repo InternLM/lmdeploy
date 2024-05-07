@@ -57,3 +57,6 @@ def vl_model_with_tokenizer(model_path: str, device: str):
                 arch = 'InternLMXComposer2ForCausalLM'
     if arch == 'MultiModalityCausalLM':
         return DeepSeekVisionModel.model_with_tokenizer(model_path, device)
+    if arch == 'LlavaLlamaForCausalLM':
+        return LlavaVisionModel.model_with_tokenizer(model_path, device)
+    raise ValueError(f'unsupported vl model with arch {arch}')
