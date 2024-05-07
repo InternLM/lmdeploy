@@ -16,7 +16,7 @@ def prepare_environment(request, config, worker_id):
     pid, startRes = start_restful_api(config, param, model, model_path,
                                       'turbomind', worker_id)
     yield
-    stop_restful_api(pid, startRes)
+    stop_restful_api(pid, startRes, param)
 
 
 def getModelList(tp_num):
@@ -31,7 +31,6 @@ def getModelList(tp_num):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=1),
                          indirect=True)
@@ -49,7 +48,6 @@ def test_restful_chat_tp1(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_2
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=2),
                          indirect=True)
@@ -81,8 +79,6 @@ def getKvintModelList(tp_num):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
-@pytest.mark.tmp
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment',
                          getKvintModelList(tp_num=1),
                          indirect=True)
@@ -100,8 +96,6 @@ def test_restful_chat_kvint_tp1(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_2
-@pytest.mark.tmp
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment',
                          getKvintModelList(tp_num=2),
                          indirect=True)
@@ -132,3 +126,25 @@ def test_restful_chat_kvint_tp2(config, common_case_config, worker_id):
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
     run_all_step(config, common_case_config)
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.gpu_num_1
+@pytest.mark.tmp
+@pytest.mark.parametrize('prepare_environment', [{
+    'model': 'Qwen/Qwen-7B-Chat',
+    'cuda_prefix': None,
+    'tp_num': 2,
+    'modelscope': True
+}],
+                         indirect=True)
+def test_modelscope_restful_chat_tp1(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     worker_id=worker_id,
+                     port=DEFAULT_PORT + get_workerid(worker_id))

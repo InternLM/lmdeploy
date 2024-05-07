@@ -32,12 +32,22 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'
       default_tp:
         required: true
         description: 'Default tp value'
         type: string
         default: '--tp 1'
+      log_level:
+        required: true
+        description: 'Default ERROR, can also set INFO'
+        type: string
+        default: 'ERROR'
+      kvint_quantization:
+        required: true
+        description: 'Default kvint4, kvint8'
+        type: string
+        default: "['kvint4','kvint8']"
       models:
         required: true
         description: 'Set models run benchmark'
@@ -52,6 +62,7 @@ env:
   DATASET_FILE: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
   TP_INFO: --tp 1
   LOOP_NUM: 3
+  TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
 
 
 jobs:
@@ -93,7 +104,7 @@ jobs:
   generation_benchmark:
     needs: linux-build
     if: ${{github.event_name == 'schedule' || (!cancelled() && contains(fromJSON(github.event.inputs.benchmark_type), 'generation'))}}
-    runs-on: [self-hosted, linux-a100-2]
+    runs-on: [self-hosted, linux-a100]
     strategy:
       fail-fast: false
       matrix:
@@ -101,7 +112,7 @@ jobs:
     timeout-minutes: 120
     env:
       MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
-      CUDA_VISIBLE_DEVICES: 4,5
+      CUDA_VISIBLE_DEVICES: 6,7
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
@@ -119,7 +130,7 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/* .
+        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -133,7 +144,7 @@ jobs:
         run: |
           python3 -m pip install ${{inputs.dependency_pkgs}}
           # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -216,7 +227,7 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/* .
+        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -230,7 +241,7 @@ jobs:
         run: |
           python3 -m pip install ${{inputs.dependency_pkgs}}
           # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -266,7 +277,7 @@ jobs:
               done
           done
       - name: Run throughput benchmark - kvint4
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
         env:
           result_dir: benchmark-throughput-turbomind-kvint4
         run: |
@@ -281,7 +292,7 @@ jobs:
               done
           done
       - name: Run throughput benchmark - kvint8
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
         env:
           result_dir: benchmark-throughput-turbomind-kvint8
         run: |
@@ -357,7 +368,7 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/* .
+        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -371,7 +382,7 @@ jobs:
         run: |
           python3 -m pip install ${{inputs.dependency_pkgs}}
           # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -394,7 +405,7 @@ jobs:
       - name: Start restful api turbomind
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --log-level INFO > turbomind_run.log 2>&1 &
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --log-level ${{inputs.log_level}} > turbomind_run.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Run restful benchmark
@@ -414,17 +425,17 @@ jobs:
           done
       - name: Kill restful api turbomind
         continue-on-error: true
-        if: always()
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
           kill -15 "$restful_pid"
       - name: Start restful api turbomind - kvint4
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
         run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level INFO > turbomind_kvint4_run.log 2>&1 &
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level ${{inputs.log_level}} > turbomind_kvint4_run.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Run restful benchmark -kvint4
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
         env:
           result_dir: benchmark-restful-turbomind-kvint4
         run: |
@@ -439,18 +450,17 @@ jobs:
               done
           done
       - name: Kill restful api turbomind - kvint4
-        continue-on-error: true
-        if: always()
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
         run: |
           kill -15 "$restful_pid"
       - name: Start restful api turbomind - kvint8
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
         run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --quant-policy 8 --log-level INFO > turbomind_kvint8_run.log 2>&1 &
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --quant-policy 8 --log-level ${{inputs.log_level}} > turbomind_kvint8_run.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Run restful benchmark -kvint8
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
         env:
           result_dir: benchmark-restful-turbomind-kvint8
         run: |
@@ -465,14 +475,13 @@ jobs:
               done
           done
       - name: Kill restful api turbomind - kvint8
-        continue-on-error: true
-        if: always()
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
         run: |
           kill -15 "$restful_pid"
       - name: Start restful api pytorch
         if: (!contains(env.MODEL_FORMAT, 'awq') && contains(fromJSON(github.event.inputs.backend), 'pytorch'))
         run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --backend pytorch --log-level INFO > pytorch_run.log 2>&1 &
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --backend pytorch --log-level ${{inputs.log_level}} > pytorch_run.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
       - name: Run restful benchmark - pytorch
@@ -491,7 +500,7 @@ jobs:
               done
           done
       - name: Kill restful api pytorch
-        if: always()
+        if: (!contains(env.MODEL_FORMAT, 'awq') && contains(fromJSON(github.event.inputs.backend), 'pytorch'))
         run: |
           kill -15 "$restful_pid"
       - name: Save reports
@@ -521,7 +530,7 @@ jobs:
       WORKDIR: /nvme/qa_test_models/triton_workspace
       OFFLINE_PKGS: /nvme/qa_test_models/offline_pkg
       MODEL_PATH: /nvme/qa_test_models/autotest_model/workspace_${{matrix.model}}
-      DEVICE: device=7
+      DEVICE: device=4
       GRPC_PORT: 33337
     strategy:
       fail-fast: false
@@ -537,7 +546,7 @@ jobs:
       - name: Set params
         if: (contains( matrix.model, 'internlm2-chat-20b'))
         run: |
-          echo 'DEVICE="device=6,7"' >> "$GITHUB_ENV"
+          echo 'DEVICE="device=4,5"' >> "$GITHUB_ENV"
       - name: Create test container
         run: |
           export date_today="$(date +'%H%M%S')"

@@ -101,6 +101,14 @@ class EngineGenerationConfig(GenerationConfig):
             stop_words=special_word_token_ids(gen_config.stop_words),
             bad_words=special_word_token_ids(gen_config.bad_words))
 
+    def __post_init__(self):
+        """Check input validation."""
+        assert type(
+            self.n) == int and self.n > 0, 'n is not a positive integer'
+        assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
+        assert self.top_k >= 0, 'top_k can not be a negative integer'
+        assert self.temperature >= 0 and self.temperature <= 1  # [0,1]
+
 
 @pydantic_dataclass
 class TurbomindEngineConfig:
@@ -144,6 +152,16 @@ class TurbomindEngineConfig:
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
 
+    def __post_init__(self):
+        """Check input validation."""
+        assert self.tp >= 1, 'tp must be a positive integer'
+        assert self.max_batch_size >= 1, 'max_batch_size must be a positive integer'  # noqa
+        assert self.cache_max_entry_count > 0 and self.cache_max_entry_count < 1, 'invalid cache_max_entry_count'  # noqa
+        assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
+        assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
+        assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
+        assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
+
 
 @dataclass
 class PytorchEngineConfig:
@@ -170,6 +188,7 @@ class PytorchEngineConfig:
         adapters (dict): The path configs to lora adapters.
         max_prefill_token_num (int): tokens per iteration.
         thread_safe (bool): thread safe engine instance.
+        enable_prefix_caching (bool): Enable token match and sharing caches.
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
         revision (str): The specific model version to use.
@@ -189,8 +208,20 @@ class PytorchEngineConfig:
     adapters: Dict[str, str] = None
     max_prefill_token_num: int = 4096
     thread_safe: bool = False
+    enable_prefix_caching: bool = False
     download_dir: str = None
     revision: str = None
+
+    def __post_init__(self):
+        """Check input validation."""
+        assert self.tp >= 1, 'invalid tp'
+        assert self.max_batch_size >= 1, 'invalid max_batch_size'
+        assert self.cache_max_entry_count > 0 and self.cache_max_entry_count < 1, 'invalid cache_max_entry_count'  # noqa
+        assert self.eviction_type in ('recompute',
+                                      'copy'), 'invalid eviction_type'
+        assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
+        assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
+        assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
 
 
 class ResponseType(enum.Enum):

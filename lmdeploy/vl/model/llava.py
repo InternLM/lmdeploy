@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Modified from
 # https://github.com/haotian-liu/LLaVA.git
-
 import warnings
+from contextlib import contextmanager
 from typing import List, Union
 
 import torch
@@ -10,7 +10,7 @@ from PIL.Image import Image
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import load_model_from_weight_files
+from lmdeploy.vl.model.utils import load_model_from_weight_files, rewrite_ctx
 
 logger = get_logger('lmdeploy')
 
@@ -24,6 +24,33 @@ def check_llava_install():
             'To use LlavaVLModel, please install llava by '
             'pip install git+https://github.com/haotian-liu/LLaVA.git --no-deps'  # noqa: E501
         )
+
+
+def _clip_vision_tower_load_model(self, **kwargs):
+    logger.info(f'CLIPVisionTower.load_model: {self.vision_tower_name}')
+    from transformers import (CLIPImageProcessor, CLIPVisionConfig,
+                              CLIPVisionModel)
+    self.image_processor = CLIPImageProcessor.from_pretrained(
+        self.vision_tower_name)
+    config = CLIPVisionConfig.from_pretrained(self.vision_tower_name,
+                                              trust_remote_code=True)
+    self.vision_tower = CLIPVisionModel._from_config(config=config)
+    self.vision_tower.requires_grad_(False)
+    self.is_loaded = True
+
+
+@contextmanager
+def init_llava_vision_tower(config):
+    """skip download vision model if possible."""
+    if getattr(config, 'unfreeze_mm_vision_tower', False):
+        origin_func_path = [
+            'llava.model.multimodal_encoder.clip_encoder.CLIPVisionTower.load_model'  # noqa: E501
+        ]
+        rewrite_func = [_clip_vision_tower_load_model]
+        with rewrite_ctx(origin_func_path, rewrite_func):
+            yield
+    else:
+        yield
 
 
 class LlavaVisionModel(VisonModel):
@@ -45,9 +72,11 @@ class LlavaVisionModel(VisonModel):
         self.config = LlavaConfig.from_pretrained(self.model_path)
         assert self.config.model_type in ['llava', 'llava_llama'], \
             'currently, only support llava llama'
+        from accelerate import init_empty_weights
 
-        # empty init
-        with torch.device('meta'), warnings.catch_warnings():
+        # init empty model, skip layer initialization
+        with init_empty_weights(), warnings.catch_warnings(), \
+                init_llava_vision_tower(self.config):
             warnings.simplefilter('ignore')
             model = LlavaLlamaForCausalLM.from_pretrained(self.model_path)
             del model.lm_head
@@ -55,12 +84,16 @@ class LlavaVisionModel(VisonModel):
             del model.model.layers
             del model.model.norm
 
-        # # load weight
+        # move model to cpu
         with torch.device('cpu'):
             model.to_empty(device='cpu')
+        # init empty vision_tower, the embedding layer in CLIPVisionModel
+        # can't init right under init_empty_weights
+        with init_llava_vision_tower(self.config):
             vision_tower = model.get_vision_tower()
             vision_tower.is_loaded = False
             vision_tower.load_model()
+        # load weight
         load_model_from_weight_files(model, self.model_path)
         model.to(self.device).eval().half()
 

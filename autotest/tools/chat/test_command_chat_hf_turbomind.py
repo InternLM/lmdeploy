@@ -1,3 +1,5 @@
+import os
+
 import allure
 import pytest
 from utils.config_utils import (get_cuda_prefix_by_workerid,
@@ -103,7 +105,6 @@ def test_hf_turbomind_base_tp2(config, model, cli_case_config, worker_id):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.pr_test
-@pytest.mark.xdist_group(name='pr_test')
 @pytest.mark.parametrize(
     'model',
     ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
@@ -122,4 +123,29 @@ def test_hf_turbomind_chat_pr(config, model, cli_case_config):
         allure.attach.file(chat_log,
                            attachment_type=allure.attachment_type.TEXT)
 
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_turbomind_chat
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('model', ['Qwen/Qwen-7B-Chat'])
+def test_modelscope_turbomind_chat_tp1(config, model, cli_case_config,
+                                       worker_id):
+    os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
+    usercase = 'chat_testcase'
+    result, chat_log, msg = hf_command_line_test(
+        config,
+        usercase,
+        cli_case_config.get(usercase),
+        model,
+        'turbomind',
+        cuda_prefix=get_cuda_prefix_by_workerid(worker_id),
+        use_local_model=False)
+    del os.environ['LMDEPLOY_USE_MODELSCOPE']
+
+    if chat_log is not None:
+        allure.attach.file(chat_log,
+                           attachment_type=allure.attachment_type.TEXT)
     assert result, msg

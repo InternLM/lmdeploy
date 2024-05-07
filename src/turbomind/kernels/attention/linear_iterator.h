@@ -56,8 +56,8 @@ struct LinearIteratorFactory {
     __device__ auto Create(int batch_idx, int head_idx)
     {
         int seq_ti = cu_ctx_len_[batch_idx] - cu_ctx_len_[0];
-
-        const Tkv* kv_cache = kv_cache_ + head_idx * stride_h_ + seq_ti * HeadDim;
+        // `head_idx * stride_h_` may be larger than `INT_MAX`
+        const Tkv* kv_cache = kv_cache_ + head_idx * (int64_t)stride_h_ + seq_ti * HeadDim;
 
         return LinearIterator<Tkv, CTA_S, HeadDim>{kv_cache, key_to_val_};
     }

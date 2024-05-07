@@ -13,7 +13,7 @@
 
 [English](README.md) | 简体中文
 
-👋 join us on [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=wechat&label=WeChat)](https://r.vansin.top/?r=internwx)
+👋 join us on [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=wechat&label=WeChat)](https://cdn.vansin.top/internlm/lmdeploy.jpg)
 [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=twitter&label=Twitter)](https://twitter.com/intern_lm)
 [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=discord&label=Discord)](https://discord.gg/xa29JuW87d)
 
@@ -90,34 +90,54 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 
 # 支持的模型
 
-|        Model        |    Size     |
-| :-----------------: | :---------: |
-|        Llama        |  7B - 65B   |
-|       Llama2        |  7B - 70B   |
-|       Llama3        |   8B, 70B   |
-|      InternLM       |  7B - 20B   |
-|      InternLM2      |  7B - 20B   |
-| InternLM-XComposer  |     7B      |
-| InternLM-XComposer2 | 7B, 4khd-7B |
-|        QWen         | 1.8B - 72B  |
-|       QWen1.5       | 0.5B - 72B  |
-|     QWen1.5-MoE     |    A2.7B    |
-|       QWen-VL       |     7B      |
-|      Baichuan       |     7B      |
-|      Baichuan2      |  7B - 13B   |
-|     Code Llama      |  7B - 34B   |
-|      ChatGLM2       |     6B      |
-|       Falcon        |  7B - 180B  |
-|         YI          |  6B - 34B   |
-|       Mistral       |     7B      |
-|    DeepSeek-MoE     |     16B     |
-|     DeepSeek-VL     |     7B      |
-|    InternVL-Chat    |      -      |
-|       Mixtral       |    8x7B     |
-|        Gemma        |    2B-7B    |
-|        Dbrx         |    132B     |
-|   LLaVA(1.5,1.6)    |  7B - 34B   |
-|   MiniGeminiLlama   |     7B      |
+<table>
+<tbody>
+<tr align="center" valign="middle">
+<td>
+  <b>LLMs</b>
+</td>
+<td>
+  <b>VLMs</b>
+</td>
+<tr valign="top">
+<td align="left" valign="top">
+<ul>
+  <li>Llama (7B - 65B)</li>
+  <li>Llama2 (7B - 70B)</li>
+  <li>Llama3 (8B, 70B)</li>
+  <li>InternLM (7B - 20B)</li>
+  <li>InternLM2 (7B - 20B)</li>
+  <li>QWen (1.8B - 72B)</li>
+  <li>QWen1.5 (0.5B - 110B)</li>
+  <li>QWen1.5 - MoE (0.5B - 72B)</li>
+  <li>Baichuan (7B)</li>
+  <li>Baichuan2 (7B-13B)</li>
+  <li>Code Llama (7B - 34B)</li>
+  <li>ChatGLM2 (6B)</li>
+  <li>Falcon (7B - 180B)</li>
+  <li>YI (6B-34B)</li>
+  <li>Mistral (7B)</li>
+  <li>DeepSeek-MoE (16B)</li>
+  <li>Mixtral (8x7B, 8x22B)</li>
+  <li>Gemma (2B - 7B)</li>
+  <li>Dbrx (132B)</li>
+</ul>
+</td>
+<td>
+<ul>
+  <li>LLaVA(1.5,1.6) (7B-34B)</li>
+  <li>InternLM-XComposer (7B)</li>
+  <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
+  <li>QWen-VL (7B)</li>
+  <li>DeepSeek-VL (7B)</li>
+  <li>InternVL-Chat (v1.1-v1.5)</li>
+  <li>MiniGeminiLlama (7B)</li>
+  <li>StarCoder2 (3B - 15B)</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
 
 LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 

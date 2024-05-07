@@ -7,7 +7,7 @@
 #include "block.h"
 #include "iterator.h"
 #include "quantization.h"
-#include "reduce.h"
+#include "reduce_kernel.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include <limits>
 #include <type_traits>
@@ -49,6 +49,26 @@ struct AttentionUniversal {
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
+    static constexpr bool kProcessKV = CTA_Q == 1;
+
+    const int q_group_size_;
+    const int q_head_per_cta_;
+    const int cta_per_q_group_;
+
+    // past-the-end hi of the CTA
+    int hi_end_{1};
+
+    __device__ bool check_h(int hi)
+    {
+        if constexpr (CTA_Q > 1) {
+            // bypass the check for prefill kernels since `hi == 0` constantly
+            return true;
+        }
+        else {
+            return hi < hi_end_;
+        }
+    }
+
     __device__ __host__ static bool need_separate_reduce(int max_split_cnt)
     {
         if constexpr (CTA_Q > 1) {
@@ -57,6 +77,91 @@ struct AttentionUniversal {
         }
         else {
             return CTA_H * max_split_cnt > 32;
+        }
+    }
+
+    template<class VecQ, class VecKV>
+    __device__ void ApplyBias(
+        VecQ& vec_Q, VecKV& vec_K, VecKV& vec_V, const ParamType& params, int head_idx, int kv_head_idx, int2 offset)
+    {
+        using Map              = typename Impl::ThreadMapQ;
+        constexpr int kVecSize = Map::kAccessC;
+        constexpr int ITER_C   = Map::kIterC;
+        constexpr int ITER_S   = Map::kIterS;
+        if constexpr (kProcessKV) {
+            Array<T, kVecSize> bias_K[ITER_C];
+            Array<T, kVecSize> bias_V[ITER_C];
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                const int di    = offset.x + c * Map::kDeltaC;
+                const int k_idx = kv_head_idx * kHeadDim + di;
+                if (params.k_bias) {
+                    Ldg(bias_K[c], &params.k_bias[k_idx]);
+                }
+                if (params.v_bias) {
+                    Ldg(bias_V[c], &params.v_bias[k_idx]);
+                }
+            }
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                using namespace ops;
+                if (params.k_bias) {
+                    vec_K[0][c] = vec_K[0][c] + bias_K[c];
+                }
+                if (params.v_bias) {
+                    vec_V[0][c] = vec_V[0][c] + bias_V[c];
+                }
+            }
+        }
+
+        if constexpr (CTA_H == 1) {
+            Array<T, kVecSize> bias_Q[ITER_C];
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                const int di    = offset.x + c * Map::kDeltaC;
+                const int q_idx = head_idx * kHeadDim + di;
+                if (params.q_bias) {
+                    Ldg(bias_Q[c], &params.q_bias[q_idx]);
+                }
+            }
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < ITER_C; ++c) {
+                    using namespace ops;
+                    if (params.q_bias) {
+                        vec_Q[s][c] = vec_Q[s][c] + bias_Q[c];
+                    }
+                }
+            }
+        }
+        else if constexpr (CTA_Q == 1) {
+            Array<T, kVecSize> bias_Q[ITER_S][ITER_C];
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                const int hi = offset.y + s * Map::kDeltaS;
+                PRAGMA_UNROLL
+                for (int c = 0; c < ITER_C; ++c) {
+                    const int di    = offset.x + c * Map::kDeltaC;
+                    const int q_idx = (head_idx + hi) * kHeadDim + di;
+                    if (params.q_bias && check_h(hi)) {
+                        Ldg(bias_Q[s][c], &params.q_bias[q_idx]);
+                    }
+                }
+            }
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < ITER_C; ++c) {
+                    using namespace ops;
+                    if (params.q_bias) {
+                        vec_Q[s][c] = vec_Q[s][c] + bias_Q[s][c];
+                    }
+                }
+            }
+        }
+        else {
+            static_assert(CTA_Q == 1 || CTA_H == 1);
         }
     }
 
@@ -75,7 +180,6 @@ struct AttentionUniversal {
                              int              warp_id,
                              int              lane_id)
     {
-        constexpr bool kProcessKV = CTA_Q == 1;
 
         using Map = typename Impl::ThreadMapQ;
 
@@ -86,9 +190,9 @@ struct AttentionUniversal {
         constexpr int ITER_C = Map::kIterC;
         constexpr int ITER_S = Map::kIterS;
 
-        Vec vec_Q[ITER_S][ITER_C]{};
-        Vec vec_K[ITER_S][ITER_C];
-        Vec vec_V[ITER_S][ITER_C];
+        Vec vec_Q[ITER_S][ITER_C]{};  // [QxH, D]
+        Vec vec_K[1][ITER_C];
+        Vec vec_V[1][ITER_C];
 
         const int2 offset = Map::get_offset(warp_id, lane_id);
 
@@ -100,59 +204,24 @@ struct AttentionUniversal {
             const int qi = si / CTA_H + qi_begin;
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
-                const int di    = offset.x + c * Map::kDeltaC;
-                const int q_idx = qi * params.stride + hi * kHeadDim + di;
-                const int k_idx = qi * params.stride + kv_head_idx * kHeadDim + di;
+                const int     di    = offset.x + c * Map::kDeltaC;
+                const int64_t q_idx = qi * params.stride + hi * kHeadDim + di;
+                const int64_t k_idx = qi * params.stride + kv_head_idx * kHeadDim + di;
                 if (qi < qi_end) {
-                    Ldg(vec_Q[s][c], &params.q[q_idx]);
-                    if constexpr (kProcessKV) {
-                        Ldg(vec_K[s][c], &params.k[k_idx]);
-                        Ldg(vec_V[s][c], &params.v[k_idx]);
+                    if (check_h(si % CTA_H)) {
+                        Ldg(vec_Q[s][c], &params.q[q_idx]);
+                    }
+                    if constexpr (kProcessKV) {  // duplicate loads in s
+                        if (s == 0) {
+                            Ldg(vec_K[0][c], &params.k[k_idx]);
+                            Ldg(vec_V[0][c], &params.v[k_idx]);
+                        }
                     }
                 }
             }
         }
 
-        Vec bias_Q[ITER_C];
-        Vec bias_K[ITER_C];
-        Vec bias_V[ITER_C];
-
-        PRAGMA_UNROLL
-        for (int c = 0; c < ITER_C; ++c) {
-            const int di    = offset.x + c * Map::kDeltaC;
-            const int q_idx = head_idx * kHeadDim + di;
-            const int k_idx = kv_head_idx * kHeadDim + di;
-            if (params.q_bias) {
-                Ldg(bias_Q[c], &params.q_bias[q_idx]);
-            }
-            if constexpr (kProcessKV) {
-                if (params.k_bias) {
-                    Ldg(bias_K[c], &params.k_bias[k_idx]);
-                }
-                if (params.v_bias) {
-                    Ldg(bias_V[c], &params.v_bias[k_idx]);
-                }
-            }
-        }
-
-        PRAGMA_UNROLL
-        for (int s = 0; s < ITER_S; ++s) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < ITER_C; ++c) {
-                using namespace ops;
-                if (params.q_bias) {
-                    vec_Q[s][c] = vec_Q[s][c] + bias_Q[c];
-                }
-                if constexpr (kProcessKV) {
-                    if (params.k_bias) {
-                        vec_K[s][c] = vec_K[s][c] + bias_K[c];
-                    }
-                    if (params.v_bias) {
-                        vec_V[s][c] = vec_V[s][c] + bias_V[c];
-                    }
-                }
-            }
-        }
+        ApplyBias(vec_Q, vec_K, vec_V, params, head_idx, kv_head_idx, offset);
 
         const float rope_base = params.rope_theta ? params.rope_theta[batch_idx] : params.rotary_embedding_base;
         PRAGMA_UNROLL
@@ -168,8 +237,9 @@ struct AttentionUniversal {
                 const int ti = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx + history_len;
                 rope.apply(vec_Q[s][c], ti);
                 if constexpr (kProcessKV) {
-                    static_assert(ITER_S == 1);
-                    rope.apply(vec_K[0][c], ti);
+                    if (s == 0) {
+                        rope.apply(vec_K[0][c], ti);
+                    }
                 }
             }
         }
@@ -187,30 +257,26 @@ struct AttentionUniversal {
         }
 
         if constexpr (kProcessKV) {
-            static_assert(ITER_S == 1);
             const int qi = offset.y / CTA_H;
             const int ti = history_len;
 
-            Array<T, 2> param_K[ITER_S];
-            Array<T, 2> param_V[ITER_S];
+            Array<T, 2> param_K[1];
+            Array<T, 2> param_V[1];
 
             if constexpr (!std::is_same_v<T, Tkv>) {
                 warp_stats<Map::kWarpThreadC>(param_K, vec_K, bitsof<Tkv>);
                 warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
             }
 
-            Array<Tkv, kVecSize> out_K[ITER_S][ITER_C];
-            Array<Tkv, kVecSize> out_V[ITER_S][ITER_C];
+            Array<Tkv, kVecSize> out_K[1][ITER_C];
+            Array<Tkv, kVecSize> out_V[1][ITER_C];
 
+            ConvertKvCache<T, Tkv> conv_K{param_K[0][0], param_K[0][1]};
+            ConvertKvCache<T, Tkv> conv_V{param_V[0][0], param_V[0][1]};
             PRAGMA_UNROLL
-            for (int s = 0; s < ITER_S; ++s) {
-                ConvertKvCache<T, Tkv> conv_K{param_K[s][0], param_K[s][1]};
-                ConvertKvCache<T, Tkv> conv_V{param_V[s][0], param_V[s][1]};
-                PRAGMA_UNROLL
-                for (int c = 0; c < ITER_C; ++c) {
-                    out_K[s][c] = conv_K(vec_K[s][c]);
-                    out_V[s][c] = conv_V(vec_V[s][c]);
-                }
+            for (int c = 0; c < ITER_C; ++c) {
+                out_K[0][c] = conv_K(vec_K[0][c]);
+                out_V[0][c] = conv_V(vec_V[0][c]);
             }
 
             iterator.block_head_.with(
@@ -258,15 +324,34 @@ struct AttentionUniversal {
         Impl::TransformQ(smem_Q, frag_Q);
     }
 
+    __device__ AttentionUniversal(int q_group_size, int q_head_per_cta, int cta_per_q_group):
+        q_group_size_{q_group_size}, q_head_per_cta_{q_head_per_cta}, cta_per_q_group_{cta_per_q_group}
+    {
+    }
+
     __device__ void
     operator()(const ParamType& params, CacheIteratorFactory& cache_iter_factory, const CtaMap& cta_map, char* smem_buf)
     {
         // [q, h, b]
         const int query_idx = cta_map.query_idx() * CTA_Q;
-        const int head_idx  = cta_map.head_idx() * CTA_H;
         const int batch_idx = cta_map.batch_idx();
         const int split_idx = cta_map.split_idx();
         const int split_cnt = cta_map.split_count();
+
+        int head_idx;
+        int kv_head_idx;
+
+        if constexpr (CTA_H == 1) {
+            head_idx    = cta_map.head_idx();
+            kv_head_idx = head_idx / q_group_size_;
+        }
+        else {
+            int cta_h_idx = cta_map.head_idx();
+            int local_idx = cta_h_idx % cta_per_q_group_ * q_head_per_cta_;
+            kv_head_idx   = cta_h_idx / cta_per_q_group_;
+            head_idx      = kv_head_idx * q_group_size_ + local_idx;
+            hi_end_       = q_group_size_ - local_idx;
+        }
 
         // early exit if finished flag is set
         if (params.finished[batch_idx]) {
@@ -286,8 +371,6 @@ struct AttentionUniversal {
 
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
-
-        const int kv_head_idx = head_idx * params.num_kv_heads / params.num_heads;
 
         const int context_len = params.cu_k_len[batch_idx + 1] - params.cu_k_len[batch_idx];
         const int history_len = context_len - input_len;
@@ -404,6 +487,7 @@ struct AttentionUniversal {
                       qi_begin,
                       head_idx,
                       params.num_heads,
+                      hi_end_,
                       split_idx + 1,
                       params.max_split_k,
                       params.inv_sqrt_dh,
@@ -415,17 +499,6 @@ struct AttentionUniversal {
             if (threadIdx.x < split_idx) {
                 locks[threadIdx.x] = 0;
             }
-        }
-    }
-
-    __device__ bool check_h(int hi)
-    {
-        if constexpr (CTA_Q > 1) {
-            // bypass the check for prefill kernels since `hi == 0` constantly
-            return true;
-        }
-        else {
-            return hi < CTA_H;
         }
     }
 
@@ -504,11 +577,14 @@ extern __shared__ char smem_buf[];
 template<class Kernel>
 __global__ void attention_kernel(typename Kernel::ParamType            params,
                                  typename Kernel::CacheIteratorFactory cache_iter_factory,
-                                 typename Kernel::CtaMap               cta_map)
+                                 typename Kernel::CtaMap               cta_map,
+                                 int                                   q_group_size,
+                                 int                                   q_head_per_cta,
+                                 int                                   cta_per_q_group)
 {
 #if __CUDA_ARCH__
     if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
-        Kernel{}(params, cache_iter_factory, cta_map, smem_buf);
+        Kernel{q_group_size, q_head_per_cta, cta_per_q_group}(params, cache_iter_factory, cta_map, smem_buf);
     }
 #endif
 }
