@@ -65,7 +65,7 @@ class DeepSeekVisionModel(VisonModel):
         return outputs
 
     @staticmethod
-    def model_with_tokenizer(model_path: str, device='cuda:0'):
+    def model_with_tokenizer(model_path: str, device='cpu'):
         check_deepseek_vl_install()
         from deepseek_vl.models import VLChatProcessor  # noqa
         model = AutoModelForCausalLM.from_pretrained(
