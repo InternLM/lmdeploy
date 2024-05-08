@@ -35,22 +35,11 @@ class TestTritonInterface:
     def test_stopword(self):
         dict_info = {
             'assistant': '<|Assistant|>െ',
-            'eoa': 'ി\n ',
-            'eoh': '\n ',
-            'eosys': '\n ',
             'meta_instruction':
             'You are an AI assistant whose name is InternLM (书生·浦语).',
-            'meta_tag': '<BOS>',
             'model_name': 'puyu',
-            'repetition_penalty': 1.02,
-            'replace_token': 'ി',
             'session_len': 8192,
-            'stop_words': [' city'],
-            'system': '<|System|>െ',
-            'temperature': 1,
-            'top_k': 40,
-            'top_p': 0.8,
-            'user': '<|Human|>െ'
+            'stop_words': [' city']
         }
 
         engine = Engine(SERVER_ADDR, log_level='ERROR', **dict_info)
@@ -64,22 +53,11 @@ class TestTritonInterface:
     def test_stopwords(self):
         dict_info = {
             'assistant': '<|Assistant|>െ',
-            'eoa': 'ി\n ',
-            'eoh': '\n ',
-            'eosys': '\n ',
             'meta_instruction':
             'You are an AI assistant whose name is InternLM (书生·浦语).',
-            'meta_tag': '<BOS>',
             'model_name': 'puyu',
-            'repetition_penalty': 1.02,
-            'replace_token': 'ി',
             'session_len': 8192,
-            'stop_words': [' Shanghai', ' city', ' China'],
-            'system': '<|System|>െ',
-            'temperature': 1,
-            'top_k': 40,
-            'top_p': 0.8,
-            'user': '<|Human|>െ'
+            'stop_words': [' Shanghai', ' city', ' China']
         }
 
         engine = Engine(SERVER_ADDR, log_level='ERROR', **dict_info)
@@ -95,21 +73,12 @@ class TestTritonInterface:
     def test_session_out_of_limit(self):
         dict_info = {
             'assistant': '<|Assistant|>െ',
-            'eoa': 'ി\n ',
-            'eoh': '\n ',
-            'eosys': '\n ',
             'meta_instruction':
             'You are an AI assistant whose name is InternLM (书生·浦语).',
-            'meta_tag': '<BOS>',
             'model_name': 'puyu',
-            'repetition_penalty': 1.02,
-            'replace_token': 'ി',
             'session_len': 120,
             'stop_words': [],
             'system': '<|System|>െ',
-            'temperature': 1,
-            'top_k': 40,
-            'top_p': 0.8,
             'user': '<|Human|>െ'
         }
 
@@ -123,21 +92,10 @@ class TestTritonInterface:
     def test_meta_instruction(self):
         dict_info = {
             'assistant': '<|Assistant|>െ',
-            'eoa': 'ി\n ',
-            'eoh': '\n ',
-            'eosys': '\n ',
             'meta_instruction': 'You are an AI assistant whose name is puyu.',
-            'meta_tag': '<BOS>',
             'model_name': 'puyu',
-            'repetition_penalty': 1.02,
-            'replace_token': 'ി',
             'session_len': 8192,
-            'stop_words': [],
-            'system': '<|System|>െ',
-            'temperature': 1,
-            'top_k': 40,
-            'top_p': 0.8,
-            'user': '<|Human|>െ'
+            'stop_words': []
         }
 
         engine = Engine(SERVER_ADDR, log_level='ERROR', **dict_info)
@@ -152,21 +110,10 @@ class TestTritonInterface:
     def test_resume_session(self):
         dict_info = {
             'assistant': '<|Assistant|>െ',
-            'eoa': 'ി\n ',
-            'eoh': '\n ',
-            'eosys': '\n ',
             'meta_instruction': 'You are an AI assistant whose name is puyu.',
-            'meta_tag': '<BOS>',
             'model_name': 'puyu',
-            'repetition_penalty': 1.02,
-            'replace_token': 'ി',
             'session_len': 8192,
-            'stop_words': [],
-            'system': '<|System|>െ',
-            'temperature': 1,
-            'top_k': 40,
-            'top_p': 0.8,
-            'user': '<|Human|>െ'
+            'stop_words': []
         }
 
         engine = Engine(SERVER_ADDR, log_level='ERROR', **dict_info)
@@ -188,21 +135,10 @@ class TestTritonInterface:
     def test_cancel_session(self):
         dict_info = {
             'assistant': '<|Assistant|>െ',
-            'eoa': 'ി\n ',
-            'eoh': '\n ',
-            'eosys': '\n ',
             'meta_instruction': 'You are an AI assistant whose name is puyu.',
-            'meta_tag': '<BOS>',
             'model_name': 'puyu',
-            'repetition_penalty': 1.02,
-            'replace_token': 'ി',
             'session_len': 8192,
-            'stop_words': [],
-            'system': '<|System|>െ',
-            'temperature': 1,
-            'top_k': 40,
-            'top_p': 0.8,
-            'user': '<|Human|>െ'
+            'stop_words': []
         }
 
         engine = Engine(SERVER_ADDR, log_level='ERROR', **dict_info)
