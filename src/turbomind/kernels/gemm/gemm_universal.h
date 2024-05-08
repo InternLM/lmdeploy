@@ -71,11 +71,16 @@ struct GemmUniversal {
 
         const int chunk_per_split = (chunk_cnt + tiled_shape.z - 1) / tiled_shape.z;
 
-        const int offset_k    = chunk_per_split * kChunkSizeK * tile_offset.z;
+        const int offset_k = chunk_per_split * kChunkSizeK * tile_offset.z;
+
         const int gemm_k_size = std::min(offset_k + chunk_per_split * kChunkSizeK, param.k) - offset_k;
 
         const int offset_m = tile_offset.x * CTA_M;
         const int offset_n = tile_offset.y * CTA_N;
+
+        if (offset_m >= param.m || offset_n >= param.n || offset_k >= param.k) {  // empty tile
+            return;
+        }
 
         const int end_m = min(CTA_M, param.m - offset_m);
         const int end_n = min(CTA_N, param.n - offset_n);
@@ -129,16 +134,15 @@ struct GemmUniversal {
 
             const int thread_idx = threadIdx.x;
 
-            // set flag if not last split
-            if (tile_offset.z < tiled_shape.z - 1) {
+            if (offset_k + gemm_k_size < param.k) {  // set flag if not last split
                 sem_post(&locks[tile_offset.z], 1, thread_idx == 0);
             }
-            else {
-                sem_wait_many(&locks[thread_idx], tiled_shape.z - 1, thread_idx < tiled_shape.z - 1);
+            else {  // offset_k + gemm_k_size == param.k => last split
+                sem_wait_many(&locks[thread_idx], tile_offset.z, thread_idx < tile_offset.z);
 
                 Reduce(tile_offset, param, end_m, end_n);
 
-                if (thread_idx < tiled_shape.z) {
+                if (thread_idx <= tile_offset.z) {
                     locks[thread_idx] = 0;
                 }
             }

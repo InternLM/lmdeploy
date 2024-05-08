@@ -32,6 +32,7 @@ public:
                        const MatrixLayout& Cdesc,
                        void*               D,
                        const MatrixLayout& Ddesc,
+                       int                 swizzle,
                        int                 splits,
                        void*               barriers,
                        size_t&             barriers_size,
@@ -45,7 +46,13 @@ public:
     // true if this kernel can be used to compute the gemm
     bool is_feasible(const GemmDesc& desc) const noexcept;
 
-    std::pair<int, int64_t> FindSplitCount(int m, int n, int k, int max_split_k, int sm_count, int max_wave_count = 16);
+    std::vector<std::pair<int, int64_t>>
+    EstimateSplits(int m, int n, int k, int max_split_k, int sm_count, int max_wave_count, int top_k);
+
+    const KernelDesc& desc() const noexcept
+    {
+        return desc_;
+    }
 
     int3 cta_tile_size() const noexcept
     {

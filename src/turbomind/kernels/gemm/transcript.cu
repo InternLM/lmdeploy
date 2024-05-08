@@ -43,7 +43,7 @@ template<class T, class Tb>
 struct Config<T, T, Tb>: BaseConfig {
     using Gemm0  = Impl<MMA_81616, T, T, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
     using Gemm1  = Impl<MMA_81616, T, Tb, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
-    using Kernel = Transcript<void, Gemm0, Gemm1, _Converter<T, Tb>, CtaSwizzleMap<0>>;
+    using Kernel = Transcript<void, Gemm0, Gemm1, _Converter<T, Tb>, CtaMap>;
 };
 
 template<class T>
@@ -51,7 +51,7 @@ struct Config<T, uint16_t, uint4_t>: BaseConfig {
     static_assert(sizeof(T) == 2);
     using Gemm0  = Impl<MMA_81616, T, T, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
     using Gemm1  = Impl<MMA_81616, T, uint4_t, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 1>;
-    using Kernel = Transcript<void, Gemm0, Gemm1, Converter<uint16_t, uint4_t>, CtaSwizzleMap<0>>;
+    using Kernel = Transcript<void, Gemm0, Gemm1, Converter<uint16_t, uint4_t>, CtaMap>;
 };
 
 template<class T>
@@ -59,7 +59,7 @@ struct Config<T, uint16_t, uint8_t>: BaseConfig {
     static_assert(sizeof(T) == 2);
     using Gemm0  = Impl<MMA_81616, T, T, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 0>;
     using Gemm1  = Impl<MMA_81616, T, uint8_t, Tq, CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, WARP_K, 3, 1>;
-    using Kernel = Transcript<void, Gemm0, Gemm1, Converter<uint16_t, uint8_t>, CtaSwizzleMap<0>>;
+    using Kernel = Transcript<void, Gemm0, Gemm1, Converter<uint16_t, uint8_t>, CtaMap>;
 };
 
 }  // namespace
@@ -93,7 +93,7 @@ void transcript(To* dst_B, T* dst_Q, const Ti* src_B, const T* src_Q, int n, int
     using Map = typename Kernel::CtaMap;
 
     auto tiles = Map::get_tiled_shape(Kernel::CTA_M, n, k, Kernel::CTA_M, Kernel::CTA_N, 1);
-    auto grid  = Map::get_grid_shape(tiles);
+    auto grid  = Map::get_grid_shape(tiles, 0);
     auto block = Kernel::WARP_CNT * WARP_SIZE;
 
     std::cout << "P_K: " << Kernel::P_K << ", P_N: " << Kernel::P_N << std::endl;
@@ -107,7 +107,8 @@ void transcript(To* dst_B, T* dst_Q, const Ti* src_B, const T* src_Q, int n, int
         }
     }();
 
-    typename Kernel::Param params{nullptr, _src, (half2*)src_Q, detail::cast(dst_B), (half2*)dst_Q, Kernel::CTA_M, n, k};
+    typename Kernel::Param params{
+        nullptr, _src, (half2*)src_Q, detail::cast(dst_B), (half2*)dst_Q, Kernel::CTA_M, n, k};
 
     transcript_kernel<Kernel><<<grid, block, kSmemSize, st>>>(params);
 }

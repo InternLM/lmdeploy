@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/gemm/transcript.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <cublas_v2.h>
+#include <fstream>
 #include <limits>
 #include <thrust/universal_vector.h>
 #include <type_traits>
@@ -295,7 +296,7 @@ void Run(int m, int n, int k, int g = 128)
 
             const MatrixLayout c_desc{DataType::F16, LayoutType::kRowMajor, m, n, n};
 
-            gGemm().Run({QuantDesc{QuantType::kAsym_FMA, g}},
+            gGemm().Run(Operation{QuantDesc{QuantType::kAsym_FMA, g}, Epilogue::kNone, DispatchPolicy::kUseCached},
                         nullptr,
                         a.data().get(),
                         MatrixLayout{DataType::F16, LayoutType::kRowMajor, m, k, k},
@@ -332,15 +333,16 @@ template<class T, class Tb>
 void Test(int bsz, int tp)
 {
     // Run<T, Tb>(8192 - 64, 8192 , 8192);
-    Run<T, Tb>(bsz, 8192, 8192);
+    // Run<T, Tb>(bsz, 8192, 8192);
     // Run<T, Tb>(bsz, 4096, 4096);
     // Run<half, uint4_t>(64, 11008, 4096);
     // Run<half, uint4_t>(128, 128, 32);
     // Run<half, uint4_t>(128, 128, 128);
 
     // llama2-7b
-    // Run<T, Tb>(bsz, 11008 / tp, 4096); // mlp.up/gate
-    // Run<T, Tb>(bsz, 4096, 11008 / tp);  // mlp.down
+    // Run<T, Tb>(bsz, 11008 / tp, 4096);  // mlp.up/gate
+    Run<T, Tb>(bsz, 4096, 11008 / tp);  // mlp.down
+    // Run<T, Tb>(bsz, 12288 / tp, 4096);
 
     // llama2-70b
     // Run<T, Tb>(bsz, 10240 / tp, 8192);  // attn.qkv
@@ -350,6 +352,22 @@ void Test(int bsz, int tp)
 
 int main(int argc, char* argv[])
 {
+    if (1) {
+        std::ifstream ifs("tm_dispatch_cache");
+
+        int n_imported = gGemm().Import(ifs);
+        std::cout << "#imported: " << n_imported << "\n";
+    }
+
+    // Test<half, uint4_t>(128, 1);
+    // Test<half, uint4_t>(256, 1);
+    // Test<half, uint4_t>(512, 1);
+    // Test<half, uint4_t>(1024, 1);
+
     Test<half, uint4_t>(8192, 1);
+
+    // std::ofstream ofs("tm_dispatch_cache");
+    // gGemm().Export(ofs);
+
     return 0;
 }

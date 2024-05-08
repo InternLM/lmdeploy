@@ -10,7 +10,7 @@
 
 namespace turbomind::gemm {
 
-enum class LayoutType {
+enum class LayoutType : int {
     kColMajor,
     kRowMajor,
     kFragment_884,
@@ -18,21 +18,21 @@ enum class LayoutType {
     kFragment_16816,
 };
 
-enum class QuantType {
+enum class QuantType : int {
     kNone,
     kSymmetric,
     kAsym_FMA,
     kAsym_SubMul,
 };
 
-enum class Epilogue {
+enum class Epilogue : int {
     kNone = 0,
     kChannelwiseLinearCombination,  // D'[i,:] = a[i] * D[i,:] + b[i]
     kGatedSilu,                     // D'[:,i] = D[:,i*2] * silu(D[:,i*2+1])
     kGatedGelu,
 };
 
-enum class DataType {
+enum class DataType : int {
     U4,
     U8,
     F16,
@@ -94,16 +94,16 @@ struct QuantDesc {
     int       group_size;
 };
 
-enum class DispatchType {
+enum class DispatchPolicy : int {
     kDefault = 0,
-    kCached,
     kMeasure,
+    kUseCached,
 };
 
 struct Operation {
-    QuantDesc    quant_desc;
-    DispatchType dispatch;
-    Epilogue     epilogue;
+    QuantDesc      quant_desc;
+    Epilogue       epilogue;
+    DispatchPolicy dispatch;
 };
 
 struct MatrixLayout {

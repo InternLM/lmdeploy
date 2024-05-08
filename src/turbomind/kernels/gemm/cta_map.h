@@ -6,40 +6,20 @@
 
 namespace turbomind::gemm {
 
-struct CtaMap2 {
-    __host__ __device__ static int3 get_tiled_shape(int m, int n, int k, int cta_m, int cta_n, int split_cnt)
-    {
-        return {(m + cta_m - 1) / cta_m, (m + cta_n - 1) / cta_n, split_cnt};
-    }
-
-    __host__ __device__ static dim3 get_grid_shape(int3 tiled_shape)
-    {
-        return dim3(tiled_shape.x, tiled_shape.y, tiled_shape.z);
-    }
-
-    __device__ static int3 get_tile_offset(int log_tile = 0)
-    {
-        return int3{(int)blockIdx.x, (int)blockIdx.y, (int)blockIdx.z};
-    }
-};
-
-template<int N_>
-struct CtaSwizzleMap {
-
-    static constexpr int N = N_;
+struct CtaMap {
 
     TM_HOST_DEVICE static int3 get_tiled_shape(int m, int n, int k, int cta_m, int cta_n, int split_cnt)
     {
         return {(m + cta_m - 1) / cta_m, (n + cta_n - 1) / cta_n, split_cnt};
     }
 
-    TM_HOST_DEVICE static int get_log_tile(int3 tiled_shape)
+    TM_HOST_DEVICE static int get_log_tile(int3 tiled_shape, int N)
     {
         auto n = tiled_shape.y;
-        if (N >= 32) {
+        if (N >= 32 && n >= 24) {
             return 5;
         }
-        else if (N >= 16) {
+        else if (N >= 16 && n >= 12) {
             return 4;
         }
         else if (N >= 8 && n >= 6) {
@@ -56,9 +36,9 @@ struct CtaSwizzleMap {
         }
     }
 
-    TM_HOST_DEVICE static dim3 get_grid_shape(int3 tiled_shape)
+    TM_HOST_DEVICE static dim3 get_grid_shape(int3 tiled_shape, int log_tile)
     {
-        int tile = 1 << get_log_tile(tiled_shape);
+        int tile = 1 << log_tile;
         return {static_cast<unsigned>(tiled_shape.x * tile),
                 static_cast<unsigned>((tiled_shape.y + tile - 1) / tile),
                 static_cast<unsigned>(tiled_shape.z)};

@@ -19,7 +19,7 @@ CacheFlushing::CacheFlushing()
 
 void CacheFlushing::flush(cudaStream_t stream)
 {
-    static CacheFlushing inst{};
+    thread_local CacheFlushing inst{};
     inst(stream);
 }
 

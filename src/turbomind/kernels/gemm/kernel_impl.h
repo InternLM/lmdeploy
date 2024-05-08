@@ -42,7 +42,6 @@ public:
 
         desc_.stages  = Impl::Stages;
         desc_.split_k = Gemm::SplitK;
-        desc_.swizzle = Gemm::CtaMap::N;
 
         desc_.arch = 80;
 
@@ -69,6 +68,7 @@ public:
                const MatrixLayout& Cdesc,
                void*               D,
                const MatrixLayout& Ddesc,
+               int                 swizzle,
                int                 splits,
                void*               barriers,
                size_t&             barriers_size,
@@ -89,9 +89,10 @@ public:
             return -1;
         }
 
-        const auto log_tile = Map::get_log_tile(tiles);
+        // const auto log_tile = Map::get_log_tile(tiles, 8);
+        const auto log_tile = swizzle;
 
-        const auto grid  = Map::get_grid_shape(tiles);
+        const auto grid  = Map::get_grid_shape(tiles, log_tile);
         const auto block = Gemm::Impl::WARP_CNT * WARP_SIZE;
 
         using Ta = typename Gemm::T;
@@ -99,16 +100,18 @@ public:
         using Tq = typename Gemm::Tq;
         using Tc = typename Gemm::T;
 
-        [[maybe_unused]] static const int _ = [] {
-            std::cout << "A:\n";
-            Print(typename Impl::ThreadMapA{});
-            std::cout << "\nB:\n";
-            Print(typename Impl::ThreadMapB{});
-            std::cout << "\nQ:\n";
-            Print(typename Impl::ThreadMapQ{});
-            printf("warp count: %d\n", Impl::WARP_CNT);
-            return 0;
-        }();
+        if constexpr (0) {
+            [[maybe_unused]] static const int _ = [] {
+                std::cout << "A:\n";
+                Print(typename Impl::ThreadMapA{});
+                std::cout << "\nB:\n";
+                Print(typename Impl::ThreadMapB{});
+                std::cout << "\nQ:\n";
+                Print(typename Impl::ThreadMapQ{});
+                printf("warp count: %d\n", Impl::WARP_CNT);
+                return 0;
+            }();
+        }
 
         typename Gemm::Param param{
             (Ta*)A, _cast((Tb*)B), (Tq*)Q, (Tc*)C, m, n, k, log_tile, tiles, (float*)workspace, (int*)barriers};

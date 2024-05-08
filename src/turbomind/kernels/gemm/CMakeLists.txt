@@ -14,7 +14,7 @@ FetchContent_Declare(
 # add_executable(gemm_bench gemm_bench.cu)
 # target_link_libraries(gemm_bench PRIVATE nvbench::main)
 
-add_library(gemm2 gemm.cu kernel.cu transcript.cu
+add_library(gemm2 gemm.cu kernel.cu transcript.cu dispatch_cache.cu
         codegen/gemm_sm80_f16_u4_f16_asym_g128.cu)
 
 target_compile_options(gemm2 PRIVATE

@@ -38,14 +38,20 @@ struct KernelDesc {
     LayoutType order_b;
     LayoutType order_c;
     QuantDesc  quant_b;
-    bool       align_m;
-    bool       align_n;
     int3       cta_tile;
     int3       warp_tile;
-    bool       split_k;
     int        stages;
-    int        swizzle;
+    bool       split_k;
+    bool       align_m;
+    bool       align_n;
     int        arch;
+};
+
+class Kernel;
+struct LaunchSpec {
+    Kernel* kernel;
+    int     swizzle;
+    int     splits;
 };
 
 }  // namespace turbomind::gemm

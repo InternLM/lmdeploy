@@ -1,11 +1,14 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/kernels/gemm/kernel.h"
+#include <algorithm>
 #include <iostream>
+#include <numeric>
 
 namespace turbomind::gemm {
 
-std::pair<int, int64_t> Kernel::FindSplitCount(int m, int n, int k, int max_split_k, int sm_count, int max_wave_count)
+std::vector<std::pair<int, int64_t>>
+Kernel::EstimateSplits(int m, int n, int k, int max_split_k, int sm_count, int max_wave_count, int top_k)
 {
     const int tiled_shape_m = ceil_div(m, desc_.cta_tile.x);
     const int tiled_shape_n = ceil_div(n, desc_.cta_tile.y);
@@ -17,8 +20,8 @@ std::pair<int, int64_t> Kernel::FindSplitCount(int m, int n, int k, int max_spli
 
     const float wave_per_split = float(tiled_shape_m * tiled_shape_n) / float(sm_count * max_active_ctas_);
 
-    //          cost    volume   waves  split-k
-    std::tuple<int64_t, int64_t, float, int> best{std::numeric_limits<int64_t>::max(), -1, 0.f, 0};
+    //                     cost    volume   waves  split-k
+    std::vector<std::tuple<int64_t, int64_t, float, int>> estimations;
 
     for (int splits = 1; splits <= max_split_k; ++splits) {
         const float waves      = wave_per_split * splits;
@@ -34,16 +37,40 @@ std::pair<int, int64_t> Kernel::FindSplitCount(int m, int n, int k, int max_spli
         const int64_t cost   = volume * wave_count;
 
         std::cout << cost << " " << volume << " " << waves << " " << splits << std::endl;
-        if (cost < std::get<0>(best)) {
-            best = std::tie(cost, volume, waves, splits);
-        }
+
+        estimations.emplace_back(cost, volume, waves, splits);
     }
 
-    auto [cost, volume, waves, splits] = best;
+    for (auto i = (int)estimations.size() - 1; i >= 1; --i) {
+        if (std::get<0>(estimations[i]) == std::get<0>(estimations[i - 1])) {
+            std::get<0>(estimations[i]) = -1;
+        }
+    }
+    estimations.erase(
+        std::remove_if(estimations.begin(), estimations.end(), [](auto e) { return std::get<0>(e) == -1; }),
+        estimations.end());
 
-    std::cout << "* " << cost << " " << volume << " " << waves << " " << splits << std::endl;
+    top_k = std::min<int>(top_k, estimations.size());
 
-    return {splits, cost};
+    std::vector<int> idxs(estimations.size());
+    std::iota(idxs.begin(), idxs.end(), 0);
+
+    std::partial_sort(idxs.begin(), idxs.begin() + top_k, idxs.end(), [&](int i, int j) {  //
+        return estimations[i] < estimations[j];
+    });
+
+    std::vector<std::pair<int, int64_t>> ret;
+    ret.reserve(top_k);
+
+    for (int i = 0; i < top_k; ++i) {
+        auto& [cost, volume, waves, splits] = estimations[idxs[i]];
+        if (i == 0) {
+            std::cout << "* " << cost << " " << volume << " " << waves << " " << splits << std::endl;
+        }
+        ret.emplace_back(splits, cost);
+    }
+
+    return ret;
 }
 
 bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
@@ -99,12 +126,14 @@ std::string Kernel::GetName() const
 {
     std::stringstream ss;
 
-    ss << "gemm_"                                                                        //
-       << to_string(desc_.type_a) << "_"                                                 //
-       << to_string(desc_.type_b) << "_"                                                 //
-       << to_string(desc_.type_c) << "_"                                                 //
-       << desc_.cta_tile.x << "x" << desc_.cta_tile.y << "x" << desc_.cta_tile.z << "_"  //
-       << desc_.stages;
+    ss << "gemm_"                                                                           //
+       << to_string(desc_.type_a) << "_"                                                    //
+       << to_string(desc_.type_b) << "_"                                                    //
+       << to_string(desc_.type_c) << "_"                                                    //
+       << desc_.cta_tile.x << "x" << desc_.cta_tile.y << "x" << desc_.cta_tile.z << "_"     //
+       << desc_.warp_tile.x << "x" << desc_.warp_tile.y << "x" << desc_.warp_tile.z << "_"  //
+       << desc_.stages << "_"                                                               //
+       << (desc_.align_m ? "a" : "n") << (desc_.align_n ? "a" : "n");
 
     return ss.str();
 }
