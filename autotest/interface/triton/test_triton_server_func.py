@@ -111,7 +111,7 @@ class TestTritonInterface:
         dict_info = {
             'assistant': '<|Assistant|>െ',
             'meta_instruction': 'You are an AI assistant whose name is puyu.',
-            'model_name': 'internlm2,
+            'model_name': 'internlm2',
             'session_len': 8192,
             'stop_words': []
         }
