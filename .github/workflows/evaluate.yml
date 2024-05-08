@@ -17,18 +17,23 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[internlm2_chat_7b,internlm2_chat_20b,internlm2_chat_20b_w4a16,llama2_chat_7b,qwen_chat_7b]'
+        default: '[tb_internlm2_chat_7b,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_llama2_chat_7b,tb_qwen1_5_chat_7b,tb_llama_3_8b_instruct,pt_internlm2_chat_7b,pt_internlm2_chat_20b,pt_llama2_chat_7b,pt_qwen1_5_chat_7b,pt_llama_3_8b_instruct,tb_internlm2_chat_7b_kvint4,tb_internlm2_chat_20b_kvint4,tb_qwen1_5_chat_7b_kvint4,tb_llama_3_8b_instruct_kvint4]'
+      datasets:
+        required: true
+        description: 'Tested TurboMind models list. eg. [*mmlu_datasets, *ceval_datasets, *WiC_datasets, *WSC_datasets, *triviaqa_datasets, *gsm8k_datasets, *race_datasets, *crowspairs_datasets]'
+        type: string
+        default: '[*mmlu_datasets, *gsm8k_datasets]'
       devices:
         required: true
         description: 'CUDA_VISIBLE_DEVICES.'
         type: string
         default: '0,1,2,3,4,5,6,7'
 
+
 jobs:
   evaluate:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 4320 # 72hours
-    environment: 'prod'
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
@@ -36,8 +41,8 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/resources:/root/resources
-        - /nvme/github-actions/evaluation-reports:/root/evaluation-reports
         - /nvme/github-actions/opencompass-data:/root/opencompass-data
+        - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/root/models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -62,6 +67,7 @@ jobs:
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
+          sed -i 's/https:\/\/github.com\/NVIDIA\/cutlass.git/https:\/\/521github.com\/extdomains\/github.com\/NVIDIA\/cutlass.git/g' CMakeLists.txt
           mkdir build
           cd build
           cmake .. \
@@ -102,6 +108,7 @@ jobs:
 
           python3 .github/scripts/action_tools.py evaluate \
             --models "${{github.event.inputs.models}}" \
+            --datasets "${{github.event.inputs.datasets}}" \
             --workspace /root/evaluation-reports/$TIME_STAMP
       - name: Clear workspace
         if: always()

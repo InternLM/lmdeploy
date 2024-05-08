@@ -49,7 +49,7 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron:  '00 20 * * 1-5'
+    - cron:  '00 20 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
