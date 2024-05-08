@@ -307,6 +307,18 @@ class ArgumentHelper:
         )
 
     @staticmethod
+    def calib_search_scale(parser):
+        """Add argument batch_size to parser."""
+
+        return parser.add_argument(
+            '--search-scale',
+            type=bool,
+            default=False,
+            help=\
+            'Whether search scale ratio. Default to False, which means only smooth quant with 0.5 ratio will be applied'  # noqa
+        )
+
+    @staticmethod
     def device(parser):
         """Add argument device to parser."""
 
