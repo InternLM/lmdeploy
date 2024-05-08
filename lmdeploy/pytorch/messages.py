@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 import time
-from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
@@ -198,33 +197,6 @@ class SchedulerSession:
         if self.seq_manager is not None:
             self.seq_manager.add_sequence(seq)
         return seq
-
-    def fork_sequence(
-            self,
-            seq: 'SchedulerSequence',
-            sampling_param: SamplingParam = None) -> 'SchedulerSequence':
-        """Fork a new message from exist message."""
-        if sampling_param is None:
-            sampling_param = deepcopy(seq.sampling_param)
-        assert seq.session == self
-
-        new_msg = SchedulerSequence(seq_id=_new_msg_id(),
-                                    session=self,
-                                    history_cache=seq.history_cache.clone(),
-                                    num_new_tokens=0,
-                                    sampling_param=sampling_param,
-                                    logical_blocks=seq.logical_blocks.clone(),
-                                    adapter_name=seq.adapter_name,
-                                    arrive_time=time.time(),
-                                    meta=deepcopy(seq.meta),
-                                    return_logits=seq.return_logits,
-                                    random_offsets=seq.random_offsets + 1)
-        new_msg._num_history_ids = seq._num_history_ids
-        new_msg._num_token_ids = seq._num_token_ids
-        new_msg.status = seq.status
-
-        self.sequences[new_msg.seq_id] = new_msg
-        return new_msg
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """remove sequence."""
