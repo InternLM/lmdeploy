@@ -97,3 +97,12 @@ class YiVisionModel(LlavaVisionModel):
 
         with init_yi_model(), disable_transformers_logging():
             super().build_model()
+
+    @staticmethod
+    def model_with_tokenizer(model_path: str, device='cpu'):
+        check_llava_install()
+        global _model_path
+        _model_path = model_path
+        with init_yi_model(), disable_transformers_logging():
+            outs = LlavaVisionModel.model_with_tokenizer(model_path, device)
+        return outs

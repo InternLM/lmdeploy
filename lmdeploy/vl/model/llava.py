@@ -96,12 +96,10 @@ class LlavaVisionModel(VisonModel):
         # load weight
         load_model_from_weight_files(model, self.model_path)
         model.to(self.device).eval()
-        if model.dtype != torch.float16:
-            model.half()
 
         self.model = model.model
-        self.vision_tower = model.model.vision_tower
-        self.mm_projector = model.model.mm_projector
+        self.vision_tower = model.model.vision_tower.half()
+        self.mm_projector = model.model.mm_projector.half()
 
     @staticmethod
     def model_with_tokenizer(model_path: str, device='cpu'):

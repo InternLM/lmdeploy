@@ -60,8 +60,11 @@ def vl_model_with_tokenizer(model_path: str, device: str):
     if arch == 'MultiModalityCausalLM':
         return DeepSeekVisionModel.model_with_tokenizer(model_path, device)
     if arch == 'LlavaLlamaForCausalLM':
+        projector_type = config.get('mm_projector_type', 'linear')
         mm_vision_tower = config.get('mm_vision_tower', '')
-        if 'OpenGVLab' in mm_vision_tower:
+        if '_Norm' in projector_type:
+            return YiVisionModel.model_with_tokenizer(model_path)
+        elif 'OpenGVLab' in mm_vision_tower:
             return InternVLLlavaVisionModel.model_with_tokenizer(model_path)
         else:
             return LlavaVisionModel.model_with_tokenizer(model_path, device)
