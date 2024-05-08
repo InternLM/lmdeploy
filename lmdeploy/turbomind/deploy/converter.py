@@ -21,6 +21,7 @@ special_input_model_map = {
     'baichuan': 'baichuan',
     'baichuan2': 'baichuan2',
     'internlm2': 'internlm2',
+    'xcomposer2': 'xcomposer2',
     'deepseekvl': 'deepseekvl',
     'internvl': 'internvl'
 }
@@ -106,7 +107,7 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
                 'please specify tokenizer path by --tokenizer-path')
 
     # move tokenizer model to the target path
-    candidate = ['tokenizer.model', 'qwen.tiktoken']
+    candidate = ['tokenizer.model', 'qwen.tiktoken', 'merges.txt']
     for name in candidate:
         tmp_path = osp.join(model_path, name)
         if osp.exists(tmp_path):

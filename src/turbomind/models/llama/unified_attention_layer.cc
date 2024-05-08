@@ -38,13 +38,23 @@ namespace turbomind {
 
 template<typename T>
 
-void UnifiedAttentionLayer<T>::allocateBuffer(size_t q_count, size_t k_count, size_t batch_size)
+void UnifiedAttentionLayer<T>::allocateBuffer(size_t            q_count,
+                                              size_t            k_count,
+                                              size_t            batch_size,
+                                              const WeightType* weights)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
-    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
+    if (weights->qkv.lora.r) {
+        size_t sz = sizeof(T) * q_count * (local_q_kv_head_num * size_per_head_ + weights->qkv.lora.r);
+        qkv_buf_  = (T*)allocator_->reMalloc(qkv_buf_, sz, false);
+    }
+    else {
+        qkv_buf_ =
+            (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
+    }
 
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * q_count * local_head_num_ * size_per_head_, false);
 
@@ -128,7 +138,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     /// allocate buffers
     allocateBuffer(token_num,                                           // shared
                    h_cu_k_len[batch_size] - h_cu_k_len[dc_batch_size],  // prefill
-                   batch_size);
+                   batch_size,
+                   weights);
 
     // [L, 2, H, s, D]
     const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
@@ -139,10 +150,11 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     //     Compare(attention_input, num_token * weights->qkv.input_dims, "qkv_input", kCmpRead, stream_);
     // }
 
+    int* lora_mask = inputs->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
     //////////////////////////////////////////////
     /// qkv gemm
     // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
-    linear_.forward(qkv_buf_, attention_input, token_num, weights->qkv);
+    linear_.forward(qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
 
     // if (layer_id == 0 && count == 0) {
     //     Compare(qkv_buf_, num_token * weights->qkv.output_dims, "qkv_buf", kCmpRead, stream_);
@@ -254,7 +266,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    linear_.forward(attention_out, qkv_buf_3_, token_num, weights->output);
+    linear_.forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
 
     ++count;
 

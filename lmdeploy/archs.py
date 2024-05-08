@@ -113,6 +113,10 @@ def autoget_backend_config(
 
 def check_vl_llm(config: dict) -> bool:
     """check if the model is a vl model from model config."""
+    if 'auto_map' in config:
+        for _, v in config['auto_map'].items():
+            if 'InternLMXComposer2ForCausalLM' in v:
+                return True
     arch = config['architectures'][0]
     if arch == 'LlavaLlamaForCausalLM':
         return True
@@ -120,9 +124,11 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
+    elif arch == 'InternLMXComposer2ForCausalLM':
+        return True
     elif arch == 'InternVLChatModel':
         return True
-    elif arch == 'MiniGeminiLlamaForCausalLM':
+    elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return True
     return False
 

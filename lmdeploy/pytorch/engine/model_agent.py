@@ -215,7 +215,7 @@ class ModelInputs:
                 seq_length=input_ids.new_tensor([end - start]),
                 block_offsets=block_offsets,
                 history_lengths=self.history_lengths + start,
-                max_q_seq_length=input_ids.new_tensor(end - start),
+                max_q_seq_length=end - start,
                 max_history_length=self.max_history_length + start,
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
