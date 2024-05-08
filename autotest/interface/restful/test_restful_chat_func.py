@@ -595,6 +595,79 @@ class TestRestfulInterfaceChatCompletions:
         assert output.get('code') is None
         assert 'Input should be a valid number' in str(output)
 
+    def test_ignore_eos(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_completions_v1(
+                model=MODEL_NAME,
+                messages='Hi, what is your name?',
+                ignore_eos=True,
+                max_tokens=100,
+                temperature=0.01):
+            continue
+        assert_chat_completions_batch_return(output, MODEL_NAME)
+        assert output.get('usage').get(
+            'completion_tokens') == 101 or output.get('usage').get(
+                'completion_tokens') == 100
+        assert output.get('choices')[0].get('finish_reason') == 'length'
+
+    def test_ignore_eos_streaming(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for output in api_client.chat_completions_v1(
+                model=MODEL_NAME,
+                messages='Hi, what is your name?',
+                ignore_eos=True,
+                stream=True,
+                max_tokens=100,
+                temperature=0.01):
+            outputList.append(output)
+        response = ''
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index],
+                                                  MODEL_NAME)
+            response += outputList[index].get('choices')[0].get('delta').get(
+                'content')
+        length = api_client.encode(response, add_bos=False)[1]
+        assert outputList[-1].get('choices')[0].get(
+            'finish_reason') == 'length'
+        assert length == 100 or length == 101
+
+    def test_max_tokens(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_completions_v1(
+                model=MODEL_NAME,
+                messages='Hi, pls intro yourself',
+                max_tokens=5,
+                temperature=0.01):
+            continue
+        assert_chat_completions_batch_return(output, MODEL_NAME)
+        assert output.get('choices')[0].get('finish_reason') == 'length'
+        assert output.get('usage').get('completion_tokens') == 6 or output.get(
+            'usage').get('completion_tokens') == 5
+
+    def test_max_tokens_streaming(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for output in api_client.chat_completions_v1(
+                model=MODEL_NAME,
+                messages='Hi, pls intro yourself',
+                stream=True,
+                max_tokens=5,
+                temperature=0.01):
+            outputList.append(output)
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        response = ''
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index],
+                                                  MODEL_NAME)
+            response += outputList[index].get('choices')[0].get('delta').get(
+                'content')
+        length = api_client.encode(response, add_bos=False)[1]
+        assert outputList[-1].get('choices')[0].get(
+            'finish_reason') == 'length'
+        assert length == 5 or length == 6
+
 
 @pytest.mark.order(8)
 @pytest.mark.turbomind
@@ -958,6 +1031,68 @@ class TestRestfulInterfaceChatInteractive:
         assert outputList[0].get('finish_reason') == 'length', outputList
         assert outputList[0].get('text') == ''
         assert len(outputList) == 1
+
+    def test_ignore_eos(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_interactive_v1(
+                prompt='Hi, what is your name?',
+                ignore_eos=True,
+                request_output_len=100,
+                temperature=0.01):
+            continue
+        assert_chat_interactive_batch_return(output)
+        assert output.get('tokens') == 100 or output.get('tokens') == 101
+        assert output.get('finish_reason') == 'length'
+
+    def test_ignore_eos_streaming(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for output in api_client.chat_interactive_v1(
+                prompt='Hi, what is your name?',
+                ignore_eos=True,
+                stream=True,
+                request_output_len=100,
+                temperature=0.01):
+            outputList.append(output)
+        assert_chat_interactive_stream_return(outputList[-1],
+                                              True,
+                                              index=len(outputList) - 2)
+        for index in range(0, len(outputList) - 1):
+            assert_chat_interactive_stream_return(outputList[index],
+                                                  index=index)
+        assert output.get('finish_reason') == 'length'
+        assert outputList[-1].get('tokens') == 100 or outputList[-1].get(
+            'tokens') == 101
+
+    def test_max_tokens(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_interactive_v1(
+                prompt='Hi, pls intro yourself',
+                request_output_len=5,
+                temperature=0.01):
+            continue
+        assert_chat_interactive_batch_return(output)
+        assert output.get('finish_reason') == 'length'
+        assert output.get('tokens') == 5 or output.get('tokens') == 6
+
+    def test_max_tokens_streaming(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for output in api_client.chat_interactive_v1(
+                prompt='Hi, pls intro yourself',
+                stream=True,
+                request_output_len=5,
+                temperature=0.01):
+            outputList.append(output)
+        assert_chat_interactive_stream_return(outputList[-1],
+                                              True,
+                                              index=len(outputList) - 2)
+        for index in range(0, len(outputList) - 1):
+            assert_chat_interactive_stream_return(outputList[index],
+                                                  index=index)
+        assert output.get('finish_reason') == 'length'
+        assert outputList[-1].get('tokens') == 5 or outputList[-1].get(
+            'tokens') == 6
 
     def test_input_validation(self):
         api_client = APIClient(BASE_URL)

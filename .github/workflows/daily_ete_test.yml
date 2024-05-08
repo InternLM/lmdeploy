@@ -487,8 +487,7 @@ jobs:
         if: matrix.backend == 'turbomind'
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
-          pytest autotest/interface/restful/test_restful_interface_func_turbomind.py -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_chat_testcase.py -n 20 --alluredir=allure-results
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
         run: |
@@ -499,8 +498,7 @@ jobs:
         if: matrix.backend == 'pytorch'
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
-          pytest autotest/interface/restful/test_restful_interface_func_pytorch.py -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_chat_testcase.py -n 20 --alluredir=allure-results
       - name: Kill api server
         if: always()
         run: |
