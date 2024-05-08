@@ -418,6 +418,8 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
         }
     }
 
+    __syncthreads();
+
     // Phase 2. Replace a logit value by the penalized one.
     for (int index = threadIdx.x; index < step; index += blockDim.x) {
         // skip prompt
