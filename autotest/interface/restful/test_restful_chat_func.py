@@ -23,7 +23,6 @@ BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 @pytest.mark.turbomind
 @pytest.mark.pytorch
 @pytest.mark.chat
-@pytest.mark.completion
 @pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceBase:
 
@@ -102,7 +101,10 @@ class TestRestfulInterfaceIssue:
         for output in api_client.chat_interactive_v1(
                 prompt='Hi, pls intro yourself', top_k=-1):
             continue
-        assert_chat_interactive_batch_return(output)
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The top_k `-1` cannot be a negative integer.'
+        assert output.get('object') == 'error'
 
 
 @pytest.mark.order(8)
@@ -142,11 +144,8 @@ class TestRestfulInterfaceChatCompletions:
                 temperature=0.01):
             outputList.append(output)
 
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
 
@@ -163,11 +162,8 @@ class TestRestfulInterfaceChatCompletions:
                 temperature=0.01):
             outputList.append(output)
 
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
 
@@ -193,11 +189,8 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             outputList.append(output)
 
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
             assert ' to' not in outputList[index].get('choices')[0].get(
@@ -230,11 +223,8 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             outputList.append(output)
 
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
             assert ' is' not in outputList[index].get('choices')[0].get(
@@ -299,11 +289,8 @@ class TestRestfulInterfaceChatCompletions:
                 temperature=0.01,
                 max_tokens=200):
             outputList.append(output)
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
             response += outputList[index].get('choices')[0].get('delta').get(
@@ -333,11 +320,8 @@ class TestRestfulInterfaceChatCompletions:
                 temperature=0.01,
                 max_tokens=200):
             outputList.append(output)
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                              False, True)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
             continue
@@ -373,11 +357,9 @@ class TestRestfulInterfaceChatCompletions:
                     top_p=0.1,
                     max_tokens=10):
                 outputList.append(output)
-            assert_chat_completions_stream_return(outputList[0], MODEL_NAME,
-                                                  True, False)
             assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                                  False, True)
-            for index in range(1, len(outputList) - 1):
+                                                  True)
+            for index in range(0, len(outputList) - 1):
                 assert_chat_completions_stream_return(outputList[index],
                                                       MODEL_NAME)
                 response += outputList[index].get('choices')[0].get(
@@ -392,7 +374,7 @@ class TestRestfulInterfaceChatCompletions:
                 model='error', messages='Hi, pls intro yourself',
                 temperature=0.01):
             continue
-        assert output.get('code') == 404
+        assert output.get('code') == 400
         assert output.get('message') == 'The model `error` does not exist.'
         assert output.get('object') == 'error'
 
@@ -406,7 +388,7 @@ class TestRestfulInterfaceChatCompletions:
                 max_tokens=5,
                 temperature=0.01):
             outputList.append(output)
-        assert output.get('code') == 404
+        assert output.get('code') == 400
         assert output.get('message') == 'The model `error` does not exist.'
         assert output.get('object') == 'error'
         assert len(outputList) == 1
@@ -437,11 +419,9 @@ class TestRestfulInterfaceChatCompletions:
                     stream=True,
                     max_tokens=100):
                 outputList.append(output)
-            assert_chat_completions_stream_return(outputList[0], MODEL_NAME,
-                                                  True, False)
             assert_chat_completions_stream_return(outputList[-1], MODEL_NAME,
-                                                  False, True)
-            for index in range(1, len(outputList) - 1):
+                                                  True)
+            for index in range(0, len(outputList) - 1):
                 assert_chat_completions_stream_return(outputList[index],
                                                       MODEL_NAME)
                 response += outputList[index].get('choices')[0].get(
@@ -469,15 +449,224 @@ class TestRestfulInterfaceChatCompletions:
                 stream=True,
                 temperature=0.01):
             outputList.append(output)
-        assert_chat_completions_stream_return(outputList[0], MODEL_NAME, True,
-                                              False)
-        for index in range(1, len(outputList) - 1):
+        assert_chat_completions_stream_return(outputList[0],
+                                              MODEL_NAME,
+                                              is_last=True)
+        assert outputList[0].get('choices')[0].get('finish_reason') == 'length'
+        assert outputList[0].get('choices')[0].get('delta').get(
+            'content') == ''
+        assert len(outputList) == 1
+
+    def test_input_validation(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     top_p=0):
+            continue
+        assert output.get('code') == 400
+        assert output.get('message') == 'The top_p `0.0` must be in (0, 1].'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     top_p=1.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get('message') == 'The top_p `1.01` must be in (0, 1].'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     top_p='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid number' in str(output)
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     n=0):
+            continue
+        assert output.get('code') == 400
+        assert output.get('message') == 'The n `0` must be a positive int.'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     n='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid integer' in str(output)
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     temperature=-0.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The temperature `-0.01` must be in [0, 1]'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     temperature=1.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The temperature `1.01` must be in [0, 1]'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     temperature='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid number' in str(output)
+
+    def test_input_validation_streaming(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     stream=True,
+                                                     top_p=0):
+            continue
+        assert output.get('code') == 400
+        assert output.get('message') == 'The top_p `0.0` must be in (0, 1].'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     stream=True,
+                                                     top_p=1.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get('message') == 'The top_p `1.01` must be in (0, 1].'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     stream=True,
+                                                     top_p='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid number' in str(output)
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     stream=True,
+                                                     n=0):
+            continue
+        assert output.get('code') == 400
+        assert output.get('message') == 'The n `0` must be a positive int.'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     stream=True,
+                                                     n='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid integer' in str(output)
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     stream=True,
+                                                     temperature=-0.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The temperature `-0.01` must be in [0, 1]'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     stream=True,
+                                                     temperature=1.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The temperature `1.01` must be in [0, 1]'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_completions_v1(model=MODEL_NAME,
+                                                     messages='Hi',
+                                                     stream=True,
+                                                     temperature='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid number' in str(output)
+
+    def test_ignore_eos(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_completions_v1(
+                model=MODEL_NAME,
+                messages='Hi, what is your name?',
+                ignore_eos=True,
+                max_tokens=100,
+                temperature=0.01):
+            continue
+        assert_chat_completions_batch_return(output, MODEL_NAME)
+        assert output.get('usage').get(
+            'completion_tokens') == 101 or output.get('usage').get(
+                'completion_tokens') == 100
+        assert output.get('choices')[0].get('finish_reason') == 'length'
+
+    def test_ignore_eos_streaming(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for output in api_client.chat_completions_v1(
+                model=MODEL_NAME,
+                messages='Hi, what is your name?',
+                ignore_eos=True,
+                stream=True,
+                max_tokens=100,
+                temperature=0.01):
+            outputList.append(output)
+        response = ''
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index],
                                                   MODEL_NAME)
-        assert outputList[1].get('choices')[0].get('finish_reason') == 'length'
-        assert outputList[1].get('choices')[0].get('delta').get(
-            'content') == ''
-        assert len(outputList) == 2
+            response += outputList[index].get('choices')[0].get('delta').get(
+                'content')
+        length = api_client.encode(response, add_bos=False)[1]
+        assert outputList[-1].get('choices')[0].get(
+            'finish_reason') == 'length'
+        assert length == 100 or length == 101
+
+    def test_max_tokens(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_completions_v1(
+                model=MODEL_NAME,
+                messages='Hi, pls intro yourself',
+                max_tokens=5,
+                temperature=0.01):
+            continue
+        assert_chat_completions_batch_return(output, MODEL_NAME)
+        assert output.get('choices')[0].get('finish_reason') == 'length'
+        assert output.get('usage').get('completion_tokens') == 6 or output.get(
+            'usage').get('completion_tokens') == 5
+
+    def test_max_tokens_streaming(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for output in api_client.chat_completions_v1(
+                model=MODEL_NAME,
+                messages='Hi, pls intro yourself',
+                stream=True,
+                max_tokens=5,
+                temperature=0.01):
+            outputList.append(output)
+        assert_chat_completions_stream_return(outputList[-1], MODEL_NAME, True)
+        response = ''
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index],
+                                                  MODEL_NAME)
+            response += outputList[index].get('choices')[0].get('delta').get(
+                'content')
+        length = api_client.encode(response, add_bos=False)[1]
+        assert outputList[-1].get('choices')[0].get(
+            'finish_reason') == 'length'
+        assert length == 5 or length == 6
 
 
 @pytest.mark.order(8)
@@ -842,3 +1031,186 @@ class TestRestfulInterfaceChatInteractive:
         assert outputList[0].get('finish_reason') == 'length', outputList
         assert outputList[0].get('text') == ''
         assert len(outputList) == 1
+
+    def test_ignore_eos(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_interactive_v1(
+                prompt='Hi, what is your name?',
+                ignore_eos=True,
+                request_output_len=100,
+                temperature=0.01):
+            continue
+        assert_chat_interactive_batch_return(output)
+        assert output.get('tokens') == 100 or output.get('tokens') == 101
+        assert output.get('finish_reason') == 'length'
+
+    def test_ignore_eos_streaming(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for output in api_client.chat_interactive_v1(
+                prompt='Hi, what is your name?',
+                ignore_eos=True,
+                stream=True,
+                request_output_len=100,
+                temperature=0.01):
+            outputList.append(output)
+        assert_chat_interactive_stream_return(outputList[-1],
+                                              True,
+                                              index=len(outputList) - 2)
+        for index in range(0, len(outputList) - 1):
+            assert_chat_interactive_stream_return(outputList[index],
+                                                  index=index)
+        assert output.get('finish_reason') == 'length'
+        assert outputList[-1].get('tokens') == 100 or outputList[-1].get(
+            'tokens') == 101
+
+    def test_max_tokens(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_interactive_v1(
+                prompt='Hi, pls intro yourself',
+                request_output_len=5,
+                temperature=0.01):
+            continue
+        assert_chat_interactive_batch_return(output)
+        assert output.get('finish_reason') == 'length'
+        assert output.get('tokens') == 5 or output.get('tokens') == 6
+
+    def test_max_tokens_streaming(self):
+        api_client = APIClient(BASE_URL)
+        outputList = []
+        for output in api_client.chat_interactive_v1(
+                prompt='Hi, pls intro yourself',
+                stream=True,
+                request_output_len=5,
+                temperature=0.01):
+            outputList.append(output)
+        assert_chat_interactive_stream_return(outputList[-1],
+                                              True,
+                                              index=len(outputList) - 2)
+        for index in range(0, len(outputList) - 1):
+            assert_chat_interactive_stream_return(outputList[index],
+                                                  index=index)
+        assert output.get('finish_reason') == 'length'
+        assert outputList[-1].get('tokens') == 5 or outputList[-1].get(
+            'tokens') == 6
+
+    def test_input_validation(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_interactive_v1(prompt='Hi', top_p=0):
+            continue
+        assert output.get('code') == 400
+        assert output.get('message') == 'The top_p `0.0` must be in (0, 1].'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_interactive_v1(prompt='Hi', top_p=1.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get('message') == 'The top_p `1.01` must be in (0, 1].'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     top_p='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid number' in str(output)
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     temperature=-0.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The temperature `-0.01` must be in [0, 1]'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     temperature=1.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The temperature `1.01` must be in [0, 1]'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     temperature='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid number' in str(output)
+
+        for output in api_client.chat_interactive_v1(prompt='Hi', top_k=-1):
+            continue
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The top_k `-1` cannot be a negative integer.'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     top_k='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid integer' in str(output)
+
+    def test_input_validation_streaming(self):
+        api_client = APIClient(BASE_URL)
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     stream=True,
+                                                     top_p=0):
+            continue
+        assert output.get('code') == 400
+        assert output.get('message') == 'The top_p `0.0` must be in (0, 1].'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     stream=True,
+                                                     top_p=1.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get('message') == 'The top_p `1.01` must be in (0, 1].'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     stream=True,
+                                                     top_p='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid number' in str(output)
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     stream=True,
+                                                     temperature=-0.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The temperature `-0.01` must be in [0, 1]'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     stream=True,
+                                                     temperature=1.01):
+            continue
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The temperature `1.01` must be in [0, 1]'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     stream=True,
+                                                     temperature='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid number' in str(output)
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     stream=True,
+                                                     top_k=-1):
+            continue
+        assert output.get('code') == 400
+        assert output.get(
+            'message') == 'The top_k `-1` cannot be a negative integer.'
+        assert output.get('object') == 'error'
+
+        for output in api_client.chat_interactive_v1(prompt='Hi',
+                                                     stream=True,
+                                                     top_k='test'):
+            continue
+        assert output.get('code') is None
+        assert 'Input should be a valid integer' in str(output)

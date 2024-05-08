@@ -483,12 +483,6 @@ jobs:
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-chat-20b --tp 2 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
-      - name: Test lmdeploy restful api turbomind
-        if: matrix.backend == 'turbomind'
-        timeout-minutes: 40
-        run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
-          pytest autotest/interface/restful/test_restful_interface_func_turbomind.py -n 20 --alluredir=allure-results
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
         run: |
@@ -496,11 +490,9 @@ jobs:
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api pytorch
-        if: matrix.backend == 'pytorch'
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
-          pytest autotest/interface/restful/test_restful_interface_func_pytorch.py -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 --alluredir=allure-results
       - name: Kill api server
         if: always()
         run: |
@@ -511,11 +503,6 @@ jobs:
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
-      - name: Test lmdeploy restful api turbomind - base
-        if: matrix.backend == 'turbomind'
-        timeout-minutes: 40
-        run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=allure-results
       - name: Start restful api pytorch - base
         if: matrix.backend == 'pytorch'
         run: |
@@ -523,7 +510,6 @@ jobs:
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api pytorch - base
-        if: matrix.backend == 'pytorch'
         timeout-minutes: 40
         run: |
           pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=allure-results
