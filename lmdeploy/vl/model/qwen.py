@@ -35,6 +35,17 @@ class QwenVisionModel(VisonModel):
         self.model = model.transformer.visual
         self.model.to(self.device).eval().half()
 
+    @staticmethod
+    def model_with_tokenizer(model_path: str, device='cpu'):
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path, trust_remote_code=True,
+            device_map=device).half().eval()
+        # model.config.use_cache = False
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_path,
+                                                  trust_remote_code=True)
+        return model, model, tokenizer
+
     @torch.no_grad()
     def forward(self, images: List[Image]) -> List[torch.Tensor]:
         """forward."""

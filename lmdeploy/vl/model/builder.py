@@ -51,6 +51,8 @@ def vl_model_with_tokenizer(model_path: str, device: str):
         model_path = get_model(model_path)
     config = get_hf_config_content(model_path)
     arch = config['architectures'][0]
+    if arch == 'QWenLMHeadModel':
+        return QwenVisionModel.model_with_tokenizer(model_path)
     if 'auto_map' in config:
         for _, v in config['auto_map'].items():
             if 'InternLMXComposer2ForCausalLM' in v:
