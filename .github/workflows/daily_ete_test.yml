@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath'
       tools_regression:
         required: true
         description: 'Whether start a tool regression'
@@ -49,12 +49,13 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron:  '00 21 * * *'
+    - cron:  '00 20 * * 1-5'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
+  TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
 
 
 jobs:
@@ -101,12 +102,17 @@ jobs:
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /root/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
+        - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
+        - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
+        - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
@@ -119,7 +125,7 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/* .
+        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -128,13 +134,13 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.2.1 torchvision==0.17.1 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai'}}
+          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath'}}
           # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
@@ -151,6 +157,7 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
+          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -233,7 +240,7 @@ jobs:
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'interface-pipeline'))
         run: |
-          pytest autotest/interface/pipeline -m 'not pr_test' -s -vv --alluredir=allure-results
+          pytest autotest/interface/pipeline -m 'not pr_test' --alluredir=allure-results
       - name: Test lmdeploy - local testcase
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
         run: |
@@ -446,7 +453,7 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/* .
+        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -455,13 +462,13 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.2.1 torchvision==0.17.1 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai'}}
+          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath'}}
           # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
