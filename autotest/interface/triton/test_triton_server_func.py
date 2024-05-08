@@ -37,7 +37,7 @@ class TestTritonInterface:
             'assistant': '<|Assistant|>െ',
             'meta_instruction':
             'You are an AI assistant whose name is InternLM (书生·浦语).',
-            'model_name': 'puyu',
+            'model_name': 'internlm2',
             'session_len': 8192,
             'stop_words': [' city']
         }
@@ -55,7 +55,7 @@ class TestTritonInterface:
             'assistant': '<|Assistant|>െ',
             'meta_instruction':
             'You are an AI assistant whose name is InternLM (书生·浦语).',
-            'model_name': 'puyu',
+            'model_name': 'internlm2',
             'session_len': 8192,
             'stop_words': [' Shanghai', ' city', ' China']
         }
@@ -75,7 +75,7 @@ class TestTritonInterface:
             'assistant': '<|Assistant|>െ',
             'meta_instruction':
             'You are an AI assistant whose name is InternLM (书生·浦语).',
-            'model_name': 'puyu',
+            'model_name': 'internlm2',
             'session_len': 120,
             'stop_words': [],
             'system': '<|System|>െ',
@@ -93,7 +93,7 @@ class TestTritonInterface:
         dict_info = {
             'assistant': '<|Assistant|>െ',
             'meta_instruction': 'You are an AI assistant whose name is puyu.',
-            'model_name': 'puyu',
+            'model_name': 'internlm2',
             'session_len': 8192,
             'stop_words': []
         }
@@ -111,7 +111,7 @@ class TestTritonInterface:
         dict_info = {
             'assistant': '<|Assistant|>െ',
             'meta_instruction': 'You are an AI assistant whose name is puyu.',
-            'model_name': 'puyu',
+            'model_name': 'internlm2,
             'session_len': 8192,
             'stop_words': []
         }
@@ -136,7 +136,7 @@ class TestTritonInterface:
         dict_info = {
             'assistant': '<|Assistant|>െ',
             'meta_instruction': 'You are an AI assistant whose name is puyu.',
-            'model_name': 'puyu',
+            'model_name': 'internlm2',
             'session_len': 8192,
             'stop_words': []
         }
