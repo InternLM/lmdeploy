@@ -21,6 +21,7 @@ LAYER_TYPE_MAP = {
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
     'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
+    'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
 }
 
 NORM_TYPE_MAP = {
@@ -32,6 +33,7 @@ NORM_TYPE_MAP = {
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
     'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
+    'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
 }
 
 HEAD_NAME_MAP = {
@@ -43,6 +45,7 @@ HEAD_NAME_MAP = {
     'BaichuanForCausalLM': 'lm_head',  # Baichuan2 7B
     'LlamaForCausalLM': 'lm_head',
     'LlavaLlamaForCausalLM': 'lm_head',
+    'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
 }
 
 

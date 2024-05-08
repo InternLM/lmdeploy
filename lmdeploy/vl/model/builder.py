@@ -68,4 +68,6 @@ def vl_model_with_tokenizer(model_path: str, device: str):
             return InternVLLlavaVisionModel.model_with_tokenizer(model_path)
         else:
             return LlavaVisionModel.model_with_tokenizer(model_path, device)
+    if arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
+        return MiniGeminiVisionModel.model_with_tokenizer(model_path, device)
     raise ValueError(f'unsupported vl model with arch {arch}')

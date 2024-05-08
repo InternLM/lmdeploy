@@ -193,7 +193,10 @@ class MiniGeminiVisionModel(VisonModel):
             vision_tower_aux.is_loaded = False
             vision_tower_aux.load_model()
         load_model_from_weight_files(model, self.model_path)
-        model.to(self.device).eval().half()
+        model.to(self.device).eval()
+        model.model.vision_tower.half()
+        model.model.vision_tower_aux.half()
+
         setattr(model.config, 'model_path', self.model_path)
         model.get_model().initialize_uni_modules(model.config, for_eval=True)
 
@@ -209,6 +212,20 @@ class MiniGeminiVisionModel(VisonModel):
             image_processor.size['shortest_edge'] = model.config.image_size_aux
         self.image_processor = image_processor
         self.process_images = process_images
+
+    @staticmethod
+    def model_with_tokenizer(model_path: str, device='cpu'):
+        check_mini_gemini_install()
+        from mgm.model import MGMLlamaForCausalLM
+        with init_mini_gemini_model(), disable_transformers_logging(
+        ), hack_import_with(['deepspeed']):
+            warnings.simplefilter('ignore')
+            model = MGMLlamaForCausalLM.from_pretrained(
+                model_path, device_map=device).half().eval()
+        model.config.use_cache = False
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        return model, model, tokenizer
 
     @torch.no_grad()
     def forward(self, images: List[Image]) -> List[torch.Tensor]:

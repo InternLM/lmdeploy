@@ -22,6 +22,7 @@ LAYER_TYPE_MAP = {
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
     'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
+    'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
@@ -32,16 +33,16 @@ NORM_TYPE_MAP = {
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
     'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
+    'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
 }
 
 
 def save_vl_model(vl_model, model_path, dst_path):
-    if type(vl_model).__name__ == 'MultiModalityCausalLM':  # deepseek vl
-        candidate = ['preprocessor_config.json', 'processor_config.json']
-        for name in candidate:  # TODO not only local but also remote path
-            tmp_path = osp.join(model_path, name)
-            if osp.exists(tmp_path):
-                shutil.copy(tmp_path, osp.join(dst_path, name))
+    candidate = ['preprocessor_config.json', 'processor_config.json', 'vit']
+    for name in candidate:  # TODO not only local but also remote path
+        tmp_path = osp.join(model_path, name)
+        if osp.exists(tmp_path):
+            shutil.copy(tmp_path, osp.join(dst_path, name))
     vl_model.save_pretrained(dst_path,
                              max_shard_size='2GB',
                              safe_serialization=False)
