@@ -448,7 +448,7 @@ class AWQCalibrationContext(CalibrationContext):
         def _input_hook(mod: nn.Module, inp: torch.Tensor):
             m_name = self.mod2name[mod]
             obs = ActivationObserver.find(m_name, group=self.inp_obs_group)
-            obs.observe(inp[0])
+            obs.observe(inp[0], self.search_scale)
 
         group = ActivationObserver.find_group(self.inp_obs_group)
         for name in group.keys():

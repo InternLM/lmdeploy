@@ -81,7 +81,7 @@ class ActivationObserver(GlobalAvailMixin):
         self.num_ratio_tracked = 0
 
     @torch.no_grad()
-    def observe(self, x: torch.Tensor) -> None:
+    def observe(self, x: torch.Tensor, save_input: bool = False) -> None:
         """Function to observe the input tensor and update the max, min, mean,
         absolute max, absolute mean values and number of batches tracked.
 
@@ -102,7 +102,8 @@ class ActivationObserver(GlobalAvailMixin):
         self.max_val = torch.maximum(self.max_val, cur_max)
         self.min_val = torch.minimum(self.min_val, cur_min)
         self.absmax_val = torch.maximum(self.absmax_val, cur_absmax)
-        self.value = x
+        if save_input:
+            self.value = x
 
         # Update mean and absmean value with accumulated sum divided
         # by total number of batches
