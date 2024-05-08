@@ -150,7 +150,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
             continue
         logging.info(f'Start evaluating {target_model} ...\\nn{model_cfg}\n\n')
         with open(config_path_new, 'a') as f:
-            # f.write(f'\ndatasets = {datasets}\n')
+            f.write(f'\ndatasets = {datasets}\n')
             f.write(f'\nmodels = [ {target_model} ]\n')
 
         work_dir = os.path.join(workspace, target_model)

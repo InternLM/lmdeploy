@@ -4,26 +4,24 @@ from opencompass.models import (HuggingFaceCausalLM, LmdeployPytorchModel,
 
 with read_base():
     # choose a list of datasets
-    # from .datasets.ceval.ceval_gen_5f30c7 import \
-    #     ceval_datasets  # noqa: F401, E501
-    # from .datasets.crowspairs.crowspairs_gen_381af0 import \
-    #     crowspairs_datasets  # noqa: F401, E501
+    from .datasets.ceval.ceval_gen_5f30c7 import \
+        ceval_datasets  # noqa: F401, E501
+    from .datasets.crowspairs.crowspairs_gen_381af0 import \
+        crowspairs_datasets  # noqa: F401, E501
     from .datasets.gsm8k.gsm8k_gen_1d7fe4 import \
         gsm8k_datasets  # noqa: F401, E501
     from .datasets.mmlu.mmlu_gen_a484b3 import \
         mmlu_datasets  # noqa: F401, E501
-    # from .datasets.race.race_gen_69ee4f import \
-    #     race_datasets  # noqa: F401, E501
-    # from .datasets.SuperGLUE_WiC.SuperGLUE_WiC_gen_d06864 import \
-    #     WiC_datasets  # noqa: F401, E501
-    # from .datasets.SuperGLUE_WSC.SuperGLUE_WSC_gen_7902a7 import \
-    #     WSC_datasets  # noqa: F401, E501
-    # from .datasets.triviaqa.triviaqa_gen_2121ce import \
-    #     triviaqa_datasets  # noqa: F401, E501
+    from .datasets.race.race_gen_69ee4f import \
+        race_datasets  # noqa: F401, E501
+    from .datasets.SuperGLUE_WiC.SuperGLUE_WiC_gen_d06864 import \
+        WiC_datasets  # noqa: F401, E501
+    from .datasets.SuperGLUE_WSC.SuperGLUE_WSC_gen_7902a7 import \
+        WSC_datasets  # noqa: F401, E501
+    from .datasets.triviaqa.triviaqa_gen_2121ce import \
+        triviaqa_datasets  # noqa: F401, E501
     # and output the results in a chosen format
     from .summarizers.medium import summarizer  # noqa: F401, E501
-
-datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), [])
 
 internlm_meta_template = dict(round=[
     dict(role='HUMAN', begin='<|User|>:', end='\n'),
@@ -194,12 +192,12 @@ tb_kvint4_engine_config_template_max_bs_128_tp2 = dict(
 gen_config_template = dict(top_k=1,
                            top_p=0.8,
                            temperature=1.0,
-                           MAX_NEW_TOKENS=MAX_NEW_TOKENS)
+                           max_new_tokens=MAX_NEW_TOKENS)
 qwen_gen_config_template = dict(top_k=1,
                                 top_p=0.8,
                                 temperature=1.0,
                                 stop_words=[151645],
-                                MAX_NEW_TOKENS=MAX_NEW_TOKENS)
+                                max_new_tokens=MAX_NEW_TOKENS)
 
 tokenizer_kwargs_template = dict(padding_side='left',
                                  truncation_side='left',
