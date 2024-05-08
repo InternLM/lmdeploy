@@ -11,14 +11,14 @@ from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                ResponseType)
 from lmdeploy.utils import get_logger, get_model, logging_timer
 
-from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
+from ..adapter.adapter import AdapterManager, SchedulerAdapter
 from ..check_env import check_adapters, check_env, check_model
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
-from .model_agent import AutoModelAgent, ModelInputs
+from .model_agent import AdapterInfo, AutoModelAgent, ModelInputs
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -59,9 +59,9 @@ def _paging_adapters(adapters: dict, model_agent: AutoModelAgent,
                      scheduler: Scheduler):
     adapters = adapters or dict()
     weight_maps = []
-    for name, path in adapters.items():
-        weight_map = scheduler.add_adapter(path, name)
-        weight_map.block_table = torch.tensor(weight_map.block_table)
+    for name in adapters:
+        weight_map = scheduler.add_adapter(name)
+        weight_map.rank_offset = torch.tensor(weight_map.rank_offset)
         weight_maps.append(weight_map)
     model_agent.paging_adapters(weight_maps)
 
@@ -124,7 +124,9 @@ class Engine:
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
             cache_max_entry_count=engine_config.cache_max_entry_count,
-            max_prefill_token_num=engine_config.max_prefill_token_num)
+            max_prefill_token_num=engine_config.max_prefill_token_num,
+            enable_prefix_caching=engine_config.enable_prefix_caching,
+        )
 
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,
@@ -140,7 +142,9 @@ class Engine:
             tp=tp)
 
         cache_config = self.model_agent.cache_config
-        self.scheduler = Scheduler(scheduler_config, cache_config)
+        self.adapter_manager = self._build_adapter_manager(adapters)
+        self.scheduler = Scheduler(scheduler_config, cache_config,
+                                   self.adapter_manager)
 
         if adapters:
             _paging_adapters(adapters,
@@ -203,6 +207,14 @@ class Engine:
 
         # buffers to create inputs
         self._seq_length_buf = torch.ones(max_batches, dtype=torch.long)
+
+    def _build_adapter_manager(self, adapters):
+        if adapters is not None and len(adapters) > 0:
+            linear_info = self.model_agent.get_loralinear_info()
+        else:
+            linear_info = dict()
+        block_numel = self.model_agent.get_block_numel()
+        return AdapterManager(linear_info, block_numel)
 
     def _bind_request_manager(self):
         """bind request manager."""
@@ -331,8 +343,8 @@ class Engine:
         return self.tp
 
     @logging_timer('CreateModelInputs', logger)
-    @torch.inference_mode()
-    def create_model_inputs(self, messages: SeqList, adapters: AdapterList):
+    def create_model_inputs(self, messages: SeqList, adapters: AdapterList,
+                            is_prefill: bool):
         """create model inputs from messages.
 
         Args:
@@ -368,8 +380,7 @@ class Engine:
         batch_size = len(messages)
         input_ids = torch.from_numpy(np.concatenate(token_ids))
 
-        is_decoding = input_ids.size(0) == batch_size
-
+        is_decoding = not is_prefill
         if not is_decoding:
             seq_length = [len(tokens) for tokens in token_ids]
             seq_length = torch.tensor(seq_length, dtype=torch.long)
@@ -384,18 +395,11 @@ class Engine:
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
         local_adapter_ids = None
-        global_adapter_ids = None
-        adapter_offsets = None
-        max_rank = 0
-        if ADAPTER_MANAGER.num_adapters() > 1:
+        adapter_info = None
+        if self.adapter_manager.num_adapters() > 1:
             local_adapter_ids = _get_adapter_ids(messages, adapters)
             local_adapter_ids = seq_length.new_tensor(local_adapter_ids)
-            adapter_offsets = self.scheduler.get_block_tables(adapters)
-            adapter_offsets = _tensorlize_block_offsets(adapter_offsets)
-            global_adapter_ids = [ada.idx for ada in adapters]
-            global_adapter_ids = seq_length.new_tensor(global_adapter_ids)
-            ranks = [ada.rank for ada in adapters]
-            max_rank = max(ranks)
+            adapter_info = AdapterInfo.from_adapters(adapters)
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
@@ -417,30 +421,25 @@ class Engine:
             is_decoding=is_decoding,
             num_ignored_history=num_ignored_history,
             local_adapter_ids=local_adapter_ids,
-            global_adapter_ids=global_adapter_ids,
-            adapter_offsets=adapter_offsets,
-            max_rank=max_rank,
+            adapter_info=adapter_info,
             meta=meta)
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,
                                  stop_words: torch.Tensor,
                                  num_appendable_ids: torch.Tensor):
         """batched stopping criteria."""
-        with torch.inference_mode(), torch.cuda.stream(self.stream):
-            num_appendable_ids = num_appendable_ids - 1
-            stopped = num_appendable_ids <= 0
-            if stop_words is not None:
-                sw_stopped = (token_ids[:, None] == stop_words).any(1)
-                stopped = stopped | sw_stopped
-        self.stream.synchronize()
+        num_appendable_ids = num_appendable_ids - 1
+        stopped = num_appendable_ids <= 0
+        if stop_words is not None:
+            sw_stopped = (token_ids[:, None] == stop_words).any(1)
+            stopped = stopped | sw_stopped
         return stopped, num_appendable_ids
 
     @logging_timer('SamplingLogits', logger)
-    async def async_sampling_logits(self, logits: torch.Tensor,
-                                    history_ids: torch.Tensor,
-                                    sampling_inputs: SamplingInputs,
-                                    inputs: ModelInputs,
-                                    ignore_eos: torch.Tensor):
+    def async_sampling_logits(self, logits: torch.Tensor,
+                              history_ids: torch.Tensor,
+                              sampling_inputs: SamplingInputs,
+                              inputs: ModelInputs, ignore_eos: torch.Tensor):
         """sampling logits."""
 
         def __get_last_logits():
@@ -454,10 +453,8 @@ class Engine:
 
         split_logits = __get_last_logits().cuda()
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos)
-        with torch.inference_mode(), torch.cuda.stream(self.stream):
-            logits = logits_processor(history_ids, split_logits)
-            next_token_ids = logits_processor.sampling(logits)
-        self.stream.synchronize()
+        logits = logits_processor(history_ids, split_logits)
+        next_token_ids = logits_processor.sampling(logits)
         next_token_ids = next_token_ids
 
         return next_token_ids
@@ -547,7 +544,6 @@ class Engine:
         else:
             return await __long_context_single_forward(inputs)
 
-    @torch.inference_mode()
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor,
                             logits: torch.Tensor, stopped: torch.Tensor):
         """make infer output."""
@@ -594,7 +590,6 @@ class Engine:
                 outputs[session_id].logits = logits[start:start + seqlen]
         return outputs
 
-    @torch.inference_mode()
     async def _async_step_background(
             self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
             history_ids: torch.Tensor, sampling_inputs: SamplingInputs,
@@ -628,22 +623,21 @@ class Engine:
 
         for idx in range(loop_count):
             # inference
-            with torch.inference_mode():
-                output = await self._async_model_forward(
-                    inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
-                logits = output['logits']
-                logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
+            output = await self._async_model_forward(inputs,
+                                                     swap_in_map=swap_in_map,
+                                                     swap_out_map=swap_out_map)
+            logits = output['logits']
+            logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
-                # sampling
-                next_token_ids = await self.async_sampling_logits(
-                    logits, history_ids, sampling_inputs, inputs,
-                    num_ignore_eos > 0)
-                num_ignore_eos = num_ignore_eos - 1
+            # sampling
+            next_token_ids = self.async_sampling_logits(
+                logits, history_ids, sampling_inputs, inputs,
+                num_ignore_eos > 0)
+            num_ignore_eos = num_ignore_eos - 1
 
-                # stopping criteria
-                stopped, num_appendable_ids = self._batch_stopping_criteria(
-                    next_token_ids, sampling_inputs.stop_words,
-                    num_appendable_ids)
+            # stopping criteria
+            stopped, num_appendable_ids = self._batch_stopping_criteria(
+                next_token_ids, sampling_inputs.stop_words, num_appendable_ids)
 
             # send output
             stopped = stopped.cpu()
@@ -660,6 +654,7 @@ class Engine:
                 swap_out_map = dict()
                 __update_inputs(next_token_ids)
 
+    @torch.inference_mode()
     async def _async_loop_background(self, in_que: asyncio.Queue,
                                      out_que: asyncio.Queue):
         """async loop background."""
@@ -709,7 +704,8 @@ class Engine:
                     raise NoRunningSeqs()
 
                 # create inputs
-                inputs = self.create_model_inputs(running, adapters)
+                inputs = self.create_model_inputs(running, adapters,
+                                                  is_prefill)
                 sampling_inputs = SamplingInputs.from_sampling_params(running)
                 history_ids = __gather_history(running, sampling_inputs)
                 num_appendable_ids = __get_num_appendable_ids(running)
@@ -717,21 +713,24 @@ class Engine:
 
                 self._running = running
                 self._inputs = inputs
-                await self._async_step_background(
-                    inputs=inputs,
-                    swap_in_map=schedule_output.swap_in_map,
-                    swap_out_map=schedule_output.swap_out_map,
-                    history_ids=history_ids,
-                    sampling_inputs=sampling_inputs,
-                    num_appendable_ids=num_appendable_ids,
-                    num_ignore_eos=num_ignore_eos,
-                    output_que=out_que,
-                )
+
+                with torch.cuda.stream(self.stream):
+                    await self._async_step_background(
+                        inputs=inputs,
+                        swap_in_map=schedule_output.swap_in_map,
+                        swap_out_map=schedule_output.swap_out_map,
+                        history_ids=history_ids,
+                        sampling_inputs=sampling_inputs,
+                        num_appendable_ids=num_appendable_ids,
+                        num_ignore_eos=num_ignore_eos,
+                        output_que=out_que,
+                    )
             except Exception as e:
                 out_que.put_nowait((True, e))
             finally:
                 in_que.task_done()
 
+    @torch.inference_mode()
     async def async_loop(self):
         """Main loop of the engine.
 

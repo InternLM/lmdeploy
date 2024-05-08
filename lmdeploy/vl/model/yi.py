@@ -1,11 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 from contextlib import contextmanager
-from typing import MutableSequence
 
 import torch.nn as nn
 
 from lmdeploy.vl.model.llava import LlavaVisionModel, check_llava_install
+
+from .utils import disable_transformers_logging, rewrite_ctx
 
 _model_path = None
 
@@ -68,43 +69,15 @@ def _build_vision_tower(vision_tower_cfg, **kwargs):
     raise ValueError(f'Unknown vision tower: {vision_tower}')
 
 
-def _set_function(old_func, new_func):
-    import gc
-    refs = gc.get_referrers(old_func)
-    obj_id = id(old_func)
-    for ref in refs:
-        if isinstance(ref, dict):
-            for x, y in ref.items():
-                if id(y) == obj_id:
-                    ref[x] = new_func
-        elif isinstance(ref, MutableSequence):
-            for i, v in enumerate(ref):
-                if id(v) == obj_id:
-                    ref[i] = new_func
-
-
 @contextmanager
 def init_yi_model():
-    import llava  # noqa: F401
-    old_projector = eval(
-        'llava.model.multimodal_projector.builder.build_vision_projector')
-    _set_function(old_projector, _build_vision_projector)
-    old_vision_tower = eval(
-        'llava.model.multimodal_encoder.builder.build_vision_tower')
-    _set_function(old_vision_tower, _build_vision_tower)
-    yield
-    _set_function(_build_vision_projector, old_projector)
-    _set_function(_build_vision_tower, old_vision_tower)
-
-
-@contextmanager
-def disable_transformers_logging():
-    import transformers
-    from transformers.utils import logging
-    previous_level = logging.get_verbosity()
-    logging.set_verbosity(transformers.logging.ERROR)
-    yield
-    logging.set_verbosity(previous_level)
+    origin_func_path = [
+        'llava.model.multimodal_projector.builder.build_vision_projector',
+        'llava.model.multimodal_encoder.builder.build_vision_tower'
+    ]
+    rewrite_func = [_build_vision_projector, _build_vision_tower]
+    with rewrite_ctx(origin_func_path, rewrite_func):
+        yield
 
 
 class YiVisionModel(LlavaVisionModel):

@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -34,6 +34,7 @@ class GenerationConfig:
             ignoring the number of tokens in the prompt.
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
+        logprobs (int): Number of log probabilities to return per output token.
     """
 
     n: int = 1
@@ -48,6 +49,7 @@ class GenerationConfig:
     bad_words: List[str] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
+    logprobs: int = None
 
 
 @dataclass
@@ -86,6 +88,7 @@ class EngineGenerationConfig(GenerationConfig):
 
         return EngineGenerationConfig(
             n=gen_config.n,
+            logprobs=gen_config.logprobs,
             max_new_tokens=gen_config.max_new_tokens,
             min_new_tokens=gen_config.min_new_tokens,
             top_p=gen_config.top_p,
@@ -97,6 +100,14 @@ class EngineGenerationConfig(GenerationConfig):
             skip_special_tokens=gen_config.skip_special_tokens,
             stop_words=special_word_token_ids(gen_config.stop_words),
             bad_words=special_word_token_ids(gen_config.bad_words))
+
+    def __post_init__(self):
+        """Check input validation."""
+        assert type(
+            self.n) == int and self.n > 0, 'n is not a positive integer'
+        assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
+        assert self.top_k >= 0, 'top_k can not be a negative integer'
+        assert self.temperature >= 0 and self.temperature <= 1  # [0,1]
 
 
 @pydantic_dataclass
@@ -119,6 +130,8 @@ class TurbomindEngineConfig:
         download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
         revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
         max_prefill_token_num(int): the number of tokens each iteration during prefill, default to 8192
+        num_tokens_per_iter(int): the number of tokens processed in each forward pass. Working with `max_prefill_iters` enables "Dynamic SplitFuse"-like scheduling
+        max_prefill_iters(int): the max number of forward pass during prefill stage
     """  # noqa: E501
 
     model_name: Optional[str] = None
@@ -134,6 +147,18 @@ class TurbomindEngineConfig:
     download_dir: Optional[str] = None
     revision: Optional[str] = None
     max_prefill_token_num: int = 8192
+    num_tokens_per_iter: int = 0
+    max_prefill_iters: int = 1
+
+    def __post_init__(self):
+        """Check input validation."""
+        assert self.tp >= 1, 'tp must be a positive integer'
+        assert self.max_batch_size >= 1, 'max_batch_size must be a positive integer'  # noqa
+        assert self.cache_max_entry_count > 0 and self.cache_max_entry_count < 1, 'invalid cache_max_entry_count'  # noqa
+        assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
+        assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
+        assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
+        assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
 
 
 @dataclass
@@ -161,6 +186,7 @@ class PytorchEngineConfig:
         adapters (dict): The path configs to lora adapters.
         max_prefill_token_num (int): tokens per iteration.
         thread_safe (bool): thread safe engine instance.
+        enable_prefix_caching (bool): Enable token match and sharing caches.
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
         revision (str): The specific model version to use.
@@ -180,8 +206,20 @@ class PytorchEngineConfig:
     adapters: Dict[str, str] = None
     max_prefill_token_num: int = 4096
     thread_safe: bool = False
+    enable_prefix_caching: bool = False
     download_dir: str = None
     revision: str = None
+
+    def __post_init__(self):
+        """Check input validation."""
+        assert self.tp >= 1, 'invalid tp'
+        assert self.max_batch_size >= 1, 'invalid max_batch_size'
+        assert self.cache_max_entry_count > 0 and self.cache_max_entry_count < 1, 'invalid cache_max_entry_count'  # noqa
+        assert self.eviction_type in ('recompute',
+                                      'copy'), 'invalid eviction_type'
+        assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
+        assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
+        assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
 
 
 class ResponseType(enum.Enum):
@@ -212,9 +250,32 @@ class Response:
             generating tokens. This will be 'stop' if the model hit a natural
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
+        token_ids: (List[int]): the output token ids.
+        logprobs: (List[Dict[int, float]]): the top logprobs for each output
+            position.
     """
     text: str
     generate_token_len: int
     input_token_len: int
     session_id: int
     finish_reason: Optional[Literal['stop', 'length']] = None
+    token_ids: List[int] = field(default_factory=list)
+    logprobs: List[Dict[int, float]] = None
+
+
+@dataclass
+class EngineOutput:
+    """Engine output for turbomind/pytorch engine.
+
+    Args:
+        status (ResponseType): the response type.
+        token_ids (List[int]): the output token ids.
+        num_token (int): the length of output token, for turbomind, num_token
+            may not equal to the length of token_ids
+        logprobs (List[Dict[int, float]]): the top logprobs for each output
+            position.
+    """
+    status: ResponseType
+    token_ids: List[int]
+    num_token: int
+    logprobs: List[Dict[int, float]] = None

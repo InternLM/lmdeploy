@@ -56,6 +56,16 @@ class CacheConfig:
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 4096
+    enable_prefix_caching: bool = False
+
+    def __post_init__(self):
+        """post init."""
+        from lmdeploy.utils import get_logger
+        logger = get_logger('lmdeploy')
+        if self.window_size > 1 and self.enable_prefix_caching:
+            logger.warning(
+                'Prefix caching is not available for window attention.')
+            self.enable_prefix_caching = False
 
 
 @dataclass
@@ -194,6 +204,14 @@ class ModelConfig:
                 head_dim=head_dim,
                 vocab_size=hf_config.vocab_size)
 
+        def __build_qwen():
+            cfg = __build_default()
+            if cfg.bos_token_id is None:
+                cfg.bos_token_id = 151644
+            if cfg.eos_token_id is None:
+                cfg.eos_token_id = 151645
+            return cfg
+
         if hf_config.model_type == 'falcon':
             model_config = __build_falcon()
         elif hf_config.model_type == 'chatglm':
@@ -202,6 +220,8 @@ class ModelConfig:
             model_config = __build_gemma()
         elif hf_config.model_type == 'dbrx':
             model_config = __build_dbrx()
+        elif hf_config.model_type == 'qwen':
+            model_config = __build_qwen()
         else:
             model_config = __build_default()
 

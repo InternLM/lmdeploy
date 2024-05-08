@@ -114,7 +114,7 @@ def run_chat(model_path: str,
                                                   input_ids=input_ids,
                                                   gen_config=gen_config,
                                                   adapter_name=adapter_name):
-                status, res, tokens = outputs
+                res, tokens = outputs.token_ids, outputs.num_token
                 # decode res
                 response, state = tokenizer.detokenize_incrementally(
                     res, state)

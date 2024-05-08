@@ -25,8 +25,15 @@ SUPPORTED_ARCHS = dict(
     Qwen2ForCausalLM='qwen2',
     # llava
     LlavaLlamaForCausalLM='llama',
+    # xcomposer2
+    InternLMXComposer2ForCausalLM='xcomposer2',
+    # internvl
+    InternVLChatModel='internvl',
     # deepseek-vl
-    MultiModalityCausalLM='deepseekvl')
+    MultiModalityCausalLM='deepseekvl',
+    # mini gemini
+    MGMLlamaForCausalLM='llama',
+    MiniGeminiLlamaForCausalLM='llama')
 
 
 def get_model_arch(model_path: str):
@@ -39,6 +46,10 @@ def get_model_arch(model_path: str):
 
     if cfg.get('architectures', None):
         arch = cfg['architectures'][0]
+        if cfg.get('auto_map'):
+            for _, v in cfg['auto_map'].items():
+                if 'InternLMXComposer2ForCausalLM' in v:
+                    arch = 'InternLMXComposer2ForCausalLM'
     elif cfg.get('auto_map',
                  None) and 'AutoModelForCausalLM' in cfg['auto_map']:
         arch = cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]

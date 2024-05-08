@@ -168,10 +168,9 @@ def launch_demo(args, preprocessor, model):
                     sequence_start=sequence_start,
                     random_seed=seed,
                     step=step):
-                res, tokens = outputs[0]
+                res, tokens = outputs.token_ids, outputs.num_token
                 # decode res
-                response = model.tokenizer.decode(res.tolist(),
-                                                  offset=response_size)
+                response = model.tokenizer.decode(res, offset=response_size)
                 if response.endswith('�'):
                     continue
                 response = valid_str(response)

@@ -33,7 +33,6 @@ step_length = 1
 cache_max_entry_count = 0.5
 cache_block_seq_len = 128
 cache_chunk_size = 1
-use_context_fmha = 1
 quant_policy = 0
 max_position_embeddings = 2048
 rope_scaling_factor = 0.0
@@ -99,9 +98,14 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 - 当值为 -1 时，开辟 `cache_max_entry_count` 个 k/v cache 块
 - 当值为 0 时，时，开辟 `sqrt(cache_max_entry_count)` 个 k/v cache 块
 
-### kv int8 开关
+### kv 量化推理开关
 
-`quant_policy`是 KV-int8 推理开关。具体使用方法，请参考 [kv int8](../quantization/kv_int8.md) 部署文档
+`quant_policy`是 kv 量化和推理开关。
+
+- `quant_policy=4` 代表 4bit k/v 量化和推理
+- `quant_policy=8` 代表 8bit k/v 量化和推理
+
+具体使用方法，请参考 [kv quant](../quantization/kv_quant.md) 部署文档
 
 ### 外推能力开关
 
@@ -189,7 +193,7 @@ TurboMind 根据 `session_len`、 `cache_chunk_size` 和 `cache_max_entry_count`
 
 ### kv int8 开关
 
-当启动 8bit k/v 推理时，需要修改参数 `quant_policy` 和 `use_context_fmha`。详细内容请查阅 [kv int8](../quantization/kv_int8.md) 部署文档。
+当启动 8bit k/v 推理时，需要修改参数 `quant_policy` 和 `use_context_fmha`。详细内容请查阅 [kv int8](../quantization/kv_quant.md) 部署文档。
 
 ### 外推能力开关
 

@@ -11,7 +11,9 @@ from utils.get_run_config import get_command_with_extra, get_model_name
 
 @pytest.mark.order(5)
 @pytest.mark.convert
-@pytest.mark.parametrize('model', get_turbomind_model_list())
+@pytest.mark.parametrize('model',
+                         get_turbomind_model_list(model_type='chat_model') +
+                         get_turbomind_model_list(model_type='base_model'))
 def test_convert(config, model, worker_id):
     convert(config, model, get_cuda_prefix_by_workerid(worker_id))
 
@@ -19,10 +21,9 @@ def test_convert(config, model, worker_id):
 @pytest.mark.order(5)
 @pytest.mark.convert
 @pytest.mark.pr_test
-@pytest.mark.xdist_group(name='pr_test')
 @pytest.mark.parametrize(
     'model',
-    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-w4a16'])
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
 def test_convert_pr(config, model):
     convert(config, model, 'CUDA_VISIBLE_DEVICES=5')
 
@@ -34,10 +35,11 @@ def convert(config, model_case, cuda_prefix):
 
     model_name = get_model_name(model_case)
 
-    if 'w4' in model_case or '4bits' in model_case:
+    if 'w4' in model_case or ('4bits' in model_case
+                              or 'awq' in model_case.lower()):
         cmd = get_command_with_extra(' '.join([
             'lmdeploy convert', model_name, origin_model_path, '--dst-path',
-            dst_path, '--model-format awq --group-size 128'
+            dst_path, '--model-format awq --group-size 128 --trust-remote-code'
         ]),
                                      config,
                                      model_name,
@@ -46,7 +48,7 @@ def convert(config, model_case, cuda_prefix):
     else:
         cmd = get_command_with_extra(' '.join([
             'lmdeploy convert', model_name, origin_model_path, '--dst-path',
-            dst_path
+            dst_path, '--trust-remote-code'
         ]),
                                      config,
                                      model_name,

@@ -1,14 +1,10 @@
 import os
-import subprocess
-from time import sleep, time
 
 import allure
 import pytest
 from openai import OpenAI
-from utils.config_utils import (get_cuda_prefix_by_workerid, get_vl_model_list,
-                                get_workerid)
-from utils.get_run_config import get_command_with_extra
-from utils.run_restful_chat import health_check
+from utils.config_utils import get_vl_model_list, get_workerid
+from utils.run_restful_chat import start_restful_api, stop_restful_api
 
 from lmdeploy.serve.openai.api_client import APIClient
 
@@ -18,69 +14,14 @@ DEFAULT_PORT = 23333
 
 @pytest.fixture(scope='function', autouse=True)
 def prepare_environment(request, config, worker_id):
-    model_path = config.get('model_path')
-    log_path = config.get('log_path')
-
     param = request.param
     model = param['model']
-    cuda_prefix = param['cuda_prefix']
-    tp_num = param['tp_num']
+    model_path = config.get('model_path') + '/' + model
 
-    if cuda_prefix is None:
-        cuda_prefix = get_cuda_prefix_by_workerid(worker_id, tp_num=tp_num)
-
-    worker_num = get_workerid(worker_id)
-    if worker_num is None:
-        port = DEFAULT_PORT
-    else:
-        port = DEFAULT_PORT + worker_num
-
-    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path +
-                                 '/' + model + ' --server-port ' + str(port),
-                                 config,
-                                 model,
-                                 need_tp=True,
-                                 cuda_prefix=cuda_prefix)
-
-    if 'llava-v1.5' in model:
-        cmd += ' --model-name vicuna'
-
-    start_log = os.path.join(log_path,
-                             'start_restful_' + model.split('/')[1] + '.log')
-
-    print('reproduce command restful: ' + cmd)
-
-    with open(start_log, 'w') as f:
-        f.writelines('reproduce command restful: ' + cmd + '\n')
-
-        startRes = subprocess.Popen([cmd],
-                                    stdout=f,
-                                    stderr=f,
-                                    shell=True,
-                                    text=True,
-                                    encoding='utf-8')
-        pid = startRes.pid
-    allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
-
-    http_url = BASE_HTTP_URL + ':' + str(port)
-    start_time = int(time())
-    sleep(5)
-    for i in range(120):
-        sleep(1)
-        end_time = int(time())
-        total_time = end_time - start_time
-        result = health_check(http_url)
-        if result or total_time >= 120:
-            break
+    pid, startRes = start_restful_api(config, param, model, model_path,
+                                      'turbomind', worker_id)
     yield
-    if pid > 0:
-        kill_log = os.path.join(log_path,
-                                'kill_' + model.split('/')[1] + '.log')
-
-        with open(kill_log, 'w') as f:
-            startRes.kill()
-
-    allure.attach.file(kill_log, attachment_type=allure.attachment_type.TEXT)
+    stop_restful_api(pid, startRes, param)
 
 
 def getModelList(tp_num):
@@ -94,40 +35,44 @@ def getModelList(tp_num):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=1),
                          indirect=True)
-def test_restful_chat_tp1(worker_id):
+def test_restful_chat_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
-        run_all_step()
+        run_all_step(config)
     else:
-        run_all_step(port=DEFAULT_PORT + get_workerid(worker_id))
+        run_all_step(config, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_2
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=2),
                          indirect=True)
-def test_restful_chat_tp2(worker_id):
+def test_restful_chat_tp2(config, worker_id):
     if get_workerid(worker_id) is None:
-        run_all_step()
+        run_all_step(config)
     else:
-        run_all_step(port=DEFAULT_PORT + get_workerid(worker_id))
+        run_all_step(config, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 PIC = 'https://raw.githubusercontent.com/' + \
     'open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
 
 
-def run_all_step(port: int = DEFAULT_PORT):
+def run_all_step(config, port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
+    log_path = config.get('log_path')
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
+
+    restful_log = os.path.join(log_path,
+                               'restful_vl_' + model_name + str(port) + '.log')
+    file = open(restful_log, 'w')
+
     response = client.chat.completions.create(
         model=model_name,
         messages=[{
@@ -145,6 +90,7 @@ def run_all_step(port: int = DEFAULT_PORT):
         }],
         temperature=0.8,
         top_p=0.8)
+    file.writelines(str(response).lower() + '\n')
     assert 'tiger' in str(response).lower(), response
 
     api_client = APIClient(http_url)
@@ -165,4 +111,8 @@ def run_all_step(port: int = DEFAULT_PORT):
     for item in api_client.chat_completions_v1(model=model_name,
                                                messages=messages):
         continue
+    file.writelines(str(item) + '\n')
     assert 'tiger' in str(item).lower(), item
+
+    allure.attach.file(restful_log,
+                       attachment_type=allure.attachment_type.TEXT)

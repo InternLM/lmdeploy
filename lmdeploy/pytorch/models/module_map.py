@@ -227,6 +227,20 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxExpertGLU'
 })
 
+# starcode2
+MODULE_MAP.update({
+    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2Attention',
+    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2FlashAttention2':    # noqa: E501
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2Attention',
+    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2SdpaAttention':    # noqa: E501
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2Attention',
+    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2Model':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2MLP',
+})
+
 # cogvlm
 MODULE_MAP.update({
     'modeling_dbrx.RMSNorm':

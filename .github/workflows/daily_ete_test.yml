@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath'
       tools_regression:
         required: true
         description: 'Whether start a tool regression'
@@ -49,12 +49,13 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron:  '00 21 * * *'
+    - cron:  '00 20 * * 1-5'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
+  TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
 
 
 jobs:
@@ -100,15 +101,20 @@ jobs:
     timeout-minutes: 300
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
+      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /root/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
+        - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
+        - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
+        - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -119,7 +125,7 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/* .
+        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -128,48 +134,43 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.2.1 torchvision==0.17.1 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai'}}
+          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath'}}
           # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl
           python3 -m pip install -r requirements/test.txt
+          pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
           python3 -m pip install /nvme/qa_test_models/offline_pkg/py38/lmdeploy-*.whl
           python3 -m pip install -r requirements/test.txt
+          pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
       - name: Check env
         run: |
           python3 -m pip list
           lmdeploy check_env
+          cp -r /root/lora .
           rm -rf allure-results
+          # remove tmp log in testcase
+          rm -rf /nvme/qa_test_models/autotest_model/log/*
       - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
         run: |
           pytest autotest/tools/quantization/test_quantization_w4a16.py -m 'not pr_test' -n 8 --alluredir=allure-results --clean-alluredir
-      - name: Test lmdeploy - quantization kv int8
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
-        run: |
-          pytest autotest/tools/quantization/test_quantization_kvint8.py -n 8 --alluredir=allure-results
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'quantization'))
         run: |
           pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=allure-results
-      - name: Test lmdeploy - quantization kv int8 and w4a16
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
-        run: |
-          pytest autotest/tools/quantization/test_quantization_kvint8_w4a16.py -n 8 --alluredir=allure-results
       - name: Test lmdeploy - convert
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'convert'))
@@ -178,91 +179,70 @@ jobs:
       - name: Test lmdeploy - chat workspace
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
-        timeout-minutes: 20
         run: |
           pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
-        timeout-minutes: 20
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - chat hf torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'chat'))
-        timeout-minutes: 20
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - pipeline turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
-        timeout-minutes: 25
         run: |
           pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
-      - name: Test lmdeploy - pipeline turbomind vl
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
-        timeout-minutes: 25
-        env:
-          PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
-        run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
-      - name: Test lmdeploy - restful turbomind
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
-        timeout-minutes: 30
-        run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
-      - name: Test lmdeploy - restful turbomind vl
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'restful'))
-        timeout-minutes: 30
-        env:
-          PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
-        run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
-      - name: Test lmdeploy - restful workspace
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
-        timeout-minutes: 30
-        run: |
-          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 -s -vv --alluredir=allure-results || true
-          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 -s -vv --alluredir=allure-results
-      - name: Test lmdeploy - interface pipeline turbomind case
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'interface-pipeline'))
-        timeout-minutes: 75
-        run: |
-          pytest autotest/interface/pipeline -m 'not pr_test' -s -vv --alluredir=allure-results
       - name: Test lmdeploy - pipeline torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
-        timeout-minutes: 25
         run: |
           pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - pipeline turbomind vl
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
+        run: |
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - restful turbomind
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
+        run: |
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - restful turbomind vl
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'restful'))
+        run: |
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - restful workspace
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
+        run: |
+          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
+          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - restful torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'restful'))
-        timeout-minutes: 40
         run: |
           pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
-      - name: Test lmdeploy - rerun all fail cases
-        timeout-minutes: 30
-        if: github.event_name == 'schedule' || (github.event.inputs.backend != '[]' && github.event.inputs.model != '[]')
+      - name: Test lmdeploy - interface pipeline turbomind case
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'interface-pipeline'))
         run: |
-          pytest autotest --lf --lfnf none --alluredir=allure-results
+          pytest autotest/interface/pipeline -m 'not pr_test' --alluredir=allure-results
       - name: Test lmdeploy - local testcase
-        timeout-minutes: 30
-        if: always() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case'))
+        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
         run: |
           pytest /local_case/issue_regression --alluredir=allure-results
       - name: Generate reports
@@ -401,6 +381,7 @@ jobs:
             internlm-chat-20b \
             /root/workspace/hf_model \
             --tp 2 \
+            --trust-remote-code \
             --dst-path /root/workspace/workdir/${TB_MODEL}
       - name: Start triton server service
         run: |
@@ -442,6 +423,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
     strategy:
+      fail-fast: false
       matrix:
         backend: ['turbomind', 'pytorch']
     timeout-minutes: 300
@@ -454,7 +436,6 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -465,7 +446,7 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/* .
+        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -474,13 +455,13 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.2.1 torchvision==0.17.1 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai'}}
+          python3 -m pip install ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath'}}
           # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
@@ -499,31 +480,43 @@ jobs:
       - name: Start restful api turbomind
         if: matrix.backend == 'turbomind'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-chat-20b --tp 2 > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-chat-20b --tp 2 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
-      - name: Test lmdeploy restful api turbomind
-        if: matrix.backend == 'turbomind'
-        timeout-minutes: 40
-        run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
-          pytest autotest/interface/restful/test_restful_interface_func_turbomind.py -n 20 --alluredir=allure-results
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-chat-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-chat-20b --tp 2 --backend pytorch > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api pytorch
-        if: matrix.backend == 'pytorch'
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
-          pytest autotest/interface/restful/test_restful_interface_func_pytorch.py -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 --alluredir=allure-results
       - name: Kill api server
         if: always()
         run: |
-          kill -9 "$restful_pid"
+          kill -15 "$restful_pid"
+      - name: Start restful api turbomind - base
+        if: matrix.backend == 'turbomind'
+        run: |
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 > restful.log  2>&1  &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 120s
+      - name: Start restful api pytorch - base
+        if: matrix.backend == 'pytorch'
+        run: |
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 180s
+      - name: Test lmdeploy - restful api pytorch - base
+        timeout-minutes: 40
+        run: |
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=allure-results
+      - name: Kill api server
+        if: always()
+        run: |
+          kill -15 "$restful_pid"
       - name: Generate reports
         if: always()
         run: |

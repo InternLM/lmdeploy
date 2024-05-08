@@ -50,6 +50,8 @@ class SubCliServe:
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
+        ArgumentHelper.enable_prefix_caching(pt_group)
+
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
         model_name_act = ArgumentHelper.model_name(pt_group)
@@ -136,6 +138,8 @@ class SubCliServe:
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
+        ArgumentHelper.enable_prefix_caching(pt_group)
+
         ArgumentHelper.adapters(pt_group)
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
@@ -157,6 +161,8 @@ class SubCliServe:
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
+        ArgumentHelper.num_tokens_per_iter(tb_group)
+        ArgumentHelper.max_prefill_iters(tb_group)
 
     @staticmethod
     def add_parser_api_client():
@@ -214,7 +220,9 @@ class SubCliServe:
                 max_batch_size=args.max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
-                session_len=args.session_len)
+                session_len=args.session_len,
+                enable_prefix_caching=args.enable_prefix_caching,
+            )
         else:
             backend_config = TurbomindEngineConfig(
                 model_name=args.model_name,
@@ -261,7 +269,9 @@ class SubCliServe:
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
                 session_len=args.session_len,
-                adapters=adapters)
+                adapters=adapters,
+                enable_prefix_caching=args.enable_prefix_caching,
+            )
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(
@@ -274,14 +284,12 @@ class SubCliServe:
                 rope_scaling_factor=args.rope_scaling_factor,
                 cache_max_entry_count=args.cache_max_entry_count,
                 cache_block_seq_len=args.cache_block_seq_len)
-        chat_template_config = ChatTemplateConfig(
-            model_name=args.model_name,
-            meta_instruction=args.meta_instruction,
-            capability=args.cap)
+        chat_template_config = None
         if args.chat_template:
             chat_template_config = ChatTemplateConfig.from_json(
                 args.chat_template)
         run_api_server(args.model_path,
+                       model_name=args.model_name,
                        backend=backend,
                        backend_config=backend_config,
                        chat_template_config=chat_template_config,

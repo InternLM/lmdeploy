@@ -3,6 +3,7 @@
 #include "attention.h"
 #include "attention_config.h"
 #include "src/turbomind/kernels/attention/arch.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 
 namespace turbomind {
 
@@ -14,40 +15,29 @@ void dispatchAttention(const AttentionParams<T>& params)
 {
     using namespace attention;
     if (params.size_per_head == 128) {
-        if (0) {}
-        else if (params.arch >= 80) {
-            using Config = AttentionConfig<arch::Sm80, T, T, 1, 128>;
-            invokeAttention<typename Config::Kernel>(params);
-        }
-        else if (params.arch == 75) {
-            using Config = AttentionConfig<arch::Sm75, T, T, 1, 128>;
-            invokeAttention<typename Config::Kernel>(params);
-        }
-        else if (params.arch == 70) {
-            using Config = AttentionConfig<arch::Sm70, T, T, 1, 128>;
-            invokeAttention<typename Config::Kernel>(params);
-        }
-    }
-}
 
-#if ENABLE_BF16
-template<>
-void dispatchAttention(const AttentionParams<nv_bfloat16>& params)
-{
-    using namespace attention;
-    if (params.size_per_head == 128) {
-        if (0) {}
-        else if (params.arch >= 80) {
-            using Config = AttentionConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 1, 128>;
-            invokeAttention<typename Config::Kernel>(params);
+        if (params.arch >= 80) {
+            using Config = AttentionConfig<arch::Sm80, T, 128, CacheType::kLinear>;
+            return invokeAttention<typename Config::Kernel>(params);
+        }
+
+        if constexpr (!std::is_same_v<T, nv_bfloat16>) {
+            if (params.arch == 75) {
+                return invokeAttention<typename AttentionConfig<arch::Sm75, T, 128, CacheType::kLinear>::Kernel>(
+                    params);
+            }
+            else if (params.arch >= 70) {
+                return invokeAttention<typename AttentionConfig<arch::Sm70, T, 128, CacheType::kLinear>::Kernel>(
+                    params);
+            }
         }
     }
+    FT_CHECK(0);
 }
-#endif
 
 template void dispatchAttention(const AttentionParams<half>& params);
-// #if ENABLE_BF16
-// template void dispatchAttention(const AttentionParams<nv_bfloat16>& params);
-// #endif
+#if ENABLE_BF16
+template void dispatchAttention(const AttentionParams<nv_bfloat16>& params);
+#endif
 
 }  // namespace turbomind

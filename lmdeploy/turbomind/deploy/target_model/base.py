@@ -67,6 +67,12 @@ class TurbomindModelConfig:
     rope_scaling_factor: float = 0.0
     use_dynamic_ntk: int = 0
     use_logn_attn: int = 0
+    lora_policy: str = ''
+    lora_r: int = 0
+    lora_scale: float = 0.0
+    lora_max_wo_r: int = 0
+    lora_rank_pattern: str = ''
+    lora_scale_pattern: str = ''
 
     @classmethod
     def from_dict(cls, env, allow_none=False):
@@ -89,9 +95,9 @@ class TurbomindModelConfig:
         env['tensor_para_size'] = env['tp']
         ret = TurbomindModelConfig.from_dict(env, allow_none=True)
         ret.rotary_embedding = ret.size_per_head
-        # workround to support `max_prefill_token_num` in turbomind engine
         if config.max_prefill_token_num is not None and \
-                config.session_len is not None:
+                config.session_len is not None and \
+                config.num_tokens_per_iter == 0:
             ret.num_tokens_per_iter = config.max_prefill_token_num
             ret.max_prefill_iters = (config.session_len +
                                      config.max_prefill_token_num -

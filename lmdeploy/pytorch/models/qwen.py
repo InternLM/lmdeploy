@@ -9,25 +9,47 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn, try_to_local)
-from ..kernels import fill_kv_cache, paged_attention_fwd
+from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
 
 
-def rotate_half(x: torch.Tensor):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., :x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2:]
-    return torch.cat((-x2, x1), dim=-1)
+def _attention_partition_fn(mod_name: str, mod: nn.Module,
+                            device_mesh: DeviceMesh):
+    """A function for attention partition."""
 
+    def __w_pack_linear_fn(mod: nn.Module):
+        """fn for w pack linear."""
+        for name, param in mod.named_parameters():
+            param = param.unflatten(0, (3, -1))
+            dist_tensor = distribute_tensor(param, device_mesh, [Shard(1)])
+            dist_tensor = try_to_local(dist_tensor)
+            dist_tensor = dist_tensor.flatten(0, 1)
+            dist_param = torch.nn.Parameter(dist_tensor)
+            mod.register_parameter(name, dist_param)
 
-def apply_rotary_pos_emb(t: torch.Tensor, freqs: torch.Tensor):
-    """apply rotary."""
-    rot_dim = freqs[0].shape[-1]
-    cos, sin = freqs
-    t_, t_pass_ = t[..., :rot_dim], t[..., rot_dim:]
-    t_ = t_.float()
-    t_pass_ = t_pass_.float()
-    t_ = (t_ * cos) + (rotate_half(t_) * sin)
-    return torch.cat((t_, t_pass_), dim=-1).type_as(t)
+    def __w_pack_lora_linear_fn(mod: nn.Module):
+        """fn for w pack lora linear."""
+        mod._tp_mode = 'colwise'
+        base_layer = mod.base_layer
+        __w_pack_linear_fn(base_layer)
+
+        for lora_a_mod in mod.lora_A.values():
+            colwise_parallelize_linear_fn(lora_a_mod,
+                                          device_mesh=device_mesh,
+                                          to_local=True)
+
+        for lora_b_mod in mod.lora_B.values():
+            __w_pack_linear_fn(lora_b_mod)
+
+    if mod_name in ['c_attn']:
+        from peft.tuners.lora import Linear as LoraLinear
+        if isinstance(mod, LoraLinear):
+            __w_pack_lora_linear_fn(mod)
+        else:
+            __w_pack_linear_fn(mod)
+    elif mod_name in ['c_proj']:
+        rowwise_parallelize_linear_fn(mod,
+                                      device_mesh=device_mesh,
+                                      to_local=True)
 
 
 class PatchedQWenAttention(nn.Module):
@@ -35,21 +57,7 @@ class PatchedQWenAttention(nn.Module):
     def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
                                  device_mesh: DeviceMesh):
         """Distribution partition callback."""
-        if mod_name in ['c_attn']:
-            for name, param in mod.named_parameters():
-                splited_param = param.split(self.hidden_size, dim=0)
-                updated_param = []
-                for p in splited_param:
-                    dist_tensor = distribute_tensor(p, device_mesh, [Shard(0)])
-                    dist_tensor = try_to_local(dist_tensor)
-                    updated_param.append(dist_tensor)
-                param = torch.cat(updated_param)
-                dist_param = torch.nn.Parameter(param)
-                mod.register_parameter(name, dist_param)
-        elif mod_name in ['c_proj']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+        return _attention_partition_fn(mod_name, mod, device_mesh)
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
@@ -70,6 +78,15 @@ class PatchedQWenAttention(nn.Module):
         Add continuous batching support. Add paged attention support. TP
         support.
         """
+        context = self.context.context
+        block_offsets = context.block_offsets
+        position_ids = context.position_ids
+        position_ids_1d = context.position_ids_1d
+        max_kv_seq_length = context.max_kv_seq_length
+        max_q_seq_length = context.max_q_seq_length
+        kv_seq_length = context.kv_seq_length
+        q_start_loc = context.q_start_loc
+        q_seq_length = context.q_seq_length
 
         def __qkv_proj(hidden_states):
             """qkv_proj."""
@@ -87,26 +104,16 @@ class PatchedQWenAttention(nn.Module):
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
             assert len(rotary_pos_emb_list) == 1, 'do not support dynamic ntk'
-            rotary_pos_emb = rotary_pos_emb_list[0]
-            rotary_pos_emb = [
-                i[:, position_ids_1d, :, :] for i in rotary_pos_emb
-            ]
-            rotary_pos_emb = (rotary_pos_emb, ) * 2
-            q_pos_emb, k_pos_emb = rotary_pos_emb
-            # Slice the pos emb for current inference
-            query_states = apply_rotary_pos_emb(query_states, q_pos_emb)
-            key_states = apply_rotary_pos_emb(key_states, k_pos_emb)
+            cos, sin = rotary_pos_emb_list[0]
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states,
+                key_states,
+                cos,
+                sin,
+                position_ids=position_ids,
+                position_ids_1d=position_ids_1d)
 
             return query_states, key_states, value_states
-
-        context = self.context.context
-        block_offsets = context.block_offsets
-        position_ids_1d = context.position_ids_1d
-        max_kv_seq_length = context.max_kv_seq_length
-        max_q_seq_length = context.max_q_seq_length
-        kv_seq_length = context.kv_seq_length
-        q_start_loc = context.q_start_loc
-        q_seq_length = context.q_seq_length
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
         if rotary_pos_emb_list is not None:

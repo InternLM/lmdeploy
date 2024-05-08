@@ -60,7 +60,7 @@
    :caption: 量化
 
    quantization/w4a16.md
-   quantization/kv_int8.md
+   quantization/kv_quant.md
    quantization/w8a8.md
 
 .. toctree::

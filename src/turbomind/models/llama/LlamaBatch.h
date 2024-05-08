@@ -215,11 +215,19 @@ private:
     T*   decoder_output_buf_{};
     int* sequence_lengths_{};  // current sequence length
     int* init_ctx_lens_{};
+    int* lora_mask_buf_{};  // lora
 
     float* logits_buf_{};        // combined logits
     float* local_logits_buf_{};  // tensor parallel local logits
     float* context_logits_buf_{};
     float* local_context_logits_buf_{};
+
+    float*    sampled_logprobs_{};
+    uint32_t* sampled_indexes_{};
+    uint32_t* sampled_nums_{};
+    float*    h_sampled_logprobs_{};
+    uint32_t* h_sampled_indexes_{};
+    uint32_t* h_sampled_nums_{};
 
     float* rope_theta_{};
 
