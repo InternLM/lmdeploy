@@ -295,6 +295,18 @@ class ArgumentHelper:
                                    help='The sequence length for calibration')
 
     @staticmethod
+    def calib_batchsize(parser):
+        """Add argument batch_size to parser."""
+
+        return parser.add_argument(
+            '--batch-size',
+            type=int,
+            default=1,
+            help=\
+            'The batch size for running the calib samples. Low GPU mem requires small batch_size. Large batch_size reduces the calibration time while costs more VRAM'  # noqa
+        )
+
+    @staticmethod
     def device(parser):
         """Add argument device to parser."""
 
