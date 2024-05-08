@@ -6,7 +6,7 @@ from typing import Dict, List, Set, Union
 
 from lmdeploy.utils import get_logger, logging_timer
 
-from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
+from ..adapter.adapter import AdapterManager, SchedulerAdapter
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import (MessageStatus, SchedulerSequence, SchedulerSession,
                         SequenceManager)
@@ -38,15 +38,21 @@ class Scheduler:
         cache_config (CacheConfig): The config of cache info.
     """
 
-    def __init__(self, scheduler_config: SchedulerConfig,
-                 cache_config: CacheConfig) -> None:
+    def __init__(self,
+                 scheduler_config: SchedulerConfig,
+                 cache_config: CacheConfig,
+                 adapter_manager: AdapterManager = None) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
 
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
         self.actived_adapters: Set[str] = set()
 
-        self.block_manager = build_block_manager(cache_config)
+        if adapter_manager is None:
+            adapter_manager = AdapterManager(dict(), 0)
+        self.adapter_manager = adapter_manager
+
+        self.block_manager = build_block_manager(cache_config, adapter_manager)
         self.block_trie = BlockTrie(self.cache_config, self.block_manager)
 
         self.eviction_helper = self.build_eviction_helper(
@@ -118,19 +124,18 @@ class Scheduler:
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
 
-    def add_adapter(self, adapter_path: str, adapter_name: str):
+    def add_adapter(self, adapter_name: str):
         """Add adapter.
 
         Args:
-            adapter_path (str): The path of adapter.
             adapter_name (str): The name of the adapter.
         """
-        adapter = ADAPTER_MANAGER.add_adapter_from_pretrained(
-            adapter_path, adapter_name=adapter_name)
+        adapter = self.adapter_manager.add_adapter(adapter_name)
         self.block_manager.allocate_adapter(adapter)
         block_table = self.block_manager.get_block_table(
             adapter) - self.block_manager.num_gpu_blocks
-        return adapter.build_weight_map(block_table)
+        adapter.update_rank_offset(block_table)
+        return adapter.build_weight_map()
 
     @logging_timer('SchedulePrefilling', logger)
     def _schedule_prefill(self):
@@ -169,26 +174,23 @@ class Scheduler:
 
         def _active_adapter(adapter_name):
             """active adapter of a seq."""
-            if adapter_name is None:
-                required_adapters.add(adapter_name)
-                return
             if adapter_name not in required_adapters:
-                adapter = ADAPTER_MANAGER.get_adapter(adapter_name)
+                adapter = self.adapter_manager.get_adapter(adapter_name)
                 if not adapter.is_actived():
-                    success, tmp_map = self.block_manager.try_swap_in(adapter)
-                    assert success
+                    _, tmp_map = self.block_manager.try_swap_in(adapter)
                     swap_in_map.update(tmp_map)
+                    block_table = self.block_manager.get_block_table(adapter)
+                    adapter.update_rank_offset(block_table)
+                    adapter.active(True)
             required_adapters.add(adapter_name)
 
         def _deactive_adapter(adapter_name):
             """deactive_adapter."""
-            if adapter_name is None:
-                return
-            adapter = ADAPTER_MANAGER.get_adapter(adapter_name)
+            adapter = self.adapter_manager.get_adapter(adapter_name)
             if adapter.is_actived():
-                success, tmp_map = self.block_manager.try_swap_out(adapter)
-                assert success
+                _, tmp_map = self.block_manager.try_swap_out(adapter)
                 swap_out_map.update(tmp_map)
+                adapter.active(False)
 
         num_waiting = self.seq_manager.num_sequences(MessageStatus.WAITING)
         if (len(running) >= max_batches or num_waiting == 0):
@@ -268,10 +270,9 @@ class Scheduler:
 
         return self.running, swap_in_map, swap_out_map, copy_map
 
-    @classmethod
-    def _get_adapter_list(cls, adapter_names: List[str]):
+    def _get_adapter_list(self, adapter_names: List[str]):
         adapters = [
-            ADAPTER_MANAGER.get_adapter(name) for name in adapter_names
+            self.adapter_manager.get_adapter(name) for name in adapter_names
         ]
         return adapters
 
