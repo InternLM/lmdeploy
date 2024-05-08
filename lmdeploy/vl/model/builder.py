@@ -58,5 +58,9 @@ def vl_model_with_tokenizer(model_path: str, device: str):
     if arch == 'MultiModalityCausalLM':
         return DeepSeekVisionModel.model_with_tokenizer(model_path, device)
     if arch == 'LlavaLlamaForCausalLM':
-        return LlavaVisionModel.model_with_tokenizer(model_path, device)
+        mm_vision_tower = config.get('mm_vision_tower', '')
+        if 'OpenGVLab' in mm_vision_tower:
+            return InternVLLlavaVisionModel.model_with_tokenizer(model_path)
+        else:
+            return LlavaVisionModel.model_with_tokenizer(model_path, device)
     raise ValueError(f'unsupported vl model with arch {arch}')
