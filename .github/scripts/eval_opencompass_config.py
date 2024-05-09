@@ -126,6 +126,8 @@ pt_engine_config_template_max_bs_16 = dict(session_len=MAX_SESSION_LEN,
                                            max_batch_size=16)
 pt_engine_config_template_max_bs_32 = dict(session_len=MAX_SESSION_LEN,
                                            max_batch_size=32)
+pt_engine_config_template_max_bs_64 = dict(session_len=MAX_SESSION_LEN,
+                                           max_batch_size=64)
 pt_engine_config_template_max_bs_128 = dict(session_len=MAX_SESSION_LEN,
                                             max_batch_size=128)
 pt_engine_config_template_max_bs_128_tp2 = dict(session_len=MAX_SESSION_LEN,
@@ -143,6 +145,10 @@ pt_engine_config_template_max_bs_16_prefill = dict(session_len=MAX_SESSION_LEN,
                                                    cache_max_entry_count=0.5,
                                                    max_prefill_token_num=4096,
                                                    max_batch_size=16)
+pt_engine_config_template_max_bs_64_prefill = dict(session_len=MAX_SESSION_LEN,
+                                                   cache_max_entry_count=0.5,
+                                                   max_prefill_token_num=4096,
+                                                   max_batch_size=64)
 pt_engine_config_template_max_bs_128_prefill = dict(
     session_len=MAX_SESSION_LEN,
     cache_max_entry_count=0.5,
@@ -474,14 +480,14 @@ pt_internlm2_chat_20b = dict(
     type=LmdeployPytorchModel,
     abbr='internlm2-chat-20b-pytorch',
     path='internlm/internlm2-chat-20b',
-    engine_config=pt_engine_config_template_max_bs_64_prefill_tp2,
+    engine_config=pt_engine_config_template_max_bs_64_prefill,
     gen_config=gen_config_template,
     max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
     batch_size=64,
     concurrency=64,
     meta_template=internlm2_meta_template,
-    run_cfg=run_cfg_tp2_template,
+    run_cfg=run_cfg_tp1_template,
     end_str='<|im_end|>')
 
 # ===== Configs for Qwen/Qwen-7B-Chat =====
@@ -733,6 +739,20 @@ pt_qwen1_5_chat_7b = dict(type=LmdeployPytorchModel,
                           meta_template=qwen1_5_meta_template,
                           run_cfg=run_cfg_tp1_template,
                           end_str='<|im_end|>')
+
+pt_qwen1_5_moe_2_7B_Chat = dict(
+    type=LmdeployPytorchModel,
+    abbr='qwen1.5-moe-2.7b-chat-pytorch',
+    path='Qwen/Qwen1.5-MoE-A2.7B-Chat',
+    engine_config=pt_engine_config_template_max_bs_64,
+    gen_config=gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=64,
+    concurrency=64,
+    meta_template=qwen1_5_meta_template,
+    run_cfg=run_cfg_tp1_template,
+    end_str='<|im_end|>')
 
 # ===== Configs for google/gemma-7b-it =====
 hf_gemma_chat_7b = dict(type=HuggingFaceCausalLM,
