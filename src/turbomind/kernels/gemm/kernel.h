@@ -34,14 +34,11 @@ public:
                        const MatrixLayout& Ddesc,
                        int                 swizzle,
                        int                 splits,
-                       void*               barriers,
-                       size_t&             barriers_size,
-                       void*               workspace,
-                       size_t&             workspace_size,
+                       Workspace&          workspace,
                        cudaStream_t        stream) = 0;
 
     // virtual because different implemntation may have different workspace requeirements
-    virtual int GetMaxSplits(int m, int n, size_t barrier_size, size_t workspace_size) = 0;
+    virtual int GetMaxSplits(int m, int n, size_t barrier_size, size_t partials_size) = 0;
 
     // true if this kernel can be used to compute the gemm
     bool is_feasible(const GemmDesc& desc) const noexcept;

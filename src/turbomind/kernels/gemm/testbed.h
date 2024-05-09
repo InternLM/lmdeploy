@@ -126,6 +126,11 @@ public:
 
         const MatrixLayout c_desc{get_data_type_v<T>, LayoutType::kRowMajor, m_, n_, n_};
 
+        const Workspace workspace{barriers_.data().get(),
+                                  sizeof(int) * barriers_.size(),
+                                  partials_.data().get(),
+                                  sizeof(float) * partials_.size()};
+
         auto status = gemm_.Run(operation,
                                 nullptr,
                                 a_.data().get(),
@@ -139,10 +144,7 @@ public:
                                 c_desc,
                                 c_.data().get(),
                                 c_desc,
-                                barriers_.data().get(),
-                                sizeof(int) * barriers_.size(),
-                                partials_.data().get(),
-                                sizeof(float) * partials_.size(),
+                                workspace,
                                 stream_);
         if (status) {
             std::cerr << "Run failed, code =" << status << "\n";

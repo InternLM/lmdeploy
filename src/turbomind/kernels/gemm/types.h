@@ -114,4 +114,11 @@ struct MatrixLayout {
     int        ld;
 };
 
+struct Workspace {
+    void*  barriers;
+    size_t barriers_size;
+    void*  partials;
+    size_t partials_size;
+};
+
 }  // namespace turbomind::gemm

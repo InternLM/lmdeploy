@@ -8,10 +8,6 @@
 
 namespace turbomind::gemm {
 
-template<class T, class Tb>
-void invoke(
-    T* C, const T* A, const Tb* B, const T* Q, int m, int n, int k, int splits, void* workspace, cudaStream_t st);
-
 class DisptchCache {};
 
 class Gemm {
@@ -33,10 +29,7 @@ public:
                           const MatrixLayout& Cdesc,
                           void*               D,
                           const MatrixLayout& Ddesc,
-                          void*               barriers,
-                          size_t              barriers_size,
-                          void*               workspace,
-                          size_t              workspace_size,
+                          const Workspace&    workspace,
                           cudaStream_t        stream);
 
     [[maybe_unused]] int Export(std::ostream& os);

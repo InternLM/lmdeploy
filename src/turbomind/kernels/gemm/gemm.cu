@@ -57,7 +57,7 @@ struct Gemm::Impl {
     Impl(): props_{GetCudaDeviceProps()}, registry_{props_} {}
 
     // find launch spec in dispatch cache, dispatch by heuristic on cache miss
-    LaunchSpec Dispatch(DispatchPolicy policy, GemmDesc desc, size_t barriers_size, size_t workspace_size)
+    LaunchSpec Dispatch(DispatchPolicy policy, GemmDesc desc, size_t barriers_size, size_t partials_size)
     {
         if (policy == DispatchPolicy::kUseCached) {
             auto it = dispatch_cache_.lower_bound(desc);
@@ -71,7 +71,7 @@ struct Gemm::Impl {
             return it->second;
         }
 
-        auto specs = Find(desc, barriers_size, workspace_size, 1);
+        auto specs = Find(desc, barriers_size, partials_size, 1);
 
         if (specs.empty()) {
             return {};
@@ -85,7 +85,7 @@ struct Gemm::Impl {
     }
 
     std::vector<std::pair<LaunchSpec, float>>
-    Find(const GemmDesc& desc, size_t barrier_size, size_t workspace_size, int top_k)
+    Find(const GemmDesc& desc, size_t barrier_size, size_t partials_size, int top_k)
     {
         std::vector<Kernel*> kernels;
 
@@ -118,9 +118,9 @@ struct Gemm::Impl {
         std::vector<std::pair<int64_t, int>> costs;
 
         for (const auto& k : kernels) {
-            std::cout << "\n" << k->name() << "\n";
-            int max_split_k = k->GetMaxSplits(desc.m, desc.n, barrier_size, workspace_size);
-            std::cout << "max_split_k: " << max_split_k << "\n";
+            // std::cout << "\n" << k->name() << "\n";
+            int max_split_k = k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
+            // std::cout << "max_split_k: " << max_split_k << "\n";
             auto [splits, cost] = k->EstimateSplits(desc.m,  //
                                                     desc.n,
                                                     desc.k,
@@ -155,7 +155,7 @@ struct Gemm::Impl {
     template<class LaunchFunc>
     int Measure(const GemmDesc& desc,
                 size_t          barriers_size,
-                size_t          workspace_size,
+                size_t          partials_size,
                 int             top_k,
                 LaunchFunc      launch_func,
                 cudaStream_t    st)
@@ -173,7 +173,7 @@ struct Gemm::Impl {
 
         std::vector<LaunchSpec> specs;
         for (const auto& k : kernels) {
-            int max_splits = k->GetMaxSplits(desc.m, desc.n, barriers_size, workspace_size);
+            int max_splits = k->GetMaxSplits(desc.m, desc.n, barriers_size, partials_size);
             max_splits     = std::min(max_splits, 8);
             auto splits    = k->EstimateSplits(desc.m,  //
                                             desc.n,
@@ -355,10 +355,7 @@ int Gemm::Run(const Operation&    operation,
               const MatrixLayout& Cdesc,
               void*               D,
               const MatrixLayout& Ddesc,
-              void*               barriers,
-              size_t              barriers_size,
-              void*               workspace,
-              size_t              workspace_size,
+              const Workspace&    workspace,
               cudaStream_t        stream)
 {
 
@@ -385,8 +382,7 @@ int Gemm::Run(const Operation&    operation,
     };
 
     const auto launch = [&](LaunchSpec spec, cudaStream_t st) {
-        size_t tmp_barriers_size  = barriers_size;
-        size_t tmp_workspace_size = workspace_size;
+        auto _workspace = workspace;
         return spec.kernel->Launch(operation,
                                    alpha,
                                    A,
@@ -402,20 +398,17 @@ int Gemm::Run(const Operation&    operation,
                                    Ddesc,
                                    spec.swizzle,
                                    spec.splits,
-                                   barriers,
-                                   tmp_barriers_size,
-                                   workspace,
-                                   tmp_workspace_size,
+                                   _workspace,
                                    st);
     };
 
     LaunchSpec spec{};
 
     if (operation.dispatch == DispatchPolicy::kMeasure) {
-        impl_->Measure(desc, barriers_size, workspace_size, 1, launch, stream);
+        impl_->Measure(desc, workspace.barriers_size, workspace.partials_size, 1, launch, stream);
     }
 
-    spec = impl_->Dispatch(operation.dispatch, desc, barriers_size, workspace_size);
+    spec = impl_->Dispatch(operation.dispatch, desc, workspace.barriers_size, workspace.partials_size);
 
     if (spec.kernel) {
         // std::cout << "[Gemm] dispatch: " << spec.kernel->name()  //

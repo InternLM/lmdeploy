@@ -70,10 +70,7 @@ public:
                const MatrixLayout& Ddesc,
                int                 swizzle,
                int                 splits,
-               void*               barriers,
-               size_t&             barriers_size,
-               void*               workspace,
-               size_t&             workspace_size,
+               Workspace&          workspace,
                cudaStream_t        stream) override
     {
         using Map = typename Gemm::CtaMap;
@@ -84,8 +81,8 @@ public:
 
         const auto tiles = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, splits);
 
-        if (splits > 1 && barriers == nullptr && workspace == nullptr) {
-            GetWorkspaceSizes(m, n, tiles.x, tiles.y, splits, barriers_size, workspace_size);
+        if (splits > 1 && workspace.barriers == nullptr && workspace.partials == nullptr) {
+            GetWorkspaceSizes(m, n, tiles.x, tiles.y, splits, workspace.barriers_size, workspace.partials_size);
             return -1;
         }
 
@@ -113,8 +110,17 @@ public:
             }();
         }
 
-        typename Gemm::Param param{
-            (Ta*)A, _cast((Tb*)B), (Tq*)Q, (Tc*)C, m, n, k, log_tile, tiles, (float*)workspace, (int*)barriers};
+        typename Gemm::Param param{(Ta*)A,
+                                   _cast((Tb*)B),
+                                   (Tq*)Q,
+                                   (Tc*)C,
+                                   m,
+                                   n,
+                                   k,
+                                   log_tile,
+                                   tiles,
+                                   (float*)workspace.partials,
+                                   (int*)workspace.barriers};
 
         gemm_kernel<Gemm><<<grid, block, smem_size_, stream>>>(param, Map{});
 
@@ -134,13 +140,13 @@ public:
 
     // ! This assumes N results in 16 byte aligned partials
     void
-    GetWorkspaceSizes(int m, int n, int tiled_m, int tiled_n, int splits, size_t& barriers_size, size_t& workspace_size)
+    GetWorkspaceSizes(int m, int n, int tiled_m, int tiled_n, int splits, size_t& barriers_size, size_t& partials_size)
     {
-        workspace_size = sizeof(float) * m * n * splits;
-        barriers_size  = sizeof(int) * tiled_m * tiled_n * splits;
+        partials_size = sizeof(float) * m * n * splits;
+        barriers_size = sizeof(int) * tiled_m * tiled_n * splits;
     }
 
-    int GetMaxSplits(int m, int n, size_t barrier_size, size_t workspace_size) override
+    int GetMaxSplits(int m, int n, size_t barrier_size, size_t partials_size) override
     {
         if (!Gemm::SplitK) {  // kernel has no split-k support
             return 1;
@@ -150,12 +156,12 @@ public:
         const int tiled_n = ceil_div(m, CTA_N);
 
         size_t barriers_per_split{};
-        size_t workspace_per_split{};
+        size_t partials_per_split{};
 
         // workspace for 1 non-trival split
-        GetWorkspaceSizes(m, n, tiled_m, tiled_n, 1, barriers_per_split, workspace_per_split);
+        GetWorkspaceSizes(m, n, tiled_m, tiled_n, 1, barriers_per_split, partials_per_split);
 
-        return std::max(1, std::min<int>(barrier_size / barriers_per_split, workspace_size / workspace_per_split));
+        return std::max(1, std::min<int>(barrier_size / barriers_per_split, partials_size / partials_per_split));
     }
 };
 
