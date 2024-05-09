@@ -299,8 +299,8 @@ def _get_and_verify_max_len(
         logger.warning(
             "The model's config.json does not contain any of the following "
             'keys to determine the original maximum length of the model: '
-            "%d. Assuming the model's maximum length is %d.", possible_keys,
-            default_max_len)
+            f"{possible_keys}. Assuming the model's maximum length is "
+            f'{default_max_len}.')
         derived_max_model_len = default_max_len
 
     rope_scaling = getattr(hf_tm_config, 'rope_scaling', None)
@@ -322,7 +322,7 @@ def _get_and_verify_max_len(
         if model_max_length is not None and max_model_len <= model_max_length:
             pass
         else:
-            raise ValueError(
+            logger.warning(
                 f'User-specified max_model_len ({max_model_len}) is greater '
                 'than the derived max_model_len '
                 f'({max_len_key}={derived_max_model_len} or model_max_length='
