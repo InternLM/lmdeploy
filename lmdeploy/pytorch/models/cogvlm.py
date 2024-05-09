@@ -7,7 +7,7 @@ from torch import nn
 from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from ..dist_utils import (colwise_parallelize_linear_fn,
+from ..dist_utils import (colwise_split_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
 
@@ -30,6 +30,11 @@ def get_expert_mask(
 
 class PatchedVisionExpertAttention(nn.Module):
 
+    def _distribute_qkv_linear(self, mod: nn.Module, device_mesh: DeviceMesh):
+        """distribute qkv linear."""
+        sections = [self.num_heads * self.head_dim] * 3
+        colwise_split_parallelize_linear_fn(mod, sections, device_mesh)
+
     def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
                                  device_mesh: DeviceMesh):
         """Distribution partition callback."""
@@ -37,9 +42,7 @@ class PatchedVisionExpertAttention(nn.Module):
                 'vision_expert_query_key_value',
                 'language_expert_query_key_value'
         ]:
-            colwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+            self._distribute_qkv_linear(mod, device_mesh=device_mesh)
         elif mod_name in ['vision_expert_dense', 'language_expert_dense']:
             rowwise_parallelize_linear_fn(mod,
                                           device_mesh=device_mesh,
