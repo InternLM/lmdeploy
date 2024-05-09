@@ -132,7 +132,7 @@ public:
         }
     }
 
-    // ! This assumes n results is 16 byte aligned partials
+    // ! This assumes N results in 16 byte aligned partials
     void
     GetWorkspaceSizes(int m, int n, int tiled_m, int tiled_n, int splits, size_t& barriers_size, size_t& workspace_size)
     {
@@ -155,7 +155,7 @@ public:
         // workspace for 1 non-trival split
         GetWorkspaceSizes(m, n, tiled_m, tiled_n, 1, barriers_per_split, workspace_per_split);
 
-        return std::min<int>(barrier_size / barriers_per_split, workspace_size / workspace_per_split);
+        return std::max(1, std::min<int>(barrier_size / barriers_per_split, workspace_size / workspace_per_split));
     }
 };
 

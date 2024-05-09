@@ -160,6 +160,10 @@ struct Gemm::Impl {
                 LaunchFunc      launch_func,
                 cudaStream_t    st)
     {
+        if (dispatch_cache_.find(desc) != dispatch_cache_.end()) {
+            return 0;
+        }
+
         std::vector<Kernel*> kernels;
         for (const auto& k : registry_.kernels()) {
             if (k->is_feasible(desc)) {
@@ -414,9 +418,9 @@ int Gemm::Run(const Operation&    operation,
     spec = impl_->Dispatch(operation.dispatch, desc, barriers_size, workspace_size);
 
     if (spec.kernel) {
-        std::cout << "[Gemm] dispatch: " << spec.kernel->name()  //
-                  << " split_k=" << spec.splits                  //
-                  << " swizzle=" << spec.swizzle << std::endl;
+        // std::cout << "[Gemm] dispatch: " << spec.kernel->name()  //
+        //           << " split_k=" << spec.splits                  //
+        //           << " swizzle=" << spec.swizzle << std::endl;
         return launch(spec, stream);
     }
 

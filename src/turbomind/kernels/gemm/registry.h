@@ -8,7 +8,8 @@ public:
     explicit Registry(std::shared_ptr<cudaDeviceProp> device_prop):
         device_prop_{std::move(device_prop)}, arch_{device_prop_->major * 100 + device_prop_->minor * 10}
     {
-        register_sm80_f16_s4_asym_g128();
+        register_sm80_f16_s4_asym_g128_basic();
+        register_sm80_f16_s4_asym_g128_extra();
     }
 
     [[maybe_unused]] bool Add(std::unique_ptr<Kernel> kernel)
@@ -29,7 +30,8 @@ public:
     }
 
 private:
-    void register_sm80_f16_s4_asym_g128();
+    void register_sm80_f16_s4_asym_g128_basic();
+    void register_sm80_f16_s4_asym_g128_extra();
     void register_sm80_f16_s4_asym_g64();
     void register_sm80_f16_s4_asym_g32();
 

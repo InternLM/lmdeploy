@@ -46,16 +46,23 @@ void Compare(const T* src, const T* ref, size_t stride, int dims, int bsz, bool 
         asums += abs_diff_sum / dims;
         rsums += rel_diff_sum / dims;
     }
-    std::cout << "abs_diff = " << asums / bsz << " rel_diff = " << rsums / bsz << " outliers = " << outliers / (float)bsz
-              << std::endl;
+    std::cout << "abs_diff = " << asums / bsz << " rel_diff = " << rsums / bsz
+              << " outliers = " << outliers / (float)bsz << std::endl;
 }
 
-template void Compare(const half* src, const half* ref, size_t stride, int dims, int bsz, bool show, float rtol, float atol);
+template void
+Compare(const half* src, const half* ref, size_t stride, int dims, int bsz, bool show, float rtol, float atol);
 template void
 Compare(const float* src, const float* ref, size_t stride, int dims, int bsz, bool show, float rtol, float atol);
 #if ENABLE_BF16
-template void
-Compare(const nv_bfloat16* src, const nv_bfloat16* ref, size_t stride, int dims, int bsz, bool show, float rtol, float atol);
+template void Compare(const nv_bfloat16* src,
+                      const nv_bfloat16* ref,
+                      size_t             stride,
+                      int                dims,
+                      int                bsz,
+                      bool               show,
+                      float              rtol,
+                      float              atol);
 #endif
 
 void LoadBinary(const std::string& path, size_t size, void* dst)
@@ -129,20 +136,22 @@ struct RNG::Impl {
 
     void GenerateUInt(uint* out, size_t count)
     {
-        curand_bytes<<<64, 64>>>(states, count, out);
+        curand_bytes<<<64, 64, 0, stream_>>>(states, count, out);
     }
 
     template<typename T>
     void GenerateUniform(T* out, size_t count, float scale, float shift)
     {
-        curand_uniform<<<64, 64>>>(states, count, out, scale, shift);
+        curand_uniform<<<64, 64, 0, stream_>>>(states, count, out, scale, shift);
     }
 
     template<typename T>
     void GenerateNormal(T* out, size_t count, float scale, float shift)
     {
-        curand_normal<<<64, 64>>>(states, count, out, scale, shift);
+        curand_normal<<<64, 64, 0, stream_>>>(states, count, out, scale, shift);
     }
+
+    cudaStream_t stream_{};
 };
 
 RNG::RNG(): impl_(std::make_unique<Impl>()) {}
@@ -164,6 +173,16 @@ template<typename T>
 void RNG::GenerateNormal(T* out, size_t count, float scale, float shift)
 {
     impl_->GenerateNormal(out, count, scale, shift);
+}
+
+cudaStream_t RNG::stream() const
+{
+    return impl_->stream_;
+}
+
+void RNG::set_stream(cudaStream_t stream)
+{
+    impl_->stream_ = stream;
 }
 
 template void RNG::GenerateUniform(half* out, size_t count, float scale, float shift);
