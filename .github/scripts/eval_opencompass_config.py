@@ -131,6 +131,9 @@ pt_engine_config_template_max_bs_128 = dict(session_len=MAX_SESSION_LEN,
 pt_engine_config_template_max_bs_128_tp2 = dict(session_len=MAX_SESSION_LEN,
                                                 tp=2,
                                                 max_batch_size=128)
+pt_engine_config_template_max_bs_64_tp2 = dict(session_len=MAX_SESSION_LEN,
+                                               tp=2,
+                                               max_batch_size=64)
 
 pt_engine_config_template_max_bs_8_prefill = dict(session_len=MAX_SESSION_LEN,
                                                   cache_max_entry_count=0.5,
@@ -150,6 +153,12 @@ pt_engine_config_template_max_bs_8_prefill_tp2 = dict(
     cache_max_entry_count=0.5,
     max_prefill_token_num=4096,
     max_batch_size=8,
+    tp=2)
+pt_engine_config_template_max_bs_64_prefill_tp2 = dict(
+    session_len=MAX_SESSION_LEN,
+    cache_max_entry_count=0.5,
+    max_prefill_token_num=4096,
+    max_batch_size=64,
     tp=2)
 pt_engine_config_template_max_bs_128_prefill_tp2 = dict(
     session_len=MAX_SESSION_LEN,
@@ -465,12 +474,12 @@ pt_internlm2_chat_20b = dict(
     type=LmdeployPytorchModel,
     abbr='internlm2-chat-20b-pytorch',
     path='internlm/internlm2-chat-20b',
-    engine_config=pt_engine_config_template_max_bs_128_prefill_tp2,
+    engine_config=pt_engine_config_template_max_bs_64_prefill_tp2,
     gen_config=gen_config_template,
     max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
-    batch_size=128,
-    concurrency=128,
+    batch_size=64,
+    concurrency=64,
     meta_template=internlm2_meta_template,
     run_cfg=run_cfg_tp2_template,
     end_str='<|im_end|>')
