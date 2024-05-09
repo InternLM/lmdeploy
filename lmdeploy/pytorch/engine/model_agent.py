@@ -469,6 +469,26 @@ def _add_adapters(hf_model: torch.nn.Module, adapters: Dict[str, str]):
         inject_adapter_in_model(config, model=hf_model, adapter_name=name)
 
 
+def _remove_unused_modules(hf_model: torch.nn.Module, model_cfg: ModelConfig):
+    """remove unused modules."""
+    if model_cfg.unused_modules is not None and len(
+            model_cfg.unused_modules) > 0:
+        for mod in model_cfg.unused_modules:
+            has_mod = True
+            parts = mod.split('.')
+            mod_path = 'hf_model'
+            for p in parts:
+                if eval(f'hasattr({mod_path}, "{p}")'):
+                    mod_path = f'{mod_path}.{p}'
+                else:
+                    has_mod = False
+                    break
+            if has_mod:
+                print('--- remove ', mod_path)
+                exec(f'del {mod_path}')
+    return hf_model
+
+
 def _unparam_lora_weight(model: torch.nn.Module):
     """unparam lora weight.
 
@@ -597,10 +617,8 @@ class BaseModelAgent(AutoModelAgent):
                 **self.model_config.init_kwargs)
             hf_model.eval()
             hf_model.config.use_cache = True
-            # build for vlm model, TODO
-            if hasattr(hf_model, 'model') and hasattr(hf_model.model,
-                                                      'vision'):
-                del hf_model.model.vision
+            # build for vlm model
+            _remove_unused_modules(hf_model, self.model_config)
 
         if adapters:
             _load_adapters(hf_model, adapters)
@@ -787,6 +805,8 @@ def _tp_build_model(
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code,
                 **model_config.init_kwargs)
+            # build for vlm model
+            _remove_unused_modules(model, model_config)
             if rank == 0:
                 device_map = _create_device_map(model, world_size)
             _add_adapters(model, adapters)
@@ -805,6 +825,7 @@ def _tp_build_model(
                     device_map=device_map,
                     trust_remote_code=trust_remote_code,
                     **model_config.init_kwargs)
+                param_model = _remove_unused_modules(param_model, model_config)
                 _load_adapters(param_model, adapters, device_map=device_map)
                 __load_state_dict_assign(param_model, model)
                 param_model = param_model.to('meta')
