@@ -7,8 +7,7 @@ import torch
 from torch import nn
 from transformers import AutoTokenizer
 
-from lmdeploy.lite.quantization import (AWQCalibrationContext,
-                                        CalibrationContext)
+from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
 from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
                                  load_hf_from_pretrained)
 
@@ -195,15 +194,15 @@ def calibrate(model: str,
 
     # Initialize calibration context
     if search_scale:
-        calib_ctx = AWQCalibrationContext(model,
-                                          tokenizer,
-                                          layer_type=layer_type,
-                                          norm_type=norm_type,
-                                          device=device,
-                                          w_bits=w_bits,
-                                          w_group_size=w_group_size,
-                                          batch_size=batch_size,
-                                          search_scale=search_scale)
+        calib_ctx = CalibrationContextV2(model,
+                                         tokenizer,
+                                         layer_type=layer_type,
+                                         norm_type=norm_type,
+                                         device=device,
+                                         w_bits=w_bits,
+                                         w_group_size=w_group_size,
+                                         batch_size=batch_size,
+                                         search_scale=search_scale)
     else:
         calib_ctx = CalibrationContext(model,
                                        tokenizer,

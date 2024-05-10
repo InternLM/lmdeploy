@@ -419,7 +419,7 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
         )
 
 
-class AWQCalibrationContext(CalibrationContext):
+class CalibrationContextV2(CalibrationContext):
 
     def __init__(self,
                  model: nn.Module,
