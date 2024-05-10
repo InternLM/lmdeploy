@@ -11,7 +11,7 @@ set(NVBench_ENABLE_EXAMPLES OFF)
 
 FetchContent_MakeAvailable(repo-nvbench)
 
-add_library(gemm2 gemm.cu kernel.cu transcript.cu dispatch_cache.cu
+add_library(gemm2 gemm.cu kernel.cu transcript.cu dispatch_cache.cu gpu_metric.cu
         codegen/gemm_sm80_f16_u4_f16_asym_g128_basic.cu
         codegen/gemm_sm80_f16_u4_f16_asym_g128_extra.cu)
 

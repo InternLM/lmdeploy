@@ -11,6 +11,7 @@
 #include <limits>
 #include <thrust/universal_vector.h>
 #include <type_traits>
+#include "src/turbomind/kernels/gemm/gpu_metric.h"
 
 using namespace turbomind;
 using thrust::universal_vector;
@@ -77,6 +78,8 @@ void Test(int bsz, int tp)
 
 int main(int argc, char* argv[])
 {
+    // gemm::MeasureL2CacheThroughput();
+    // gemm::MeasureMmaThroughput();
     Test<half, uint4_t>(1, 1);
     // Test<half, uint4_t>(16, 1);
     // Test<half, uint4_t>(32, 1);

@@ -7,7 +7,7 @@
 #include <string>
 
 std::map<std::string, std::vector<std::pair<int, int>>> config{
-    {"llama2-7b", {{2 * 11008, 4096}, {4096, 11008}, {12288, 4096}, {4096, 4096}}}};
+    {"llama2-7b", {{2 * 11008, 4096}, {4096, 11008}, {12288, 4096}, {16384, 16384}}}};
 
 std::unique_ptr<turbomind::gemm::Testbed<half, turbomind::uint4_t>> g_testbed;
 
@@ -33,21 +33,21 @@ void gemm_bench(nvbench::state& state)
         });
     }
     else {
-        // state.add_global_memory_reads(sizeof(half) * (m * k + n * k));
-        // state.exec([&](nvbench::launch&) {  //
-        //     g_testbed->RunCublas();
-        // });
+        state.add_global_memory_reads(sizeof(half) * (m * k + n * k));
+        state.exec([&](nvbench::launch&) {  //
+            g_testbed->RunCublas();
+        });
     }
 }
 
 NVBENCH_BENCH(gemm_bench)
-    .add_int64_power_of_two_axis("batch size", nvbench::range(0, 13))
+    .add_int64_power_of_two_axis("batch size", nvbench::range(14, 14))
     .add_int64_axis("index", nvbench::range(0, 3));
 
 int main(int argc, char* argv[])
 {
     g_testbed = std::make_unique<turbomind::gemm::Testbed<half, turbomind::uint4_t>>(
-        turbomind::gemm::DispatchPolicy::kUseCached, "cache");
+        turbomind::gemm::DispatchPolicy::kDefault, "cache");
 
     NVBENCH_MAIN_BODY(argc, argv);
 

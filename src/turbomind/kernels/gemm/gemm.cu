@@ -3,6 +3,7 @@
 #include "src/turbomind/kernels/gemm/cache_utils.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
+#include "src/turbomind/kernels/gemm/gpu_metric.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/types.h"
