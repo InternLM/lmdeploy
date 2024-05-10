@@ -83,7 +83,8 @@ def init_yi_model():
 class YiVisionModel(LlavaVisionModel):
     """Yi visual model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self, model_path, device='cuda:0', with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.device = device
         self.build_model()
@@ -97,12 +98,3 @@ class YiVisionModel(LlavaVisionModel):
 
         with init_yi_model(), disable_transformers_logging():
             super().build_model()
-
-    @staticmethod
-    def model_with_tokenizer(model_path: str, device='cpu'):
-        check_llava_install()
-        global _model_path
-        _model_path = model_path
-        with init_yi_model(), disable_transformers_logging():
-            outs = LlavaVisionModel.model_with_tokenizer(model_path, device)
-        return outs

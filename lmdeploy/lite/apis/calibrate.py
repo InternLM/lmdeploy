@@ -22,6 +22,7 @@ LAYER_TYPE_MAP = {
     'LlamaForCausalLM': 'LlamaDecoderLayer',
     'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
+    'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
 }
 
 NORM_TYPE_MAP = {
@@ -34,6 +35,7 @@ NORM_TYPE_MAP = {
     'LlamaForCausalLM': 'LlamaRMSNorm',
     'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
+    'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
 }
 
 HEAD_NAME_MAP = {
@@ -46,6 +48,7 @@ HEAD_NAME_MAP = {
     'LlamaForCausalLM': 'lm_head',
     'LlavaLlamaForCausalLM': 'lm_head',
     'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
+    'InternLMXComposer2ForCausalLM': 'output',
 }
 
 

@@ -1,23 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import torch
-
 from .base import INPUT_MODELS
 from .deepseek_vl import DeepSeekVLModel, DeepSeekVLReader
-
-
-def ensure_fp16orint32(tensors: torch.Tensor):
-    """Ensure tensors in fp16/int32 format."""
-    result = []
-    for tensor in tensors:
-        if tensor is not None:
-            if tensor.dtype in [torch.float16, torch.float32, torch.bfloat16]:
-                result.append(tensor.half())
-            else:
-                assert tensor.dtype == torch.int32
-                result.append(tensor)
-        else:
-            result.append(None)
-    return (*result, )
+from .llama_awq import ensure_fp16orint32
 
 
 class DeepSeekVLAwqReader(DeepSeekVLReader):

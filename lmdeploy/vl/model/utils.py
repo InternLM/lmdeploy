@@ -51,6 +51,20 @@ def load_model_from_weight_files(model: nn.Module, folder: str) -> None:
         model.load_state_dict(state_dict, strict=False)
 
 
+def buffers_aware_empty(model: nn.Module, device: str = 'cpu'):
+    """Avoid empty buffers in model."""
+    model_buffers = dict()
+    for name, module in model.named_modules():
+        if len(module._buffers):
+            model_buffers.update({name: module._buffers.copy()})
+    model.to_empty(device=device)
+    for name, module in model.named_modules():
+        if len(module._buffers):
+            module._buffers = model_buffers[name]
+            for n, buff in module._buffers.items():
+                module._buffers[n] = buff.to(device)
+
+
 @contextmanager
 def add_sys_path(path: Union[str, os.PathLike]) -> Iterator[None]:
     """Temporarily add the given path to `sys.path`."""

@@ -23,6 +23,7 @@ LAYER_TYPE_MAP = {
     'LlamaForCausalLM': 'LlamaDecoderLayer',
     'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
+    'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
@@ -34,6 +35,7 @@ NORM_TYPE_MAP = {
     'LlamaForCausalLM': 'LlamaRMSNorm',
     'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
+    'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
 }
 
 
@@ -43,9 +45,11 @@ def save_vl_model(vl_model, model_path, dst_path):
         tmp_path = osp.join(model_path, name)
         if osp.exists(tmp_path):
             shutil.copy(tmp_path, osp.join(dst_path, name))
+
+    safe_serialization = type(vl_model).__name__ == 'MGMLlamaForCausalLM'
     vl_model.save_pretrained(dst_path,
                              max_shard_size='2GB',
-                             safe_serialization=False)
+                             safe_serialization=safe_serialization)
 
 
 def auto_awq(model: str,

@@ -7,13 +7,15 @@ from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import load_model_from_weight_files
+from lmdeploy.vl.model.utils import (buffers_aware_empty,
+                                     load_model_from_weight_files)
 
 
 class QwenVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self, model_path, device='cuda:0', with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.device = device
         self.build_model()
@@ -23,28 +25,21 @@ class QwenVisionModel(VisonModel):
         with init_empty_weights():
             config = AutoConfig.from_pretrained(self.model_path,
                                                 trust_remote_code=True)
+            config.quantization_config = {}  # disable vision part quantization
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)
-            del model.lm_head
-            for key in ['wte', 'h', 'ln_f']:
-                setattr(model.transformer, key, None)
+            if not self.with_llm:
+                del model.lm_head
+                for key in ['wte', 'h', 'ln_f']:
+                    setattr(model.transformer, key, None)
+            else:
+                self.vl_model = model
 
-        model.to_empty(device='cpu')
+        buffers_aware_empty(model, 'cpu')
         load_model_from_weight_files(model, self.model_path)
 
         self.model = model.transformer.visual
         self.model.to(self.device).eval().half()
-
-    @staticmethod
-    def model_with_tokenizer(model_path: str, device='cpu'):
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path, trust_remote_code=True,
-            device_map=device).half().eval()
-        # model.config.use_cache = False
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(model_path,
-                                                  trust_remote_code=True)
-        return model, model, tokenizer
 
     @torch.no_grad()
     def forward(self, images: List[Image]) -> List[torch.Tensor]:

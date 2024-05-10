@@ -7,10 +7,12 @@ from typing import List, Union
 
 import torch
 from PIL.Image import Image
+from transformers import AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import load_model_from_weight_files, rewrite_ctx
+from lmdeploy.vl.model.utils import (buffers_aware_empty,
+                                     load_model_from_weight_files, rewrite_ctx)
 
 logger = get_logger('lmdeploy')
 
@@ -56,7 +58,8 @@ def init_llava_vision_tower(config):
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self, model_path, device='cuda:0', with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.device = device
         self.build_model()
@@ -67,7 +70,7 @@ class LlavaVisionModel(VisonModel):
         check_llava_install()
 
         # currently, only support llava llama
-        from llava.model.language_model.llava_llama import (
+        from llava.model.language_model.llava_llama import (  # noqa
             LlavaConfig, LlavaLlamaForCausalLM)
         self.config = LlavaConfig.from_pretrained(self.model_path)
         assert self.config.model_type in ['llava', 'llava_llama'], \
@@ -78,15 +81,21 @@ class LlavaVisionModel(VisonModel):
         with init_empty_weights(), warnings.catch_warnings(), \
                 init_llava_vision_tower(self.config):
             warnings.simplefilter('ignore')
-            model = LlavaLlamaForCausalLM.from_pretrained(self.model_path)
-            del model.lm_head
-            del model.model.embed_tokens
-            del model.model.layers
-            del model.model.norm
+            self.config.quantization_config = {
+            }  # disable vision part quantization
+            model = AutoModelForCausalLM.from_config(self.config,
+                                                     trust_remote_code=True)
+            if not self.with_llm:
+                del model.lm_head
+                del model.model.embed_tokens
+                del model.model.layers
+                del model.model.norm
+            else:
+                self.vl_model = model
 
         # move model to cpu
         with torch.device('cpu'):
-            model.to_empty(device='cpu')
+            buffers_aware_empty(model, 'cpu')
         # init empty vision_tower, the embedding layer in CLIPVisionModel
         # can't init right under init_empty_weights
         with init_llava_vision_tower(self.config):
@@ -100,18 +109,6 @@ class LlavaVisionModel(VisonModel):
         self.model = model.model
         self.vision_tower = model.model.vision_tower.half()
         self.mm_projector = model.model.mm_projector.half()
-
-    @staticmethod
-    def model_with_tokenizer(model_path: str, device='cpu'):
-        check_llava_install()
-        from llava.model.language_model.llava_llama import \
-            LlavaLlamaForCausalLM
-        model = LlavaLlamaForCausalLM.from_pretrained(
-            model_path, device_map=device).half().eval()
-        model.config.use_cache = False
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        return model, model, tokenizer
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """encode images."""

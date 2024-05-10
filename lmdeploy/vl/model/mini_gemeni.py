@@ -9,7 +9,8 @@ import torch
 from PIL.Image import Image
 
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import (disable_transformers_logging,
+from lmdeploy.vl.model.utils import (buffers_aware_empty,
+                                     disable_transformers_logging,
                                      hack_import_with,
                                      load_model_from_weight_files)
 
@@ -136,6 +137,16 @@ def _openclip_vision_tower_load_model(self):
     self.vision_stages.requires_grad_(False)
 
 
+old_func = torch.nn.Module.load_state_dict
+
+
+def _load_state_dict(self,
+                     state_dict,
+                     strict: bool = True,
+                     assign: bool = False):
+    return old_func(self, state_dict, strict=False, assign=assign)
+
+
 @contextmanager
 def init_mini_gemini_model():
     origin_func_path = [
@@ -144,7 +155,8 @@ def init_mini_gemini_model():
         'mgm.model.multimodal_encoder.clip_encoder.CLIPVisionTower.__init__',  # noqa: E501
         'mgm.model.multimodal_encoder.clip_encoder.CLIPVisionTower.load_model',  # noqa: E501
         'mgm.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.__init__',  # noqa: E501
-        'mgm.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.load_model'  # noqa: E501
+        'mgm.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.load_model',  # noqa: E501
+        'torch.nn.Module.load_state_dict',
     ]
     rewrite_func = [
         _build_vision_tower,
@@ -153,6 +165,7 @@ def init_mini_gemini_model():
         _clip_vision_tower_load_model,
         _openclip_vision_tower__init__,
         _openclip_vision_tower_load_model,
+        _load_state_dict,
     ]
     from lmdeploy.vl.model.utils import rewrite_ctx
     with rewrite_ctx(origin_func_path, rewrite_func):
@@ -162,7 +175,8 @@ def init_mini_gemini_model():
 class MiniGeminiVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self, model_path, device='cuda:0', with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.device = device
         check_mini_gemini_install()
@@ -173,19 +187,30 @@ class MiniGeminiVisionModel(VisonModel):
         # empty init
         from accelerate import init_empty_weights
         from mgm.mm_utils import process_images
-        from mgm.model import MGMLlamaForCausalLM
+        from mgm.model import MGMLlamaForCausalLM  # noqa
+        from mgm.model.language_model.mgm_llama import MGMConfig
+        from transformers import AutoModelForCausalLM
         with init_empty_weights(), disable_transformers_logging(
         ), hack_import_with(['deepspeed']):
             warnings.simplefilter('ignore')
-            model = MGMLlamaForCausalLM.from_pretrained(self.model_path)
-            del model.lm_head
-            del model.model.embed_tokens
-            del model.model.layers
-            del model.model.norm
+            config = MGMConfig.from_pretrained(self.model_path,
+                                               trust_remote_code=True)
+            setattr(config, 'quantization_config', {})
+            setattr(config, 'model_path', self.model_path)
+            model = AutoModelForCausalLM.from_config(config,
+                                                     trust_remote_code=True)
+            if not self.with_llm:
+                del model.lm_head
+                del model.model.embed_tokens
+                del model.model.layers
+                del model.model.norm
+            else:
+                model.config.use_cache = False
+                self.vl_model = model
 
         # # load weight
         with torch.device('cpu'):
-            model.to_empty(device='cpu')
+            buffers_aware_empty(model, 'cpu')
             vision_tower = model.get_vision_tower()
             vision_tower.is_loaded = False
             vision_tower.load_model()
@@ -193,11 +218,8 @@ class MiniGeminiVisionModel(VisonModel):
             vision_tower_aux.is_loaded = False
             vision_tower_aux.load_model()
         load_model_from_weight_files(model, self.model_path)
-        model.to(self.device).eval()
-        model.model.vision_tower.half()
-        model.model.vision_tower_aux.half()
+        model.to(self.device).eval().half()
 
-        setattr(model.config, 'model_path', self.model_path)
         model.get_model().initialize_uni_modules(model.config, for_eval=True)
 
         self.model = model
@@ -212,20 +234,6 @@ class MiniGeminiVisionModel(VisonModel):
             image_processor.size['shortest_edge'] = model.config.image_size_aux
         self.image_processor = image_processor
         self.process_images = process_images
-
-    @staticmethod
-    def model_with_tokenizer(model_path: str, device='cpu'):
-        check_mini_gemini_install()
-        from mgm.model import MGMLlamaForCausalLM
-        with init_mini_gemini_model(), disable_transformers_logging(
-        ), hack_import_with(['deepspeed']):
-            warnings.simplefilter('ignore')
-            model = MGMLlamaForCausalLM.from_pretrained(
-                model_path, device_map=device).half().eval()
-        model.config.use_cache = False
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        return model, model, tokenizer
 
     @torch.no_grad()
     def forward(self, images: List[Image]) -> List[torch.Tensor]:

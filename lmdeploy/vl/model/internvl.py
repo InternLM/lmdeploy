@@ -8,7 +8,8 @@ from transformers import AutoConfig, AutoModel, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import load_model_from_weight_files
+from lmdeploy.vl.model.utils import (buffers_aware_empty,
+                                     load_model_from_weight_files)
 
 logger = get_logger('lmdeploy')
 
@@ -77,7 +78,8 @@ def dynamic_preprocess(image,
 class InternVLVisionModel(VisonModel):
     """InternVL vision model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self, model_path, device='cuda:0', with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.device = device
         self.build_model()
@@ -91,10 +93,13 @@ class InternVLVisionModel(VisonModel):
             # transformers below 4.37.0 may raise error about flash_attn
             config.llm_config.attn_implementation = 'eager'
             model = AutoModel.from_config(config, trust_remote_code=True)
-            del model.language_model
+            if not self.with_llm:
+                del model.language_model
+            else:
+                self.vl_model = model
             model.half()
 
-        model.to_empty(device='cpu')
+        buffers_aware_empty(model, 'cpu')
         load_model_from_weight_files(model, self.model_path)
         self.model = model
         self.model.to(self.device).eval()

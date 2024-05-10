@@ -9,7 +9,8 @@ from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import add_sys_path, rewrite_ctx
+from lmdeploy.vl.model.utils import (add_sys_path, buffers_aware_empty,
+                                     rewrite_ctx)
 
 
 def _CLIPVisionModel_from_pretrained(vision_tower_name):
@@ -35,7 +36,8 @@ def init_empty_vit():
 class Xcomposer2VisionModel(VisonModel):
     """InternLM-Xcomposer2 vision model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self, model_path, device='cuda:0', with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.device = device
         self.build_model()
@@ -49,10 +51,13 @@ class Xcomposer2VisionModel(VisonModel):
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)
             model = model.half()
-            del model.model
-            del model.output
+            if not self.with_llm:
+                del model.model
+                del model.output
+            else:
+                self.vl_model = model
 
-        model.to_empty(device='cpu')
+        buffers_aware_empty(model, 'cpu')
 
         # additional components.
         with add_sys_path(self.model_path), init_empty_vit():
