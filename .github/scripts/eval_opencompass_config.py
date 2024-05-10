@@ -740,7 +740,7 @@ pt_qwen1_5_chat_7b = dict(type=LmdeployPytorchModel,
                           run_cfg=run_cfg_tp1_template,
                           end_str='<|im_end|>')
 
-pt_qwen1_5_moe_2_7B_Chat = dict(
+pt_qwen1_5_moe_2_7b_chat = dict(
     type=LmdeployPytorchModel,
     abbr='qwen1.5-moe-2.7b-chat-pytorch',
     path='Qwen/Qwen1.5-MoE-A2.7B-Chat',

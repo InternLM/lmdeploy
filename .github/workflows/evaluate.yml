@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[tb_internlm2_chat_7b,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_llama2_chat_7b,tb_qwen1_5_chat_7b,tb_llama_3_8b_instruct,pt_internlm2_chat_7b,pt_internlm2_chat_20b,pt_llama2_chat_7b,pt_qwen1_5_chat_7b,pt_qwen1_5_moe_2_7B_Chat,pt_llama_3_8b_instruct,tb_internlm2_chat_7b_kvint4,tb_internlm2_chat_20b_kvint4,tb_qwen1_5_chat_7b_kvint4,tb_llama_3_8b_instruct_kvint4]'
+        default: '[tb_internlm2_chat_7b,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_llama2_chat_7b,tb_qwen1_5_chat_7b,tb_llama_3_8b_instruct,pt_internlm2_chat_7b,pt_internlm2_chat_20b,pt_llama2_chat_7b,pt_qwen1_5_chat_7b,pt_qwen1_5_moe_2_7b_chat,pt_llama_3_8b_instruct,tb_internlm2_chat_7b_kvint4,tb_internlm2_chat_20b_kvint4,tb_qwen1_5_chat_7b_kvint4,tb_llama_3_8b_instruct_kvint4]'
       datasets:
         required: true
         description: 'Tested TurboMind models list. eg. [*mmlu_datasets, *ceval_datasets, *WiC_datasets, *WSC_datasets, *triviaqa_datasets, *gsm8k_datasets, *race_datasets, *crowspairs_datasets]'
@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 4320 # 72hours
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages

@@ -115,7 +115,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: 6,7
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -211,7 +211,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: 4,5
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -352,7 +352,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: 6,7
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -564,6 +564,7 @@ jobs:
             --name "lmdeploy-ci-triton-$GITHUB_RUN_ID-$date_today" \
             --workdir /__w/lmdeploy/lmdeploy \
             --env NCCL_LAUNCH_MODE=GROUP \
+            --pull never \
             -v $(pwd)/../../:/__w \
             -v ${MODEL_PATH}:${MODEL_PATH} \
             -v ${WORKDIR}:/root/workspace/workdir \
