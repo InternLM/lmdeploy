@@ -224,41 +224,6 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         add_summary(output_csv)
 
 
-def evaluate_new(models: List[str], datasets: List[str], workspace: str):
-    """Evaluate models from lmdeploy using opencompass.
-
-    Args:
-        models: Input models.
-        workspace: Working directory.
-    """
-    os.makedirs(workspace, exist_ok=True)
-    output_csv = os.path.join(workspace, 'results.csv')
-
-    opencompass_dir = os.path.abspath(os.environ['OPENCOMPASS_DIR'])
-    lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
-    config_path = os.path.join(lmdeploy_dir,
-                               '.github/scripts/eval_opencompass_config.py')
-    config_path_new = os.path.join(opencompass_dir, 'configs',
-                                   'eval_lmdeploy.py')
-    if os.path.exists(config_path_new):
-        os.remove(config_path_new)
-    shutil.copy(config_path, config_path_new)
-    with open(config_path_new, 'a') as f:
-        f.write(f'\ndatasets = {datasets}\n')
-        f.write(f'\nmodels = {models}\n')
-
-    cmd_eval = [
-        f'python3 {opencompass_dir}/run.py {config_path_new} -w {workspace}'
-    ]
-    eval_log = os.path.join(workspace, 'eval.txt')
-    run_cmd(cmd_eval, log_path=eval_log, cwd=lmdeploy_dir)
-
-    # write to github action summary
-    _append_summary('## Evaluation Results')
-    if os.path.exists(output_csv):
-        add_summary(output_csv)
-
-
 def create_model_links(src_dir: str, dst_dir: str):
     """Create softlinks for models."""
     paths = glob.glob(os.path.join(src_dir, '*'))

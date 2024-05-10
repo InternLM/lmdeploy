@@ -106,7 +106,7 @@ jobs:
           export LMDEPLOY_DIR=$(pwd)
           export CUDA_VISIBLE_DEVICES="${{github.event.inputs.devices}}"
 
-          python3 .github/scripts/action_tools.py evaluate_new \
+          python3 .github/scripts/action_tools.py evaluate \
             --models "${{github.event.inputs.models}}" \
             --datasets "${{github.event.inputs.datasets}}" \
             --workspace /root/evaluation-reports/$TIME_STAMP
