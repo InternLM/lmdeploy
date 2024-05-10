@@ -268,22 +268,22 @@ def _get_cogvlm_position_ids(context):
 
     q_seq_length = inputs.seq_length
     vision_input_info = inputs.vision_inputs
-    history_position_lengths = vision_input_info.history_lengths - vision_input_info.history_image_token_lengths + vision_input_info.history_image_nums * 3
     device = inputs.history_lengths.device
+    position_id_offsets = vision_input_info.history_image_token_lengths - vision_input_info.history_image_nums * 3
     if inputs.is_decoding:
-        position_ids = history_position_lengths
+        position_ids = inputs.history_lengths - position_id_offsets
     else:
-        if context.input_embeddings is not None and len(
-                context.input_embeddings) > 0:
+        history_position_lengths = vision_input_info.history_lengths - position_id_offsets
+        if vision_input_info.input_embeddings is not None and len(
+                vision_input_info.input_embeddings) > 0:
             token_type_ids = torch.tensor(
                 [[e is not None for e in li]
                  for li in vision_input_info.input_embeddings],
                 dtype=torch.bool,
                 device=device)
-            position_ids_all = vision_input_info.history_lengths[:,
-                                                                 None] + build_position_ids(
-                                                                     token_type_ids
-                                                                 )
+            position_ids_all = history_position_lengths[:,
+                                                        None] + build_position_ids(
+                                                            token_type_ids)
             starts = inputs.history_lengths - vision_input_info.history_lengths
             ends = starts + q_seq_length
             position_ids = torch.cat([

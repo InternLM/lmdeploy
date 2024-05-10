@@ -351,8 +351,10 @@ class StepContext:
         history_lengths = inputs.history_lengths
 
         # for vlm
-        input_embeddings, input_embedding_indexing = \
-            inputs.vision_inputs.get_inputs(history_lengths, q_seq_length)
+        input_embeddings, input_embedding_indexing = None, None
+        if inputs.vision_inputs is not None:
+            input_embeddings, input_embedding_indexing = \
+                inputs.vision_inputs.get_inputs(history_lengths, q_seq_length)
 
         batch_size = len(q_seq_length)
         device = q_seq_length.device
