@@ -61,7 +61,7 @@ env:
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
   DATASET_FILE: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
   TP_INFO: --tp 1
-  LOOP_NUM: 2
+  LOOP_NUM: 1
   TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
 
 
