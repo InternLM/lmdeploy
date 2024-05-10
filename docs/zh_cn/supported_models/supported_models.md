@@ -51,3 +51,4 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |    Gemma     |   2B-7B    |    Yes    |   No    |  No  |
 |     Dbrx     |    132B    |    Yes    |   No    |  No  |
 |  StarCoder2  |   3B-15B   |    Yes    |   No    |  No  |
+| CogVLM-Chat  |    17B     |    Yes    |   No    |  No  |
