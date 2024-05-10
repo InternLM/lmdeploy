@@ -101,6 +101,7 @@ class InternVLLlavaVisionModel(VisonModel):
                 del model.model.norm
             else:
                 self.vl_model = model
+                model.config.use_cache = False
 
         # move model to cpu
         with torch.device('cpu'):
@@ -124,11 +125,11 @@ class InternVLLlavaVisionModel(VisonModel):
                     shortest_edge=crop_size)
         # load weight
         load_model_from_weight_files(model, self.model_path)
-        model.to(self.device).eval()
+        model.to(self.device).eval().half()
 
         self.model = model.model
-        self.vision_tower = model.model.vision_tower.half()
-        self.mm_projector = model.model.mm_projector.half()
+        self.vision_tower = model.model.vision_tower
+        self.mm_projector = model.model.mm_projector
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """encode images."""

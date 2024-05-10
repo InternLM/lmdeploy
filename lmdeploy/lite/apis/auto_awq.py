@@ -40,16 +40,18 @@ NORM_TYPE_MAP = {
 
 
 def save_vl_model(vl_model, model_path, dst_path):
-    candidate = ['preprocessor_config.json', 'processor_config.json', 'vit']
-    for name in candidate:  # TODO not only local but also remote path
-        tmp_path = osp.join(model_path, name)
-        if osp.exists(tmp_path):
-            shutil.copy(tmp_path, osp.join(dst_path, name))
-
     safe_serialization = type(vl_model).__name__ == 'MGMLlamaForCausalLM'
     vl_model.save_pretrained(dst_path,
                              max_shard_size='2GB',
                              safe_serialization=safe_serialization)
+    candidate = [
+        'preprocessor_config.json', 'processor_config.json', 'vit',
+        'generation_config.json'
+    ]
+    for name in candidate:  # TODO not only local but also remote path
+        tmp_path = osp.join(model_path, name)
+        if osp.exists(tmp_path):
+            shutil.copy(tmp_path, osp.join(dst_path, name))
 
 
 def auto_awq(model: str,
