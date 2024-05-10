@@ -17,15 +17,14 @@ VISION_TOKEN_TYPE = 1
 # flake8: noqa: F821
 
 
-def get_expert_mask(
+def get_vision_expert_mask(
     token_type_ids: 'torch.LongTensor(B, L)'
 ) -> '[torch.BoolTensor(B, L), torch.BoolTensor(B, L)]':
     vision_token_mask = torch.zeros_like(token_type_ids, dtype=torch.bool)
     vision_token_mask[:, :-1] = (token_type_ids[:, :-1]
                                  == VISION_TOKEN_TYPE) & (token_type_ids[:, 1:]
                                                           == VISION_TOKEN_TYPE)
-    language_token_mask = ~vision_token_mask
-    return vision_token_mask, language_token_mask
+    return vision_token_mask
 
 
 class PatchedVisionExpertAttention(nn.Module):
@@ -78,8 +77,13 @@ class PatchedVisionExpertAttention(nn.Module):
         num_kv_heads = self.num_heads // world_size
         head_dim = self.head_dim
         hidden_size = num_heads * head_dim
-        vision_token_mask, language_token_mask = get_expert_mask(
-            token_type_ids)
+        # for embedding splitting
+        if hasattr(context, 'vision_token_mask'):
+            vision_token_mask = context.vision_token_mask
+        else:
+            vision_token_mask = get_vision_expert_mask(token_type_ids)
+
+        language_token_mask = ~vision_token_mask
 
         def __qkv_proj(hidden_states):
             """qkv_proj."""
@@ -195,16 +199,15 @@ class PatchedCogVLMModel(nn.Module):
         context = self.context.context
         # get inputs from context
         vision_embeddings = context.input_embeddings
-        vision_embedding_ranges = context.input_embedding_ranges
+        vision_embedding_indexing = context.input_embedding_indexing
         inputs_embeds = self.embed_tokens(input_ids)
-        token_type_ids, position_ids = _get_cogvlm_inputs(context)
-
+        token_type_ids = None
+        position_ids = _get_cogvlm_position_ids(context)
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             # multi-modality
-            assert token_type_ids is not None, 'multi-modality requires `token_type_ids`!'
-            assert len(vision_embeddings) == len(vision_embedding_ranges)
-            for emb, ranges in zip(vision_embeddings, vision_embedding_ranges):
-                inputs_embeds[0, ranges[0]:ranges[1]] = emb.to(inputs_embeds)
+            token_type_ids = vision_embedding_indexing.int()
+            inputs_embeds[vision_embedding_indexing] = vision_embeddings.to(
+                inputs_embeds)
         else:
             if token_type_ids is None:
                 token_type_ids = torch.ones_like(
@@ -232,43 +235,69 @@ class PatchedCogVLMModel(nn.Module):
         )
 
 
-def _get_cogvlm_inputs(context):
-    """get cogvlm inputs."""
+def build_position_ids(
+    x: 'torch.BoolTensor(B, L)',
+    attention_mask: Optional['torch.BoolTensor(B, L)'] = None
+) -> 'torch.LongTensor(B, L)':
+    if attention_mask is not None:
+        tmp = x.clone()
+        tmp[~(attention_mask.bool())] = -1
+    else:
+        tmp = x.clone()
+    # image boi eoi token as LANGUAGE_TOKEN_TYPE
+    is_boi_eoi = torch.zeros_like(x, dtype=torch.bool)
+    is_boi_eoi[:, 1:] |= (tmp[:, 1:] == VISION_TOKEN_TYPE) & (
+        tmp[:, :-1] == LANGUAGE_TOKEN_TYPE)
+    is_boi_eoi[:, 0] |= (tmp[:, 0] == VISION_TOKEN_TYPE)
+    is_boi_eoi[:, :-1] |= (tmp[:, :-1] == VISION_TOKEN_TYPE) & (
+        tmp[:, 1:] == LANGUAGE_TOKEN_TYPE)
+    is_boi_eoi[:, -1] |= (tmp[:, -1] == VISION_TOKEN_TYPE)
+    tmp[is_boi_eoi] = LANGUAGE_TOKEN_TYPE
+    # final position ids
+    y = torch.zeros_like(x, dtype=torch.long)
+    y[:, 1:] = (tmp[:, 1:] == LANGUAGE_TOKEN_TYPE) | (
+        (tmp[:, 1:] == VISION_TOKEN_TYPE) &
+        (tmp[:, :-1] == LANGUAGE_TOKEN_TYPE))
+    y = y.cumsum(dim=-1)
+    return y
+
+
+def _get_cogvlm_position_ids(context):
+    """get cogvlm position_ids."""
     inputs = context.inputs
 
     q_seq_length = inputs.seq_length
-
-    history_position_lengths = inputs.history_lengths - inputs.history_image_token_lengths + inputs.history_image_nums * 3
-    token_type_ids = None
+    vision_input_info = inputs.vision_inputs
+    history_position_lengths = vision_input_info.history_lengths - vision_input_info.history_image_token_lengths + vision_input_info.history_image_nums * 3
     device = inputs.history_lengths.device
     if inputs.is_decoding:
         position_ids = history_position_lengths
     else:
-        if inputs.input_embedding_ranges is not None and len(
-                inputs.input_embedding_ranges) > 0:
-            token_type_ids = []
-            position_ids = []
-            for idx, input_ranges in enumerate(inputs.input_embedding_ranges):
-                seq_len = q_seq_length[idx]
-                cur_token_type_ids = torch.zeros(seq_len,
-                                                 dtype=torch.long,
-                                                 device=device)
-                cur_position_mask = torch.ones(seq_len,
-                                               dtype=torch.long,
-                                               device=device)
-                for start, end in input_ranges:
-                    # vision token_types
-                    cur_token_type_ids[start:end] = VISION_TOKEN_TYPE
-                    cur_position_mask[start + 2:end - 1] = 0
-
-                cur_position_ids = cur_position_mask.cumsum(
-                    0) - 1 + history_position_lengths[idx]
-                position_ids.append(cur_position_ids)
-                token_type_ids.append(cur_token_type_ids)
-            position_ids = torch.cat(position_ids)
-            token_type_ids = torch.cat(token_type_ids).unsqueeze(0)
+        if context.input_embeddings is not None and len(
+                context.input_embeddings) > 0:
+            token_type_ids = torch.tensor(
+                [[e is not None for e in li]
+                 for li in vision_input_info.input_embeddings],
+                dtype=torch.bool,
+                device=device)
+            position_ids_all = vision_input_info.history_lengths[:,
+                                                                 None] + build_position_ids(
+                                                                     token_type_ids
+                                                                 )
+            starts = inputs.history_lengths - vision_input_info.history_lengths
+            ends = starts + q_seq_length
+            position_ids = torch.cat([
+                pids[s:e]
+                for (pids, s, e) in zip(position_ids_all, starts, ends)
+            ]).unsqueeze(0)
+            vision_token_mask_all = get_vision_expert_mask(token_type_ids)
+            vision_token_mask = torch.cat([
+                masks[s:e]
+                for (masks, s, e) in zip(vision_token_mask_all, starts, ends)
+            ]).unsqueeze(0)
+            context.vision_token_mask = vision_token_mask
         else:
             position_ids = (context.attention_mask.long().cumsum(-1) -
                             1).squeeze(0)
-            position_ids += history_position_lengths
-    return token_type_ids, position_ids
+            position_ids += history_position_lengths + inputs.history_lengths - vision_input_info.history_lengths
+    return position_ids

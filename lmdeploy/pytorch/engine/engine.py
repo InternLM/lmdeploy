@@ -18,7 +18,8 @@ from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
-from .model_agent import AdapterInfo, AutoModelAgent, ModelInputs
+from .model_agent import (AdapterInfo, AutoModelAgent, ModelInputs,
+                          VisionModelInputs)
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -354,22 +355,6 @@ class Engine:
         history_lengths = [msg.history_len for msg in messages]
         history_lengths = torch.tensor(history_lengths)
 
-        history_image_nums = torch.LongTensor(
-            [msg.history_image_num for msg in messages])
-        history_image_token_lengths = torch.LongTensor(
-            [msg.history_image_token_len for msg in messages])
-
-        input_embeddings = []
-        input_embedding_ranges = []
-        for msg in messages:
-            input_embeddings.extend([
-                torch.from_numpy(emb.embeddings)
-                for emb in msg.input_embeddings
-            ])
-            input_embedding_ranges.append(
-                torch.LongTensor([[emb.start, emb.end]
-                                  for emb in msg.input_embeddings]))
-
         token_ids = [msg.token_ids for msg in messages]
 
         meta = messages[0].meta
@@ -407,22 +392,42 @@ class Engine:
 
         num_ignored_history = [msg.num_ignored_history for msg in messages]
         num_ignored_history = torch.tensor(num_ignored_history)
-        return ModelInputs(
-            input_ids=input_ids,
-            input_embeddings=input_embeddings,
-            input_embedding_ranges=input_embedding_ranges,
-            seq_length=seq_length,
+
+        # for vlm
+        history_image_nums = torch.LongTensor(
+            [msg.history_image_num for msg in messages])
+        history_image_token_lengths = torch.LongTensor(
+            [msg.history_image_token_len for msg in messages])
+        input_embeddings = None
+        has_embedding = any(
+            [len(msg.input_embeddings) > 0 for msg in messages])
+        if has_embedding:
+            input_embeddings = []
+            for msg in messages:
+                embeddings = [None] * max_q_seq_length
+                for emb in msg.input_embeddings:
+                    embeddings[emb.start:emb.end] = list(
+                        torch.from_numpy(emb.embeddings).split(1, dim=0))
+                input_embeddings.append(embeddings)
+        vision_embedding_inputs = VisionModelInputs(
             history_lengths=history_lengths,
             history_image_nums=history_image_nums,
             history_image_token_lengths=history_image_token_lengths,
-            block_offsets=block_offsets,
-            max_q_seq_length=max_q_seq_length,
-            max_history_length=max_history_length,
-            is_decoding=is_decoding,
-            num_ignored_history=num_ignored_history,
-            local_adapter_ids=local_adapter_ids,
-            adapter_info=adapter_info,
-            meta=meta)
+            input_embeddings=input_embeddings,
+        )
+
+        return ModelInputs(input_ids=input_ids,
+                           seq_length=seq_length,
+                           history_lengths=history_lengths,
+                           block_offsets=block_offsets,
+                           max_q_seq_length=max_q_seq_length,
+                           max_history_length=max_history_length,
+                           is_decoding=is_decoding,
+                           num_ignored_history=num_ignored_history,
+                           local_adapter_ids=local_adapter_ids,
+                           adapter_info=adapter_info,
+                           vision_inputs=vision_embedding_inputs,
+                           meta=meta)
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,
                                  stop_words: torch.Tensor,
