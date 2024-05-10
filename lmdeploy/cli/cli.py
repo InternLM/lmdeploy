@@ -106,6 +106,7 @@ class CLI(object):
         # # chat template args
         ArgumentHelper.meta_instruction(parser)
         ArgumentHelper.cap(parser)
+        ArgumentHelper.chat_template(parser)
         #
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -226,10 +227,20 @@ class CLI(object):
     def chat(args):
         """Chat with pytorch or turbomind engine."""
         from lmdeploy.archs import autoget_backend
+        from lmdeploy.model import ChatTemplateConfig
         backend = args.backend
         if backend != 'pytorch':
             # set auto backend mode
             backend = autoget_backend(args.model_path)
+
+        chat_template_config = ChatTemplateConfig(
+            model_name=args.model_name,
+            meta_instruction=args.meta_instruction,
+            capability=args.cap)
+        if args.chat_template:
+            chat_template_config = ChatTemplateConfig.from_json(
+                args.chat_template)
+
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             from lmdeploy.pytorch.chat import run_chat
@@ -245,10 +256,13 @@ class CLI(object):
             )
             run_chat(args.model_path,
                      engine_config,
-                     trust_remote_code=args.trust_remote_code)
+                     trust_remote_code=args.trust_remote_code,
+                     chat_template_config=chat_template_config)
         else:
             from lmdeploy.turbomind.chat import main as run_chat
             kwargs = convert_args(args)
+            kwargs.pop('chat_template')
+            kwargs['chat_template_cfg'] = chat_template_config
             run_chat(**kwargs)
 
     @staticmethod
