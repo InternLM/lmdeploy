@@ -96,7 +96,6 @@ class Engine:
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True,
-                 tokenizer_path: str = None,
                  **kwargs) -> None:
         check_env()
         check_model(model_path, trust_remote_code)
@@ -133,7 +132,6 @@ class Engine:
             model_path = get_model(model_path, engine_config.download_dir,
                                    engine_config.revision)
         self.model_path = model_path
-        self.tokenizer_path = tokenizer_path or model_path
 
         self.model_agent = AutoModelAgent.from_pretrained(
             model_path,
@@ -196,11 +194,7 @@ class Engine:
         """create tokenizer."""
         from lmdeploy.tokenizer import Tokenizer
         if not hasattr(self, '_tokenizer'):
-            # TODO move this out
-            if 'cogvlm' in self.model_path.lower():
-                self._tokenizer = Tokenizer('lmsys/vicuna-7b-v1.5')
-            else:
-                self._tokenizer = Tokenizer(self.model_path)
+            self._tokenizer = Tokenizer(self.model_path)
         return self._tokenizer
 
     def _create_buffers(self):
