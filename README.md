@@ -125,7 +125,6 @@ For detailed inference benchmarks in more devices and more settings, please refe
 <td>
 <ul>
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
-  <li>InternLM-XComposer (7B)</li>
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>QWen-VL (7B)</li>
   <li>DeepSeek-VL (7B)</li>

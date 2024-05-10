@@ -33,7 +33,9 @@ SUPPORTED_ARCHS = dict(
     MultiModalityCausalLM='deepseekvl',
     # mini gemini
     MGMLlamaForCausalLM='llama',
-    MiniGeminiLlamaForCausalLM='llama')
+    MiniGeminiLlamaForCausalLM='llama',
+    # mistral
+    MistralForCausalLM='llama')
 
 
 def get_model_arch(model_path: str):

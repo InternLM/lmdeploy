@@ -9,7 +9,6 @@
 |       Llama3        |   8B, 70B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM       |  7B - 20B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM2      |  7B - 20B   |    Yes    |   Yes   |   Yes   |  Yes  |
-| InternLM-XComposer  |     7B      |    Yes    |    -    |    -    |   -   |
 | InternLM-XComposer2 | 7B, 4khd-7B |    Yes    |    -    |    -    |   -   |
 |        QWen         | 1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       QWen1.5       | 1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -26,7 +25,7 @@
 “-” 表示还没有验证。
 
 ```{note}
-turbomind 引擎不支持 window attention。所以，对于应用了 window attention，并开启了对应的开关"use_sliding_window"的模型，在推理时，请选择 pytorch engine
+turbomind 引擎不支持 window attention。所以，对于应用了 window attention，并开启了对应的开关"use_sliding_window"的模型，比如 Mistral、QWen1.5 等，在推理时，请选择 pytorch engine
 ```
 
 ### PyTorch 支持的模型
