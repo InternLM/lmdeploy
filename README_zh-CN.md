@@ -121,6 +121,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>
   <li>Dbrx (132B)</li>
+  <li>StarCoder2 (3B - 15B)</li>
 </ul>
 </td>
 <td>
@@ -131,7 +132,6 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>MiniGeminiLlama (7B)</li>
-  <li>StarCoder2 (3B - 15B)</li>
 </ul>
 </td>
 </tr>
@@ -164,7 +164,7 @@ pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_V
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
+pipe = lmdeploy.pipeline("internlm/internlm2-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
