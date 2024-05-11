@@ -168,6 +168,7 @@ class VisionModelInputs:
     history_image_nums: torch.LongTensor
     history_image_token_lengths: torch.LongTensor
     input_embeddings: List[List[torch.Tensor]] = None
+    input_embedding_indexing: torch.BoolTensor = None
 
     def to_device(self, device: str):
         """to device."""
@@ -191,23 +192,19 @@ class VisionModelInputs:
         input_embedding_indexing = None
         if self.input_embeddings is not None and len(
                 self.input_embeddings) > 0:
-            device = self.history_lengths.device
             starts = history_lengths - self.history_lengths
             ends = starts + seq_lengths
-            input_embedding_li = [
-                embeddings[s:e]
-                for (embeddings, s,
-                     e) in zip(self.input_embeddings, starts, ends)
-            ]
-            input_embedding_indexing = torch.tensor(
-                sum([[e is not None for e in li] for li in input_embedding_li],
-                    []),
-                dtype=torch.bool,
-                device=device).unsqueeze(0)
-            input_embeddings = torch.cat(sum([[e for e in li if e is not None]
-                                              for li in input_embedding_li],
-                                             []),
-                                         dim=0)
+            input_embedding_li = sum(
+                [[emb for emb in embeddings[s:e] if emb is not None]
+                 for (embeddings, s,
+                      e) in zip(self.input_embeddings, starts, ends)], [])
+            if len(input_embedding_li) > 0:
+                input_embedding_indexing = torch.cat([
+                    indexing[s:e] for indexing, s, e in zip(
+                        self.input_embedding_indexing, starts, ends)
+                ],
+                                                     dim=0).unsqueeze(0)
+                input_embeddings = torch.cat(input_embedding_li, dim=0)
         return input_embeddings, input_embedding_indexing
 
 
@@ -374,7 +371,8 @@ class StepContext:
         # position ids 1d
         position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
                                                   device)
-
+        # print(20 * '--*--')
+        # print(position_ids.cpu().numpy().tolist())
         # seq_len + history_length
         kv_seq_length = q_seq_length + inputs.history_lengths
         max_kv_seq_length = max_q_seq_length + inputs.max_history_length

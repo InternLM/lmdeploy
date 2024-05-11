@@ -490,3 +490,4 @@ class SchedulerSequence:
         self._num_history_ids = step
         self._num_token_ids = num_all_ids - step
         self.num_ignored_history = min(step, self.num_ignored_history)
+        # TODO update for vlm

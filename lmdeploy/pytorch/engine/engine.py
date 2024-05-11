@@ -393,22 +393,27 @@ class Engine:
         history_image_token_lengths = torch.LongTensor(
             [msg.history_image_token_len for msg in messages])
         input_embeddings = None
+        input_embedding_indexing = None
         has_embedding = any(
             [len(msg.input_embeddings) > 0 for msg in messages])
         if has_embedding:
-            input_embeddings = []
-            for msg in messages:
-                embeddings = [None] * max_q_seq_length
+            input_embeddings = [[None] * max_q_seq_length] * len(messages)
+            input_embedding_indexing = torch.zeros(
+                (batch_size, max_q_seq_length), dtype=torch.bool)
+            for msg_id, msg in enumerate(messages):
                 for emb in msg.input_embeddings:
-                    embeddings[emb.start:emb.end] = list(
+                    # make slice index relative to embeddings
+                    emb_start = emb.start - msg.history_len
+                    emb_end = emb.end - msg.history_len
+                    input_embeddings[msg_id][emb_start:emb_end] = list(
                         torch.from_numpy(emb.embeddings).split(1, dim=0))
-                input_embeddings.append(embeddings)
+                    input_embedding_indexing[msg_id][emb_start:emb_end] = True
         vision_embedding_inputs = VisionModelInputs(
             history_lengths=history_lengths,
             history_image_nums=history_image_nums,
             history_image_token_lengths=history_image_token_lengths,
             input_embeddings=input_embeddings,
-        )
+            input_embedding_indexing=input_embedding_indexing)
 
         return ModelInputs(input_ids=input_ids,
                            seq_length=seq_length,

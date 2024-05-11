@@ -24,7 +24,32 @@ def get_vision_expert_mask(
     vision_token_mask[:, :-1] = (token_type_ids[:, :-1]
                                  == VISION_TOKEN_TYPE) & (token_type_ids[:, 1:]
                                                           == VISION_TOKEN_TYPE)
-    return vision_token_mask
+    language_token_mask = ~vision_token_mask
+    return vision_token_mask, language_token_mask
+
+
+class PatchedVisionExpertMLP(nn.Module):
+
+    def forward(self, hidden_states: 'torch.Tensor(B, L, D)',
+                token_type_ids: 'torch.LongTensor(B, L)'):
+        output = torch.empty(hidden_states.shape,
+                             dtype=hidden_states.dtype,
+                             device=hidden_states.device)
+        # for embedding splitting
+        context = self.context.context
+        if hasattr(context, 'vision_token_mask') and hasattr(
+                context, 'language_token_mask'):
+            vision_token_mask = context.vision_token_mask
+            language_token_mask = context.language_token_mask
+        else:
+            vision_token_mask, language_token_mask = get_vision_expert_mask(
+                token_type_ids)
+
+        output[vision_token_mask] = self.vision_mlp(
+            hidden_states[vision_token_mask])
+        output[language_token_mask] = self.language_mlp(
+            hidden_states[language_token_mask])
+        return output
 
 
 class PatchedVisionExpertAttention(nn.Module):
@@ -78,12 +103,13 @@ class PatchedVisionExpertAttention(nn.Module):
         head_dim = self.head_dim
         hidden_size = num_heads * head_dim
         # for embedding splitting
-        if hasattr(context, 'vision_token_mask'):
+        if hasattr(context, 'vision_token_mask') and hasattr(
+                context, 'language_token_mask'):
             vision_token_mask = context.vision_token_mask
+            language_token_mask = context.language_token_mask
         else:
-            vision_token_mask = get_vision_expert_mask(token_type_ids)
-
-        language_token_mask = ~vision_token_mask
+            vision_token_mask, language_token_mask = get_vision_expert_mask(
+                token_type_ids)
 
         def __qkv_proj(hidden_states):
             """qkv_proj."""
@@ -201,18 +227,17 @@ class PatchedCogVLMModel(nn.Module):
         vision_embeddings = context.input_embeddings
         vision_embedding_indexing = context.input_embedding_indexing
         inputs_embeds = self.embed_tokens(input_ids)
-        token_type_ids = None
         position_ids = _get_cogvlm_position_ids(context)
+
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             # multi-modality
             token_type_ids = vision_embedding_indexing.int()
             inputs_embeds[vision_embedding_indexing] = vision_embeddings.to(
                 inputs_embeds)
         else:
-            if token_type_ids is None:
-                token_type_ids = torch.ones_like(
-                    input_ids, dtype=torch.long,
-                    device=input_ids.device) * LANGUAGE_TOKEN_TYPE
+            token_type_ids = torch.ones_like(
+                input_ids, dtype=torch.int,
+                device=input_ids.device) * LANGUAGE_TOKEN_TYPE
         hidden_states = inputs_embeds
 
         for idx, decoder_layer in enumerate(self.layers):
@@ -236,14 +261,8 @@ class PatchedCogVLMModel(nn.Module):
 
 
 def build_position_ids(
-    x: 'torch.BoolTensor(B, L)',
-    attention_mask: Optional['torch.BoolTensor(B, L)'] = None
-) -> 'torch.LongTensor(B, L)':
-    if attention_mask is not None:
-        tmp = x.clone()
-        tmp[~(attention_mask.bool())] = -1
-    else:
-        tmp = x.clone()
+        x: 'torch.BoolTensor(B, L)') -> 'torch.LongTensor(B, L)':
+    tmp = x.clone()
     # image boi eoi token as LANGUAGE_TOKEN_TYPE
     is_boi_eoi = torch.zeros_like(x, dtype=torch.bool)
     is_boi_eoi[:, 1:] |= (tmp[:, 1:] == VISION_TOKEN_TYPE) & (
@@ -268,36 +287,33 @@ def _get_cogvlm_position_ids(context):
 
     q_seq_length = inputs.seq_length
     vision_input_info = inputs.vision_inputs
-    device = inputs.history_lengths.device
-    position_id_offsets = vision_input_info.history_image_token_lengths - vision_input_info.history_image_nums * 3
+    position_id_offsets = vision_input_info.history_image_token_lengths - vision_input_info.history_image_nums * 2
     if inputs.is_decoding:
         position_ids = inputs.history_lengths - position_id_offsets
     else:
-        history_position_lengths = vision_input_info.history_lengths - position_id_offsets
         if vision_input_info.input_embeddings is not None and len(
                 vision_input_info.input_embeddings) > 0:
-            token_type_ids = torch.tensor(
-                [[e is not None for e in li]
-                 for li in vision_input_info.input_embeddings],
-                dtype=torch.bool,
-                device=device)
+            starts = inputs.history_lengths - vision_input_info.history_lengths
+            ends = starts + q_seq_length
+            token_type_ids = vision_input_info.input_embedding_indexing.to(
+                torch.int)
+            history_position_lengths = vision_input_info.history_lengths - position_id_offsets
             position_ids_all = history_position_lengths[:,
                                                         None] + build_position_ids(
                                                             token_type_ids)
-            starts = inputs.history_lengths - vision_input_info.history_lengths
-            ends = starts + q_seq_length
             position_ids = torch.cat([
                 pids[s:e]
                 for (pids, s, e) in zip(position_ids_all, starts, ends)
             ]).unsqueeze(0)
-            vision_token_mask_all = get_vision_expert_mask(token_type_ids)
+            vision_token_mask_all, _ = get_vision_expert_mask(token_type_ids)
             vision_token_mask = torch.cat([
                 masks[s:e]
                 for (masks, s, e) in zip(vision_token_mask_all, starts, ends)
             ]).unsqueeze(0)
             context.vision_token_mask = vision_token_mask
+            context.language_token_mask = ~vision_token_mask
         else:
             position_ids = (context.attention_mask.long().cumsum(-1) -
                             1).squeeze(0)
-            position_ids += history_position_lengths + inputs.history_lengths - vision_input_info.history_lengths
+            position_ids += inputs.history_lengths - position_id_offsets
     return position_ids
