@@ -43,8 +43,15 @@ public:
     // true if this kernel can be used to compute the gemm
     bool is_feasible(const GemmDesc& desc) const noexcept;
 
-    std::vector<std::pair<int, int64_t>>
-    EstimateSplits(int m, int n, int k, int max_split_k, int sm_count, int max_wave_count, int top_k);
+    std::vector<std::pair<int, float>> Estimate(int   m,
+                                                int   n,
+                                                int   k,
+                                                int   max_split_k,
+                                                int   sm_count,
+                                                int   max_wave_count,
+                                                int   top_k,
+                                                float bytes_per_second,
+                                                float fma_per_second);
 
     const KernelDesc& desc() const noexcept
     {

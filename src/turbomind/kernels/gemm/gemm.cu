@@ -55,7 +55,11 @@ inline bool operator<(const GemmDesc& a, const GemmDesc& b)
 
 struct Gemm::Impl {
 
-    Impl(): props_{GetCudaDeviceProps()}, registry_{props_} {}
+    Impl(): props_{GetCudaDeviceProps()}, registry_{props_}
+    {
+        l2_bytes_per_second_ = MeasureL2CacheThroughput();
+        fma_per_second_      = MeasureMmaThroughput();
+    }
 
     // find launch spec in dispatch cache, dispatch by heuristic on cache miss
     LaunchSpec Dispatch(DispatchPolicy policy, GemmDesc desc, size_t barriers_size, size_t partials_size)
@@ -116,19 +120,21 @@ struct Gemm::Impl {
             kernels.end());
 
         //                    cost     splits
-        std::vector<std::pair<int64_t, int>> costs;
+        std::vector<std::pair<float, int>> costs;
 
         for (const auto& k : kernels) {
-            // std::cout << "\n" << k->name() << "\n";
+            std::cout << "\n" << k->name() << "\n";
             int max_split_k = k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
             // std::cout << "max_split_k: " << max_split_k << "\n";
-            auto [splits, cost] = k->EstimateSplits(desc.m,  //
-                                                    desc.n,
-                                                    desc.k,
-                                                    max_split_k,
-                                                    props_->multiProcessorCount,
-                                                    1,
-                                                    1)
+            auto [splits, cost] = k->Estimate(desc.m,  //
+                                              desc.n,
+                                              desc.k,
+                                              max_split_k,
+                                              props_->multiProcessorCount,
+                                              1,
+                                              1,
+                                              l2_bytes_per_second_,
+                                              fma_per_second_)
                                       .front();
             costs.emplace_back(cost, splits);
         }
@@ -165,6 +171,8 @@ struct Gemm::Impl {
             return 0;
         }
 
+        std::cout << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
+
         std::vector<Kernel*> kernels;
         for (const auto& k : registry_.kernels()) {
             if (k->is_feasible(desc)) {
@@ -174,18 +182,21 @@ struct Gemm::Impl {
 
         std::vector<LaunchSpec> specs;
         for (const auto& k : kernels) {
+            std::cout << k->name() << "\n";
             int max_splits = k->GetMaxSplits(desc.m, desc.n, barriers_size, partials_size);
             max_splits     = std::min(max_splits, 8);
-            auto splits    = k->EstimateSplits(desc.m,  //
-                                            desc.n,
-                                            desc.k,
-                                            max_splits,
-                                            props_->multiProcessorCount,
-                                            32,
-                                            10);
-            for (const auto& [split_k, _] : splits) {
+            auto splits    = k->Estimate(desc.m,  //
+                                      desc.n,
+                                      desc.k,
+                                      max_splits,
+                                      props_->multiProcessorCount,
+                                      32,
+                                      10,
+                                      l2_bytes_per_second_,
+                                      fma_per_second_);
+            for (const auto& [split_k, cost] : splits) {
                 for (const auto& swizzle : {3}) {
-                    specs.push_back(LaunchSpec{k, swizzle, split_k});
+                    specs.push_back(LaunchSpec{k, swizzle, split_k, cost});
                 }
             }
         }
@@ -203,14 +214,14 @@ struct Gemm::Impl {
         cudaEventCreate(&ev_beg);
         cudaEventCreate(&ev_end);
 
-        std::vector<float> measurements;
+        // std::vector<float> measurements;
 
-        for (const auto& spec : specs) {
+        for (auto& spec : specs) {
             int                iter = 0;
             float              accum{};
             std::vector<float> duration;
-            std::cout << "measuring " << spec.kernel->name() << " with swizzle=" << spec.swizzle
-                      << ", splits=" << spec.splits << "\n";
+            // std::cout << "measuring " << spec.kernel->name() << " with swizzle=" << spec.swizzle
+            //           << ", splits=" << spec.splits << "\n";
             while (true) {
                 CacheFlushing::flush(st);
                 // cudaStreamSynchronize(st);
@@ -246,25 +257,29 @@ struct Gemm::Impl {
                 }
             }
 
-            measurements.push_back(accum / static_cast<float>(iter));
+            spec.measured = accum / static_cast<float>(iter);
+            // measurements.push_back(accum / static_cast<float>(iter));
         }
 
         cudaEventDestroy(ev_beg);
         cudaEventDestroy(ev_end);
 
-        std::vector<int> idxs(measurements.size());
+        std::vector<int> idxs(specs.size());
         std::iota(idxs.begin(), idxs.end(), 0);
         std::sort(idxs.begin(), idxs.end(), [&](int i, int j) {  //
-            return measurements[i] < measurements[j];
+            return specs[i].measured < specs[j].measured;
         });
 
         for (const auto& i : idxs) {
-            std::cout << specs[i].kernel->name() << " swizzle=" << specs[i].swizzle << ", splits=" << specs[i].splits
-                      << ", time=" << measurements[i] << "ms\n";
+            std::cout << specs[i].kernel->name()                              //
+                      << " swizzle=" << specs[i].swizzle                      //
+                      << ", splits=" << specs[i].splits                       //
+                      << ", estimated=" << specs[i].estimated * 1e3f << "ms"  //
+                      << ", measured=" << specs[i].measured << "ms\n";
         }
 
         LaunchSpec spec{};
-        if (!idxs.empty() && measurements[idxs[0]] != kFloatInf) {
+        if (!idxs.empty() && specs[idxs[0]].measured != kFloatInf) {
             spec                  = specs[idxs[0]];
             dispatch_cache_[desc] = spec;
         }
@@ -279,7 +294,7 @@ struct Gemm::Impl {
             --unaligned_desc.m;
             LaunchSpec unaligned_spec{};
             for (const auto& i : idxs) {
-                if (measurements[i] == kFloatInf) {
+                if (specs[i].measured == kFloatInf) {
                     break;
                 }
                 if (!specs[i].kernel->align_m()) {
@@ -332,6 +347,9 @@ private:
 
 private:
     std::shared_ptr<cudaDeviceProp> props_;
+
+    float l2_bytes_per_second_;
+    float fma_per_second_;
 
     std::map<GemmDesc, LaunchSpec> dispatch_cache_;
     Registry                       registry_;
@@ -412,9 +430,9 @@ int Gemm::Run(const Operation&    operation,
     spec = impl_->Dispatch(operation.dispatch, desc, workspace.barriers_size, workspace.partials_size);
 
     if (spec.kernel) {
-        // std::cout << "[Gemm] dispatch: " << spec.kernel->name()  //
-        //           << " split_k=" << spec.splits                  //
-        //           << " swizzle=" << spec.swizzle << std::endl;
+        std::cout << "[Gemm] dispatch: " << spec.kernel->name()  //
+                  << " split_k=" << spec.splits                  //
+                  << " swizzle=" << spec.swizzle << std::endl;
         return launch(spec, stream);
     }
 

@@ -149,7 +149,7 @@ struct GemmUniversal {
         }
     }
 
-    __device__ static constexpr int check_m(int mi, int end_m)
+    __device__ static constexpr bool check_m(int mi, int end_m)
     {
         if constexpr (AlignedM) {
             return 1;
@@ -159,7 +159,7 @@ struct GemmUniversal {
         }
     }
 
-    __device__ static constexpr int check_n(int ni, int end_n)
+    __device__ static constexpr bool check_n(int ni, int end_n)
     {
         if constexpr (AlignedN) {
             return 1;
@@ -206,10 +206,11 @@ struct GemmUniversal {
                 const int mi = d.y + s * Map::kDeltaS;
                 PRAGMA_UNROLL
                 for (int c = 0; c < C; ++c) {
-                    const int ni = d.x + c * Map::kDeltaC;
-                    if (check_m(mi, end_m) && check_n(ni, end_n)) {
-                        Ldg(frag_C[0][c],
-                            &param.partial_C[k * param.m * param.n + (offset_m + mi) * param.n + offset_n + ni]);
+                    const int  ni    = d.x + c * Map::kDeltaC;
+                    const int  index = k * param.m * param.n + (offset_m + mi) * param.n + offset_n + ni;
+                    const bool mask  = check_m(mi, end_m) && check_n(ni, end_n);
+                    if (mask) {
+                        Ldg(frag_C[0][c], &param.partial_C[index]);
                     }
                 }
 
@@ -226,10 +227,11 @@ struct GemmUniversal {
             const int mi = d.y + s * Map::kDeltaS;
             PRAGMA_UNROLL
             for (int c = 0; c < C; ++c) {
-                const int ni = d.x + c * Map::kDeltaC;
-                if (check_m(mi, end_m) && check_n(ni, end_n)) {
-                    Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<T>(accu_C[s][c]));
-                }
+                const int  ni    = d.x + c * Map::kDeltaC;
+                const int  index = (offset_m + mi) * param.n + offset_n + ni;
+                const bool mask  = check_m(mi, end_m) && check_n(ni, end_n);
+                if (mask)
+                    Store(&param.C[index], cast<T>(accu_C[s][c]));
             }
         }
     }

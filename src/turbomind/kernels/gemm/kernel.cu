@@ -7,8 +7,15 @@
 
 namespace turbomind::gemm {
 
-std::vector<std::pair<int, int64_t>>
-Kernel::EstimateSplits(int m, int n, int k, int max_split_k, int sm_count, int max_wave_count, int top_k)
+std::vector<std::pair<int, float>> Kernel::Estimate(int   m,
+                                                    int   n,
+                                                    int   k,
+                                                    int   max_split_k,
+                                                    int   sm_count,
+                                                    int   max_wave_count,
+                                                    int   top_k,
+                                                    float bytes_per_second,
+                                                    float fma_per_second)
 {
     const int tiled_shape_m = ceil_div(m, desc_.cta_tile.x);
     const int tiled_shape_n = ceil_div(n, desc_.cta_tile.y);
@@ -16,12 +23,17 @@ Kernel::EstimateSplits(int m, int n, int k, int max_split_k, int sm_count, int m
 
     std::cout << tiled_shape_m << " " << tiled_shape_n << " " << chunk_cnt_k << std::endl;
 
-    const int64_t cta_mn = desc_.cta_tile.x * desc_.cta_tile.y;
+    const int     cta_m  = desc_.cta_tile.x;
+    const int     cta_n  = desc_.cta_tile.y;
+    const int64_t cta_mn = cta_m * cta_n;
 
-    const float wave_per_split = float(tiled_shape_m * tiled_shape_n) / float(sm_count * max_active_ctas_);
+    const int tiled_shape_mn = tiled_shape_m * tiled_shape_n;
+    const int concurrency    = sm_count * std::min(2, max_active_ctas_);
+    // const int   concurrency    = sm_count;
+    const float wave_per_split = float(tiled_shape_mn) / float(concurrency);
 
     //                     cost    volume   waves  split-k
-    std::vector<std::tuple<int64_t, int64_t, float, int>> estimations;
+    std::vector<std::tuple<float, int64_t, float, int>> estimations;
 
     for (int splits = 1; splits <= max_split_k; ++splits) {
         const float waves      = wave_per_split * splits;
@@ -31,14 +43,28 @@ Kernel::EstimateSplits(int m, int n, int k, int max_split_k, int sm_count, int m
             break;
         }
 
-        const int gemm_size_k = ceil_div(chunk_cnt_k, splits) * chunk_size_k_;
+        const int64_t gemm_size_k = ceil_div(chunk_cnt_k, splits) * chunk_size_k_;
 
-        const int64_t volume = cta_mn * gemm_size_k;  // cta volume
-        const int64_t cost   = volume * wave_count;
+        const int64_t fma_volume   = cta_mn * gemm_size_k;  // cta volume
+        const int64_t ldg_volume   = (cta_m * 2 + cta_n / 2) * gemm_size_k;
+        const int64_t split_volume = 2 * cta_mn * 4;  // 2 for W/R, 4 for float
 
-        std::cout << cost << " " << volume << " " << waves << " " << splits << std::endl;
+        // (CTA_M * CTA_N) * ceil(K / S) * ceil(S * TILED_M * TILED_N / C) * C
+        const float fma_cost = fma_volume * wave_count * concurrency / fma_per_second;
 
-        estimations.emplace_back(cost, volume, waves, splits);
+        // (CTA_M + CTA_N) * ceil(K / S) * ceil(S * TILED_M * TILED_N / C) * C
+        const float ldg_cost = ldg_volume * wave_count * concurrency / bytes_per_second;
+
+        // (CTA_M * CTA_N) * ceil(S * TILED_M * TILED_N / C) * C
+        const float split_cost = splits > 1 ? split_volume * wave_count * concurrency / bytes_per_second : 0;
+
+        // Non-perfect latency hiding
+        float cost = std::pow(fma_cost + ldg_cost, 0.2) * std::pow(std::max(fma_cost, ldg_cost), 0.8) + split_cost;
+
+        std::cout << splits << " waves=" << waves << " fma=" << fma_cost * 1e3 << " ldg=" << ldg_cost * 1e3
+                  << " spk=" << split_cost * 1e3 << " cost=" << cost * 1e3 << std::endl;
+
+        estimations.emplace_back(cost, 0, waves, splits);
     }
 
     for (auto i = (int)estimations.size() - 1; i >= 1; --i) {
@@ -59,13 +85,13 @@ Kernel::EstimateSplits(int m, int n, int k, int max_split_k, int sm_count, int m
         return estimations[i] < estimations[j];
     });
 
-    std::vector<std::pair<int, int64_t>> ret;
+    std::vector<std::pair<int, float>> ret;
     ret.reserve(top_k);
 
     for (int i = 0; i < top_k; ++i) {
         auto& [cost, volume, waves, splits] = estimations[idxs[i]];
         if (i == 0) {
-            std::cout << "* " << cost << " " << volume << " " << waves << " " << splits << std::endl;
+            std::cout << "* " << cost * 1e3 << " " << volume << " " << waves << " " << splits << std::endl;
         }
         ret.emplace_back(splits, cost);
     }

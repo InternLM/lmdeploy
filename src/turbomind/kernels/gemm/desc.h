@@ -52,6 +52,8 @@ struct LaunchSpec {
     Kernel* kernel;
     int     swizzle;
     int     splits;
+    float   estimated;
+    float   measured;
 };
 
 }  // namespace turbomind::gemm
