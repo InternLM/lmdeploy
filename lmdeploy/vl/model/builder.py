@@ -25,7 +25,7 @@ def load_vl_model(model_path: str):
                 arch = 'InternLMXComposer2ForCausalLM'
     if arch == 'QWenLMHeadModel':
         return QwenVisionModel(model_path)
-    elif arch == 'LlavaLlamaForCausalLM':
+    elif arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
         projector_type = config.get('mm_projector_type', 'linear')
         mm_vision_tower = config.get('mm_vision_tower', '')
         if '_Norm' in projector_type:
@@ -33,13 +33,13 @@ def load_vl_model(model_path: str):
         elif 'OpenGVLab' in mm_vision_tower:
             return InternVLLlavaVisionModel(model_path)
         else:
-            return LlavaVisionModel(model_path)
-    if arch == 'MultiModalityCausalLM':
+            return LlavaVisionModel(model_path, arch=arch)
+    elif arch == 'MultiModalityCausalLM':
         return DeepSeekVisionModel(model_path)
-    if arch == 'InternLMXComposer2ForCausalLM':
+    elif arch == 'InternLMXComposer2ForCausalLM':
         return Xcomposer2VisionModel(model_path)
-    if arch == 'InternVLChatModel':
+    elif arch == 'InternVLChatModel':
         return InternVLVisionModel(model_path)
-    if arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
+    elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiVisionModel(model_path)
     raise ValueError(f'unsupported vl model with arch {arch}')

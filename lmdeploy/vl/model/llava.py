@@ -56,8 +56,12 @@ def init_llava_vision_tower(config):
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self,
+                 model_path,
+                 arch='LlavaLlamaForCausalLM',
+                 device='cuda:0'):
         self.model_path = model_path
+        self.arch = arch
         self.device = device
         self.build_model()
 
@@ -66,23 +70,42 @@ class LlavaVisionModel(VisonModel):
         # check llava install
         check_llava_install()
 
-        # currently, only support llava llama
-        from llava.model.language_model.llava_llama import (
-            LlavaConfig, LlavaLlamaForCausalLM)
-        self.config = LlavaConfig.from_pretrained(self.model_path)
-        assert self.config.model_type in ['llava', 'llava_llama'], \
-            'currently, only support llava llama'
         from accelerate import init_empty_weights
 
-        # init empty model, skip layer initialization
-        with init_empty_weights(), warnings.catch_warnings(), \
-                init_llava_vision_tower(self.config):
-            warnings.simplefilter('ignore')
-            model = LlavaLlamaForCausalLM.from_pretrained(self.model_path)
-            del model.lm_head
-            del model.model.embed_tokens
-            del model.model.layers
-            del model.model.norm
+        model = None
+        if self.arch == 'LlavaLlamaForCausalLM':
+            from llava.model.language_model.llava_llama import (
+                LlavaConfig, LlavaLlamaForCausalLM)
+            self.config = LlavaConfig.from_pretrained(self.model_path)
+            assert self.config.model_type in ['llava', 'llava_llama'], \
+                f'expect model_type llava and llava_llama '\
+                f'but got {self.config.model_type}'
+
+            # init empty model, skip layer initialization
+            with init_empty_weights(), warnings.catch_warnings(), \
+                    init_llava_vision_tower(self.config):
+                warnings.simplefilter('ignore')
+                model = LlavaLlamaForCausalLM.from_pretrained(self.model_path)
+        elif self.arch == 'LlavaMistralForCausalLM':
+            from llava.model.language_model.llava_mistral import (
+                LlavaMistralConfig, LlavaMistralForCausalLM)
+            self.config = LlavaMistralConfig.from_pretrained(self.model_path)
+
+            # init empty model, skip layer initialization
+            with init_empty_weights(), warnings.catch_warnings(), \
+                    init_llava_vision_tower(self.config):
+                warnings.simplefilter('ignore')
+                model = LlavaMistralForCausalLM.from_pretrained(
+                    self.model_path)
+        else:
+            assert 0, f'unsupported arch {self.arch}'
+
+        # remove the LLM part from llava model.
+        # Instead, Load the LLM part to turbomind engine
+        del model.lm_head
+        del model.model.embed_tokens
+        del model.model.layers
+        del model.model.norm
 
         # move model to cpu
         with torch.device('cpu'):

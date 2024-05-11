@@ -25,6 +25,7 @@ SUPPORTED_ARCHS = dict(
     Qwen2ForCausalLM='qwen2',
     # llava
     LlavaLlamaForCausalLM='llama',
+    LlavaMistralForCausalLM='llama',
     # xcomposer2
     InternLMXComposer2ForCausalLM='xcomposer2',
     # internvl
@@ -89,7 +90,6 @@ def is_supported(model_path: str):
         support_by_turbomind = True
     else:
         arch, cfg = get_model_arch(model_path)
-
         if arch in SUPPORTED_ARCHS.keys():
             support_by_turbomind = True
             # special cases
