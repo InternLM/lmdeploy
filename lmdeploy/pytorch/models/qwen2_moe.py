@@ -4,63 +4,59 @@ from typing import List, Optional
 import torch
 from torch import distributed as dist
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
-
-
-def _div_up(a, b):
-    """div up."""
-    return (a + b - 1) // b
 
 
 class PatchedQwen2MoeSparseMoeBlock(nn.Module):
 
-    @classmethod
-    def _get_expert_range(cls, num_experts: int):
-        rank = 0
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
-            rank = dist.get_rank()
-        num_experts_per_rank = _div_up(num_experts, world_size)
-        first_experts_id = rank * num_experts_per_rank
-        last_experts_id = min(num_experts,
-                              first_experts_id + num_experts_per_rank)
-        return first_experts_id, last_experts_id
+    def _update_model_fn(self):
+        """update model."""
+        num_experts = len(self.experts)
 
-    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name == 'experts':
-            world_size = dist.get_world_size()
-            num_experts: int = len(self.experts)
-            assert num_experts > world_size, (
-                f'world_size: {world_size} should not greater than '
-                f'num_experts: {num_experts}')
-            first_experts_id, last_experts_id = self._get_expert_range(
-                num_experts)
-            for i in range(num_experts):
-                if i >= first_experts_id and i < last_experts_id:
-                    continue
-                mod[i] = nn.Identity()
+        def __get_meta():
+            exp = self.experts[0]
+            ffn_dim = exp.gate_proj.weight.size(0)
+            hidden_dim = exp.down_proj.weight.size(0)
+            dtype = exp.gate_proj.weight.dtype
+            device = exp.gate_proj.weight.device
+            return ffn_dim, hidden_dim, dtype, device
+
+        def __copy_assign_param(param, weight):
+            """copy assign."""
+            weight.copy_(param.data)
+            param.data = weight
+
+        ffn_dim, hidden_dim, dtype, device = __get_meta()
+
+        gate_up_weights = torch.empty(num_experts,
+                                      ffn_dim * 2,
+                                      hidden_dim,
+                                      device=device,
+                                      dtype=dtype)
+        down_weights = torch.empty(num_experts,
+                                   hidden_dim,
+                                   ffn_dim,
+                                   device=device,
+                                   dtype=dtype)
+
+        for exp_id, exp in enumerate(self.experts):
+            __copy_assign_param(exp.gate_proj.weight,
+                                gate_up_weights[exp_id, :ffn_dim])
+            __copy_assign_param(exp.up_proj.weight, gate_up_weights[exp_id,
+                                                                    ffn_dim:])
+            __copy_assign_param(exp.down_proj.weight, down_weights[exp_id])
+
+        torch.cuda.empty_cache()
+
+        self.register_buffer('gate_up_weights', gate_up_weights)
+        self.register_buffer('down_weights', down_weights)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """moe forward."""
         import torch.nn.functional as F
 
-        def __get_expert_index(selected_experts, num_experts, first_experts_id,
-                               last_experts_id):
-            """get expert index."""
-            idxs, top_xs = [None] * num_experts, [None] * num_experts
-            # Loop over all available experts in the model
-            for expert_idx in range(first_experts_id, last_experts_id):
-                pos = torch.nonzero(selected_experts == expert_idx)
-                if pos.size(0) > 0:
-                    top_x, idx = pos.t()
-                    idxs[expert_idx] = idx
-                    top_xs[expert_idx] = top_x
-            return idxs, top_xs
+        from lmdeploy.pytorch.kernels.fused_moe import fused_moe
 
-        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        _, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         # router_logits: (batch * sequence_length, n_experts)
         router_logits = self.gate(hidden_states)
@@ -71,44 +67,25 @@ class PatchedQwen2MoeSparseMoeBlock(nn.Module):
                                                        dim=-1)
         if self.norm_topk_prob:
             routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        # we cast back to the input dtype
-        routing_weights = routing_weights.to(hidden_states.dtype)
-
-        final_hidden_states = torch.zeros(
-            (batch_size * sequence_length, hidden_dim),
-            dtype=hidden_states.dtype,
-            device=hidden_states.device)
-
-        num_experts = self.num_experts
-        first_experts_id, last_experts_id = self._get_expert_range(num_experts)
-
-        idxs, top_xs = __get_expert_index(selected_experts, num_experts,
-                                          first_experts_id, last_experts_id)
-
-        for expert_idx in range(first_experts_id, last_experts_id):
-            idx, top_x = idxs[expert_idx], top_xs[expert_idx]
-            if idx is None:
-                continue
-            expert_layer = self.experts[expert_idx]
-
-            current_state = hidden_states.index_select(dim=0, index=top_x)
-            current_hidden_states = expert_layer(
-                current_state) * routing_weights[top_x, idx, None]
-
-            final_hidden_states.index_add_(0, top_x, current_hidden_states)
+        out_states = fused_moe(hidden_states,
+                               self.gate_up_weights,
+                               self.down_weights,
+                               routing_weights,
+                               selected_experts,
+                               topk=self.top_k,
+                               renormalize=False)
 
         if dist.is_initialized():
-            dist.all_reduce(final_hidden_states)
+            dist.all_reduce(out_states)
 
         shared_expert_output = self.shared_expert(hidden_states)
         shared_expert_output = F.sigmoid(
             self.shared_expert_gate(hidden_states)) * shared_expert_output
 
-        final_hidden_states = final_hidden_states + shared_expert_output
-        final_hidden_states = final_hidden_states.unflatten(
-            0, (-1, sequence_length))
+        out_states = out_states + shared_expert_output
+        out_states = out_states.unflatten(0, (-1, sequence_length))
 
-        return final_hidden_states, router_logits
+        return out_states, router_logits
 
 
 class PatchedQwen2MoeModel(nn.Module):

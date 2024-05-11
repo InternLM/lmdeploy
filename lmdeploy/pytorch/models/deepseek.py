@@ -69,11 +69,23 @@ class PatchedDeepseekAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             if hasattr(self, 'rotary_emb'):
-                cos, sin = self.rotary_emb(value_states,
-                                           seq_len=max_kv_seq_length)
+                if not hasattr(context, '_cos'):
+                    cos, sin = self.rotary_emb(value_states,
+                                               seq_len=max_kv_seq_length)
+                    context._cos = cos
+                    context._sin = sin
+                else:
+                    cos = context._cos
+                    sin = context._sin
                 query_states, key_states = apply_rotary_pos_emb(
-                    query_states, key_states, cos, sin, position_ids,
-                    context.position_ids_1d)
+                    query_states,
+                    key_states,
+                    cos,
+                    sin,
+                    position_ids,
+                    context.position_ids_1d,
+                    q_embed=query_states,
+                    k_embed=key_states)
             return query_states, key_states, value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
@@ -139,69 +151,63 @@ class PatchedDeepseekAttention(nn.Module):
         )
 
 
-def _div_up(a, b):
-    """div up."""
-    return (a + b - 1) // b
-
-
 class PatchedDeepseekMoE(nn.Module):
 
-    @classmethod
-    def _get_expert_range(cls, num_experts: int):
-        rank = 0
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
-            rank = dist.get_rank()
-        num_experts_per_rank = _div_up(num_experts, world_size)
-        first_experts_id = rank * num_experts_per_rank
-        last_experts_id = min(num_experts,
-                              first_experts_id + num_experts_per_rank)
-        return first_experts_id, last_experts_id
+    def _update_model_fn(self):
+        """update model."""
+        num_experts = len(self.experts)
 
-    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name == 'experts':
-            world_size = dist.get_world_size()
-            num_experts: int = len(self.experts)
-            assert num_experts > world_size, (
-                f'world_size: {world_size} should not greater than '
-                f'num_experts: {num_experts}')
-            first_experts_id, last_experts_id = self._get_expert_range(
-                num_experts)
-            for i in range(num_experts):
-                if i >= first_experts_id and i < last_experts_id:
-                    continue
-                mod[i] = nn.Identity()
+        def __get_meta():
+            exp = self.experts[0]
+            ffn_dim = exp.gate_proj.weight.size(0)
+            hidden_dim = exp.down_proj.weight.size(0)
+            dtype = exp.gate_proj.weight.dtype
+            device = exp.gate_proj.weight.device
+            return ffn_dim, hidden_dim, dtype, device
+
+        def __copy_assign_param(param, weight):
+            """copy assign."""
+            weight.copy_(param.data)
+            param.data = weight
+
+        ffn_dim, hidden_dim, dtype, device = __get_meta()
+
+        gate_up_weights = torch.empty(num_experts,
+                                      ffn_dim * 2,
+                                      hidden_dim,
+                                      device=device,
+                                      dtype=dtype)
+        down_weights = torch.empty(num_experts,
+                                   hidden_dim,
+                                   ffn_dim,
+                                   device=device,
+                                   dtype=dtype)
+
+        for exp_id, exp in enumerate(self.experts):
+            __copy_assign_param(exp.gate_proj.weight,
+                                gate_up_weights[exp_id, :ffn_dim])
+            __copy_assign_param(exp.up_proj.weight, gate_up_weights[exp_id,
+                                                                    ffn_dim:])
+            __copy_assign_param(exp.down_proj.weight, down_weights[exp_id])
+
+        torch.cuda.empty_cache()
+
+        self.register_buffer('gate_up_weights', gate_up_weights)
+        self.register_buffer('down_weights', down_weights)
 
     def moe_infer(self, x, flat_expert_indices, flat_expert_weights):
         """moe infer."""
-        expert_cache = torch.zeros_like(x)
-        idxs = flat_expert_indices.argsort()
-        tokens_per_expert = flat_expert_indices.bincount().cpu().numpy(
-        ).cumsum(0)
-        token_idxs = idxs // self.num_experts_per_tok
+        from lmdeploy.pytorch.kernels.fused_moe import fused_moe
+        seq_len = x.size(0)
+        out_states = fused_moe(x,
+                               self.gate_up_weights,
+                               self.down_weights,
+                               flat_expert_weights,
+                               flat_expert_indices,
+                               topk=self.num_experts_per_tok,
+                               renormalize=False)
 
-        num_experts: int = len(self.experts)
-        first_experts_id, last_experts_id = self._get_expert_range(num_experts)
-        for i in range(first_experts_id, last_experts_id):
-            if i >= len(tokens_per_expert):
-                break
-            start_idx = 0 if i == 0 else tokens_per_expert[i - 1]
-            end_idx = tokens_per_expert[i]
-            if start_idx == end_idx:
-                continue
-            expert = self.experts[i]
-            exp_token_idx = token_idxs[start_idx:end_idx]
-            expert_tokens = x[exp_token_idx]
-            expert_out = expert(expert_tokens)
-            expert_out.mul_(flat_expert_weights[idxs[start_idx:end_idx]])
-            expert_cache.scatter_reduce_(0,
-                                         exp_token_idx.view(-1, 1).expand(
-                                             -1, x.shape[-1]),
-                                         expert_out,
-                                         reduce='sum')
+        out_states = out_states.reshape(seq_len, -1)
         if dist.is_initialized():
-            dist.all_reduce(expert_cache)
-        return expert_cache
+            dist.all_reduce(out_states)
+        return out_states
