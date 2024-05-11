@@ -1329,14 +1329,20 @@ class Phi3Instruct(BaseChatTemplate):
     """Chat template of InternLM model."""
 
     def __init__(self,
+                 system='<|system|>\n',
+                 meta_instruction=None,
+                 eosys='<|end|>\n',
                  user='<|user|>\n',
                  eoh='<|end|>\n',
                  assistant='<|assistant|>\n',
                  eoa='<|end|>\n',
                  separator='\n',
-                 stop_words=['<|end|>'],
+                 stop_words=['<|end|>', '<|endoftext|>'],
                  **kwargs):
-        super().__init__(user=user,
+        super().__init__(system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
