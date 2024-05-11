@@ -180,48 +180,41 @@ class PatchedDbrxExpertGLU(nn.Module):
                                  device_mesh: DeviceMesh):
         """Distribution partition callback."""
 
-        def __colwise_partition(name, param):
-            dist_tensor = distribute_tensor(param, device_mesh, [Shard(0)])
+        def __partition(name, param):
+            param = param.unflatten(0, (self.moe_num_experts, -1))
+            dist_tensor = distribute_tensor(param, device_mesh, [Shard(1)])
             dist_tensor = try_to_local(dist_tensor)
-            dist_param = torch.nn.Parameter(dist_tensor)
+            dist_param = torch.nn.Parameter(dist_tensor.flatten(0, 1))
+            del dist_tensor
             mod.register_parameter(name, dist_param)
 
         if mod_name == '':
-            __colwise_partition('w1', mod.w1)
-            __colwise_partition('v1', mod.v1)
-            __colwise_partition('w2', mod.w2)
+            __partition('w1', mod.w1)
+            __partition('v1', mod.v1)
+            __partition('w2', mod.w2)
 
-    def forward(self, x: torch.Tensor, expert_w1: torch.Tensor,
-                expert_v1: torch.Tensor,
-                expert_w2: torch.Tensor) -> torch.Tensor:
-        """remote code and transformers has different implementation."""
-        gate_proj = x.matmul(expert_w1.t())
-        up_proj = x.matmul(expert_v1.t())
-        gate_proj = self.activation_fn(gate_proj)
-        intermediate_states = gate_proj * up_proj
-        down_proj = intermediate_states.matmul(expert_w2)
-        return down_proj
+    def _update_model_fn(self):
+        """update model."""
+        ffn_hidden_size = self.w1.size(0) // self.moe_num_experts
+        gate_up_weights = self.w1.new_empty(self.moe_num_experts,
+                                            ffn_hidden_size * 2,
+                                            self.w1.size(1))
+        gate_up_weights[:, :ffn_hidden_size].copy_(
+            self.w1.unflatten(0, (self.moe_num_experts, -1)))
+        gate_up_weights[:, ffn_hidden_size:].copy_(
+            self.v1.unflatten(0, (self.moe_num_experts, -1)))
+        delattr(self, 'w1')
+        delattr(self, 'v1')
+        down_weights = self.w2.data.unflatten(
+            0, (self.moe_num_experts, -1)).transpose(1, 2).contiguous()
+        delattr(self, 'w2')
+        torch.cuda.empty_cache()
 
-
-def _div_up(a, b):
-    """div up."""
-    return (a + b - 1) // b
+        self.register_buffer('gate_up_weights', gate_up_weights)
+        self.register_buffer('down_weights', down_weights)
 
 
 class PatchedDbrxExperts(nn.Module):
-
-    @classmethod
-    def _get_expert_range(cls, num_experts: int):
-        rank = 0
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
-            rank = dist.get_rank()
-        num_experts_per_rank = _div_up(num_experts, world_size)
-        first_experts_id = rank * num_experts_per_rank
-        last_experts_id = min(num_experts,
-                              first_experts_id + num_experts_per_rank)
-        return first_experts_id, last_experts_id
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
@@ -233,55 +226,19 @@ class PatchedDbrxExperts(nn.Module):
                 top_weights: torch.Tensor,
                 top_experts: torch.LongTensor) -> torch.Tensor:
         """moe forward."""
+        from lmdeploy.pytorch.kernels.fused_moe import fused_moe
+        q_len = x.size(1)
+        x = x.flatten(0, 1)
+        out_states = fused_moe(x,
+                               self.mlp.gate_up_weights,
+                               self.mlp.down_weights,
+                               top_weights,
+                               top_experts,
+                               topk=top_weights.size(1),
+                               renormalize=False)
 
-        def __get_expert_index(num_experts, first_experts_id, last_experts_id):
-            """get expert index."""
-            idxs, top_xs = [None] * num_experts, [None] * num_experts
-            # Loop over all available experts in the model
-            for expert_idx in range(first_experts_id, last_experts_id):
-                pos = torch.nonzero(top_experts == expert_idx)
-                if pos.size(0) > 0:
-                    top_x, idx = pos.t()
-                    idxs[expert_idx] = idx
-                    top_xs[expert_idx] = top_x
-            return idxs, top_xs
-
-        bsz, q_len, hidden_size = x.shape
-        x = x.view(-1, hidden_size)
-        out = torch.zeros_like(x)
-
-        num_experts = self.mlp.moe_num_experts
-
-        first_experts_id, last_experts_id = self._get_expert_range(num_experts)
-
-        idxs, top_xs = __get_expert_index(num_experts, first_experts_id,
-                                          last_experts_id)
-
-        ffn_hidden_size = self.mlp.ffn_hidden_size
-
-        w1_chunked = self.mlp.w1.unflatten(0, (-1, ffn_hidden_size))
-        v1_chunked = self.mlp.v1.unflatten(0, (-1, ffn_hidden_size))
-        w2_chunked = self.mlp.w2.unflatten(0, (-1, ffn_hidden_size))
-
-        for expert_idx in range(first_experts_id, last_experts_id):
-            idx, top_x = idxs[expert_idx], top_xs[expert_idx]
-            if idx is None:
-                continue
-
-            mlp_idx = expert_idx - first_experts_id
-            current_state = x.index_select(dim=0, index=top_x)
-            expert_out = self.mlp(
-                current_state,
-                w1_chunked[mlp_idx],
-                v1_chunked[mlp_idx],
-                w2_chunked[mlp_idx],
-            )
-            expert_out *= top_weights[top_x, idx, None]
-
-            out.index_add_(0, top_x, expert_out)
-
-        out = out.reshape(bsz, q_len, hidden_size)
-        return out
+        out_states = out_states.unflatten(0, (-1, q_len))
+        return out_states
 
 
 class PatchedDbrxModel(nn.Module):

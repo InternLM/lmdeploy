@@ -183,7 +183,6 @@ def fused_moe(hidden_states: torch.Tensor,
     exp_start = exp_end - exp_tok_cnt
 
     intermediate_cache1 = hidden_states.new_empty((M, topk, N))
-    intermediate_cache2 = hidden_states.new_empty((M, topk, w2.shape[1]))
     # gate and up
     fused_moe_kernel_launcher(hidden_states,
                               w1,
@@ -199,7 +198,9 @@ def fused_moe(hidden_states: torch.Tensor,
     # activate
     gate_cache, up_cache = intermediate_cache1.chunk(2, -1)
     F.silu(gate_cache, inplace=True).mul_(up_cache)
+    del intermediate_cache1
 
+    intermediate_cache2 = hidden_states.new_empty((M, topk, w2.shape[1]))
     # down
     fused_moe_kernel_launcher(gate_cache,
                               w2,
