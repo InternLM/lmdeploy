@@ -713,6 +713,20 @@ tb_qwen1_5_chat_7b = dict(type=TurboMindModel,
                           run_cfg=run_cfg_tp1_template,
                           end_str='<|im_end|>')
 
+tb_qwen1_5_chat_7b_w4a16 = dict(
+    type=TurboMindModel,
+    abbr='qwen1.5-7b-chat-4bits-turbomind',
+    path='Qwen/Qwen1.5-7B-Chat-inner-4bits',
+    engine_config=tb_awq_engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=128,
+    concurrency=128,
+    meta_template=qwen1_5_meta_template,
+    run_cfg=run_cfg_tp1_template,
+    end_str='<|im_end|>')
+
 tb_qwen1_5_chat_7b_kvint4 = dict(
     type=TurboMindModel,
     abbr='qwen1.5-7b-chat-turbomind-kvint4',
@@ -789,6 +803,20 @@ tb_llama_3_8b_instruct = dict(
     abbr='llama-3-8b-instruct-turbomind',
     path='meta-llama/Meta-Llama-3-8B-Instruct',
     engine_config=tb_engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=128,
+    concurrency=128,
+    meta_template=llama3_meta_template,
+    run_cfg=run_cfg_tp1_template,
+    end_str='[INST]')
+
+tb_llama_3_8b_instruct_w4a16 = dict(
+    type=TurboMindModel,
+    abbr='llama-3-8b-instruct-4bits-turbomind',
+    path='meta-llama/Meta-Llama-3-8B-Instruct-inner-4bits',
+    engine_config=tb_awq_engine_config_template_max_bs_128,
     gen_config=gen_config_template,
     max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,

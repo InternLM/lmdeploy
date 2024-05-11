@@ -83,6 +83,7 @@ quatization_case_config:
         - baichuan-inc/Baichuan2-7B-Chat
         - internlm/internlm2-20b
         - Qwen/Qwen1.5-7B-Chat
+        - meta-llama/Meta-Llama-3-8B-Instruct
     kvint:
         - meta-llama/Llama-2-7b-chat-hf
         - meta-llama/Meta-Llama-3-8B-Instruct
