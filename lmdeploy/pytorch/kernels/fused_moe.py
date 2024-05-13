@@ -4,8 +4,109 @@ import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
+from packaging import version
+
+if version.parse(triton.__version__) <= version.parse('2.2.0'):
+
+    def get_kernel_meta(tensor: torch.Tensor):
+        """kernel meta."""
+        from triton.runtime.jit import get_cuda_stream
+
+        device = tensor.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
+else:
+
+    KERNEL_META = dict()
+
+    def get_kernel_meta(tensor: torch.Tensor):
+        """kernel meta."""
+        return KERNEL_META
 
 
+def get_cuda_autotune_config():
+    return [
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 128,
+                'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_K': 64,
+                'GROUP_SIZE_M': 8
+            },
+            num_stages=3,
+            num_warps=8),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 64,
+                'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8
+            },
+            num_stages=4,
+            num_warps=4),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 128,
+                'BLOCK_SIZE_N': 128,
+                'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8
+            },
+            num_stages=4,
+            num_warps=4),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 128,
+                'BLOCK_SIZE_N': 64,
+                'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8
+            },
+            num_stages=4,
+            num_warps=4),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 64,
+                'BLOCK_SIZE_N': 128,
+                'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8
+            },
+            num_stages=4,
+            num_warps=4),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 128,
+                'BLOCK_SIZE_N': 32,
+                'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8
+            },
+            num_stages=4,
+            num_warps=4),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 64,
+                'BLOCK_SIZE_N': 32,
+                'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8
+            },
+            num_stages=5,
+            num_warps=2),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 32,
+                'BLOCK_SIZE_N': 64,
+                'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8
+            },
+            num_stages=5,
+            num_warps=2),
+    ]
+
+
+@triton.autotune(
+    configs=get_cuda_autotune_config(),
+    key=['N', 'K'],
+)
 @triton.jit
 def fused_moe_kernel(
     A,
@@ -105,13 +206,12 @@ def fused_moe_kernel_launcher(
 ):
     """fused moe kernel launcher."""
 
-    def _kernel_meta():
-        from triton.runtime.jit import get_cuda_stream
-        device = A.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
+    def _grid_fn(META):
+        return (
+            E,
+            triton.cdiv(num_tokens, META['BLOCK_SIZE_M']) *
+            triton.cdiv(N, META['BLOCK_SIZE_N']),
+        )
 
     if num_tokens is None:
         num_tokens = A.size(0)
@@ -119,13 +219,8 @@ def fused_moe_kernel_launcher(
     A = A.flatten(0, -2)
     C = C.flatten(0, -2)
 
-    BLOCK_SIZE_M = 64
-    BLOCK_SIZE_N = 64
-    BLOCK_SIZE_K = 32
-    GROUP_SIZE_M = 1
-    grid = (E, triton.cdiv(num_tokens, BLOCK_SIZE_M) *
-            triton.cdiv(N, BLOCK_SIZE_N))
-    kernel_meta = _kernel_meta()
+    grid = _grid_fn
+    kernel_meta = get_kernel_meta(A)
     fused_moe_kernel[grid](
         A,
         B,
@@ -143,16 +238,69 @@ def fused_moe_kernel_launcher(
         stride_bk=B.stride(2),
         stride_cm=C.stride(0),
         stride_cn=C.stride(1),
-        BLOCK_SIZE_M=BLOCK_SIZE_M,
-        BLOCK_SIZE_N=BLOCK_SIZE_N,
-        BLOCK_SIZE_K=BLOCK_SIZE_K,
-        GROUP_SIZE_M=GROUP_SIZE_M,
         ENABLE_WEIGHTS=enable_weights,
         top_k=top_k,
+        **kernel_meta,
+    )
+
+
+@triton.jit
+def _start_end_kernel(TopkIdx, SortedIdx, ExpStart, ExpEnd,
+                      len_sorted_idx: int, num_experts: tl.constexpr,
+                      BLOCK: tl.constexpr):
+    """start end kernel."""
+    exp_id = tl.program_id(0)
+    exp_start = -1
+    cnt = 0
+
+    s_off = tl.arange(0, BLOCK)
+
+    # find start
+    for sidx_start in range(0, len_sorted_idx, BLOCK):
+        sidx_off = sidx_start + s_off
+        sidx_mask = sidx_off < len_sorted_idx
+        sidx = tl.load(SortedIdx + sidx_off, mask=sidx_mask, other=0)
+        tidx = tl.load(TopkIdx + sidx, mask=sidx_mask, other=num_experts)
+        tidx_mask = tidx == exp_id
+        cnt += tl.sum(tidx_mask)
+        if cnt > 0 and exp_start < 0:
+            exp_start = sidx_start + tl.argmax(tidx_mask, axis=0)
+
+    if exp_start < 0:
+        exp_start *= 0
+    exp_end = exp_start + cnt
+    tl.store(ExpStart + exp_id, exp_start)
+    tl.store(ExpEnd + exp_id, exp_end)
+
+
+def get_start_end(topk_idx: torch.Tensor, sorted_idx: torch.Tensor,
+                  num_experts: int):
+    """get start and end.
+
+    same process as:
+    >>> exp_tok_cnt = F.one_hot(flatten_topk_ids, num_classes=E).sum(0)
+    >>> exp_end = exp_tok_cnt.cumsum(0)
+    >>> exp_start = exp_end - exp_tok_cnt
+    """
+    exp_start = sorted_idx.new_empty(num_experts)
+    exp_end = sorted_idx.new_empty(num_experts)
+
+    BLOCK = 128
+    kernel_meta = get_kernel_meta(topk_idx)
+    _start_end_kernel[(num_experts, )](
+        topk_idx,
+        sorted_idx,
+        exp_start,
+        exp_end,
+        len_sorted_idx=sorted_idx.numel(),
+        num_experts=num_experts,
+        BLOCK=BLOCK,
         num_warps=4,
         num_stages=1,
         **kernel_meta,
     )
+
+    return exp_start, exp_end
 
 
 def fused_moe(hidden_states: torch.Tensor,
@@ -163,24 +311,22 @@ def fused_moe(hidden_states: torch.Tensor,
               topk: int,
               renormalize: bool = False) -> torch.Tensor:
     """fused moe."""
-    device = hidden_states.device
     M = hidden_states.size(0)
     E, N, _ = w1.shape
 
     def __get_sorted_idx(topk_ids: torch.Tensor):
         flatten_topk_ids = topk_ids.flatten()
         sorted_idx = flatten_topk_ids.argsort()
-        exp_range = torch.arange(0, E, device=device)
-        exp_tok_cnt = (flatten_topk_ids[None, :] == exp_range[:, None]).sum(1)
-        return sorted_idx, exp_tok_cnt
+
+        exp_start, exp_end = get_start_end(flatten_topk_ids, sorted_idx, E)
+        return sorted_idx, exp_start, exp_end
 
     if renormalize:
         topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
-    topk_weights = topk_weights.contiguous()
+    if not topk_weights.is_contiguous():
+        topk_weights = topk_weights.contiguous()
 
-    sorted_idx, exp_tok_cnt = __get_sorted_idx(topk_ids)
-    exp_end = exp_tok_cnt.cumsum(0)
-    exp_start = exp_end - exp_tok_cnt
+    sorted_idx, exp_start, exp_end = __get_sorted_idx(topk_ids)
 
     intermediate_cache1 = hidden_states.new_empty((M, topk, N))
     # gate and up
