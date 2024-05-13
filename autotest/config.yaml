@@ -36,6 +36,7 @@ turbomind_chat_model:
     - codellama/CodeLlama-7b-Instruct-hf
     - Qwen/Qwen1.5-4B-Chat-AWQ
     - OpenGVLab/InternVL-Chat-V1-5
+    - internlm/internlm-xcomposer2-vl-7b
 
 pytorch_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
@@ -73,6 +74,7 @@ vl_model:
     - 01-ai/Yi-VL-6B
     - deepseek-ai/deepseek-vl-1.3b-chat
     - OpenGVLab/InternVL-Chat-V1-5
+    - internlm/internlm-xcomposer2-vl-7b
 
 quatization_case_config:
     w4a16:
