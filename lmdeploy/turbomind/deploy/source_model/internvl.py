@@ -3,11 +3,12 @@ import json
 import os.path as osp
 
 from .base import INPUT_MODELS
+from .internlm2 import InternLM2Reader
 from .llama import LlamaModel, LlamaReader
 
 
 class InternVLReader(LlamaReader):
-    """InternVLReader."""
+    """InternVLReader for llama model."""
 
     attn_layer_prefix = 'language_model.model.layers'
     attn_layer_patten = r'language_model.model.layers.([0-9]+).'
@@ -16,14 +17,28 @@ class InternVLReader(LlamaReader):
     output_weight_key = 'language_model.lm_head.weight'
 
 
+class InternVL2Reader(InternLM2Reader):
+    """InternVLReader for InternLM2 model."""
+
+    attn_layer_prefix = 'language_model.model.layers'
+    attn_layer_patten = r'language_model.model.layers.([0-9]+).'
+    tok_embeddings_key = 'language_model.model.tok_embeddings.weight'
+    norm_weight_key = 'language_model.model.norm.weight'
+    output_weight_key = 'language_model.output.weight'
+
+
 @INPUT_MODELS.register_module(name='internvl')
 class InternVLModel(LlamaModel):
-    """InternVLReader model in hf format."""
-
-    Reader = InternVLReader
+    """InternVL model in hf format."""
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
         super().__init__(model_path, tokenizer_path, **kwargs)
+        from transformers import AutoConfig
+        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        arch = config.llm_config.architectures[0]
+        _readers = dict(InternLM2ForCausalLM=InternVL2Reader,
+                        LlamaForCausalLM=InternVLReader)
+        self.Reader = _readers[arch]
 
     def model_info(self):
         """Read model info."""

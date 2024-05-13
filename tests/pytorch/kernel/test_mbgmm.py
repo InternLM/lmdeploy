@@ -28,10 +28,6 @@ class TestMBGMM:
         yield torch.tensor([2, 4]).cuda()
 
     @pytest.fixture
-    def page_start(self, ranks):
-        yield torch.zeros_like(ranks)
-
-    @pytest.fixture
     def start_loc(self, seq_lens):
         yield seq_lens.cumsum(0) - seq_lens
 
@@ -48,8 +44,8 @@ class TestMBGMM:
         yield ret
 
     @pytest.fixture
-    def scaling(self, adapter_ids):
-        yield torch.ones(adapter_ids.size(0)).cuda()
+    def scaling(self, ranks):
+        yield torch.arange(ranks.size(0)).cuda() + 1
 
     @pytest.fixture
     def lora_a(self, ranks, head_size, dtype):
@@ -75,6 +71,10 @@ class TestMBGMM:
         yield pad_sequence(index, batch_first=True).cuda()
 
     @pytest.fixture
+    def rank_offset(self, page_table, head_size):
+        yield page_table * head_size
+
+    @pytest.fixture
     def paged_lora_a(self, lora_a, ranks, page_table, head_size, dtype):
         num_pages = sum(ranks)
         cache = torch.empty(num_pages, head_size, dtype=dtype).cuda()
@@ -92,29 +92,30 @@ class TestMBGMM:
         yield cache
 
     @pytest.fixture
-    def gt(self, input, start_loc, seq_lens, adapter_ids, lora_a, lora_b):
+    def gt(self, input, start_loc, seq_lens, adapter_ids, lora_a, lora_b,
+           scaling):
         out = []
         for loc, s_len, r_id in zip(start_loc, seq_lens, adapter_ids):
             inp = input[loc:loc + s_len]
             l_a = lora_a[r_id]
             l_b = lora_b[r_id]
-            out.append(inp @ l_a @ l_b)
+            s = scaling[r_id]
+            out.append(inp @ l_a @ l_b * s)
 
         yield torch.cat(out)
 
     def test_mbgmm(self, input, paged_lora_a, paged_lora_b, out_head_size,
-                   start_loc, seq_lens, adapter_ids, scaling, page_table,
-                   ranks, page_start, gt):
+                   start_loc, seq_lens, adapter_ids, scaling, rank_offset,
+                   ranks, gt):
         max_seq_len = max(seq_lens).item()
-        max_rank = page_table.size(-1)
+        max_rank = rank_offset.size(-1)
 
         xa = mbgmm_a(input,
                      paged_lora_a,
                      q_start_loc=start_loc,
                      q_seqlens=seq_lens,
                      adapter_ids=adapter_ids,
-                     rank_page_table=page_table,
-                     rank_page_start=page_start,
+                     rank_offset=rank_offset,
                      ranks=ranks,
                      max_seq_len=max_seq_len,
                      max_rank=max_rank)
@@ -125,8 +126,7 @@ class TestMBGMM:
                          q_seqlens=seq_lens,
                          adapter_ids=adapter_ids,
                          scaling=scaling,
-                         rank_page_table=page_table,
-                         rank_page_start=page_start,
+                         rank_offset=rank_offset,
                          ranks=ranks,
                          max_seq_len=max_seq_len,
                          max_rank=max_rank)

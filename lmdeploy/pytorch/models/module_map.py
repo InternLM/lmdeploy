@@ -250,3 +250,19 @@ MODULE_MAP.update({
     'transformers.models.starcoder2.modeling_starcoder2.Starcoder2MLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2MLP',
 })
+
+# phi-3
+MODULE_MAP.update({
+    'modeling_phi3.Phi3Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
+    'modeling_phi3.Phi3FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
+    'modeling_phi3.Phi3SdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
+    'modeling_phi3.Phi3Model':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Model',
+    'modeling_phi3.Phi3MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3MLP',
+    'modeling_phi3.Phi3RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})

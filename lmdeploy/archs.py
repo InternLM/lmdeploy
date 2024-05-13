@@ -128,7 +128,7 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch == 'InternVLChatModel':
         return True
-    elif arch == 'MiniGeminiLlamaForCausalLM':
+    elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return True
     return False
 

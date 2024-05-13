@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import warnings
+from contextlib import contextmanager
 from typing import List, Union
 
 import torch
@@ -8,7 +9,7 @@ from PIL.Image import Image
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import load_model_from_weight_files
+from lmdeploy.vl.model.utils import load_model_from_weight_files, rewrite_ctx
 
 from .utils import disable_transformers_logging
 
@@ -25,6 +26,41 @@ def check_llava_install():
             'To use LlavaVLModel, please install llava by '
             'pip install "git+https://github.com/OpenGVLab/InternVL#subdirectory=internvl_chat_llava" --no-deps'  # noqa: E501
         )
+
+
+def _intern_vision_model__from_pretrained(vision_tower_name: str):
+    logger.info(f'init empty InternVisionModel: {vision_tower_name}')
+    from llava.model.multimodal_encoder.intern_vit_6b.modeling_intern_vit import (  # noqa: E501
+        InternVisionConfig, InternVisionModel)
+    config = InternVisionConfig.from_pretrained(vision_tower_name)
+    model = InternVisionModel._from_config(config)
+    model.requires_grad_(False)
+    return model
+
+
+def _intern_vl_model__from_pretrained(vision_tower_name: str):
+    logger.info(f'init empty InternVLModel: {vision_tower_name}')
+    from llava.model.multimodal_encoder.internvl_14b.modeling_internvl import (
+        InternVLConfig, InternVLModel)
+    config = InternVLConfig.from_pretrained(vision_tower_name)
+    model = InternVLModel._from_config(config)
+    model.requires_grad_(False)
+    return model
+
+
+@contextmanager
+def init_empty_vit():
+    """skip download vision model if possible."""
+    origin_func_path = [
+        'llava.model.multimodal_encoder.intern_vit_6b.modeling_intern_vit.InternVisionModel.from_pretrained',  # noqa: E501
+        'llava.model.multimodal_encoder.internvl_14b.modeling_internvl.InternVLModel.from_pretrained',  # noqa: E501
+    ]
+    rewrite_func = [
+        _intern_vision_model__from_pretrained,
+        _intern_vl_model__from_pretrained
+    ]
+    with rewrite_ctx(origin_func_path, rewrite_func):
+        yield
 
 
 class InternVLLlavaVisionModel(VisonModel):
@@ -47,7 +83,7 @@ class InternVLLlavaVisionModel(VisonModel):
         assert self.config.model_type in ['llava', 'llava_llama'], \
             'currently, only support llava llama'
 
-        # empty init
+        # init empty model, skip layer initialization
         from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings(), \
                 disable_transformers_logging():
@@ -58,12 +94,14 @@ class InternVLLlavaVisionModel(VisonModel):
             del model.model.layers
             del model.model.norm
 
-        # load weight
+        # move model to cpu
         with torch.device('cpu'):
             model.to_empty(device='cpu')
-            vision_tower = model.get_vision_tower()
-            vision_tower.is_loaded = False
-            vision_tower.load_model()
+            # init embedding layer in CLIPVisionModel
+            with init_empty_vit():
+                vision_tower = model.get_vision_tower()
+                vision_tower.is_loaded = False
+                vision_tower.load_model()
             crop_size = vision_tower.image_processor.crop_size['height']
             image_size = vision_tower.config.image_size
             patch_size = vision_tower.config.patch_size
@@ -76,7 +114,7 @@ class InternVLLlavaVisionModel(VisonModel):
                                                               width=crop_size)
                 vision_tower.image_processor.size = dict(
                     shortest_edge=crop_size)
-
+        # load weight
         load_model_from_weight_files(model, self.model_path)
         model.to(self.device).eval().half()
 

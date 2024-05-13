@@ -20,7 +20,7 @@
 |     Code Llama      |  7B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |         YI          |  6B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |   LLaVA(1.5,1.6)    |  7B - 34B   |    Yes    |    -    |    -    |   -   |
-|    InternVL-Chat    |      -      |    Yes    |    -    |    -    |   -   |
+|    InternVL-Chat    | v1.1- v1.5  |    Yes    |    -    |    -    |   -   |
 |   MiniGeminiLlama   |     7B      |    Yes    |   No    |   No    |  No   |
 
 “-” 表示还没有验证。
@@ -51,3 +51,4 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |    Gemma     |   2B-7B    |    Yes    |   No    |  No  |
 |     Dbrx     |    132B    |    Yes    |   No    |  No  |
 |  StarCoder2  |   3B-15B   |    Yes    |   No    |  No  |
+|  Phi-3-mini  |    3.8B    |    Yes    |   No    |  No  |

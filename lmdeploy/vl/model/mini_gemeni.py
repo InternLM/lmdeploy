@@ -9,8 +9,7 @@ import torch
 from PIL.Image import Image
 
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import (_set_function,
-                                     disable_transformers_logging,
+from lmdeploy.vl.model.utils import (disable_transformers_logging,
                                      hack_import_with,
                                      load_model_from_weight_files)
 
@@ -19,17 +18,17 @@ def check_mini_gemini_install():
     """check mini gemini install."""
     try:
         with hack_import_with(['deepspeed']):
-            import minigemini  # noqa: F401
+            import mgm  # noqa: F401
     except ImportError:
         raise ImportError(
             'To use MiniGeminiVisionModel, please install minigemini by '
-            'pip install git+https://github.com/dvlab-research/MiniGemini.git'
+            'pip install git+https://github.com/dvlab-research/MGM.git'
             ' --no-deps')
 
 
 def _build_vision_tower(vision_tower_cfg, **kwargs):
-    from minigemini.model.multimodal_encoder.builder import (CLIPVisionTower,
-                                                             EVAVisionTower)
+    from mgm.model.multimodal_encoder.builder import (CLIPVisionTower,
+                                                      EVAVisionTower)
     vision_tower = getattr(vision_tower_cfg, 'mm_vision_tower',
                            getattr(vision_tower_cfg, 'vision_tower', None))
     image_processor = getattr(
@@ -49,8 +48,8 @@ def _build_vision_tower(vision_tower_cfg, **kwargs):
 
 
 def _build_vision_tower_aux(vision_tower_cfg, **kwargs):
-    from minigemini.model.multimodal_encoder.builder import (
-        CLIPVisionTower, OpenCLIPVisionTower)
+    from mgm.model.multimodal_encoder.builder import (CLIPVisionTower,
+                                                      OpenCLIPVisionTower)
     vision_tower_aux = getattr(
         vision_tower_cfg, 'mm_vision_tower_aux',
         getattr(vision_tower_cfg, 'vision_tower_aux', None))
@@ -84,7 +83,7 @@ def _clip_vision_tower__init__(self, vision_tower, args, delay_load=False):
 
 
 def _clip_vision_tower_load_model(self):
-    from minigemini.model.multimodal_encoder.clip_encoder import (
+    from mgm.model.multimodal_encoder.clip_encoder import (  # noqa
         CLIPVisionModel, VideoFramesProcessor)
     self.image_processor = VideoFramesProcessor.from_pretrained(
         self.vision_tower_name)
@@ -122,7 +121,7 @@ def _openclip_vision_tower_load_model(self):
             self.model_type = 'convnext_xxlarge'
             self.model_channel = [384, 768, 1536, 3072]
 
-    from minigemini.model.multimodal_encoder.openclip_encoder import (
+    from mgm.model.multimodal_encoder.openclip_encoder import (  # noqa
         CLIP, get_model_config)
     clip_model = CLIP(**get_model_config(self.model_type))
     clip_model.visual.trunk.norm_pre = None
@@ -139,39 +138,25 @@ def _openclip_vision_tower_load_model(self):
 
 @contextmanager
 def init_mini_gemini_model():
-    import minigemini  # noqa: F401
-    old_vision_tower = eval(
-        'minigemini.model.multimodal_encoder.builder.build_vision_tower')
-    _set_function(old_vision_tower, _build_vision_tower)
-    old_vision_tower_aux = eval(
-        'minigemini.model.multimodal_encoder.builder.build_vision_tower_aux')
-    _set_function(old_vision_tower_aux, _build_vision_tower_aux)
-    old_vision_tower_init = eval(
-        'minigemini.model.multimodal_encoder.clip_encoder.CLIPVisionTower.__init__'  # noqa
-    )
-    _set_function(old_vision_tower_init, _clip_vision_tower__init__)
-    old_vision_tower_load_model = eval(
-        'minigemini.model.multimodal_encoder.clip_encoder.CLIPVisionTower.load_model'  # noqa
-    )
-    _set_function(old_vision_tower_load_model, _clip_vision_tower_load_model)
-    old_vision_tower_aux_init = eval(
-        'minigemini.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.__init__'  # noqa
-    )
-    _set_function(old_vision_tower_aux_init, _openclip_vision_tower__init__)
-    _set_function(old_vision_tower_load_model, _clip_vision_tower_load_model)
-    old_vision_tower_aux_load_model = eval(
-        'minigemini.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.load_model'  # noqa
-    )
-    _set_function(old_vision_tower_aux_load_model,
-                  _openclip_vision_tower_load_model)
-    yield
-    _set_function(_build_vision_tower, old_vision_tower)
-    _set_function(_build_vision_tower_aux, old_vision_tower_aux)
-    _set_function(_clip_vision_tower__init__, old_vision_tower_init)
-    _set_function(_clip_vision_tower_load_model, old_vision_tower_load_model)
-    _set_function(_openclip_vision_tower__init__, old_vision_tower_aux_init)
-    _set_function(_openclip_vision_tower_load_model,
-                  old_vision_tower_aux_load_model)
+    origin_func_path = [
+        'mgm.model.multimodal_encoder.builder.build_vision_tower',
+        'mgm.model.multimodal_encoder.builder.build_vision_tower_aux',
+        'mgm.model.multimodal_encoder.clip_encoder.CLIPVisionTower.__init__',  # noqa: E501
+        'mgm.model.multimodal_encoder.clip_encoder.CLIPVisionTower.load_model',  # noqa: E501
+        'mgm.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.__init__',  # noqa: E501
+        'mgm.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.load_model'  # noqa: E501
+    ]
+    rewrite_func = [
+        _build_vision_tower,
+        _build_vision_tower_aux,
+        _clip_vision_tower__init__,
+        _clip_vision_tower_load_model,
+        _openclip_vision_tower__init__,
+        _openclip_vision_tower_load_model,
+    ]
+    from lmdeploy.vl.model.utils import rewrite_ctx
+    with rewrite_ctx(origin_func_path, rewrite_func):
+        yield
 
 
 class MiniGeminiVisionModel(VisonModel):
@@ -187,12 +172,12 @@ class MiniGeminiVisionModel(VisonModel):
     def build_model(self):
         # empty init
         from accelerate import init_empty_weights
-        from minigemini.mm_utils import process_images
-        from minigemini.model import MiniGeminiLlamaForCausalLM
+        from mgm.mm_utils import process_images
+        from mgm.model import MGMLlamaForCausalLM
         with init_empty_weights(), disable_transformers_logging(
         ), hack_import_with(['deepspeed']):
             warnings.simplefilter('ignore')
-            model = MiniGeminiLlamaForCausalLM.from_pretrained(self.model_path)
+            model = MGMLlamaForCausalLM.from_pretrained(self.model_path)
             del model.lm_head
             del model.model.embed_tokens
             del model.model.layers

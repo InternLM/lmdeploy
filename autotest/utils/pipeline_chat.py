@@ -16,21 +16,22 @@ def run_pipeline_chat_test(config,
                            cases_info,
                            model_case,
                            type,
-                           extra: object = None):
+                           extra: object = None,
+                           use_local_model: bool = True):
     log_path = config.get('log_path')
     tp = get_tp_num(config, model_case)
     model_name = model_name = get_model_name(model_case)
     model_path = config.get('model_path')
-    hf_path = model_path + '/' + model_case
-
-    print(' '.join([
-        'reproduce command:', 'python',
-        'autotest/tools/pipeline/pipeline_chat_script.py', type, model_case,
-        str(tp)
-    ]))
+    if use_local_model is True:
+        hf_path = model_path + '/' + model_case
+    else:
+        hf_path = model_case
 
     if 'pytorch' == type:
         backend_config = PytorchEngineConfig(tp=tp)
+    elif 'pytorch_lora' == type:
+        backend_config = PytorchEngineConfig(tp=tp,
+                                             adapters=extra.get('adapters'))
     elif 'kvint' in type:
         if 'w4' in model_case or ('4bits' in model_case
                                   or 'awq' in model_case.lower()):
@@ -54,14 +55,31 @@ def run_pipeline_chat_test(config,
 
     # run testcases
     gen_config = GenerationConfig(top_k=1)
+
+    config_log = os.path.join(
+        log_path,
+        'pipeline_config_' + type + model_case.split('/')[1] + '.log')
+    file = open(config_log, 'w')
+    file.writelines(' '.join([
+        'reproduce config info:', hf_path,
+        str(backend_config),
+        str(gen_config)
+    ]))
+    print(' '.join([
+        'reproduce config info:', hf_path,
+        str(backend_config),
+        str(gen_config)
+    ]))
+    file.close
+
     for case in cases_info.keys():
         if ('deepseek-coder' in model_case
                 or 'CodeLlama' in model_case) and 'code' not in case:
             continue
         case_info = cases_info.get(case)
         pipeline_chat_log = os.path.join(
-            log_path,
-            'pipeline_chat_' + model_case.split('/')[1] + '_' + case + '.log')
+            log_path, 'pipeline_chat_' + type + model_case.split('/')[1] +
+            '_' + case + '.log')
 
         file = open(pipeline_chat_log, 'w')
 
@@ -86,19 +104,27 @@ def run_pipeline_chat_test(config,
     torch.cuda.empty_cache()
 
 
-def assert_pipeline_chat_log(config, cases_info, model_case):
+def assert_pipeline_chat_log(config, cases_info, model_case, type):
     log_path = config.get('log_path')
+
+    config_log = os.path.join(
+        log_path,
+        'pipeline_config_' + type + model_case.split('/')[1] + '.log')
+    allure.attach.file(config_log, attachment_type=allure.attachment_type.TEXT)
 
     for case in cases_info.keys():
         if ('deepseek-coder' in model_case
                 or 'CodeLlama' in model_case) and 'code' not in case:
             continue
-        msg = ''
+        msg = 'result is empty, please check again'
         result = False
         with allure.step('case - ' + case):
             pipeline_chat_log = os.path.join(
-                log_path, 'pipeline_chat_' + model_case.split('/')[1] + '_' +
-                case + '.log')
+                log_path, 'pipeline_chat_' + type + model_case.split('/')[1] +
+                '_' + case + '.log')
+
+            allure.attach.file(pipeline_chat_log,
+                               attachment_type=allure.attachment_type.TEXT)
 
             with open(pipeline_chat_log, 'r') as f:
                 lines = f.readlines()
@@ -110,11 +136,41 @@ def assert_pipeline_chat_log(config, cases_info, model_case):
                         break
                     if 'result:True, reason:' in line and result is False:
                         result = True
+                        msg = ''
 
-            allure.attach.file(pipeline_chat_log,
-                               attachment_type=allure.attachment_type.TEXT)
             with assume:
                 assert result, msg
+
+
+def save_pipeline_common_log(config, log_name, content, write_type: str = 'w'):
+    log_path = config.get('log_path')
+
+    config_log = os.path.join(log_path, log_name)
+    file = open(config_log, write_type)
+    file.write(content)
+
+
+def assert_pipeline_common_log(config, log_name):
+    log_path = config.get('log_path')
+
+    config_log = os.path.join(log_path, log_name)
+    allure.attach.file(config_log, attachment_type=allure.attachment_type.TEXT)
+
+    msg = 'result is empty, please check again'
+    result = False
+    with open(config_log, 'r') as f:
+        lines = f.readlines()
+
+        for line in lines:
+            if 'result:False, reason:' in line:
+                result = False
+                msg = line
+                break
+            if 'result:True, reason:' in line and result is False:
+                result = True
+                msg = ''
+
+    assert result, msg
 
 
 PIC1 = 'https://raw.githubusercontent.com/' + \
@@ -209,12 +265,21 @@ def assert_pipeline_vl_chat_log(config, model_case):
     pipeline_chat_log = os.path.join(
         log_path, 'pipeline_vl_chat_' + model_case.split('/')[1] + '.log')
 
+    allure.attach.file(pipeline_chat_log,
+                       attachment_type=allure.attachment_type.TEXT)
+
+    msg = 'result is empty, please check again'
+    result = False
     with open(pipeline_chat_log, 'r') as f:
         lines = f.readlines()
         for line in lines:
             if 'result:False, reason:' in line:
-                with assume:
-                    assert False, line
+                result = False
+                msg = line
+                break
+            if 'result:True, reason:' in line and result is False:
+                result = True
+                msg = ''
 
-    allure.attach.file(pipeline_chat_log,
-                       attachment_type=allure.attachment_type.TEXT)
+    with assume:
+        assert result, msg

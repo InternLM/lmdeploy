@@ -32,6 +32,7 @@ SUPPORTED_ARCHS = dict(
     # deepseek-vl
     MultiModalityCausalLM='deepseekvl',
     # mini gemini
+    MGMLlamaForCausalLM='llama',
     MiniGeminiLlamaForCausalLM='llama')
 
 
