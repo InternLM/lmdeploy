@@ -54,6 +54,16 @@ class CacheConfig:
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 4096
+    enable_prefix_caching: bool = False
+
+    def __post_init__(self):
+        """post init."""
+        from lmdeploy.utils import get_logger
+        logger = get_logger('lmdeploy')
+        if self.window_size > 1 and self.enable_prefix_caching:
+            logger.warning(
+                'Prefix caching is not available for window attention.')
+            self.enable_prefix_caching = False
 
 
 @dataclass

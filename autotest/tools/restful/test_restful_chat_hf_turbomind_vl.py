@@ -21,7 +21,7 @@ def prepare_environment(request, config, worker_id):
     pid, startRes = start_restful_api(config, param, model, model_path,
                                       'turbomind', worker_id)
     yield
-    stop_restful_api(pid, startRes)
+    stop_restful_api(pid, startRes, param)
 
 
 def getModelList(tp_num):
@@ -35,7 +35,6 @@ def getModelList(tp_num):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=1),
                          indirect=True)
@@ -49,7 +48,6 @@ def test_restful_chat_tp1(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_2
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=2),
                          indirect=True)

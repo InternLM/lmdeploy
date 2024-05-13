@@ -126,15 +126,15 @@ class TestDefaultBlockManager:
 
         # no new logical block
         msg.update_token_ids(torch.tensor([1] * (block_size - 1)))
-        assert block_mgr.can_append_slot(msg)
-        block_mgr.append_slot(msg)
+        assert block_mgr.can_allocate(msg)
+        block_mgr.allocate(msg)
         block_table = block_mgr.get_block_table(msg)
         assert len(block_table) == 1
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 1
 
         # with new logical block
         msg.update_token_ids(torch.tensor([1]))
-        block_mgr.append_slot(msg)
+        block_mgr.allocate(msg)
         block_table = block_mgr.get_block_table(msg)
         assert len(block_table) == 2
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 2

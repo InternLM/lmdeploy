@@ -107,7 +107,7 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
                 'please specify tokenizer path by --tokenizer-path')
 
     # move tokenizer model to the target path
-    candidate = ['tokenizer.model', 'qwen.tiktoken']
+    candidate = ['tokenizer.model', 'qwen.tiktoken', 'merges.txt']
     for name in candidate:
         tmp_path = osp.join(model_path, name)
         if osp.exists(tmp_path):
