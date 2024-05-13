@@ -2,8 +2,9 @@
 import torch
 
 from .base import INPUT_MODELS
-from .xcomposer2 import Xcomposer2Model, Xcomposer2Reader
 from .llama_awq import ensure_fp16orint32
+from .xcomposer2 import Xcomposer2Model, Xcomposer2Reader
+
 
 class Xcomposer2AwqReader(Xcomposer2Reader):
     """LlamaAwqReader."""
@@ -48,7 +49,6 @@ class Xcomposer2AwqReader(Xcomposer2Reader):
         """Get attn lora_b."""
         return super()._attn(i, 'Plora_B.weight', 0, 0)
 
-
     def ffn(self, i: int):
         """Get ffn qweight for layer i."""
         return ensure_fp16orint32(self._ffn(i, 'qweight'))
@@ -60,6 +60,7 @@ class Xcomposer2AwqReader(Xcomposer2Reader):
     def ffn_scale(self, i: int):
         """Get ffn scales for layer i."""
         return ensure_fp16orint32(self._ffn(i, 'scales'))
+
 
 @INPUT_MODELS.register_module(name='xcomposer2-awq')
 class Xcomposer2AwqModel(Xcomposer2Model):

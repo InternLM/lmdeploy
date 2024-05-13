@@ -93,7 +93,13 @@ def auto_awq(model: str,
         fcs.update(name2fc)
 
     smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size, device)
-    quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)
+    quant_weights(model,
+                  fcs,
+                  w_bits,
+                  w_sym,
+                  w_group_size,
+                  device,
+                  skip_if_contains='Plora')  # TODO quant lora weight
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,

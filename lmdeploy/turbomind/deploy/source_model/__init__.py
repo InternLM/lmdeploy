@@ -11,3 +11,4 @@ from .meta_llama import MetaLlamaModel  # noqa: F401
 from .qwen import QwenModel  # noqa: F401
 from .qwen_awq import QwenAwqModel  # noqa: F401
 from .xcomposer2 import Xcomposer2Model  # noqa: F401
+from .xcomposer2_awq import Xcomposer2AwqModel  # noqa: F401

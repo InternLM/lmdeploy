@@ -207,21 +207,32 @@ def check_awq_supported(layer_type):
         raise NotImplementedError
 
 
-def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
+def quant_weights(model,
+                  fcs,
+                  bits,
+                  symmetry,
+                  group_size=-1,
+                  device='cuda',
+                  skip_if_contains: str = None):
     """Quantize the weights of the target model's linear layers."""
     from lmdeploy.legacy.pytorch.modules import WeightOnlyQLinear
     from lmdeploy.lite.quantization import WeightQuantizer
     for name, fc in fcs.items():
         fc.to(device)
-        quantizer = WeightQuantizer(bits, symmetry, 'per_group', group_size)
-        q_linear = WeightOnlyQLinear.from_linear(fc, quantizer)
-
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
-        fc.to('cpu')
+        pack_or_skip = 'packed'
+        if skip_if_contains and skip_if_contains in child_name:
+            q_linear = fc
+            pack_or_skip = 'skipped'
+        else:
+            quantizer = WeightQuantizer(bits, symmetry, 'per_group',
+                                        group_size)
+            q_linear = WeightOnlyQLinear.from_linear(fc, quantizer)
         setattr(parent, child_name, q_linear)
+        fc.to('cpu')
 
-        print(f'{name} weight packed.')
+        print(f'{name} weight {pack_or_skip}.')
 
 
 def smooth_layers(layers,

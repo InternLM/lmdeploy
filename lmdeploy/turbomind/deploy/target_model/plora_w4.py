@@ -1,13 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
-
-import torch
-
 from ..source_model.base import BaseInputModel, BaseReader
-from .base import (OUTPUT_MODELS, BaseOutputModel, TurbomindModelConfig,
-                   merge_qkv, permute)
+from .base import OUTPUT_MODELS, TurbomindModelConfig, merge_qkv, permute
 from .plora import TurbomindPloraModel, transpose_tensor
-from .w4 import get_cuda_tensor, tp_m_s4, transpose_qk_s4, fuse_w1_w3_s4, convert_s4
+from .w4 import (convert_s4, fuse_w1_w3_s4, get_cuda_tensor, tp_m_s4,
+                 transpose_qk_s4)
+
 
 @OUTPUT_MODELS.register_module(name=['plora-w4'])
 class TurbomindPloraW4Model(TurbomindPloraModel):
@@ -71,7 +68,6 @@ class TurbomindPloraW4Model(TurbomindPloraModel):
         self.save_split(o_qw, f'layers.{i}.attention.wo.qweight', 0)
         self.save_split(o_sz, f'layers.{i}.attention.wo.scales_zeros', 0)
 
-
         q_b, k_b, v_b, o_b = get_cuda_tensor(bin.attn_bias(i))
         if q_b is not None:
             q_b = permute(q_b, size_per_head)
@@ -96,7 +92,6 @@ class TurbomindPloraW4Model(TurbomindPloraModel):
         w2_qw, w2_sz = convert_s4(w2_qw, w2_qz, w2_s, group_size)
         self.save_split(w2_qw, f'layers.{i}.feed_forward.w2.qweight', 0)
         self.save_split(w2_sz, f'layers.{i}.feed_forward.w2.scales_zeros', 0)
-
 
         # attn lora_a
         lora_a_qkv, lora_a_o = bin.attn_lora_a(i)

@@ -156,7 +156,7 @@ void mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
     }
 
     if (weights.lora.r > 0) {
-        FT_CHECK(bit_size >= 16);
+        // FT_CHECK(bit_size >= 16);
         deviceMalloc((T**)&weights.lora.a, weights.input_dims * weights.lora.r);
         deviceMalloc((T**)&weights.lora.b, weights.lora.r * weights.output_dims);
     }
@@ -203,7 +203,7 @@ void getWeightTensor(LlamaDenseWeight<T>& weights, bool bias, const std::string&
     }
 
     if (weights.lora.r) {
-        FT_CHECK(bit_size >= 16);
+        // FT_CHECK(bit_size >= 16);
         auto        n       = prefix.rfind(".");
         std::string _prefix = prefix.substr(0, n);
         std::string _num    = prefix.substr(n + 1);
