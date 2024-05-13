@@ -2,8 +2,7 @@
 from ..source_model.base import BaseInputModel, BaseReader
 from .base import OUTPUT_MODELS, TurbomindModelConfig, merge_qkv, permute
 from .plora import TurbomindPloraModel, transpose_tensor
-from .w4 import (convert_s4, fuse_w1_w3_s4, get_cuda_tensor, tp_m_s4,
-                 transpose_qk_s4)
+from .w4 import convert_s4, get_cuda_tensor, tp_m_s4, transpose_qk_s4
 
 
 @OUTPUT_MODELS.register_module(name=['plora-w4'])
@@ -81,13 +80,12 @@ class TurbomindPloraW4Model(TurbomindPloraModel):
         w1_qz, w2_qz, w3_qz = get_cuda_tensor(bin.ffn_zero(i))
         w1_s, w2_s, w3_s = get_cuda_tensor(bin.ffn_scale(i))
 
-        w13_qw, w13_qz, w13_s = fuse_w1_w3_s4(w1_qw, w1_qz, w1_s, w3_qw, w3_qz,
-                                              w3_s)
-        w13_qw, w13_sz = convert_s4(w13_qw, w13_qz, w13_s, group_size)
-        w13_qw = tp_m_s4(w13_qw, tp)
-        self.save_split(w13_qw, f'layers.{i}.feed_forward.w13.qweight', -1)
-        self.save_split(w13_sz, f'layers.{i}.feed_forward.w13.scales_zeros',
-                        -1)
+        w1_qw, w1_sz = convert_s4(w1_qw, w1_qz, w1_s, group_size)
+        w3_qw, w3_sz = convert_s4(w3_qw, w3_qz, w3_s, group_size)
+        self.save_split(w1_qw, f'layers.{i}.feed_forward.w1.qweight', -1)
+        self.save_split(w1_sz, f'layers.{i}.feed_forward.w1.scales_zeros', -1)
+        self.save_split(w3_qw, f'layers.{i}.feed_forward.w3.qweight', -1)
+        self.save_split(w3_sz, f'layers.{i}.feed_forward.w3.scales_zeros', -1)
 
         w2_qw, w2_sz = convert_s4(w2_qw, w2_qz, w2_s, group_size)
         self.save_split(w2_qw, f'layers.{i}.feed_forward.w2.qweight', 0)
