@@ -16,14 +16,12 @@ turbomind_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
     - meta-llama/Meta-Llama-3-8B-Instruct
     - internlm/internlm2-chat-1_8b
-    - internlm/internlm-chat-7b
     - internlm/internlm-chat-20b
     - internlm/internlm2-chat-7b
     - internlm/internlm2-chat-20b
     - internlm/internlm2-chat-7b-4bits
     - internlm/internlm2-chat-20b-4bits
     - Qwen/Qwen-7B-Chat
-    - Qwen/Qwen-14B-Chat
     - Qwen/Qwen1.5-7B-Chat
     - lmdeploy/llama2-chat-7b-w4
     - baichuan-inc/Baichuan2-7B-Chat
@@ -37,11 +35,12 @@ turbomind_chat_model:
     - deepseek-ai/deepseek-coder-1.3b-instruct
     - codellama/CodeLlama-7b-Instruct-hf
     - Qwen/Qwen1.5-4B-Chat-AWQ
+    - OpenGVLab/InternVL-Chat-V1-5
+    - internlm/internlm-xcomposer2-vl-7b
 
 pytorch_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
     - meta-llama/Meta-Llama-3-8B-Instruct
-    - internlm/internlm-chat-7b
     - internlm/internlm-chat-20b
     - internlm/internlm2-chat-7b
     - internlm/internlm2-chat-20b
@@ -49,6 +48,7 @@ pytorch_chat_model:
     - baichuan-inc/Baichuan2-13B-Chat
     - 01-ai/Yi-6B-Chat
     - Qwen/Qwen1.5-7B-Chat
+    - Qwen/Qwen1.5-MoE-A2.7B-Chat
     - deepseek-ai/deepseek-moe-16b-chat
     - mistralai/Mistral-7B-Instruct-v0.1
     - mistralai/Mixtral-8x7B-Instruct-v0.1
@@ -73,29 +73,29 @@ vl_model:
     - liuhaotian/llava-v1.6-vicuna-7b
     - 01-ai/Yi-VL-6B
     - deepseek-ai/deepseek-vl-1.3b-chat
+    - OpenGVLab/InternVL-Chat-V1-5
+    - internlm/internlm-xcomposer2-vl-7b
 
 quatization_case_config:
     w4a16:
         - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b
         - Qwen/Qwen-7B-Chat
-        - Qwen/Qwen-14B-Chat
         - internlm/internlm2-chat-20b
         - baichuan-inc/Baichuan2-7B-Chat
         - internlm/internlm2-20b
         - Qwen/Qwen1.5-7B-Chat
+        - meta-llama/Meta-Llama-3-8B-Instruct
     kvint:
         - meta-llama/Llama-2-7b-chat-hf
         - meta-llama/Meta-Llama-3-8B-Instruct
         - internlm/internlm2-chat-1_8b
-        - internlm/internlm-chat-7b
         - internlm/internlm-chat-20b
         - internlm/internlm2-chat-7b
         - internlm/internlm2-chat-20b
         - internlm/internlm2-chat-7b-4bits
         - internlm/internlm2-chat-20b-4bits
         - Qwen/Qwen-7B-Chat
-        - Qwen/Qwen-14B-Chat
         - Qwen/Qwen1.5-7B-Chat
         - lmdeploy/llama2-chat-7b-w4
         - baichuan-inc/Baichuan2-7B-Chat
@@ -106,7 +106,6 @@ quatization_case_config:
     w8a8:
         - meta-llama/Llama-2-7b-chat-hf
         - meta-llama/Meta-Llama-3-8B-Instruct
-        - internlm/internlm-chat-7b
         - internlm/internlm-chat-20b
         - internlm/internlm2-chat-20b
         - internlm/internlm2-chat-7b

@@ -100,7 +100,7 @@ def _load_hf_results(test_results: dict, model_name: str):
     return out
 
 
-def evaluate(models: List[str], workspace: str):
+def evaluate(models: List[str], datasets: List[str], workspace: str):
     """Evaluate models from lmdeploy using opencompass.
 
     Args:
@@ -150,6 +150,7 @@ def evaluate(models: List[str], workspace: str):
             continue
         logging.info(f'Start evaluating {target_model} ...\\nn{model_cfg}\n\n')
         with open(config_path_new, 'a') as f:
+            f.write(f'\ndatasets = {datasets}\n')
             f.write(f'\nmodels = [ {target_model} ]\n')
 
         work_dir = os.path.join(workspace, target_model)
