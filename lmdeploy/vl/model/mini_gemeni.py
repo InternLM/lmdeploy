@@ -185,6 +185,7 @@ class MiniGeminiVisionModel(VisonModel):
                 del model.model.norm
 
         device_map = self.vision_config.device_map
+        keys = []
         if isinstance(device_map, str):
             max_memory = None
             from accelerate.utils import (get_balanced_memory,
@@ -218,7 +219,7 @@ class MiniGeminiVisionModel(VisonModel):
                 no_split_module_classes=['CLIPEncoderLayer', 'ConvNeXtStage'],
                 dtype=torch.half)
 
-        if keys[0] in device_map:
+        if len(keys) and keys[0] in device_map:
             add_device_hook(vision_tower, device_map[keys[0]])
             add_device_hook(vision_tower_aux, device_map[keys[0]])
 
