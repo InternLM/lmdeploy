@@ -75,15 +75,16 @@ class PatchedQwen2MoeSparseMoeBlock(nn.Module):
                                topk=self.top_k,
                                renormalize=False)
 
-        if dist.is_initialized():
-            dist.all_reduce(out_states)
-
-        shared_expert_output = self.shared_expert(hidden_states)
+        # all reduce of shared_expert is not necessary
+        shared_expert_output = self.shared_expert.forward(hidden_states)
         shared_expert_output = F.sigmoid(
             self.shared_expert_gate(hidden_states)) * shared_expert_output
 
         out_states = out_states + shared_expert_output
         out_states = out_states.unflatten(0, (-1, sequence_length))
+
+        if dist.is_initialized():
+            dist.all_reduce(out_states)
 
         return out_states, router_logits
 

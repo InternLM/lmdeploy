@@ -195,10 +195,23 @@ class PatchedDeepseekMoE(nn.Module):
         self.register_buffer('gate_up_weights', gate_up_weights)
         self.register_buffer('down_weights', down_weights)
 
+    def forward(self, hidden_states):
+        identity = hidden_states
+        orig_shape = hidden_states.shape
+        topk_idx, topk_weight, _ = self.gate(hidden_states)
+        hidden_states = hidden_states.flatten(0, 1)
+        flat_topk_idx = topk_idx.flatten()
+        y = self.moe_infer(hidden_states, flat_topk_idx,
+                           topk_weight).view(*orig_shape)
+        if self.config.n_shared_experts is not None:
+            y = y + self.shared_experts.forward(identity)
+        if dist.is_initialized():
+            dist.all_reduce(y)
+        return y
+
     def moe_infer(self, x, flat_expert_indices, flat_expert_weights):
         """moe infer."""
         from lmdeploy.pytorch.kernels.fused_moe import fused_moe
-        seq_len = x.size(0)
         out_states = fused_moe(x,
                                self.gate_up_weights,
                                self.down_weights,
@@ -206,8 +219,4 @@ class PatchedDeepseekMoE(nn.Module):
                                flat_expert_indices,
                                topk=self.num_experts_per_tok,
                                renormalize=False)
-
-        out_states = out_states.reshape(seq_len, -1)
-        if dist.is_initialized():
-            dist.all_reduce(out_states)
         return out_states

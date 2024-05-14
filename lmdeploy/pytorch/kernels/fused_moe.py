@@ -33,7 +33,6 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 128,
                 'BLOCK_SIZE_N': 256,
                 'BLOCK_SIZE_K': 64,
-                'GROUP_SIZE_M': 8
             },
             num_stages=3,
             num_warps=8),
@@ -42,7 +41,6 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 64,
                 'BLOCK_SIZE_N': 256,
                 'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8
             },
             num_stages=4,
             num_warps=4),
@@ -51,7 +49,6 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 128,
                 'BLOCK_SIZE_N': 128,
                 'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8
             },
             num_stages=4,
             num_warps=4),
@@ -60,7 +57,6 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 128,
                 'BLOCK_SIZE_N': 64,
                 'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8
             },
             num_stages=4,
             num_warps=4),
@@ -69,7 +65,6 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 64,
                 'BLOCK_SIZE_N': 128,
                 'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8
             },
             num_stages=4,
             num_warps=4),
@@ -78,7 +73,6 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 128,
                 'BLOCK_SIZE_N': 32,
                 'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8
             },
             num_stages=4,
             num_warps=4),
@@ -87,7 +81,6 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 64,
                 'BLOCK_SIZE_N': 32,
                 'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8
             },
             num_stages=5,
             num_warps=2),
@@ -96,7 +89,6 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 32,
                 'BLOCK_SIZE_N': 64,
                 'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8
             },
             num_stages=5,
             num_warps=2),
@@ -116,21 +108,23 @@ def fused_moe_kernel(
     ExpStart,
     ExpEnd,
     Weights,
-    N: int,
-    K: int,
+    N: tl.constexpr,
+    K: tl.constexpr,
     stride_am: int,
-    stride_ak: int,
-    stride_be: int,
-    stride_bn: int,
-    stride_bk: int,
+    stride_ak: tl.constexpr,
+    stride_be: tl.constexpr,
+    stride_bn: tl.constexpr,
+    stride_bk: tl.constexpr,
     stride_cm: int,
-    stride_cn: int,
+    stride_cn: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     ENABLE_WEIGHTS: tl.constexpr,
     top_k: tl.constexpr,
+    reindex_a: tl.constexpr,
+    reindex_c: tl.constexpr,
 ):
     """fused moe kernel."""
     exp_id = tl.program_id(0)
@@ -139,7 +133,7 @@ def fused_moe_kernel(
     exp_start = tl.load(ExpStart + exp_id)
     exp_end = tl.load(ExpEnd + exp_id)
     M = exp_end - exp_start
-    if M == 0:
+    if M <= 0:
         return
 
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -158,10 +152,13 @@ def fused_moe_kernel(
     mask_sid = offs_sid < exp_end
     sid = tl.load(SortedIdx + offs_sid, mask=mask_sid, other=0)
 
-    offs_am = sid // top_k
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)
+    if reindex_a:
+        offs_am = sid // top_k
+    else:
+        offs_am = offs_sid
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     b_ptrs = B + exp_id * stride_be + (offs_k[:, None] * stride_bk +
                                        offs_bn[None, :] * stride_bn)
 
@@ -185,7 +182,10 @@ def fused_moe_kernel(
 
     c = accumulator.to(A.dtype.element_ty)
 
-    offs_cm = sid
+    if reindex_c:
+        offs_cm = sid
+    else:
+        offs_cm = exp_start + pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = mask_sid[:, None] & (offs_cn[None, :] < N)
@@ -203,19 +203,23 @@ def fused_moe_kernel_launcher(
     enable_weights: bool = False,
     top_k: int = 1,
     num_tokens: int = None,
+    reindex_a: bool = True,
+    reindex_c: bool = True,
 ):
     """fused moe kernel launcher."""
 
     def _grid_fn(META):
-        return (
+        grid = (
             E,
             triton.cdiv(num_tokens, META['BLOCK_SIZE_M']) *
             triton.cdiv(N, META['BLOCK_SIZE_N']),
         )
+        return grid
 
     if num_tokens is None:
         num_tokens = A.size(0)
     E, N, K = B.shape
+    GROUP_SIZE_M = 1
     A = A.flatten(0, -2)
     C = C.flatten(0, -2)
 
@@ -240,6 +244,9 @@ def fused_moe_kernel_launcher(
         stride_cn=C.stride(1),
         ENABLE_WEIGHTS=enable_weights,
         top_k=top_k,
+        reindex_a=reindex_a,
+        reindex_c=reindex_c,
+        GROUP_SIZE_M=GROUP_SIZE_M,
         **kernel_meta,
     )
 
@@ -282,8 +289,9 @@ def get_start_end(topk_idx: torch.Tensor, sorted_idx: torch.Tensor,
     >>> exp_end = exp_tok_cnt.cumsum(0)
     >>> exp_start = exp_end - exp_tok_cnt
     """
-    exp_start = sorted_idx.new_empty(num_experts)
-    exp_end = sorted_idx.new_empty(num_experts)
+    start_end = sorted_idx.new_empty(2, num_experts)
+    exp_start = start_end[0, :]
+    exp_end = start_end[1, :]
 
     BLOCK = 128
     kernel_meta = get_kernel_meta(topk_idx)
@@ -330,16 +338,20 @@ def fused_moe(hidden_states: torch.Tensor,
 
     intermediate_cache1 = hidden_states.new_empty((M, topk, N))
     # gate and up
-    fused_moe_kernel_launcher(hidden_states,
-                              w1,
-                              intermediate_cache1,
-                              sorted_idx=sorted_idx,
-                              exp_start=exp_start,
-                              exp_end=exp_end,
-                              weights=topk_weights,
-                              enable_weights=False,
-                              top_k=topk,
-                              num_tokens=hidden_states.size(0))
+    fused_moe_kernel_launcher(
+        hidden_states,
+        w1,
+        intermediate_cache1,
+        sorted_idx=sorted_idx,
+        exp_start=exp_start,
+        exp_end=exp_end,
+        weights=topk_weights,
+        enable_weights=False,
+        top_k=topk,
+        num_tokens=hidden_states.size(0),
+        reindex_a=True,
+        reindex_c=False,
+    )
 
     # activate
     gate_cache, up_cache = intermediate_cache1.chunk(2, -1)
@@ -348,16 +360,20 @@ def fused_moe(hidden_states: torch.Tensor,
 
     intermediate_cache2 = hidden_states.new_empty((M, topk, w2.shape[1]))
     # down
-    fused_moe_kernel_launcher(gate_cache,
-                              w2,
-                              intermediate_cache2,
-                              sorted_idx=sorted_idx,
-                              exp_start=exp_start,
-                              exp_end=exp_end,
-                              weights=topk_weights,
-                              enable_weights=True,
-                              top_k=1,
-                              num_tokens=hidden_states.size(0))
+    fused_moe_kernel_launcher(
+        gate_cache,
+        w2,
+        intermediate_cache2,
+        sorted_idx=sorted_idx,
+        exp_start=exp_start,
+        exp_end=exp_end,
+        weights=topk_weights,
+        enable_weights=True,
+        top_k=1,
+        num_tokens=hidden_states.size(0),
+        reindex_a=False,
+        reindex_c=True,
+    )
 
     ret = intermediate_cache2.sum(dim=1)
     return ret
