@@ -348,15 +348,14 @@ def fused_moe(hidden_states: torch.Tensor,
         weights=topk_weights,
         enable_weights=False,
         top_k=topk,
-        num_tokens=hidden_states.size(0),
+        num_tokens=M,
         reindex_a=True,
         reindex_c=False,
     )
 
     # activate
     gate_cache, up_cache = intermediate_cache1.chunk(2, -1)
-    F.silu(gate_cache, inplace=True).mul_(up_cache)
-    del intermediate_cache1
+    gate_cache = F.silu(gate_cache, inplace=True) * up_cache
 
     intermediate_cache2 = hidden_states.new_empty((M, topk, w2.shape[1]))
     # down
@@ -370,7 +369,7 @@ def fused_moe(hidden_states: torch.Tensor,
         weights=topk_weights,
         enable_weights=True,
         top_k=1,
-        num_tokens=hidden_states.size(0),
+        num_tokens=M,
         reindex_a=False,
         reindex_c=True,
     )

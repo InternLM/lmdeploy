@@ -2,8 +2,11 @@
 from typing import List, Optional
 
 import torch
+import torch.nn.functional as F
 from torch import distributed as dist
 from torch import nn
+
+from lmdeploy.pytorch.kernels.fused_moe import fused_moe
 
 
 class PatchedQwen2MoeSparseMoeBlock(nn.Module):
@@ -52,9 +55,6 @@ class PatchedQwen2MoeSparseMoeBlock(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """moe forward."""
-        import torch.nn.functional as F
-
-        from lmdeploy.pytorch.kernels.fused_moe import fused_moe
 
         _, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
@@ -64,7 +64,8 @@ class PatchedQwen2MoeSparseMoeBlock(nn.Module):
         routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
         routing_weights, selected_experts = torch.topk(routing_weights,
                                                        self.top_k,
-                                                       dim=-1)
+                                                       dim=-1,
+                                                       sorted=False)
         if self.norm_topk_prob:
             routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         out_states = fused_moe(hidden_states,

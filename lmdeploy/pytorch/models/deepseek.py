@@ -6,6 +6,8 @@ import torch.distributed as dist
 from torch import nn
 from torch.distributed._tensor import DeviceMesh
 
+from lmdeploy.pytorch.kernels.fused_moe import fused_moe
+
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
@@ -201,22 +203,15 @@ class PatchedDeepseekMoE(nn.Module):
         topk_idx, topk_weight, _ = self.gate(hidden_states)
         hidden_states = hidden_states.flatten(0, 1)
         flat_topk_idx = topk_idx.flatten()
-        y = self.moe_infer(hidden_states, flat_topk_idx,
-                           topk_weight).view(*orig_shape)
+        y = fused_moe(hidden_states,
+                      self.gate_up_weights,
+                      self.down_weights,
+                      topk_weight,
+                      flat_topk_idx,
+                      topk=self.num_experts_per_tok,
+                      renormalize=False).view(*orig_shape)
         if self.config.n_shared_experts is not None:
             y = y + self.shared_experts.forward(identity)
         if dist.is_initialized():
             dist.all_reduce(y)
         return y
-
-    def moe_infer(self, x, flat_expert_indices, flat_expert_weights):
-        """moe infer."""
-        from lmdeploy.pytorch.kernels.fused_moe import fused_moe
-        out_states = fused_moe(x,
-                               self.gate_up_weights,
-                               self.down_weights,
-                               flat_expert_weights,
-                               flat_expert_indices,
-                               topk=self.num_experts_per_tok,
-                               renormalize=False)
-        return out_states

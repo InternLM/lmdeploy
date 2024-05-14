@@ -10,6 +10,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
+from ..kernels.fused_moe import fused_moe
 
 
 class PatchedMixtralAttention(nn.Module):
@@ -226,7 +227,6 @@ class PatchedMixtralSparseMoeBlock(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """rewrite moe forward."""
-        from lmdeploy.pytorch.kernels.fused_moe import fused_moe
 
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)

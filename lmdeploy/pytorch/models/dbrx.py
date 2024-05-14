@@ -10,6 +10,8 @@ from torch.distributed._tensor import DeviceMesh, Shard, distribute_tensor
 from transformers.cache_utils import Cache
 from transformers.modeling_outputs import MoeModelOutputWithPast
 
+from lmdeploy.pytorch.kernels.fused_moe import fused_moe
+
 from ..dist_utils import rowwise_parallelize_linear_fn, try_to_local
 from ..kernels import fill_kv_cache, fused_rotary_emb, paged_attention_fwd
 
@@ -226,7 +228,6 @@ class PatchedDbrxExperts(nn.Module):
                 top_weights: torch.Tensor,
                 top_experts: torch.LongTensor) -> torch.Tensor:
         """moe forward."""
-        from lmdeploy.pytorch.kernels.fused_moe import fused_moe
         q_len = x.size(1)
         x = x.flatten(0, 1)
         out_states = fused_moe(x,
