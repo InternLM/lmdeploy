@@ -164,6 +164,12 @@ class SubCliServe:
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
 
+        # vlm args
+        vision_group = parser.add_argument_group('Vision model arguments')
+        ArgumentHelper.vision_max_batch_size(vision_group)
+        ArgumentHelper.vision_device_map(vision_group)
+        ArgumentHelper.vision_kwargs(vision_group)
+
     @staticmethod
     def add_parser_api_client():
         """Add parser for api_client command."""
@@ -288,11 +294,17 @@ class SubCliServe:
         if args.chat_template:
             chat_template_config = ChatTemplateConfig.from_json(
                 args.chat_template)
+        from lmdeploy.messages import VisonConfig
+        vision_kwargs = {} if args.vision_kwargs is None \
+            else args.vision_kwargs
+        vision_config = VisonConfig(args.vision_max_batch_size,
+                                    args.vision_device_map, vision_kwargs)
         run_api_server(args.model_path,
                        model_name=args.model_name,
                        backend=backend,
                        backend_config=backend_config,
                        chat_template_config=chat_template_config,
+                       vision_config=vision_config,
                        server_name=args.server_name,
                        server_port=args.server_port,
                        allow_origins=args.allow_origins,

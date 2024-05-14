@@ -81,7 +81,7 @@ class Xcomposer2VisionModel(VisonModel):
                 from ixc_utils import HD_transform
                 self.HD_transform = HD_transform
                 self._forward_func = self._forward_4khd_7b
-                self.hd_num = self.vision_config.kwargs.get('hd_num', 25)
+                self.hd_num = int(self.vision_config.kwargs.get('hd_num', 25))
                 # make all tensor on same device for postprocess
                 if 'plora_glb_GN' in device_map:
                     device_map['plora_sub_GN'] = device_map['plora_glb_GN']
