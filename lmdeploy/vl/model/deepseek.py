@@ -6,8 +6,9 @@ from typing import List
 import torch
 from PIL.Image import Image
 
+from lmdeploy.messages import VisonConfig
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import load_model_from_weight_files
+from lmdeploy.vl.model.utils import disable_logging
 
 
 def check_deepseek_vl_install():
@@ -24,9 +25,10 @@ def check_deepseek_vl_install():
 class DeepSeekVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self, model_path: str, vision_config: VisonConfig = None):
         self.model_path = model_path
-        self.device = device
+        self.vision_config = (vision_config
+                              if vision_config is not None else VisonConfig())
         self.build_model()
 
     def build_model(self):
@@ -39,14 +41,51 @@ class DeepSeekVisionModel(VisonModel):
             warnings.simplefilter('ignore')
             model = AutoModelForCausalLM.from_pretrained(self.model_path)
             del model.language_model
-        # load weight
-        model.to_empty(device='cpu')
-        load_model_from_weight_files(model, self.model_path)
 
-        self.vision_model = model.vision_model
-        self.aligner = model.aligner
-        self.vision_model.eval().half().to(self.device)
-        self.aligner.eval().half().to(self.device)
+        device_map = self.vision_config.device_map
+        if isinstance(device_map, str):
+            max_memory = None
+            from accelerate.utils import (get_balanced_memory,
+                                          infer_auto_device_map)
+            if device_map != 'sequential':
+                max_memory = get_balanced_memory(
+                    model, dtype=torch.half, no_split_module_classes=['Block'])
+            device_map = infer_auto_device_map(
+                model,
+                no_split_module_classes=['Block'],
+                max_memory=max_memory,
+                dtype=torch.half)
+
+            same_device_keys = [
+                ('vision_model.vision_tower_high.vision_tower.pos_embed',
+                 'vision_model.vision_tower_high.vision_tower.patch_embed'),
+                ('vision_model.vision_tower_low.vision_tower.pos_embed',
+                 'vision_model.vision_tower_low.vision_tower.patch_embed')
+            ]
+            for (a, b) in same_device_keys:
+                if a in device_map and b in device_map:
+                    device_map[b] = device_map[a]
+            downsamples = []
+            ka = 'vision_model.vision_tower_high.vision_tower.downsamples'
+            kb = 'vision_model.vision_tower_high.vision_tower.hd_alpha_downsamples'  # noqa: E501
+            for k in device_map:
+                if k.startswith(ka):
+                    downsamples.append(k)
+            if len(downsamples) == 1:
+                device_map[ka] = device_map[kb]
+            elif len(downsamples) > 1:
+                numbers = [int(x[len(ka) + 1:]) for x in downsamples]
+                device_map[f'{ka}.{numbers[-1]}'] = device_map[kb]
+
+        from accelerate import load_checkpoint_and_dispatch
+        with disable_logging():
+            load_checkpoint_and_dispatch(model=model,
+                                         checkpoint=self.model_path,
+                                         device_map=device_map,
+                                         dtype=torch.half)
+
+        self.vision_model = model.vision_model.eval()
+        self.aligner = model.aligner.eval()
         self.image_processor = VLChatProcessor.from_pretrained(
             self.model_path).image_processor
 
@@ -56,7 +95,7 @@ class DeepSeekVisionModel(VisonModel):
         outputs = [x.convert('RGB') for x in images]
         pixel_values = self.image_processor(outputs,
                                             return_tensors='pt').pixel_values
-        pixel_values = pixel_values.to(self.device, dtype=torch.float16)
+        pixel_values = pixel_values.to(dtype=torch.float16)
         # [b x n_images, T2, D]
         images_embeds = self.aligner(self.vision_model(pixel_values))
 

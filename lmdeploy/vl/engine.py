@@ -8,6 +8,7 @@ from typing import List, Union
 import torch
 from PIL.Image import Image
 
+from lmdeploy.messages import VisonConfig
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.builder import load_vl_model
 
@@ -64,9 +65,10 @@ class Record:
 class ImageEncoder:
     """Image encoder."""
 
-    def __init__(self, model_path: str, max_batch_size: int = 16):
-        self.model = load_vl_model(model_path)
-        self.max_batch_size = max_batch_size
+    def __init__(self, model_path: str, vicion_config: VisonConfig = None):
+        self.model = load_vl_model(model_path, vicion_config)
+        self.max_batch_size = (1 if vicion_config is None else
+                               VisonConfig.max_batch_size)
         self.loop = asyncio.new_event_loop()
         self.work_thread = self._start_work_thread()
         torch.cuda.empty_cache()
@@ -100,12 +102,11 @@ class ImageEncoder:
 
     def forward(self, inputs: List[Image]):
         """Model forward."""
-        with torch.device(self.model.device):
-            time_start = time.perf_counter()
-            outputs = self.model.forward(inputs)
-            time_end = time.perf_counter()
-            logger.info(f'ImageEncoder forward {len(inputs)} images, '
-                        f'cost {time_end - time_start:.3f}s')
+        time_start = time.perf_counter()
+        outputs = self.model.forward(inputs)
+        time_end = time.perf_counter()
+        logger.info(f'ImageEncoder forward {len(inputs)} images, '
+                    f'cost {time_end - time_start:.3f}s')
         return outputs
 
     def infer(self, inputs: List[Image]):

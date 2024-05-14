@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
@@ -279,3 +279,21 @@ class EngineOutput:
     token_ids: List[int]
     num_token: int
     logprobs: List[Dict[int, float]] = None
+
+
+@dataclass
+class VisonConfig:
+    """Vison model configs.
+
+    Args:
+        max_batch_size (int): the max image size passed to the model, since
+            some model will use image patch, the actual running batch could
+            be larger than this value.
+        device_map (Union[str, Dict[str, Union[int, str]]]): A map that
+            specifies where each submodule should go. Could be `auto`,
+            `balanced`(same as auto), `sequential` or custom configuration.
+        kwargs (dict): kwargs for vision model.
+    """
+    max_batch_size: int = 1
+    device_map: Union[str, Dict[str, Union[int, str]]] = 'auto'
+    kwargs: dict = field(default_factory=dict)

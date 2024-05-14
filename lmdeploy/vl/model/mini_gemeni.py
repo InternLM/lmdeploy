@@ -8,10 +8,11 @@ from typing import List
 import torch
 from PIL.Image import Image
 
+from lmdeploy.messages import VisonConfig
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import (disable_transformers_logging,
-                                     hack_import_with,
-                                     load_model_from_weight_files)
+from lmdeploy.vl.model.utils import (add_device_hook, disable_logging,
+                                     disable_transformers_logging,
+                                     hack_import_with)
 
 
 def check_mini_gemini_install():
@@ -76,11 +77,6 @@ def _clip_vision_tower__init__(self, vision_tower, args, delay_load=False):
     self.select_feature = getattr(args, 'mm_vision_select_feature', 'patch')
     self.is_optimize = getattr(args, 'optimize_vision_tower', False)
 
-    if not delay_load:
-        self.load_model()
-    elif getattr(args, 'unfreeze_mm_vision_tower', False):
-        self.load_model()
-
 
 def _clip_vision_tower_load_model(self):
     from mgm.model.multimodal_encoder.clip_encoder import (  # noqa
@@ -104,9 +100,6 @@ def _openclip_vision_tower__init__(self, vision_tower, args, delay_load=False):
         self.vision_config = json.load(
             open(osp.join(vision_tower, 'open_clip_config.json'), 'r'))
     self.is_optimize = getattr(args, 'optimize_vision_tower_aux', False)
-
-    if not delay_load:
-        self.load_model()
 
 
 def _openclip_vision_tower_load_model(self):
@@ -162,12 +155,12 @@ def init_mini_gemini_model():
 class MiniGeminiVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self, model_path: str, vision_config: VisonConfig = None):
         self.model_path = model_path
-        self.device = device
+        self.vision_config = (vision_config
+                              if vision_config is not None else VisonConfig())
         check_mini_gemini_install()
-        with init_mini_gemini_model():
-            self.build_model()
+        self.build_model()
 
     def build_model(self):
         # empty init
@@ -177,27 +170,57 @@ class MiniGeminiVisionModel(VisonModel):
         with init_empty_weights(), disable_transformers_logging(
         ), hack_import_with(['deepspeed']):
             warnings.simplefilter('ignore')
-            model = MGMLlamaForCausalLM.from_pretrained(self.model_path)
-            del model.lm_head
-            del model.model.embed_tokens
-            del model.model.layers
-            del model.model.norm
+            with init_mini_gemini_model():
+                model = MGMLlamaForCausalLM.from_pretrained(self.model_path)
+                setattr(model.config, 'model_path', self.model_path)
+                model.get_model().initialize_uni_modules(model.config,
+                                                         for_eval=True)
+                vision_tower = model.get_vision_tower()
+                vision_tower.load_model()
+                vision_tower_aux = model.get_vision_tower_aux()
+                vision_tower_aux.load_model()
+                del model.lm_head
+                del model.model.embed_tokens
+                del model.model.layers
+                del model.model.norm
 
-        # # load weight
-        with torch.device('cpu'):
-            model.to_empty(device='cpu')
-            vision_tower = model.get_vision_tower()
-            vision_tower.is_loaded = False
-            vision_tower.load_model()
-            vision_tower_aux = model.get_vision_tower_aux()
-            vision_tower_aux.is_loaded = False
-            vision_tower_aux.load_model()
-        load_model_from_weight_files(model, self.model_path)
-        model.to(self.device).eval().half()
-        setattr(model.config, 'model_path', self.model_path)
-        model.get_model().initialize_uni_modules(model.config, for_eval=True)
+        device_map = self.vision_config.device_map
+        if isinstance(device_map, str):
+            max_memory = None
+            from accelerate.utils import (get_balanced_memory,
+                                          infer_auto_device_map)
+            if device_map != 'sequential':
+                max_memory = get_balanced_memory(model,
+                                                 dtype=torch.half,
+                                                 no_split_module_classes=[
+                                                     'CLIPEncoderLayer',
+                                                     'ConvNeXtStage'
+                                                 ])
+            device_map = infer_auto_device_map(
+                model,
+                no_split_module_classes=['CLIPEncoderLayer', 'ConvNeXtStage'],
+                max_memory=max_memory,
+                dtype=torch.half)
+            keys = [
+                'model.vlm_uni_query_projector', 'model.vlm_uni_aux_projector',
+                'model.vlm_uni_val_projector'
+            ]
+            if keys[0] in device_map:
+                for key in keys[1:]:
+                    device_map[key] = device_map[keys[0]]
 
-        self.model = model
+        from accelerate import load_checkpoint_and_dispatch
+        with disable_logging():
+            load_checkpoint_and_dispatch(
+                model=model,
+                checkpoint=self.model_path,
+                device_map=device_map,
+                no_split_module_classes=['CLIPEncoderLayer', 'ConvNeXtStage'],
+                dtype=torch.half)
+
+        if keys[0] in device_map:
+            add_device_hook(vision_tower, device_map[keys[0]])
+            add_device_hook(vision_tower_aux, device_map[keys[0]])
 
         image_processor = model.model.vision_tower.image_processor
         if hasattr(model.config, 'image_size_aux'):
@@ -207,6 +230,8 @@ class MiniGeminiVisionModel(VisonModel):
             image_processor.crop_size['height'] = model.config.image_size_aux
             image_processor.crop_size['width'] = model.config.image_size_aux
             image_processor.size['shortest_edge'] = model.config.image_size_aux
+
+        self.model = model.eval()
         self.image_processor = image_processor
         self.process_images = process_images
 

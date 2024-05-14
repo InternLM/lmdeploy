@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 
+from lmdeploy.messages import VisonConfig
 from lmdeploy.utils import get_hf_config_content, get_model
 
 from .deepseek import DeepSeekVisionModel
@@ -13,7 +14,7 @@ from .xcomposer2 import Xcomposer2VisionModel
 from .yi import YiVisionModel
 
 
-def load_vl_model(model_path: str):
+def load_vl_model(model_path: str, vision_config: VisonConfig = None):
     """load visual model."""
     if not os.path.exists(model_path):
         model_path = get_model(model_path)
@@ -24,22 +25,22 @@ def load_vl_model(model_path: str):
             if 'InternLMXComposer2ForCausalLM' in v:
                 arch = 'InternLMXComposer2ForCausalLM'
     if arch == 'QWenLMHeadModel':
-        return QwenVisionModel(model_path)
+        return QwenVisionModel(model_path, vision_config)
     elif arch == 'LlavaLlamaForCausalLM':
         projector_type = config.get('mm_projector_type', 'linear')
         mm_vision_tower = config.get('mm_vision_tower', '')
         if '_Norm' in projector_type:
-            return YiVisionModel(model_path)
+            return YiVisionModel(model_path, vision_config)
         elif 'OpenGVLab' in mm_vision_tower:
-            return InternVLLlavaVisionModel(model_path)
+            return InternVLLlavaVisionModel(model_path, vision_config)
         else:
-            return LlavaVisionModel(model_path)
+            return LlavaVisionModel(model_path, vision_config)
     if arch == 'MultiModalityCausalLM':
-        return DeepSeekVisionModel(model_path)
+        return DeepSeekVisionModel(model_path, vision_config)
     if arch == 'InternLMXComposer2ForCausalLM':
-        return Xcomposer2VisionModel(model_path)
+        return Xcomposer2VisionModel(model_path, vision_config)
     if arch == 'InternVLChatModel':
-        return InternVLVisionModel(model_path)
+        return InternVLVisionModel(model_path, vision_config)
     if arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiVisionModel(model_path)
     raise ValueError(f'unsupported vl model with arch {arch}')
