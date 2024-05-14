@@ -9,6 +9,7 @@
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/sync.h"
 #include "src/turbomind/kernels/gemm/thread_map.h"
+#include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
 
@@ -48,18 +49,46 @@ struct GemmUniversal {
 
     // row.col.row
     struct Param {
-        T*                   A;  // x (m  ,k)
-        get_pointer_type<Tb> B;  // W (n  ,k)
-        Tq*                  Q;  //   (k/g,n)
-        T*                   C;  //   (m  ,n)
-        int                  m;
-        int                  n;
-        int                  k;
-        int                  log_tile;
-        int3                 tiled_shape;
-        float*               partial_C;  // (k, m, n)
-        int*                 locks;      // (m/cta_m, n/cta_n, k)
+        int m;
+        int n;
+        int k;
+
+        T*  A;
+        int lda;
+
+        get_pointer_type<Tb> B;
+        int                  ldb;
+
+        Tq* Q;
+        int ldq;
+
+        T*  C;
+        int ldc;
+
+        int  log_tile;
+        int3 tiled_shape;
+
+        float* partial_C;  // (k, m, n)
+        int*   locks;      // (m/cta_m, n/cta_n, k)
     };
+
+    template<LayoutType layout>
+    __device__ int Offset(int rows, int cols, int ld)
+    {
+        if constexpr (layout == LayoutType::kRowMajor) {
+            return rows * ld + cols;
+        }
+        else if constexpr (layout == LayoutType::kColMajor) {
+            return cols * ld + rows;
+        }
+        else if constexpr (layout == LayoutType::kFragment_81616) {  // k-major
+            return cols * ld + rows * Impl::kPackedN;
+        }
+        else {
+            static_assert(layout != layout, "not implemented");
+            return 0;
+        }
+    }
 
     __device__ void operator()(const Param& param, const CtaMap& cta_map, char* smem_buf)
     {
@@ -91,27 +120,61 @@ struct GemmUniversal {
 
         int tile_iter = (gemm_k_size + CTA_K - 1) / CTA_K;
 
+        // IteratorA gmem_A{
+        //     param.A + offset_m * param.k + offset_k,  // ptr
+        //     param.k,                                  // stride s
+        //     CTA_K,                                    // stride k
+        //     AlignedM ? CTA_M : end_m,                 // max s
+        //     CTA_K,                                    // max c
+        // };
+        // constexpr int packed_n = Impl::kPackedN;
+        // IteratorB     gmem_B{
+        //     param.B + offset_n * param.k + offset_k * packed_n,  // ptr
+        //     param.k * packed_n,                                  // stride s
+        //     CTA_K * packed_n,                                    // stride k
+        //     ceil_div(AlignedN ? CTA_N : end_n, packed_n),        // max s
+        //     CTA_K * packed_n,                                    // max c
+        // };
+        // IteratorQ gmem_Q{
+        //     param.Q + offset_n + offset_k / Impl::G * param.n,  // ptr
+        //     param.n,                                            // stride s
+        //     CTA_G * param.n,                                    // stride k
+        //     CTA_G,                                              // max s
+        //     AlignedN ? CTA_N : end_n,                           // max c
+        // };
+
+        // if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
+        //     printf("lda=%d, ldb=%d, ldc=%d\n", param.lda, param.ldb, param.ldc);
+        // }
+
+        auto offset_a = [&](int m, int k) { return Offset<Impl::LayoutA>(m, k, param.lda); };
+
         IteratorA gmem_A{
-            param.A + offset_m * param.k + offset_k,  // ptr
-            param.k,                                  // stride s
-            CTA_K,                                    // stride k
-            AlignedM ? CTA_M : end_m,                 // max s
-            CTA_K,                                    // max c
+            param.A + offset_a(offset_m, offset_k),  // ptr
+            param.lda,                               // stride s
+            CTA_K,                                   // offset_a(0, CTA_K),                      // stride k
+            AlignedM ? CTA_M : end_m,                // max s
+            CTA_K,                                   // max c
         };
-        constexpr int packed_n = Impl::kPackedN;
-        IteratorB     gmem_B{
-            param.B + offset_n * param.k + offset_k * packed_n,  // ptr
-            param.k * packed_n,                                  // stride s
-            CTA_K * packed_n,                                    // stride k
-            ceil_div(AlignedN ? CTA_N : end_n, packed_n),        // max s
-            CTA_K * packed_n,                                    // max c
+
+        auto offset_b = [&](int k, int n) { return Offset<Impl::LayoutB>(k, n, param.ldb); };
+        // constexpr int packed_n = Impl::kPackedN;
+        IteratorB gmem_B{
+            param.B + offset_b(offset_k, offset_n),  // ptr
+            param.ldb,                               // stride s
+            CTA_K,                                   // offset_b(CTA_K, 0),                            // stride k
+            AlignedN ? CTA_N : end_n,
+            // ceil_div(AlignedN ? CTA_N : end_n, packed_n),  // max s
+            CTA_K,  // max c
         };
+
+        auto      offset_q = [&](int k, int n) { return Offset<Impl::LayoutQ>(k / Impl::G, n, param.ldq); };
         IteratorQ gmem_Q{
-            param.Q + offset_n + offset_k / Impl::G * param.n,  // ptr
-            param.n,                                            // stride s
-            CTA_G * param.n,                                    // stride k
-            CTA_G,                                              // max s
-            AlignedN ? CTA_N : end_n,                           // max c
+            param.Q + offset_q(offset_k, offset_n),  // ptr
+            param.ldq,                               // stride s
+            offset_q(CTA_G, 0),                      // stride k
+            CTA_G,                                   // max s
+            AlignedN ? CTA_N : end_n,                // max c
         };
 
         Mainloop mainloop{};
@@ -172,9 +235,12 @@ struct GemmUniversal {
     __device__ void
     StoreC(FragC& frag_C, int offset_m, int offset_n, int end_m, int end_n, const Param& param, SharedStorage& storage)
     {
+        static_assert(Impl::LayoutC == LayoutType::kRowMajor);
+
         Impl::template StoreC<T>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
             if (check_m(mi, end_m) && check_n(ni, end_n)) {
-                Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<T>(vec));  //
+                // Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<T>(vec));  //
+                Store(&param.C[(offset_m + mi) * param.ldc + offset_n + ni], cast<T>(vec));
             }
         });
     }

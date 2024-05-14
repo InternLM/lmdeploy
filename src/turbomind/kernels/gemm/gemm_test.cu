@@ -34,7 +34,7 @@ void ComputeRefCpu(half* C, const half* A, const half* B, int m, int n, int k)
 template<class T, class Tb>
 gemm::Testbed<T, Tb>& gTestbed()
 {
-    static gemm::Testbed<T, Tb> inst{turbomind::gemm::DispatchPolicy::kMeasure, "tmp"};
+    static gemm::Testbed<T, Tb> inst{turbomind::gemm::DispatchPolicy::kDefault, "tmp"};
     return inst;
 }
 
@@ -48,7 +48,7 @@ void Run(int m, int n, int k, int g = 128)
         test.Run();
     }
 
-    test.CompareB();
+    // test.CompareB();
     test.CompareC();
 
     return;
@@ -68,31 +68,35 @@ void Test(int bsz, int tp)
     // Run<T, Tb>(bsz, 2 * 11008 / tp, 4096);  // mlp.up/gate
 
     // Run<T, Tb>(bsz, 4096, 11008 / tp);  // mlp.down
-    Run<T, Tb>(bsz, 12288 / tp, 4096);  // w_qkv
+    // Run<T, Tb>(bsz, 12288 / tp, 4096);  // w_qkv
     // Run<T, Tb>(bsz, 4096, 4096);        // w_o
 
     // llama2-70b
     // Run<T, Tb>(bsz, 10240 / tp, 8192);  // attn.qkv
 
     // Run<T, Tb>(8, 128, 512);
+
+    // Run<T, Tb>(16, 16, 32);
+
+     Run<T, Tb>(8192, 8192, 8192);
 }
 
 int main(int argc, char* argv[])
 {
     // gemm::MeasureL2CacheThroughput();
     // gemm::MeasureMmaThroughput();
-    Test<half, uint4_t>(1, 1);
-    Test<half, uint4_t>(8, 1);
-    Test<half, uint4_t>(16, 1);
-    Test<half, uint4_t>(32, 1);
-    Test<half, uint4_t>(64, 1);
-    Test<half, uint4_t>(128, 1);
-    Test<half, uint4_t>(256, 1);
-    Test<half, uint4_t>(512, 1);
-    Test<half, uint4_t>(1024, 1);
-    Test<half, uint4_t>(2048, 1);
-    Test<half, uint4_t>(4096, 1);
-    Test<half, uint4_t>(8192, 1);
+    // Test<half, uint4_t>(1, 1);
+    // Test<half, uint4_t>(8, 1);
+    Test<half, half>(16, 1);
+    // Test<half, uint4_t>(32, 1);
+    // Test<half, uint4_t>(64, 1);
+    // Test<half, uint4_t>(128, 1);
+    // Test<half, uint4_t>(256, 1);
+    // Test<half, uint4_t>(512, 1);
+    // Test<half, uint4_t>(1024, 1);
+    // Test<half, uint4_t>(2048, 1);
+    // Test<half, uint4_t>(4096, 1);
+    // Test<half, uint4_t>(8192, 1);
 
     return 0;
 }

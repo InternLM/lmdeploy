@@ -95,9 +95,14 @@ struct Gemm::Impl {
         std::vector<Kernel*> kernels;
 
         for (const auto& k : registry_.kernels()) {
+            std::cout << k->name() << "\n";
             if (k->is_feasible(desc)) {
                 kernels.push_back(k.get());
             }
+        }
+
+        if (kernels.empty()) {
+            return {};
         }
 
         // is a better than b

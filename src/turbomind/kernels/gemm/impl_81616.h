@@ -10,7 +10,9 @@
 #include "src/turbomind/kernels/core/mma.h"
 #include "src/turbomind/kernels/core/smem.h"
 #include "src/turbomind/kernels/gemm/impl.h"
+// #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/thread_map.h"
+#include "src/turbomind/kernels/gemm/types.h"
 #include <type_traits>
 
 namespace turbomind::gemm {
@@ -128,6 +130,11 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
         std::min<int>(16 / sizeof(Tq), std::max(1, (CTA_N * CTA_G) / (WARP_CNT * WARP_SIZE)));
     using ThreadMapQ = gemm::ThreadMap<CTA_N, CTA_G, kGmemAccessSizeQ, WARP_CNT>;
 
+    static constexpr auto LayoutA = LayoutType::kRowMajor;
+    static constexpr auto LayoutB = LayoutType::kFragment_81616;
+    static constexpr auto LayoutQ = LayoutType::kRowMajor;
+    static constexpr auto LayoutC = LayoutType::kRowMajor;
+
     // static constexpr int kGmemAccessSizeC =
     //     std::min<int>(16 / sizeof(T), std::max(1, (CTA_K * CTA_M) / (WARP_CNT * WARP_SIZE)));
     // using SmemLayoutC = SmemLayoutV2<CTA_M, CTA_N, 8, 32, Identity>;
@@ -169,18 +176,10 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             if constexpr (ITER_M == 1) {
                 const int offset_s = lane_id % 8 * 1 + warp_offset_m;
                 const int offset_c = lane_id / 8 * 8 % 16 + warp_offset_k;
-                // if constexpr (ITER_K % 2 == 0) {
-                //     if (k % 2 == 0) {
-                //         const int s = offset_s;
-                //         const int c = offset_c + k * 16;
-                //         ldsm_x4((Array<uint32_t, 4>&)frag_A[k][0], cast_smem_ptr_to_uint(&smem_A(s, c, offset)));
-                //     }
-                // }
-                // else {
+
                 const int s = offset_s;
                 const int c = offset_c + k * 16;
                 ldsm_x2((Array<uint32_t, 2>&)frag_A[k][0], cast_smem_ptr_to_uint(&smem(s, c)));
-                // }
             }
             else {
                 const int offset_s = lane_id % 8 + lane_id / 16 * 8 + warp_offset_m;
@@ -240,6 +239,8 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
             // }
 
             if constexpr (!Flag_) {
+                // SmemLayoutV2<CTA_G, CTA_N>
+                // using ThreadMapQ = gemm::ThreadMap<CTA_N, CTA_G, kGmemAccessSizeQ, WARP_CNT>;
                 PRAGMA_UNROLL
                 for (int n = 0; n < ITER_N; ++n) {
                     PRAGMA_UNROLL

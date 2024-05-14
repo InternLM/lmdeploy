@@ -21,15 +21,19 @@ public:
 
     KernelImpl()
     {
-        desc_.order_a = LayoutType::kRowMajor;
-        desc_.order_b = LayoutType::kFragment_81616;
-        desc_.order_c = LayoutType::kRowMajor;
+        desc_.order_a = Impl::LayoutA;
+        desc_.order_b = Impl::LayoutB;
+        desc_.order_c = Impl::LayoutC;
 
         desc_.type_a = get_data_type_v<typename Gemm::T>;
         desc_.type_b = get_data_type_v<typename Gemm::Tb>;
         desc_.type_c = get_data_type_v<typename Gemm::T>;
 
-        desc_.quant_b = QuantDesc{QuantType::kAsym_FMA, Impl::G};
+        desc_.quant_b = QuantDesc{};
+
+        if (!std::is_same_v<typename Gemm::T, typename Gemm::Tb>) {
+            desc_.quant_b = QuantDesc{QuantType::kAsym_FMA, Impl::G};
+        }
 
         desc_.cta_tile  = {Gemm::CTA_M, Gemm::CTA_N, Gemm::CTA_K};
         desc_.warp_tile = {Impl::WARP_M, Impl::WARP_N, Impl::WARP_K};
@@ -97,26 +101,32 @@ public:
         using Tq = typename Gemm::Tq;
         using Tc = typename Gemm::T;
 
-        if constexpr (0) {
+        if constexpr (1) {
             [[maybe_unused]] static const int _ = [] {
                 std::cout << "A:\n";
                 Print(typename Impl::ThreadMapA{});
                 std::cout << "\nB:\n";
                 Print(typename Impl::ThreadMapB{});
-                std::cout << "\nQ:\n";
-                Print(typename Impl::ThreadMapQ{});
+                // std::cout << "\nQ:\n";
+                // Print(typename Impl::ThreadMapQ{});
                 printf("warp count: %d\n", Impl::WARP_CNT);
                 return 0;
             }();
         }
 
-        typename Gemm::Param param{(Ta*)A,
-                                   _cast((Tb*)B),
-                                   (Tq*)Q,
-                                   (Tc*)C,
-                                   m,
+        std::cout << "lda=" << Adesc.ld << ", ldb=" << Bdesc.ld << ", ldc=" << Cdesc.ld << "\n";
+
+        typename Gemm::Param param{m,
                                    n,
                                    k,
+                                   (Ta*)A,
+                                   Adesc.ld,
+                                   _cast((Tb*)B),
+                                   Bdesc.ld,
+                                   (Tq*)Q,
+                                   Qdesc.ld,
+                                   (Tc*)C,
+                                   Cdesc.ld,
                                    log_tile,
                                    tiles,
                                    (float*)workspace.partials,

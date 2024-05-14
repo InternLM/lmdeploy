@@ -118,8 +118,14 @@ public:
 
     void Run()
     {
+        // const Operation operation{
+        //     QuantDesc{QuantType::kAsym_FMA, g_},
+        //     Epilogue::kNone,
+        //     dispatch_policy_,
+        // };
+
         const Operation operation{
-            QuantDesc{QuantType::kAsym_FMA, g_},
+            QuantDesc{QuantType::kNone, 0},
             Epilogue::kNone,
             dispatch_policy_,
         };
@@ -131,14 +137,30 @@ public:
                                   partials_.data().get(),
                                   sizeof(float) * partials_.size()};
 
+        // auto status = gemm_.Run(operation,
+        //                         nullptr,
+        //                         a_.data().get(),
+        //                         MatrixLayout{get_data_type_v<T>, LayoutType::kRowMajor, m_, k_, k_},
+        //                         b_pack_.data().get(),
+        //                         MatrixLayout{get_data_type_v<Tb>, LayoutType::kFragment_81616, k_, n_, k_},
+        //                         q_pack_.data().get(),
+        //                         MatrixLayout{get_data_type_v<T>, LayoutType::kColMajor, k_ / g_, n_, n_},
+        //                         nullptr,
+        //                         c_.data().get(),
+        //                         c_desc,
+        //                         c_.data().get(),
+        //                         c_desc,
+        //                         workspace,
+        //                         stream_);
+
         auto status = gemm_.Run(operation,
                                 nullptr,
                                 a_.data().get(),
                                 MatrixLayout{get_data_type_v<T>, LayoutType::kRowMajor, m_, k_, k_},
-                                b_pack_.data().get(),
-                                MatrixLayout{get_data_type_v<Tb>, LayoutType::kFragment_81616, k_, n_, k_},
-                                q_pack_.data().get(),
-                                MatrixLayout{get_data_type_v<T>, LayoutType::kColMajor, k_ / g_, n_, n_},
+                                b_.data().get(),
+                                MatrixLayout{get_data_type_v<Tb>, LayoutType::kColMajor, k_, n_, k_},
+                                nullptr,
+                                MatrixLayout{get_data_type_v<T>, LayoutType::kRowMajor, 0, 0, 0},
                                 nullptr,
                                 c_.data().get(),
                                 c_desc,
@@ -146,6 +168,7 @@ public:
                                 c_desc,
                                 workspace,
                                 stream_);
+
         if (status) {
             std::cerr << "Run failed, code =" << status << "\n";
         }
@@ -168,13 +191,15 @@ public:
 
         // c_f_.resize(m_ * n_);
         // computeRefCublas(c_f_.data().get(), a_.data().get(), b_f_.data().get(), m_, n_, k_, stream_);
-        RunCublas();
+        // RunCublas();
 
         cudaDeviceSynchronize();
 
-        Compare(c_f_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
+        // Compare(c_f_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
 
-        Compare(c_.data().get(), c_f_.data().get(), n_, n_, m_, 0);
+        // Compare(c_.data().get(), c_f_.data().get(), n_, n_, m_, 0);
+
+        Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
     }
 
 private:
@@ -213,18 +238,18 @@ private:
 
     void Pack()
     {
-        b_pack_.resize(n_ * k_ / 8);
-        q_pack_.resize(q_.size());
+        // b_pack_.resize(n_ * k_ / 8);
+        // q_pack_.resize(q_.size());
 
-        constexpr int kQ = !std::is_same_v<T, Tb>;
-        gemm::transcript<T>((Tb*)b_pack_.data().get(),  //
-                            kQ ? q_pack_.data().get() : nullptr,
-                            b_q_.data().get(),
-                            kQ ? q_.data().get() : nullptr,
-                            n_,
-                            k_,
-                            g_,
-                            stream_);
+        // constexpr int kQ = !std::is_same_v<T, Tb>;
+        // gemm::transcript<T>((Tb*)b_pack_.data().get(),  //
+        //                     kQ ? q_pack_.data().get() : nullptr,
+        //                     b_q_.data().get(),
+        //                     kQ ? q_.data().get() : nullptr,
+        //                     n_,
+        //                     k_,
+        //                     g_,
+        //                     stream_);
     }
 
     void computeRefCublas(half* C, const half* A, const half* B, int m, int n, int k, cudaStream_t stream)
