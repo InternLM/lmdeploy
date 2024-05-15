@@ -2,11 +2,11 @@
 
 TurboMind is one of the inference engines of LMDeploy. When using it to do model inference, you need to convert the input model into a TurboMind model. In the TurboMind model folder, besides model weight files, the TurboMind model also includes some other files, among which the most important is the configuration file `triton_models/weights/config.ini` that is closely related to inference performance.
 
-If you are using LMDeploy version 0.0.x, please refer to the [turbomind 1.0 config](#turbomind-10-config) section to learn the relevant content in the configuration. Otherwise, please read [turbomind 2.0 config](#turbomind-20-config) to familiarize yourself with the configuration details.
+If you are using LMDeploy version 0.0.x, please refer to the [turbomind 1.0 config](#turbomind-10-config) section to learn the relevant content in the configuration. Otherwise, please read [turbomind 2.0 config](#turbomind-2x-config) to familiarize yourself with the configuration details.
 
 ## TurboMind 2.x config
 
-Take the `llama-2-7b-chat` model as an example. In TurboMind 2.0, its config.ini content is as follows:
+Take the `llama-2-7b-chat` model as an example. In TurboMind 2.x, its config.ini content is as follows:
 
 ```toml
 [llama]
@@ -74,7 +74,7 @@ The maximum batch size is still set through `max_batch_size`. But its default va
 
 k/v cache memory is determined by `cache_block_seq_len` and `cache_max_entry_count`.
 
-TurboMind 2.0 has implemented Paged Attention, managing the k/v cache in blocks.
+TurboMind 2.x has implemented Paged Attention, managing the k/v cache in blocks.
 
 `cache_block_seq_len` represents the length of the token sequence in a k/v block with a default value 128. TurboMind calculates the memory size of the k/v block according to the following formula:
 

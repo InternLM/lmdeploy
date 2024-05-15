@@ -2,11 +2,11 @@
 
 TurboMind 是 LMDeploy 的推理引擎，在用它推理 LLM 模型时，需要把输入模型转成 TurboMind 模型。在 TurboMind 的模型文件夹中，除模型权重外，TurboMind 模型还包括其他一些文件，其中最重要的是和推理性能息息相关的配置文件`triton_models/weights/config.ini`。
 
-如果你使用的是 LMDeploy 0.0.x 版本，请参考[turbomind 1.0 配置](#turbomind-10-配置)章节，了解配置中的相关内容。如果使用的是 LMDeploy 0.1.x 版本，请阅读[turbomind 2.0 配置](#turbomind-20-配置)了解配置细节。
+如果你使用的是 LMDeploy 0.0.x 版本，请参考[turbomind 1.0 配置](#turbomind-10-配置)章节，了解配置中的相关内容。如果使用的是 LMDeploy 0.1.x 版本，请阅读[turbomind 2.x 配置](#turbomind-2x-配置)了解配置细节。
 
-## TurboMind 2.0 配置
+## TurboMind 2.x 配置
 
-以 `llama-2-7b-chat` 模型为例，在 TurboMind 2.0 中，它的`config.ini`内容如下：
+以 `llama-2-7b-chat` 模型为例，在 TurboMind 2.x 中，它的`config.ini`内容如下：
 
 ```toml
 [llama]
@@ -57,7 +57,7 @@ rope_theta = 10000.0
 size_per_head = 128
 ```
 
-和 TurboMind 1.0 config 相比，TurboMind 2.0 config 中的模型属性部分和 1.0 一致，但推理参数发生了变化。
+和 TurboMind 1.0 config 相比，TurboMind 2.x config 中的模型属性部分和 1.0 一致，但推理参数发生了变化。
 
 在接下来的章节中，我们重点介绍推理参数。
 
@@ -70,13 +70,13 @@ size_per_head = 128
 ### 批处理大小
 
 仍通过 `max_batch_size` 设置最大批处理量。默认值由原来的 32 改成 64。
-在 TurboMind 2.0 中，`max_batch_size` 和 `cache_max_entry_count`无关。
+在 TurboMind 2.x 中，`max_batch_size` 和 `cache_max_entry_count`无关。
 
 ### k/v 缓存大小
 
 `cache_block_seq_len` 和 `cache_max_entry_count` 用来调节 k/v cache 的内存大小。
 
-TurboMind 2.0 实现了 Paged Attention，按块管理 k/v cache。
+TurboMind 2.x 实现了 Paged Attention，按块管理 k/v cache。
 
 `cache_block_seq_len` 表示一块 k/v block 可以存放的 token 序列长度，默认 128。TurboMind 按照以下公式计算 k/v block 的内存大小：
 

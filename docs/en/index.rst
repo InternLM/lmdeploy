@@ -66,6 +66,7 @@ Welcome to LMDeploy's tutorials!
    :caption: Advanced Guide
 
    inference/turbomind.md
+   inference/turbomind_config.md
    inference/pytorch.md
    advance/pytorch_new_model.md
    advance/long_context.md
