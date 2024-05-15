@@ -284,10 +284,9 @@ def build_position_ids(
 def _get_cogvlm_position_ids(context):
     """get cogvlm position_ids."""
     inputs = context.inputs
-
     q_seq_length = inputs.seq_length
     vision_input_info = inputs.vision_inputs
-    position_id_offsets = vision_input_info.history_image_token_lengths - vision_input_info.history_image_nums * 2
+    position_id_offsets = vision_input_info.history_image_token_lengths - vision_input_info.history_image_nums * 3
     if inputs.is_decoding:
         position_ids = inputs.history_lengths - position_id_offsets
     else:
@@ -316,4 +315,5 @@ def _get_cogvlm_position_ids(context):
             position_ids = (context.attention_mask.long().cumsum(-1) -
                             1).squeeze(0)
             position_ids += inputs.history_lengths - position_id_offsets
+
     return position_ids

@@ -371,8 +371,6 @@ class StepContext:
         # position ids 1d
         position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
                                                   device)
-        # print(20 * '--*--')
-        # print(position_ids.cpu().numpy().tolist())
         # seq_len + history_length
         kv_seq_length = q_seq_length + inputs.history_lengths
         max_kv_seq_length = max_q_seq_length + inputs.max_history_length
