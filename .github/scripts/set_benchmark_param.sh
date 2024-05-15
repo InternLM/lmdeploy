@@ -12,15 +12,24 @@ else
     echo "MODEL_FORMAT=" >> "$GITHUB_ENV"
 fi
 
-if [[ $1 == *"llama"* ]] || [[ $1 == *"Llama"* ]]
+if [[ $1 == *"llama2"* ]] || [[ $1 == *"Llama-2"* ]]
 then
     echo "MAX_ENTRY_COUNT=--cache-max-entry-count 0.95" >> "$GITHUB_ENV"
+
 else
     echo "MAX_ENTRY_COUNT=--cache-max-entry-count 0.90" >> "$GITHUB_ENV"
 fi
 
+if [[ $1 == *"Llama-2-13b"* ]]
+then
+    echo "BATCHES=128" >> "$GITHUB_ENV"
+    echo "MAX_BATCH_SIZE=" >> "$GITHUB_ENV"
+else
+    echo "BATCHES=128 256" >> "$GITHUB_ENV"
+    echo "MAX_BATCH_SIZE=--max-batch-size 256" >> "$GITHUB_ENV"
+fi
 
-if [[ $1 == *"internlm2-chat-20b"* ]]
+if [[ $1 == *"internlm2-chat-20b"* ]] || [[ $1 == *"Qwen1.5-32B-Chat"* ]]
 then
   echo "TP_INFO=--tp 2" >> "$GITHUB_ENV"
 fi
