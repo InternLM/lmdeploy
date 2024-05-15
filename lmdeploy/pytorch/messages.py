@@ -243,7 +243,8 @@ class HistoryEmbeddings:
     """History embeddings."""
 
     def __init__(self, embeddings: List[InputEmbeddings] = None):
-
+        self._num_history_images: int = 0
+        self._num_history_image_tokens: int = 0
         self._embeddings: List[InputEmbeddings] = []
         if embeddings is not None:
             self._embeddings.extend(embeddings)
@@ -258,29 +259,34 @@ class HistoryEmbeddings:
     def copy(self):
         return self.clone()
 
-    def get_embeddings(self, start: int = 0, end: int = None):
-        out_embeddings: List[InputEmbeddings] = []
-        assert start >= 0
-        if end is not None and start >= end:
-            return out_embeddings
-
-        for emb in self._embeddings:
-            if start < emb.end:
-                new_start = max(start, emb.start)
-                new_end = emb.end if end is None else min(emb.end, end)
-                new_emb = InputEmbeddings(
-                    emb.embeddings[new_start - emb.start:new_end - emb.start],
-                    new_start, new_end)
-                out_embeddings.append(new_emb)
-                if end is not None and end <= emb.end:
-                    break
-
-        return out_embeddings
+    def get_step(self, step: int) -> int:
+        """get step before a whole image."""
+        real_step = step
+        num_all_images = len(self._embeddings)
+        history_image_num = 0
+        if num_all_images > 0:
+            history_image_num = sum(
+                [1 for emb in self._embeddings if emb.end <= step])
+            if history_image_num < num_all_images:
+                emb = self._embeddings[history_image_num]
+                # for case step in middle of an image
+                if emb.start - 1 <= step:
+                    real_step = emb.start - 1
+        num_images = num_all_images - history_image_num
+        return real_step, history_image_num, num_images
 
     @property
     def embeddings(self):
         """embeddings."""
         return self._embeddings
+
+    def __len__(self):
+        """get num images."""
+        return len(self._embeddings)
+
+    def __getitem__(self, *args, **kwargs):
+        """get values."""
+        return self._embeddings.__getitem__(*args, **kwargs)
 
 
 class HistoryTokenIds:
@@ -366,10 +372,8 @@ class SchedulerSequence:
         """post init."""
         self._num_history_ids: int = 0
         self._num_history_images: int = 0
-        self._num_history_image_tokens: int = 0
+        self._num_images: int = len(self.history_embeddings)
         self._num_token_ids: int = len(self.history_cache)
-        self._input_embeddings: List[
-            InputEmbeddings] = self.history_embeddings.embeddings
 
     @property
     def block_size(self) -> int:
@@ -389,7 +393,10 @@ class SchedulerSequence:
     @property
     def history_image_token_len(self) -> int:
         """get history image token length."""
-        return self._num_history_image_tokens
+        return sum([
+            emb.end - emb.start
+            for emb in self.history_embeddings[:self._num_history_images]
+        ])
 
     @property
     def session_id(self) -> int:
@@ -406,7 +413,9 @@ class SchedulerSequence:
     @property
     def input_embeddings(self) -> List[InputEmbeddings]:
         """get current embeddings."""
-        return self._input_embeddings
+        start = self.history_image_num
+        end = start + self._num_images
+        return self.history_embeddings[start:end]
 
     @property
     def history_ids(self) -> np.ndarray:
@@ -426,6 +435,10 @@ class SchedulerSequence:
     @property
     def num_token_ids(self):
         return self._num_token_ids
+
+    @property
+    def num_images(self):
+        return self._num_images
 
     @property
     def num_all_ids(self):
@@ -461,16 +474,13 @@ class SchedulerSequence:
         """Update token ids, old token ids will be added to history."""
         self._num_history_ids += self._num_token_ids
         # update history image nums
-        self._num_history_images += len(self._input_embeddings)
-        self._num_history_image_tokens += sum(
-            [emb.end - emb.start for emb in self._input_embeddings])
-
-        self._input_embeddings: List[InputEmbeddings] = []
+        self._num_history_images += self._num_images
+        self._num_images = 0
         if embeddings is not None:
             new_embeddings = [
                 emb.move_position(self._num_history_ids) for emb in embeddings
             ]
-            self._input_embeddings = new_embeddings
+            self._num_images = len(new_embeddings)
             self.history_embeddings.append(new_embeddings)
 
         if isinstance(token_ids, Tensor):
@@ -487,7 +497,12 @@ class SchedulerSequence:
     def set_step(self, step: int):
         """set step."""
         num_all_ids = self.num_all_ids
+        # update step for vlm
+        if len(self.history_embeddings) > 0:
+            new_step, self._num_history_images, self._num_images = \
+                self.history_embeddings.get_step(step)
+            assert 0 <= new_step <= step
+            step = new_step
         self._num_history_ids = step
         self._num_token_ids = num_all_ids - step
         self.num_ignored_history = min(step, self.num_ignored_history)
-        # TODO update for vlm
