@@ -326,7 +326,5 @@ def _get_and_verify_max_len(
                 f'User-specified max_model_len ({max_model_len}) is greater '
                 'than the derived max_model_len '
                 f'({max_len_key}={derived_max_model_len} or model_max_length='
-                f"{model_max_length} in model's config.json). This may lead "
-                'to incorrect model outputs or CUDA errors. Make sure the '
-                'value is correct and within the model context size.')
+                f"{model_max_length} in model's config.json).")
     return int(max_model_len)
