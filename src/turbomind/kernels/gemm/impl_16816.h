@@ -17,7 +17,7 @@
 
 namespace turbomind::gemm {
 
-struct MMA_SIMT {};
+struct MMA_16816 {};
 
 template<class T_,
          class Tb_,
@@ -30,7 +30,7 @@ template<class T_,
          int WARP_K_,
          int Stages_,
          int Flag_>
-struct Impl<MMA_SIMT, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K_, Stages_, Flag_> {
+struct Impl<MMA_16816, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WARP_K_, Stages_, Flag_> {
     using T  = T_;
     using Tb = Tb_;
     using Tq = Tq_;
@@ -53,22 +53,22 @@ struct Impl<MMA_SIMT, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WA
 
     static constexpr int WARP_CNT = WARP_CNT_MN * WARP_CNT_K;
 
-    static constexpr int OP_M = 2;
-    static constexpr int OP_N = 16;
-    static constexpr int OP_K = 4;
+    static constexpr int OP_M = 16;
+    static constexpr int OP_N = 8;
+    static constexpr int OP_K = 16;
 
-    static constexpr int ITER_M = WARP_M / OP_M;  // 8
-    static constexpr int ITER_N = WARP_N / OP_N;  // 1
-    static constexpr int ITER_K = WARP_K / OP_K;  // 16
+    static constexpr int ITER_M = WARP_M / OP_M;
+    static constexpr int ITER_N = WARP_N / OP_N;
+    static constexpr int ITER_K = WARP_K / OP_K;
 
-    using FragA = Array<T, OP_K>[ITER_K][ITER_M];
-    using FragB = Array<T, OP_K>[ITER_K][ITER_N];
-    using FragC = Array<float, 1>[ITER_M][ITER_N];
+    using FragA = Array<T, 8>[ITER_K][ITER_M];
+    using FragB = Array<T, 4>[ITER_K][ITER_N];
+    using FragC = Array<float, 4>[ITER_M][ITER_N];
 
-    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K>;
+    using SmemLayoutA = SmemLayoutV2<CTA_M, CTA_K, std::min(16, CTA_M), 32, Swizzle<2, 3, 3>>;
     using ThreadMapA  = gemm::ThreadMap<CTA_K, CTA_M, 8, WARP_CNT>;
 
-    using SmemLayoutB = SmemLayoutV2<CTA_N, CTA_K>;
+    using SmemLayoutB = SmemLayoutV2<CTA_N, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
     using ThreadMapB  = gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>;
 
     using SmemLayoutQ             = SmemLayoutB;
@@ -108,8 +108,8 @@ struct Impl<MMA_SIMT, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WA
             const int offset_s = warp_id_m(warp_id) * WARP_M;
             const int offset_c = warp_id_k(warp_id) * WARP_K;
 
-            const int thr_s = lane_id / 16;
-            const int thr_c = 0;
+            const int thr_s = lane_id % 16;
+            const int thr_c = lane_id / 16 * 8;
 
             SmemAccessor<T, SmemLayoutA> smem{data};
 
@@ -117,8 +117,7 @@ struct Impl<MMA_SIMT, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WA
             for (int m = 0; m < ITER_M; ++m) {
                 const int s = offset_s + thr_s + m * OP_M;
                 const int c = offset_c + thr_c + k * OP_K;
-                Lds(frag_A[k][m], &smem(s, c));
-                // frag_A[k][m][0] = smem_A(s, c);
+                ldsm_x4((Array<uint32_t, 4>&)frag_A[k][m], cast_smem_ptr_to_uint(&smem(s, c)));
             }
         }
 
@@ -161,16 +160,18 @@ struct Impl<MMA_SIMT, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WA
             const int offset_c = warp_id_k(warp_id) * WARP_K;
             const int offset_s = warp_id_n(warp_id) * WARP_N;
 
-            const int thr_c = 0;
-            const int thr_s = lane_id % 16;
+            const int thr_c = lane_id / 8 * 8 % 16;
+            const int thr_s = lane_id % 8 + lane_id / 16 * 8;
 
             SmemAccessor<T, SmemLayoutB> smem{data};
 
+            static_assert(ITER_N % 2 == 0);
+
             PRAGMA_UNROLL
-            for (int n = 0; n < ITER_N; ++n) {
+            for (int n = 0; n < ITER_N; n += 2) {
                 const int s = offset_s + thr_s + n * OP_N;
                 const int c = offset_c + thr_c + k * OP_K;
-                Lds(frag_B[k][n], &smem(s, c));
+                ldsm_x4((Array<uint32_t, 4>&)frag_B[k][n], cast_smem_ptr_to_uint(&smem(s, c)));
             }
         }
 
@@ -202,13 +203,7 @@ struct Impl<MMA_SIMT, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WA
             for (int n = 0; n < ITER_N; ++n) {
                 PRAGMA_UNROLL
                 for (int m = 0; m < ITER_M; ++m) {
-                    PRAGMA_UNROLL
-                    for (int c = 0; c < OP_K; ++c) {
-                        frag_C[m][n][0] += float(state_A.frag_A[k][m][c]) * float(state_B.frag_B[k][n][c]);
-                        // frag_C[m][n][0] += float(state_A.frag_A[k][m][c]) * 1.f;
-                        // frag_C[m][n][0] += 1.f * float(state_B.frag_B[k][n][c]);
-                        // frag_C[m][n][0] += 1.f;
-                    }
+                    mma_m16n8k16_row_col(frag_C[m][n], state_A.frag_A[k][m], state_B.frag_B[k][n], frag_C[m][n]);
                 }
             }
             ((Prefetch&&)prefetch)((k + 1) % ITER_K);
@@ -240,9 +235,13 @@ struct Impl<MMA_SIMT, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WA
         for (int m = 0; m < ITER_M; ++m) {
             PRAGMA_UNROLL
             for (int n = 0; n < ITER_N; ++n) {
-                const int mi = m * OP_M + lane_id / 16;
-                const int ni = n * OP_N + lane_id % 16;
-                ((Func&&)func)(warp_offset_m + mi, warp_offset_n + ni, frag_C[m][n]);
+                PRAGMA_UNROLL
+                for (int mm = 0; mm < 2; ++mm) {
+                    const int mi = m * OP_M + lane_id / 4 + mm * 8;
+                    const int ni = n * OP_N + lane_id % 4 * 2;
+                    ((Func&&)func)(
+                        warp_offset_m + mi, warp_offset_n + ni, cast<Tc>((Array<float, 2>&)frag_C[m][n][mm * 2]));
+                }
             }
         }
     }

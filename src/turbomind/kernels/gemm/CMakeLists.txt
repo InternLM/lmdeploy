@@ -14,7 +14,8 @@ FetchContent_MakeAvailable(repo-nvbench)
 add_library(gemm2 gemm.cu kernel.cu transcript.cu dispatch_cache.cu gpu_metric.cu
         codegen/gemm_sm80_f16_u4_f16_asym_g128_basic.cu
         codegen/gemm_sm80_f16_u4_f16_asym_g128_extra.cu
-        codegen/gemm_sm80_f16_f16_f16.cu)
+        codegen/gemm_sm80_f16_f16_f16.cu
+        codegen/sm80_s16816gemm_f16_f16.cu)
 
 add_executable(gemm_bench gemm_bench.cu test_utils.cu cache_utils.cu)
 target_link_libraries(gemm_bench PRIVATE gemm2 nvbench::nvbench cublas)
