@@ -9,6 +9,48 @@
 namespace turbomind {
 
 __inline__ __device__ void
+mma_m8n8k4_row_col(Array<float, 8>& d, const Array<half, 4>& a, const Array<half, 4>& b, Array<float, 8>& c)
+{
+#if TURBOMIND_ARCH_SM70
+    uint32_t const* A = reinterpret_cast<uint32_t const*>(&a);
+    uint32_t const* B = reinterpret_cast<uint32_t const*>(&b);
+    // clang-format off
+    asm volatile(
+        "mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32"
+        "{%0,  %1,  %2,  %3,  %4,  %5,  %6,  %7},"
+        "{%8,  %9},"
+        "{%10, %11},"
+        "{%12, %13, %14, %15, %16, %17, %18, %19};"
+        : "=f"(d[0]), "=f"(d[1]), "=f"(d[2]), "=f"(d[3]), "=f"(d[4]), "=f"(d[5]), "=f"(d[6]), "=f"(d[7])
+        : "r"(A[0]), "r"(A[1]),
+          "r"(B[0]), "r"(B[1]),
+          "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]), "f"(c[4]), "f"(c[5]), "f"(c[6]), "f"(c[7]));
+// clang-format on
+#endif
+}
+
+__inline__ __device__ void
+mma_m8n8k4_row_row(Array<float, 8>& d, const Array<half, 4>& a, const Array<half, 4>& b, Array<float, 8>& c)
+{
+#if TURBOMIND_ARCH_SM70
+    uint32_t const* A = reinterpret_cast<uint32_t const*>(&a);
+    uint32_t const* B = reinterpret_cast<uint32_t const*>(&b);
+    // clang-format off
+    asm volatile(
+        "mma.sync.aligned.m8n8k4.row.row.f32.f16.f16.f32"
+        "{%0,  %1,  %2,  %3,  %4,  %5,  %6,  %7},"
+        "{%8,  %9},"
+        "{%10, %11},"
+        "{%12, %13, %14, %15, %16, %17, %18, %19};"
+        : "=f"(d[0]), "=f"(d[1]), "=f"(d[2]), "=f"(d[3]), "=f"(d[4]), "=f"(d[5]), "=f"(d[6]), "=f"(d[7])
+        : "r"(A[0]), "r"(A[1]),
+          "r"(B[0]), "r"(B[1]),
+          "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]), "f"(c[4]), "f"(c[5]), "f"(c[6]), "f"(c[7]));
+// clang-format on
+#endif
+}
+
+__inline__ __device__ void
 mma_m16n8k8_row_col(Array<float, 4>& d, const Array<half, 4>& a, const Array<half, 2>& b, Array<float, 4>& c)
 {
 #if TURBOMIND_ARCH_SM75
