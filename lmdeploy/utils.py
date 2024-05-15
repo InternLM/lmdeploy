@@ -8,9 +8,10 @@ import sys
 import time
 from contextlib import contextmanager
 from logging import Logger, LogRecord
-from typing import List, Optional
+from typing import List, Optional, TypeVar, Union
 
 from huggingface_hub import hf_hub_download
+from transformers import PretrainedConfig
 
 logger_initialized = {}
 
@@ -255,3 +256,75 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
             return __func_warpper
 
     return __inner
+
+
+# copy from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
+def _get_and_verify_max_len(
+    hf_tm_config: Union[PretrainedConfig,
+                        TypeVar('TurbomindModelConfig')],
+    max_model_len: Optional[int],
+) -> int:
+    """Get and verify the model's maximum length."""
+    derived_max_model_len = float('inf')
+    possible_keys = [
+        # OPT
+        'max_position_embeddings',
+        # GPT-2
+        'n_positions',
+        # MPT
+        'max_seq_len',
+        # ChatGLM2
+        'seq_length',
+        # Command-R
+        'model_max_length',
+        # Others
+        'max_sequence_length',
+        'max_seq_length',
+        'seq_len',
+    ]
+    max_len_key = None
+    for key in possible_keys:
+        max_len = getattr(hf_tm_config, key, None)
+        if max_len is not None:
+            max_len_key = key if max_len < derived_max_model_len \
+                else max_len_key
+            derived_max_model_len = min(derived_max_model_len, max_len)
+    if derived_max_model_len == float('inf'):
+        if max_model_len is not None:
+            # If max_model_len is specified, we use it.
+            return max_model_len
+
+        default_max_len = 2048
+        logger = get_logger('lmdeploy')
+        logger.warning(
+            "The model's config.json does not contain any of the following "
+            'keys to determine the original maximum length of the model: '
+            f"{possible_keys}. Assuming the model's maximum length is "
+            f'{default_max_len}.')
+        derived_max_model_len = default_max_len
+
+    rope_scaling = getattr(hf_tm_config, 'rope_scaling', None)
+    if rope_scaling is not None and rope_scaling['type'] != 'su':
+        assert 'factor' in rope_scaling
+        scaling_factor = rope_scaling['factor']
+        if rope_scaling['type'] == 'yarn':
+            derived_max_model_len = rope_scaling[
+                'original_max_position_embeddings']
+        derived_max_model_len *= scaling_factor
+
+    if max_model_len is None:
+        max_model_len = int(derived_max_model_len)
+    elif max_model_len > derived_max_model_len:
+        # Some models might have a separate key for specifying model_max_length
+        # that will be bigger than derived_max_model_len. We compare user input
+        # with model_max_length and allow this override when it's smaller.
+        model_max_length = getattr(hf_tm_config, 'model_max_length', None)
+        if model_max_length is not None and max_model_len <= model_max_length:
+            pass
+        else:
+            logger.warning(
+                f'User-specified max_model_len ({max_model_len}) is greater '
+                'than the derived max_model_len '
+                f'({max_len_key}={derived_max_model_len} or model_max_length='
+                f"{model_max_length} in model's config.json).")
+    return int(max_model_len)
