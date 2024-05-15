@@ -11,7 +11,6 @@ from torch.distributed._tensor import DeviceMesh
 
 from lmdeploy.utils import get_logger
 
-from ..dist_utils import partition_module, replicate_module
 from .module_map import MODULE_MAP
 
 logger = get_logger('lmdeploy')
@@ -154,48 +153,15 @@ def _update_model(model: torch.nn.Module):
         model._update_model_fn()
 
 
+def update_model(model: torch.nn.Module):
+    """update model."""
+    return _update_model(model)
+
+
 def _dist_model(model: torch.nn.Module,
                 rank: int = 0,
                 device_mesh: DeviceMesh = None):
     """distribute model parameters."""
-
-    def _init_params():
-        """init params."""
-        device = torch.device(f'cuda:{rank}')
-        for name, param in model.named_parameters(recurse=False):
-            if device != param.device:
-                if rank == 0:
-                    new_param = param.to(device)
-                    model.register_parameter(
-                        name, torch.nn.Parameter(new_param,
-                                                 requires_grad=False))
-                else:
-                    new_param = torch.empty_like(param, device=device)
-                    model.register_parameter(
-                        name, torch.nn.Parameter(new_param,
-                                                 requires_grad=False))
-
-        for name, param in model.named_buffers(recurse=False):
-            if device != param.device:
-                if rank == 0:
-                    new_param = param.to(device)
-                    model.register_buffer(name, new_param)
-                else:
-                    new_param = torch.empty_like(param, device=device)
-                    model.register_buffer(name, new_param)
-
-    def _dist_params():
-        """dist params."""
-        if hasattr(model, '_distribute_partition_fn'):
-            partition_module(
-                model,
-                device_mesh=device_mesh,
-                func=model._distribute_partition_fn,
-                to_local=True,
-            )
-            torch.cuda.empty_cache()
-        else:
-            replicate_module(model, device_mesh=device_mesh)
 
     def _register_hooks():
         """register hooks."""
@@ -219,8 +185,6 @@ def _dist_model(model: torch.nn.Module,
         if new_child != child:
             model.register_module(name, child)
 
-    _init_params()
-    _dist_params()
     _register_hooks()
 
     return model
@@ -278,12 +242,7 @@ def patch(
     model = _patch(model, _patch_context)
 
     if world_size > 1:
-        if rank == 0:
-            logger.info('distribute model parameters.')
-        device_mesh = DeviceMesh('cuda', list(range(world_size)))
-        model = _dist_model(model, rank, device_mesh=device_mesh)
-
-    _update_model(model)
+        model = _dist_model(model, rank)
 
     patched_forward = PatchedForward(model,
                                      _patch_context,
