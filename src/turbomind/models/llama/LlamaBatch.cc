@@ -705,7 +705,8 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     const size_t head_dim          = model_->size_per_head_;
     const size_t local_kv_head_num = model_->local_kv_head_num_;
     // +1 padding, BlockIterator does not use predicate
-    const size_t max_batch_block_count = batch_size * ((session_len + cache_block_seq_len - 1) / cache_block_seq_len) + 1;
+    const size_t max_batch_block_count =
+        batch_size * ((session_len + cache_block_seq_len - 1) / cache_block_seq_len) + 1;
 
     if (model_->lora_params_.policy == LoraPolicy::kPlora) {
         lora_mask_buf_ = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_context_token_num_, false);
@@ -802,7 +803,8 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
             (curandState_t*)allocator_->reMalloc(s.curand_state, sizeof(curandState_t) * max_batch_size, true);
     }
 
-    const size_t max_batch_block_count = max_batch_size * ((session_len_ + cache_block_seq_len - 1) / cache_block_seq_len);
+    const size_t max_batch_block_count =
+        max_batch_size * ((session_len_ + cache_block_seq_len - 1) / cache_block_seq_len);
 
     {
         NcclGuard barrier(model_->tensor_para_, stream_, true);

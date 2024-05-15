@@ -30,7 +30,7 @@ SequenceManager::SequenceManager(size_t             layer_num,
     size_t block_size = layout.block_size(layer_num);
 
     block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
-    block_trie_ = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_, enable_prefix_caching);
+    block_trie_    = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_, enable_prefix_caching);
 }
 
 const Sequence* SequenceManager::Create(uint64_t id)
