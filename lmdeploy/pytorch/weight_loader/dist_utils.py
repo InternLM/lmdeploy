@@ -23,20 +23,31 @@ def get_prefixed_name(name: str, prefix: str):
         return f'{prefix}.{name}'
 
 
+def cast_dtype(param: torch.Tensor, dtype: torch.dtype):
+    """cast dtype."""
+    if param.dtype != dtype:
+        param = param.to(dtype)
+    return param
+
+
 def colwise_parallelize_linear_naive(mod: torch.nn.Module,
                                      loader: ModelWeightLoader,
                                      rank: int,
                                      world_size: int,
                                      prefix: str = ''):
     """colwise parallelize linear."""
-    for name, _ in mod.named_parameters():
+    for name, param in mod.named_parameters():
+        dtype = param.dtype
         prefixed_name = get_prefixed_name(name, prefix)
         param = loader.pop(prefixed_name).chunk(world_size)[rank]
+        param = cast_dtype(param, dtype)
         param = torch.nn.Parameter(param, requires_grad=False)
         mod.register_parameter(name, param)
-    for name, _ in mod.named_buffers():
+    for name, param in mod.named_buffers():
+        dtype = param.dtype
         prefixed_name = get_prefixed_name(name, prefix)
         param = loader.pop(prefixed_name).chunk(world_size)[rank]
+        param = cast_dtype(param, dtype)
         mod.register_buffer(name, param)
 
 
@@ -98,22 +109,26 @@ def rowwise_parallelize_linear_naive(mod: torch.nn.Module,
                                      world_size: int,
                                      prefix: str = ''):
     """rowwise parallelize linear."""
-    for name, _ in mod.named_parameters():
+    for name, param in mod.named_parameters():
+        dtype = param.dtype
         prefixed_name = get_prefixed_name(name, prefix)
         param = loader.pop(prefixed_name)
         if name == 'weight':
             param = param.chunk(world_size, 1)[rank]
         if name == 'bias':
             param /= world_size
+        param = cast_dtype(param, dtype)
         param = torch.nn.Parameter(param, requires_grad=False)
         mod.register_parameter(name, param)
-    for name, _ in mod.named_buffers():
+    for name, param in mod.named_buffers():
+        dtype = param.dtype
         prefixed_name = get_prefixed_name(name, prefix)
         param = loader.pop(prefixed_name)
         if name == 'weight':
             param = param.chunk(world_size, 1)[rank]
         if name == 'bias':
             param /= world_size
+        param = cast_dtype(param, dtype)
         mod.register_buffer(name, param)
 
 
@@ -176,24 +191,28 @@ def colwise_split_parallelize_linear_naive(module: torch.nn.Module,
                                            world_size: int,
                                            prefix: str = ''):
     """colwise split linear naive."""
-    for name, _ in module.named_parameters():
+    for name, param in module.named_parameters():
+        dtype = param.dtype
         prefixed_name = get_prefixed_name(name, prefix)
         param = loader.pop(prefixed_name)
         splited_param = param.split(sections, dim=0)
         updated_param = []
         for p in splited_param:
             p = p.chunk(world_size)[rank]
+            p = cast_dtype(p, dtype)
             updated_param.append(p)
         param = torch.cat(updated_param)
         param = torch.nn.Parameter(param, requires_grad=False)
         module.register_parameter(name, param)
-    for name, _ in module.named_buffers():
+    for name, dtype in module.named_buffers():
+        dtype = param.dtype
         prefixed_name = get_prefixed_name(name, prefix)
         param = loader.pop(prefixed_name)
         splited_param = param.split(sections, dim=0)
         updated_param = []
         for p in splited_param:
             p = p.chunk(world_size)[rank]
+            p = cast_dtype(p, dtype)
             updated_param.append(p)
         module.register_buffer(name, param)
 

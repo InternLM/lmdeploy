@@ -13,77 +13,48 @@ from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import \
     BaseModelOutputWithPastAndCrossAttentions
 
-from ..dist_utils import (colwise_parallelize_linear_fn,
-                          rowwise_parallelize_linear_fn)
 from ..kernels import (alibi_paged_attention_fwd, apply_rotary_pos_emb,
                        fill_kv_cache, fused_rotary_emb, paged_attention_fwd)
+from ..weight_loader.dist_utils import (colwise_parallelize_linear,
+                                        rowwise_parallelize_linear)
 
 
 class PatchedFalconAttention(nn.Module):
 
-    # @classmethod
-    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        if self.multi_query:
+            weight = loader.pop('query_key_value.weight')
+            weight = weight.unflatten(0, (-1, self.head_dim))
+            q_weight = weight[:self.num_heads]
+            q_weight = q_weight.chunk(world_size, 0)[rank]
+            kv_weight = weight[-2:]
+            weight = torch.cat([q_weight, kv_weight])
+            weight = torch.nn.Parameter(weight.flatten(0, 1),
+                                        requires_grad=False)
+            self.query_key_value.register_parameter('weight', weight)
+        else:
+            colwise_parallelize_linear(self.query_key_value,
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix='query_key_value')
 
-        world_size = dist.get_world_size()
-
-        if mod_name in ['query_key_value']:
-            if self.new_decoder_architecture:
-                # e.g. 40b-instruct, GQA
-                # split qkv across groups
-                # no finer-grained partitioning
-                mod.weight.data = mod.weight.reshape(
-                    -1,  # num groups
-                    (self.num_heads + self.num_kv_heads * 2) * self.head_dim,
-                    self.hidden_size,
-                )
-            elif self.multi_query:
-                # e.g. 7b-instruct, MQA
-                # split to q, copy kv
-                weight = mod.weight.unflatten(0, (-1, self.head_dim))
-                q_weight = weight[:self.num_heads]
-                kv_weight = weight[-2:]
-                q_weight_shards = q_weight.chunk(world_size, 0)
-                weight_shards = []
-                for q in q_weight_shards:
-                    # only shard q heads but
-                    # copy single k/v head to all ranks
-                    weight_shards.append(q)
-                    weight_shards.append(kv_weight)
-                mod.weight.data = torch.cat(weight_shards, dim=0)
-                # here we keep the weight to be 3D,
-                # so that column parallel will split it
-                # into integer-numbered heads
-
-            # no bias for 7b-instruct and 40b-instruct
-            colwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
-
-            if self.new_decoder_architecture or self.multi_query:
-                # return to 2D for later matmul
-                mod.weight.data = mod.weight.data.reshape(-1, self.hidden_size)
-
-        elif mod_name in ['dense']:
-            if self.new_decoder_architecture:
-                # e.g. 40b-instruct, GQA
-                mod.weight.data = mod.weight.reshape(
-                    self.hidden_size,
-                    -1,  # num groups
-                    self.num_heads * self.head_dim,
-                )
-            elif self.multi_query:
-                # e.g. 7b-instruct, MQA
-                mod.weight.data = mod.weight.reshape(self.hidden_size, -1,
-                                                     self.head_dim)
-
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
-
-            if self.new_decoder_architecture or self.multi_query:
-                mod.weight.data = mod.weight.reshape(self.hidden_size, -1)
+        # dense
+        weight = loader.pop('dense.weight')
+        if self.multi_query:
+            weight = weight.reshape(self.hidden_size, -1, self.head_dim)
+        else:
+            weight = weight.reshape(
+                self.hidden_size,
+                -1,  # num groups
+                self.num_heads * self.head_dim,
+            )
+        weight = weight.chunk(world_size, 1)[rank]
+        weight = torch.nn.Parameter(weight.reshape(self.hidden_size, -1),
+                                    requires_grad=False)
+        self.dense.register_parameter('weight', weight)
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
@@ -261,18 +232,20 @@ class PatchedFalconAttention(nn.Module):
 
 class PatchedFalconMLP(nn.Module):
 
-    @classmethod
-    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['dense_h_to_4h']:
-            colwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
-        elif mod_name in ['dense_4h_to_h']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        for mod_name in ['dense_h_to_4h']:
+            colwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
+        rowwise_parallelize_linear(self.dense_4h_to_h,
+                                   loader,
+                                   rank=rank,
+                                   world_size=world_size,
+                                   prefix='dense_4h_to_h')
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):

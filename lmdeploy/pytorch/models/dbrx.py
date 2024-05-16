@@ -1,56 +1,43 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.utils.checkpoint
-from torch.distributed._tensor import DeviceMesh, Shard, distribute_tensor
+from torch.distributed._tensor import DeviceMesh
 from transformers.cache_utils import Cache
 from transformers.modeling_outputs import MoeModelOutputWithPast
 
 from lmdeploy.pytorch.kernels.fused_moe import fused_moe
 
-from ..dist_utils import rowwise_parallelize_linear_fn, try_to_local
 from ..kernels import fill_kv_cache, fused_rotary_emb, paged_attention_fwd
-
-
-def _colwise_split_parallelize_linear(mod: nn.Module, sections: List[int],
-                                      device_mesh: DeviceMesh):
-    """split and colwise parallelize."""
-    for name, param in mod.named_parameters():
-        splited_param = param.split(sections, dim=0)
-        updated_param = []
-        for p in splited_param:
-            dist_tensor = distribute_tensor(p, device_mesh, [Shard(0)])
-            dist_tensor = try_to_local(dist_tensor)
-            updated_param.append(dist_tensor)
-        param = torch.cat(updated_param)
-        dist_param = torch.nn.Parameter(param)
-        mod.register_parameter(name, dist_param)
+from ..weight_loader.dist_utils import (colwise_split_parallelize_linear,
+                                        rowwise_parallelize_linear)
 
 
 class PatchedDbrxAttention(nn.Module):
 
-    def _distribute_qkv_linear(self, mod: nn.Module, device_mesh: DeviceMesh):
-        """distribute qkv linear."""
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
         sections = [
             self.num_heads * self.head_dim,
             self.num_key_value_heads * self.head_dim,
             self.num_key_value_heads * self.head_dim,
         ]
-        return _colwise_split_parallelize_linear(mod, sections, device_mesh)
-
-    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['Wqkv']:
-            self._distribute_qkv_linear(mod, device_mesh)
-        elif mod_name in ['out_proj']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+        colwise_split_parallelize_linear(self.Wqkv,
+                                         sections,
+                                         loader,
+                                         rank=rank,
+                                         world_size=world_size,
+                                         prefix='Wqkv')
+        rowwise_parallelize_linear(self.out_proj,
+                                   loader,
+                                   rank=rank,
+                                   world_size=world_size,
+                                   prefix='out_proj')
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
@@ -178,22 +165,41 @@ class PatchedDbrxAttention(nn.Module):
 
 class PatchedDbrxExpertGLU(nn.Module):
 
-    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
 
         def __partition(name, param):
+            param = loader.pop(name)
             param = param.unflatten(0, (self.moe_num_experts, -1))
-            dist_tensor = distribute_tensor(param, device_mesh, [Shard(1)])
-            dist_tensor = try_to_local(dist_tensor)
-            dist_param = torch.nn.Parameter(dist_tensor.flatten(0, 1))
-            del dist_tensor
-            mod.register_parameter(name, dist_param)
+            param = param.chunk(world_size, 1)[rank]
+            param = param.to(device)
+            dtype = param.dtype
+            if param.dtype != dtype:
+                param = param.to(dtype)
+            param = torch.nn.Parameter(param.flatten(0, 1))
+            self.register_parameter(name, param)
 
-        if mod_name == '':
-            __partition('w1', mod.w1)
-            __partition('v1', mod.v1)
-            __partition('w2', mod.w2)
+        __partition('w1', self.w1)
+        __partition('v1', self.v1)
+        __partition('w2', self.w2)
+
+    # def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
+    #                              device_mesh: DeviceMesh):
+    #     """Distribution partition callback."""
+
+    #     def __partition(name, param):
+    #         param = param.unflatten(0, (self.moe_num_experts, -1))
+    #         dist_tensor = distribute_tensor(param, device_mesh, [Shard(1)])
+    #         dist_tensor = try_to_local(dist_tensor)
+    #         dist_param = torch.nn.Parameter(dist_tensor.flatten(0, 1))
+    #         del dist_tensor
+    #         mod.register_parameter(name, dist_param)
+
+    #     if mod_name == '':
+    #         __partition('w1', mod.w1)
+    #         __partition('v1', mod.v1)
+    #         __partition('w2', mod.w2)
 
     def _update_model_fn(self):
         """update model."""

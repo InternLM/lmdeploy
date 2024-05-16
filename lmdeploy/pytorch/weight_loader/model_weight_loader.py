@@ -127,6 +127,11 @@ class ModelWeightLoader:
         self._load_shard_for_key(key)
         return self._state_dict.get(key)
 
+    def has(self, key: str):
+        """check has key."""
+        key = self._prefix + key
+        return key in self._weight_map
+
     def adapter(self, key: str):
         """get adapter loader."""
         if key not in self._adapter_loaders:
@@ -159,16 +164,32 @@ def _load_model_weights_impl(model: torch.nn.Module,
 
     def __load_no_recursive(mod: torch.nn.Module):
         """load no recursive."""
-        for name, _ in mod.named_parameters(recurse=False):
-            param = loader.pop(name)
+        for name, param in mod.named_parameters(recurse=False):
+            dtype = param.dtype
+            if not loader.has(name):
+                logger.debug(f'rank [{rank}]'
+                             f' failed to find weight: {name}.')
+                param = torch.empty_like(param, device='cpu')
+            else:
+                param = loader.pop(name)
+            if param.dtype != dtype:
+                param = param.to(dtype)
             mod.register_parameter(
                 name, torch.nn.Parameter(param, requires_grad=False))
-        for name, _ in mod.named_buffers(recurse=False):
-            buf = loader.pop(name)
-            mod.register_buffer(name, buf)
+        for name, param in mod.named_buffers(recurse=False):
+            dtype = param.dtype
+            if not loader.has(name):
+                logger.debug(f'rank [{rank}]'
+                             f' failed to find weight: {name}.')
+                param = torch.empty_like(param, device='cpu')
+            else:
+                param = loader.pop(name)
+            if param.dtype != dtype:
+                param = param.to(dtype)
+            mod.register_buffer(name, param)
 
     if hasattr(model, '_load_weights'):
-        model._load_weights(loader, rank, world_size)
+        model._load_weights(loader, rank, world_size, device=device)
     else:
         __load_no_recursive(model)
         for name, child in model.named_children():
@@ -203,3 +224,5 @@ def load_model_weights(model: torch.nn.Module,
                              rank=rank,
                              world_size=world_size,
                              device=device)
+    model.tie_weights()
+    model.eval()

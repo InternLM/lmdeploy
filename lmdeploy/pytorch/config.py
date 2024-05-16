@@ -81,7 +81,6 @@ class ModelConfig:
     dtype: torch.dtype = torch.float16
     multi_query_attention: bool = False
     vocab_size: int = 40000
-    json_config: dict = field(default_factory=dict)
     hf_config: Any = None
     init_kwargs: Dict[str, Any] = field(default_factory=dict)
 
@@ -224,5 +223,4 @@ class ModelConfig:
         model_config.dtype = _get_torch_dtype(hf_config)
 
         model_config.hf_config = hf_config
-        model_config.json_config = hf_config.to_dict()
         return model_config

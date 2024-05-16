@@ -16,7 +16,8 @@ from ..weight_loader.dist_utils import (colwise_parallelize_linear,
 class PatchedMixtralAttention(nn.Module):
     """Rewrite module of MixtralAttention."""
 
-    def _load_weights(self, loader, rank: int = 0, world_size: int = 1):
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
         """load weights."""
         for mod_name in ['q_proj', 'k_proj', 'v_proj']:
             colwise_parallelize_linear(getattr(self, mod_name),
@@ -157,7 +158,8 @@ class PatchedMixtralAttention(nn.Module):
 
 class PatchedMixtralBLockSparseTop2MLP(nn.Module):
 
-    def _load_weights(self, loader, rank: int = 0, world_size: int = 1):
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
         """load weights."""
         for mod_name in ['w1', 'w3']:
             colwise_parallelize_linear(getattr(self, mod_name),

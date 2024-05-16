@@ -49,7 +49,8 @@ def _attention_load_weights(mod, loader, rank: int = 0, world_size: int = 1):
 class Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper."""
 
-    def _load_weights(self, loader, rank: int = 0, world_size: int = 1):
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
         """load weights."""
         _attention_load_weights(self, loader, rank=rank, world_size=world_size)
 
@@ -168,7 +169,8 @@ class Attention(nn.Module):
 class BaichuanAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper."""
 
-    def _load_weights(self, loader, rank: int = 0, world_size: int = 1):
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
         """load weights."""
         _attention_load_weights(self, loader, rank=rank, world_size=world_size)
 

@@ -51,11 +51,7 @@ class CacheEngine:
         self.num_layers = model_config.num_layers
         self.num_heads = model_config.num_key_value_heads
 
-        if 'kv_cache_dtype' in model_config.json_config:
-            self.kv_cache_dtype = eval(
-                model_config.json_config['kv_cache_dtype'])
-        else:
-            self.kv_cache_dtype = model_config.dtype
+        self.kv_cache_dtype = model_config.dtype
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()

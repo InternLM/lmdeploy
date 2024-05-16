@@ -8,31 +8,34 @@ from torch.distributed._tensor import DeviceMesh
 from transformers.cache_utils import Cache
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from ..dist_utils import (colwise_split_parallelize_linear_fn,
-                          rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
+from ..weight_loader.dist_utils import (colwise_split_parallelize_linear,
+                                        rowwise_parallelize_linear)
 
 
 class PatchedPhi3Attention(nn.Module):
 
-    def _distribute_qkv_linear(self, mod: nn.Module, device_mesh: DeviceMesh):
-        """distribute qkv linear."""
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
         sections = [
             self.num_heads * self.head_dim,
             self.num_key_value_heads * self.head_dim,
             self.num_key_value_heads * self.head_dim,
         ]
-        colwise_split_parallelize_linear_fn(mod, sections, device_mesh)
-
-    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['qkv_proj']:
-            self._distribute_qkv_linear(mod, device_mesh)
-        elif mod_name in ['o_proj']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+        for mod_name in ['qkv_proj']:
+            colwise_split_parallelize_linear(getattr(self, mod_name),
+                                             sections,
+                                             loader,
+                                             rank=rank,
+                                             world_size=world_size,
+                                             prefix=mod_name)
+        for mod_name in ['o_proj']:
+            rowwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
@@ -167,23 +170,24 @@ class PatchedPhi3Attention(nn.Module):
 
 class PatchedPhi3MLP(nn.Module):
 
-    @classmethod
-    def _distribute_gate_up(cls, mod: nn.Module, device_mesh: DeviceMesh):
-        """distribute gate_up."""
-        out_size = mod.weight.size(0)
-        sections = [out_size // 2] * 2
-        colwise_split_parallelize_linear_fn(mod, sections, device_mesh)
-
-    @classmethod
-    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['gate_up_proj']:
-            cls._distribute_gate_up(mod, device_mesh=device_mesh)
-        elif mod_name in ['down_proj']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        for mod_name in ['gate_up_proj']:
+            out_size = self.gate_up_proj.weight.size(0)
+            sections = [out_size // 2] * 2
+            colwise_split_parallelize_linear(getattr(self, mod_name),
+                                             sections,
+                                             loader,
+                                             rank=rank,
+                                             world_size=world_size,
+                                             prefix=mod_name)
+        for mod_name in ['down_proj']:
+            rowwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, List, Tuple
+from typing import List, Tuple
 
 import torch
 
@@ -49,7 +49,6 @@ def make_step_context(
     num_key_value_heads: int = 32,
     head_size: int = 128,
     kv_cache_dtype: torch.dtype = torch.float16,
-    json_config: Any = None,
 ):
     """make step context."""
     from torch.nn.utils.rnn import pad_sequence
@@ -124,7 +123,6 @@ def make_step_context(
         inputs=model_inputs,
         world_size=world_size,
         device=device,
-        json_config=json_config,
         kv_caches=kv_caches,
     )
 

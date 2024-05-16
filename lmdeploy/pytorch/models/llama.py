@@ -49,7 +49,8 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
 class LlamaAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
 
-    def _load_weights(self, loader, rank: int = 0, world_size: int = 1):
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
         """load weights."""
         for mod_name in ['q_proj', 'k_proj', 'v_proj']:
             colwise_parallelize_linear(getattr(self, mod_name),
@@ -254,7 +255,8 @@ class LlamaAttention(nn.Module):
 
 class LlamaMLP(nn.Module):
 
-    def _load_weights(self, loader, rank: int = 0, world_size: int = 1):
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
         """load weights."""
         for mod_name in ['gate_proj', 'up_proj']:
             colwise_parallelize_linear(getattr(self, mod_name),

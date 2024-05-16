@@ -265,7 +265,6 @@ class StepContext:
     kv_caches: List
     is_decoding: bool
     world_size: int = 1
-    json_config: Dict = None
     local_adapter_ids: torch.LongTensor = None
     adapter_params: Dict[str, AdapterInfo] = None
 
@@ -277,7 +276,6 @@ class StepContext:
         inputs: ModelInputs,
         world_size: int = 1,
         device: str = 'cuda',
-        json_config: dict = None,
         kv_caches: List = None,
         cache_config: CacheConfig = None,
     ):
@@ -336,7 +334,6 @@ class StepContext:
                           kv_caches=kv_caches,
                           is_decoding=inputs.is_decoding,
                           world_size=world_size,
-                          json_config=json_config,
                           local_adapter_ids=inputs.local_adapter_ids,
                           adapter_params=adapter_params)
         return ret
@@ -388,7 +385,6 @@ def model_forward(
     patched_model: torch.nn.Module,
     inputs: ModelInputs,
     cache_engine: CacheEngine,
-    json_config: dict = None,
     world_size: int = 1,
     stream: torch.cuda.Stream = None,
 ):
@@ -400,7 +396,6 @@ def model_forward(
         context = StepContext.new(
             inputs=inputs,
             world_size=world_size,
-            json_config=json_config,
             kv_caches=cache_engine.gpu_cache,
             cache_config=cache_engine.cache_config,
         )
@@ -612,7 +607,6 @@ class BaseModelAgent(AutoModelAgent):
             self.patched_model,
             inputs,
             self.cache_engine,
-            self.model_config.json_config,
             world_size=1,
             stream=self.stream,
         )
@@ -867,7 +861,6 @@ def _tp_model_loop(
             patched_model,
             inputs,
             cache_engine,
-            model_config.json_config,
             world_size=world_size,
             stream=stream,
         )
@@ -1090,7 +1083,6 @@ class TPModelAgent(AutoModelAgent):
             self.patched_model,
             inputs,
             self.cache_engine,
-            self.model_config.json_config,
             world_size=1,
             stream=self.stream,
         )

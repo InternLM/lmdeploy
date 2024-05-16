@@ -7,13 +7,12 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.utils.checkpoint
-from torch.distributed._tensor import DeviceMesh, Shard, distribute_tensor
+from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from ..dist_utils import (colwise_parallelize_linear,
-                          rowwise_parallelize_linear_fn, try_to_local)
-from ..kernels import paged_attention_fwd
-from .functional import fill_kv_cache
+from ..kernels import fill_kv_cache, paged_attention_fwd
+from ..weight_loader.dist_utils import (colwise_split_parallelize_linear,
+                                        rowwise_parallelize_linear)
 
 
 class PatchedRMSNorm(nn.Module):
@@ -81,8 +80,9 @@ class PatchedSelfAttention(nn.Module):
     the same size.
     """
 
-    def _distribute_qkv_linear(self, mod: nn.Module, device_mesh: DeviceMesh):
-        """distribute qkv linear."""
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
         sections = [
             self.num_attention_heads_per_partition *
             self.hidden_size_per_attention_head,
@@ -91,49 +91,17 @@ class PatchedSelfAttention(nn.Module):
             self.num_multi_query_groups_per_partition *
             self.hidden_size_per_attention_head,
         ]
-        for name, param in mod.named_parameters():
-            splited_param = param.split(sections, dim=0)
-            updated_param = []
-            for p in splited_param:
-                dist_tensor = distribute_tensor(p, device_mesh, [Shard(0)])
-                dist_tensor = try_to_local(dist_tensor)
-                updated_param.append(dist_tensor)
-            param = torch.cat(updated_param)
-            dist_param = torch.nn.Parameter(param)
-            mod.register_parameter(name, dist_param)
-
-    def _distribute_qkv_lora_linear(self, module: nn.Module,
-                                    device_mesh: DeviceMesh):
-        """distribute qkv lora linear."""
-        to_local = True
-        self._distribute_qkv_linear(
-            module.base_layer,
-            device_mesh=device_mesh,
-        )
-        for mod in module.lora_A.values():
-            colwise_parallelize_linear(mod,
-                                       device_mesh=device_mesh,
-                                       to_local=to_local)
-        for mod in module.lora_B.values():
-            self._distribute_qkv_linear(
-                mod,
-                device_mesh=device_mesh,
-            )
-        module._tp_mode = 'colwise'
-
-    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['query_key_value']:
-            from peft.tuners.lora import Linear as LoraLinear
-            if isinstance(mod, LoraLinear):
-                self._distribute_qkv_lora_linear(mod, device_mesh)
-            else:
-                self._distribute_qkv_linear(mod, device_mesh)
-        elif mod_name in ['dense']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+        colwise_split_parallelize_linear(self.query_key_value,
+                                         sections,
+                                         loader,
+                                         rank=rank,
+                                         world_size=world_size,
+                                         prefix='query_key_value')
+        rowwise_parallelize_linear(self.dense,
+                                   loader,
+                                   rank=rank,
+                                   world_size=world_size,
+                                   prefix='dense')
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
@@ -266,21 +234,22 @@ class PatchedSelfAttention(nn.Module):
 
 class MLP(nn.Module):
 
-    @classmethod
-    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['dense_h_to_4h']:
-            for name, param in mod.named_parameters():
-                dist_tensor = distribute_tensor(param.unflatten(0, (2, -1)),
-                                                device_mesh, [Shard(1)])
-                dist_tensor = try_to_local(dist_tensor)
-                dist_param = torch.nn.Parameter(dist_tensor.flatten(0, 1))
-                mod.register_parameter(name, dist_param)
-        elif mod_name in ['dense_4h_to_h']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        w_pack_out = self.dense_h_to_4h.out_features
+        sections = [w_pack_out // 2] * 2
+        colwise_split_parallelize_linear(self.dense_h_to_4h,
+                                         sections,
+                                         loader,
+                                         rank=rank,
+                                         world_size=world_size,
+                                         prefix='dense_h_to_4h')
+        rowwise_parallelize_linear(self.dense_4h_to_h,
+                                   loader,
+                                   rank=rank,
+                                   world_size=world_size,
+                                   prefix='dense_4h_to_h')
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
