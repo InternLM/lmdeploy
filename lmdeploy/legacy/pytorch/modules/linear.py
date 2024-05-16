@@ -4,6 +4,8 @@ from typing import Optional, Type, TypeVar
 import torch
 from torch import nn
 
+from lmdeploy.lite.utils.cal_qparams import QParams
+
 try:
     import awq_inference_engine
 except ModuleNotFoundError:
@@ -72,7 +74,8 @@ class WeightOnlyQLinear(nn.Module):
     def from_linear(cls: Type['WeightOnlyQLinear'],
                     linear: nn.Linear,
                     quantizer: TypeVar('Quantizer'),
-                    awq_layout: bool = True) -> 'WeightOnlyQLinear':
+                    awq_layout: bool = True,
+                    qparams: Optional[QParams] = None) -> 'WeightOnlyQLinear':
         """Create a WeightOnlyQLinear object from a PyTorch Linear object.
 
         Args:
@@ -103,7 +106,8 @@ class WeightOnlyQLinear(nn.Module):
                       group_size)
         qlinear.bias = linear.bias
 
-        qparams = quantizer.calculate_qparams(linear.weight)
+        if qparams is not None:
+            qparams = quantizer.calculate_qparams(linear.weight)
         i32_w = quantizer.quant(linear.weight, qparams, real=True)
         i32_w = i32_w.t().contiguous()
 

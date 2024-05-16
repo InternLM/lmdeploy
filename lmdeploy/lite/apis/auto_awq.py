@@ -75,7 +75,6 @@ def auto_awq(model: str,
     fc2fcs = FC_FCS_MAP[layer_type]
     norm2fcs = NORM_FCS_MAP[layer_type]
     input_stats = torch.load(work_dir / 'inputs_stats.pth')
-    act_scales = input_stats['absmax']
     layers = collect_target_modules(model, layer_type)
     fcs = {}
     for l_name, layer in layers.items():
@@ -84,9 +83,11 @@ def auto_awq(model: str,
 
     if search_scale:
         awq_ratios = input_stats['ratios']
+        act_scales = input_stats['absmean']
         awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios,
                    w_group_size, device)
     else:
+        act_scales = input_stats['absmax']
         smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size,
                       device)
     quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)

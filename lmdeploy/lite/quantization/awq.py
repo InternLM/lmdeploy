@@ -100,7 +100,7 @@ def smooth_ln_fcs(ln: torch.nn.Module,
     w_scales = get_weight_scale(concat_w, group_size)
 
     scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).to(device).to(dtype)
+              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
 
     scales = scales / (scales[nonzero_positions].max() *
                        scales[nonzero_positions].min()).sqrt()
@@ -151,7 +151,7 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     w_scales = get_weight_scale(concat_w, group_size)
 
     scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).to(device).to(dtype)
+              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
     scales = scales / (scales.max() * scales.min()).sqrt()
 
     # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
@@ -211,11 +211,16 @@ def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
     """Quantize the weights of the target model's linear layers."""
     from lmdeploy.legacy.pytorch.modules import WeightOnlyQLinear
     from lmdeploy.lite.quantization import WeightQuantizer
+    from lmdeploy.lite.utils import QParams
     for name, fc in fcs.items():
         fc.to(device)
         quantizer = WeightQuantizer(bits, symmetry, 'per_group', group_size)
-        q_linear = WeightOnlyQLinear.from_linear(fc, quantizer)
-
+        fc.weight.data, scales, zeros = pseudo_quantize_tensor(
+            fc.weight.data, bits, group_size, return_scale_zeros=True)
+        q_linear = WeightOnlyQLinear.from_linear(fc,
+                                                 quantizer,
+                                                 qparams=QParams(
+                                                     scales, zeros))
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         fc.to('cpu')
@@ -253,7 +258,10 @@ def smooth_layers(layers,
         print(f'{l_name} smooth weight done.')
 
 
-def pseudo_quantize_tensor(w, w_bit=8, w_group_size=-1):
+def pseudo_quantize_tensor(w,
+                           w_bit=8,
+                           w_group_size=-1,
+                           return_scale_zeros=False):
     """Pseudo quantize tensor."""
     org_w_shape = w.shape
     if w_group_size > 0:
@@ -274,6 +282,10 @@ def pseudo_quantize_tensor(w, w_bit=8, w_group_size=-1):
     assert torch.isnan(w).sum() == 0
 
     w = w.reshape(org_w_shape)
+    if return_scale_zeros:
+        zeros = zeros.view(org_w_shape[0], -1)
+        scales = scales.view(org_w_shape[0], -1)
+        return w, scales, zeros
     return w
 
 

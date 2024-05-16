@@ -501,8 +501,10 @@ class CalibrationContextV2(CalibrationContext):
                     *batch_args[i], **batch_kwargs[i]))
                 obs_group = ActivationObserver.find_group(self.inp_obs_group)
                 mod_name = self.mod2name[mod]
+                ActivationObserver.disable()
                 auto_scale_block(mod, batch_kwargs[i], self.w_bits,
                                  self.w_group_size, obs_group, mod_name)
+                ActivationObserver.enable()
             for key, item in obs_group.items():
                 if key.startswith(f'{mod_name}.'):
                     item.value.cpu()

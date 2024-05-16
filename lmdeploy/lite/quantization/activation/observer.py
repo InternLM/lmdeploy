@@ -62,6 +62,7 @@ class ActivationObserver(GlobalAvailMixin):
 
     Also keeps track of the number of batches observed.
     """
+    observed = False
 
     def __init__(self, dim: int) -> None:
         """Constructor for ActivationObserver.
@@ -80,6 +81,16 @@ class ActivationObserver(GlobalAvailMixin):
         self.ratio = None
         self.num_ratio_tracked = 0
 
+    @classmethod
+    def disable(cls):
+        """To avoid recomputation in search scale process."""
+        cls.observed = True
+
+    @classmethod
+    def enable(cls):
+        """To avoid recomputation in search scale process."""
+        cls.observed = False
+
     @torch.no_grad()
     def observe(self, x: torch.Tensor, save_input: bool = False) -> None:
         """Function to observe the input tensor and update the max, min, mean,
@@ -88,6 +99,8 @@ class ActivationObserver(GlobalAvailMixin):
         Args:
             x : Input tensor
         """
+        if self.observed:
+            return
         assert len(x.shape) == 3
         assert x.size(2) == self.dim
         cur_val = x.flatten(0, 1)
