@@ -4,7 +4,6 @@ from typing import List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
@@ -32,7 +31,7 @@ class PatchedMixtralAttention(nn.Module):
                                    prefix='o_proj')
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs
@@ -174,7 +173,7 @@ class PatchedMixtralBLockSparseTop2MLP(nn.Module):
                                    prefix='w2')
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs
@@ -224,7 +223,7 @@ class PatchedMixtralSparseMoeBlock(nn.Module):
         self.register_buffer('down_weights', down_weights)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs

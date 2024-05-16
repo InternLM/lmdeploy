@@ -9,7 +9,6 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.utils.checkpoint
-from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import \
     BaseModelOutputWithPastAndCrossAttentions
 
@@ -57,7 +56,7 @@ class PatchedFalconAttention(nn.Module):
         self.dense.register_parameter('weight', weight)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs
@@ -248,7 +247,7 @@ class PatchedFalconMLP(nn.Module):
                                    prefix='dense_4h_to_h')
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs

@@ -4,7 +4,6 @@ from typing import Optional, Tuple
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
 
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
 from ..weight_loader.dist_utils import (colwise_parallelize_linear,
@@ -30,7 +29,7 @@ class PatchedQwen2Attention(nn.Module):
                                        prefix=mod_name)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs

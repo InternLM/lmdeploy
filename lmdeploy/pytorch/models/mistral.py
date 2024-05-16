@@ -4,7 +4,6 @@ from typing import Optional, Tuple
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
 
 from ..kernels import apply_rotary_pos_emb
 from ..kernels.fill_kv_cache import fill_kv_cache
@@ -32,7 +31,7 @@ class MistralFlashAttention2(nn.Module):
                                        prefix=mod_name)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs

@@ -4,7 +4,6 @@ from typing import List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..kernels import fill_kv_cache, fused_rotary_emb, paged_attention_fwd
@@ -50,7 +49,7 @@ class PatchedGemmaAttention(nn.Module):
                                    prefix='o_proj')
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs

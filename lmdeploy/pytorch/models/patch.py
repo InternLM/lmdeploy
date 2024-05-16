@@ -7,7 +7,6 @@ from typing import Any, Dict, Sequence
 
 import torch
 from addict import Addict
-from torch.distributed._tensor import DeviceMesh
 
 from lmdeploy.utils import get_logger
 
@@ -158,9 +157,7 @@ def update_model(model: torch.nn.Module):
     return _update_model(model)
 
 
-def _dist_model(model: torch.nn.Module,
-                rank: int = 0,
-                device_mesh: DeviceMesh = None):
+def _dist_model(model: torch.nn.Module, rank: int = 0):
     """distribute model parameters."""
 
     def _register_hooks():
@@ -168,20 +165,19 @@ def _dist_model(model: torch.nn.Module,
         if hasattr(model, '_distribute_input_fn'):
             input_fn = model._distribute_input_fn
             model.register_forward_pre_hook(
-                lambda _, inputs, inputs_dict: input_fn(
-                    inputs, inputs_dict, device_mesh),
+                lambda _, inputs, inputs_dict: input_fn(inputs, inputs_dict),
                 with_kwargs=True,
             )
 
         if hasattr(model, '_distribute_output_fn'):
             output_fn = model._distribute_output_fn
             model.register_forward_hook(
-                lambda mod, inputs, outputs: output_fn(outputs, device_mesh))
+                lambda mod, inputs, outputs: output_fn(outputs))
 
     for name, child in model.named_children():
         if rank == 0:
             logger.debug(f'Distribute module: <{name}>')
-        new_child = _dist_model(child, rank, device_mesh)
+        new_child = _dist_model(child, rank)
         if new_child != child:
             model.register_module(name, child)
 

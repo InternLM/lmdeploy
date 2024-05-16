@@ -6,7 +6,6 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.utils.checkpoint
-from torch.distributed._tensor import DeviceMesh
 from transformers.cache_utils import Cache
 from transformers.modeling_outputs import MoeModelOutputWithPast
 
@@ -40,7 +39,7 @@ class PatchedDbrxAttention(nn.Module):
                                    prefix='out_proj')
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs
@@ -184,23 +183,6 @@ class PatchedDbrxExpertGLU(nn.Module):
         __partition('v1', self.v1)
         __partition('w2', self.w2)
 
-    # def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-    #                              device_mesh: DeviceMesh):
-    #     """Distribution partition callback."""
-
-    #     def __partition(name, param):
-    #         param = param.unflatten(0, (self.moe_num_experts, -1))
-    #         dist_tensor = distribute_tensor(param, device_mesh, [Shard(1)])
-    #         dist_tensor = try_to_local(dist_tensor)
-    #         dist_param = torch.nn.Parameter(dist_tensor.flatten(0, 1))
-    #         del dist_tensor
-    #         mod.register_parameter(name, dist_param)
-
-    #     if mod_name == '':
-    #         __partition('w1', mod.w1)
-    #         __partition('v1', mod.v1)
-    #         __partition('w2', mod.w2)
-
     def _update_model_fn(self):
         """update model."""
         ffn_hidden_size = self.w1.size(0) // self.moe_num_experts
@@ -225,7 +207,7 @@ class PatchedDbrxExpertGLU(nn.Module):
 class PatchedDbrxExperts(nn.Module):
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs

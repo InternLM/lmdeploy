@@ -6,7 +6,6 @@ import torch.distributed as dist
 import transformers
 from packaging import version
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..kernels import apply_rotary_pos_emb as apply_rotary_pos_emb_old
@@ -65,7 +64,7 @@ class LlamaAttention(nn.Module):
                                    prefix='o_proj')
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs
@@ -271,7 +270,7 @@ class LlamaMLP(nn.Module):
                                    prefix='down_proj')
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs

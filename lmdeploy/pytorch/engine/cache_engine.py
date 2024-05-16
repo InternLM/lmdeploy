@@ -3,7 +3,6 @@
 from typing import Dict, List, Tuple
 
 import torch
-from torch.distributed._tensor import DeviceMesh
 
 from lmdeploy.utils import get_logger
 
@@ -23,7 +22,6 @@ class CacheEngine:
         rank (int): distribution rank, 0 on non-distributed environment.
         world_size (int): distribution world size, 1 on non-distributed
             environment.
-        device_mesh (DeviceMesh): distribution device mesh.
     """
 
     def __init__(
@@ -32,15 +30,11 @@ class CacheEngine:
         model_config: ModelConfig,
         rank: int = 0,
         world_size: int = 1,
-        device_mesh: DeviceMesh = None,
     ) -> None:
         if rank == 0:
             logger.info(f'build CacheEngine with config:{cache_config}')
         self.rank = rank
         self.world_size = world_size
-        if device_mesh is None and self.world_size > 1:
-            device_mesh = DeviceMesh('cuda', list(range(self.world_size)))
-        self.device_mesh = device_mesh
 
         self.cache_config = cache_config
         self.model_config = model_config
