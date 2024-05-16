@@ -79,7 +79,7 @@ class QosEngine:
                 result_generator = self.engine.generate(
                     request.prompt[i],
                     request.session_id + i,
-                    stream_response=True,  # always use stream to enable batching
+                    stream_response=True,  # always use stream for batching
                     sequence_start=True,
                     sequence_end=True,
                     request_output_len=request.max_tokens
