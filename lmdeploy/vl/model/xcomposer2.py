@@ -8,7 +8,6 @@ import torch
 from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
-from lmdeploy.messages import VisonConfig
 from lmdeploy.vl.model.base import VisonModel
 from lmdeploy.vl.model.utils import (add_device_hook, add_sys_path,
                                      disable_logging, rewrite_ctx)
@@ -37,10 +36,8 @@ def init_empty_vit():
 class Xcomposer2VisionModel(VisonModel):
     """InternLM-Xcomposer2 vision model."""
 
-    def __init__(self, model_path: str, vision_config: VisonConfig = None):
+    def __init__(self, model_path: str):
         self.model_path = model_path
-        self.vision_config = (vision_config
-                              if vision_config is not None else VisonConfig())
         self.build_model()
 
     def build_model(self):
@@ -58,22 +55,6 @@ class Xcomposer2VisionModel(VisonModel):
             del model.model
             del model.output
 
-        device_map = self.vision_config.device_map
-        if isinstance(device_map, str):
-            max_memory = None
-            from accelerate.utils import (get_balanced_memory,
-                                          infer_auto_device_map)
-            if device_map != 'sequential':
-                max_memory = get_balanced_memory(
-                    model,
-                    dtype=torch.half,
-                    no_split_module_classes=['CLIPEncoderLayer'])
-            device_map = infer_auto_device_map(
-                model,
-                no_split_module_classes=['CLIPEncoderLayer'],
-                max_memory=max_memory,
-                dtype=torch.half)
-
         # additional components.
         with add_sys_path(self.model_path):
             if config.architectures[0] == 'InternLM2ForCausalLM':
@@ -81,13 +62,25 @@ class Xcomposer2VisionModel(VisonModel):
                 from ixc_utils import HD_transform
                 self.HD_transform = HD_transform
                 self._forward_func = self._forward_4khd_7b
-                self.hd_num = int(self.vision_config.kwargs.get('hd_num', 25))
-                # make all tensor on same device for postprocess
-                if 'plora_glb_GN' in device_map:
-                    device_map['plora_sub_GN'] = device_map['plora_glb_GN']
             else:
                 # internlm-xcomposer2-7b
                 self._forward_func = self._forward_7b
+
+                from accelerate.utils import (get_balanced_memory,
+                                              infer_auto_device_map)
+
+        max_memory = get_balanced_memory(
+            model,
+            dtype=torch.half,
+            no_split_module_classes=['CLIPEncoderLayer'])
+        device_map = infer_auto_device_map(
+            model,
+            no_split_module_classes=['CLIPEncoderLayer'],
+            max_memory=max_memory,
+            dtype=torch.half)
+        # make all tensor on same device for postprocess
+        if 'plora_glb_GN' in device_map:
+            device_map['plora_sub_GN'] = device_map['plora_glb_GN']
 
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
@@ -122,7 +115,7 @@ class Xcomposer2VisionModel(VisonModel):
     def _forward_4khd_7b(self, images: List[Image]) -> List[torch.Tensor]:
         """internlm-xcomposer2-4khd-7b vit forward."""
         outputs = [x.convert('RGB') for x in images]
-        outputs = [self.HD_transform(x, hd_num=self.hd_num) for x in images]
+        outputs = [self.HD_transform(x, hd_num=25) for x in images]
         outputs = [
             self.model.vis_processor(x).unsqueeze(0).to(dtype=torch.half)
             for x in outputs
