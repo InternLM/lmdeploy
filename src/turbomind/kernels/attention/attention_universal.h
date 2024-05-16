@@ -76,7 +76,7 @@ struct AttentionUniversal {
             return true;
         }
         else {
-            return CTA_H * max_split_cnt > 32;
+            return max_split_cnt > 32;
         }
     }
 

@@ -210,26 +210,27 @@ int test_attention()
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
-    constexpr size_t kHeadNum   = 40;
-    constexpr size_t KvHeadNum  = kHeadNum / 5;
-    constexpr size_t kBatchSize = 128;
+    constexpr size_t kHeadNum   = 32;
+    constexpr size_t KvHeadNum  = kHeadNum / 4;
+    constexpr size_t kBatchSize = 1;
     constexpr size_t kInputLen  = 1;
     // constexpr size_t kSequenceLen = 63;
     // constexpr size_t kSequenceLen = 4095;
     // constexpr size_t kSequenceLen = 511;
     // constexpr size_t kSequenceLen = 2047;
-    constexpr size_t kSequenceLen = 4095;
+    // constexpr size_t kSequenceLen = 4095;
     // constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;
+    constexpr size_t kSequenceLen = 200000;
     // constexpr size_t kSequenceLen = 262143;
     // constexpr size_t kSequenceLen = (1 << 20) - 1;  // 1M
     // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
     // constexpr size_t kSequenceLen = (1 << 24) - 1;  // 16M
     // constexpr int kSequenceLen = 2047;
     constexpr int kBlockSz   = 128;
-    constexpr int kMaxSplitK = 1;
+    constexpr int kMaxSplitK = 128;
 #else
 
     // append
