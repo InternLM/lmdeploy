@@ -237,6 +237,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
         params.use_logn_attn = params_.use_logn_attn;
 
+        FT_CHECK(barriers_);
         params.split_cnt   = split_cnt_;
         params.partial_L   = partial_L_;
         params.partial_M   = partial_M_;

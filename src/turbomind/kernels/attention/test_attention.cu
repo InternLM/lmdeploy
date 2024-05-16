@@ -194,7 +194,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     }
 }
 
-#define KV_INT8 1
+#define KV_INT8 0
 
 #define KV_INT4 0
 

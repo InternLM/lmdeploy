@@ -170,11 +170,11 @@ private:
     T*     qkv_buf_2_{};
     T*     qkv_buf_3_{};
 
-    float* partial_M_;
-    float* partial_L_;
-    float* partial_O_;
-    int*   split_cnt_;
-    int*   barriers_;  // always zero
+    float* partial_M_{};
+    float* partial_L_{};
+    float* partial_O_{};
+    int*   split_cnt_{};
+    int*   barriers_{};  // always zero
 
     T* tmp_kv_buf_{};
 
