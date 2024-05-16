@@ -265,6 +265,7 @@ def _get_and_verify_max_len(
     max_model_len: Optional[int],
 ) -> int:
     """Get and verify the model's maximum length."""
+    logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')
     possible_keys = [
         # OPT
@@ -295,7 +296,6 @@ def _get_and_verify_max_len(
             return max_model_len
 
         default_max_len = 2048
-        logger = get_logger('lmdeploy')
         logger.warning(
             "The model's config.json does not contain any of the following "
             'keys to determine the original maximum length of the model: '
