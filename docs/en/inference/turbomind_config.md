@@ -33,6 +33,7 @@ step_length = 1
 cache_max_entry_count = 0.5
 cache_block_seq_len = 128
 cache_chunk_size = 1
+enable_prefix_caching = False
 quant_policy = 0
 max_position_embeddings = 2048
 rope_scaling_factor = 0.0
@@ -95,6 +96,14 @@ The `cache_chunk_size` indicates the size of the k/v cache chunk to be allocated
 - When it is an integer > 0, `cache_chunk_size` number of k/v cache blocks are allocated.
 - When the value is -1, `cache_max_entry_count` number of k/v cache blocks are allocated.
 - When the value is 0, `sqrt(cache_max_entry_count)` number of k/v cache blocks are allocated.
+
+### prefix caching switch
+
+Prefix caching feature can be controlled by setting the `enable_prefix_caching` parameter. When set to `True`, it indicates that the feature is enabled, and when set to `False`, it indicates that the feature is disabled. The default value is `False`.
+
+Prefix caching feature is mainly applicable to scenarios where multiple requests have the same prompt prefix (such as system prompt). The k/v blocks of this identical prefix part will be cached and reused by multiple requests, thereby saving the overhead of redundant computations and improving inference performance. The longer the identical prompt prefix, the greater the performance improvement.
+
+Since k/v block is the smallest granularity for reuse in prefix caching, if the identical prompt prefix is less than one block (prefix length \< cache_block_seq_len), there will be no improvement in inference performance.
 
 ### kv quantization and inference switch
 

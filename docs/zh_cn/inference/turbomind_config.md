@@ -33,6 +33,7 @@ step_length = 1
 cache_max_entry_count = 0.5
 cache_block_seq_len = 128
 cache_chunk_size = 1
+enable_prefix_caching = False
 quant_policy = 0
 max_position_embeddings = 2048
 rope_scaling_factor = 0.0
@@ -97,6 +98,14 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 - 当为 > 0 的整数时，开辟 `cache_chunk_size` 个 k/v cache 块
 - 当值为 -1 时，开辟 `cache_max_entry_count` 个 k/v cache 块
 - 当值为 0 时，时，开辟 `sqrt(cache_max_entry_count)` 个 k/v cache 块
+
+### 前缀缓存开关
+
+`enable_prefix_caching`是前缀缓存（Prefix Caching）功能的开关。值为`True`时表示开启，`False`表示关闭，默认为`False`。
+
+前缀缓存功能主要适用于多个请求具有相同的prompt前缀（比如system prompt）的场景，该相同前缀部分的 k/v block 会被缓存起来，被多个请求重复利用，从而节省了重复计算的开销，提高推理性能。相同prompt前缀长度越长，性能提升越大。
+
+由于前缀缓存对 k/v 重复利用的最小粒度是block，如果相同prompt前缀不足一个block（前缀长度\<`cache_block_seq_len`），则推理性能不会有提升。
 
 ### kv 量化推理开关
 
