@@ -181,7 +181,7 @@ def add_device_hook(module: torch.nn.Module,
             if fn is not None:
                 output = fn(output)
             else:
-                output.to(device=self.device)
+                output = output.to(device=self.device)
             return output
 
     add_hook_to_module(module=module,

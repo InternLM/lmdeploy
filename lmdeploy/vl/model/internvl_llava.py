@@ -7,7 +7,6 @@ from typing import List, Union
 import torch
 from PIL.Image import Image
 
-from lmdeploy.messages import VisonConfig
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VisonModel
 from lmdeploy.vl.model.utils import rewrite_ctx
@@ -67,10 +66,8 @@ def init_empty_vit():
 class InternVLLlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path: str, vision_config: VisonConfig = None):
+    def __init__(self, model_path: str):
         self.model_path = model_path
-        self.vision_config = (vision_config
-                              if vision_config is not None else VisonConfig())
         # check llava install
         check_llava_install()
         self.build_model()
@@ -118,7 +115,7 @@ class InternVLLlavaVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=self.vision_config.device_map,
+                device_map='auto',
                 no_split_module_classes=['InternVisionEncoderLayer'],
                 dtype=torch.half)
 

@@ -66,7 +66,7 @@ class ImageEncoder:
     """Image encoder."""
 
     def __init__(self, model_path: str, vicion_config: VisonConfig = None):
-        self.model = load_vl_model(model_path, vicion_config)
+        self.model = load_vl_model(model_path)
         self.max_batch_size = (1 if vicion_config is None else
                                VisonConfig.max_batch_size)
         self.loop = asyncio.new_event_loop()

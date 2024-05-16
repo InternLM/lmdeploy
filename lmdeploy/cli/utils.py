@@ -21,15 +21,6 @@ class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
         return help
 
 
-class ParseKwargs(argparse.Action):
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        setattr(namespace, self.dest, dict())
-        for value in values:
-            key, value = value.split('=')
-            getattr(namespace, self.dest)[key] = value
-
-
 def convert_args(args):
     """Convert args to dict format."""
     special_names = ['run', 'command']
@@ -426,17 +417,3 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='the vision model batch size')
-
-    @staticmethod
-    def vision_device_map(parser):
-        return parser.add_argument(
-            '--vision-device-map',
-            type=str,
-            default='auto',
-            help='the vision model device map, could be auto or sequential')
-
-    @staticmethod
-    def vision_kwargs(parser):
-        return parser.add_argument('--vision-kwargs',
-                                   nargs='*',
-                                   action=ParseKwargs)

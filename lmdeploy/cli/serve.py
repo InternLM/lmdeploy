@@ -167,8 +167,6 @@ class SubCliServe:
         # vlm args
         vision_group = parser.add_argument_group('Vision model arguments')
         ArgumentHelper.vision_max_batch_size(vision_group)
-        ArgumentHelper.vision_device_map(vision_group)
-        ArgumentHelper.vision_kwargs(vision_group)
 
     @staticmethod
     def add_parser_api_client():
@@ -295,10 +293,7 @@ class SubCliServe:
             chat_template_config = ChatTemplateConfig.from_json(
                 args.chat_template)
         from lmdeploy.messages import VisonConfig
-        vision_kwargs = {} if args.vision_kwargs is None \
-            else args.vision_kwargs
-        vision_config = VisonConfig(args.vision_max_batch_size,
-                                    args.vision_device_map, vision_kwargs)
+        vision_config = VisonConfig(args.vision_max_batch_size)
         run_api_server(args.model_path,
                        model_name=args.model_name,
                        backend=backend,

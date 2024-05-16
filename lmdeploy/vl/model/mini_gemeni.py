@@ -8,7 +8,6 @@ from typing import List
 import torch
 from PIL.Image import Image
 
-from lmdeploy.messages import VisonConfig
 from lmdeploy.vl.model.base import VisonModel
 from lmdeploy.vl.model.utils import (add_device_hook, disable_logging,
                                      disable_transformers_logging,
@@ -155,10 +154,8 @@ def init_mini_gemini_model():
 class MiniGeminiVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path: str, vision_config: VisonConfig = None):
+    def __init__(self, model_path: str):
         self.model_path = model_path
-        self.vision_config = (vision_config
-                              if vision_config is not None else VisonConfig())
         check_mini_gemini_install()
         self.build_model()
 
@@ -184,31 +181,23 @@ class MiniGeminiVisionModel(VisonModel):
                 del model.model.layers
                 del model.model.norm
 
-        device_map = self.vision_config.device_map
-        keys = []
-        if isinstance(device_map, str):
-            max_memory = None
-            from accelerate.utils import (get_balanced_memory,
-                                          infer_auto_device_map)
-            if device_map != 'sequential':
-                max_memory = get_balanced_memory(model,
-                                                 dtype=torch.half,
-                                                 no_split_module_classes=[
-                                                     'CLIPEncoderLayer',
-                                                     'ConvNeXtStage'
-                                                 ])
-            device_map = infer_auto_device_map(
-                model,
-                no_split_module_classes=['CLIPEncoderLayer', 'ConvNeXtStage'],
-                max_memory=max_memory,
-                dtype=torch.half)
-            keys = [
-                'model.vlm_uni_query_projector', 'model.vlm_uni_aux_projector',
-                'model.vlm_uni_val_projector'
-            ]
-            if keys[0] in device_map:
-                for key in keys[1:]:
-                    device_map[key] = device_map[keys[0]]
+        from accelerate.utils import get_balanced_memory, infer_auto_device_map
+        max_memory = get_balanced_memory(
+            model,
+            dtype=torch.half,
+            no_split_module_classes=['CLIPEncoderLayer', 'ConvNeXtStage'])
+        device_map = infer_auto_device_map(
+            model,
+            no_split_module_classes=['CLIPEncoderLayer', 'ConvNeXtStage'],
+            max_memory=max_memory,
+            dtype=torch.half)
+        keys = [
+            'model.vlm_uni_query_projector', 'model.vlm_uni_aux_projector',
+            'model.vlm_uni_val_projector'
+        ]
+        if keys[0] in device_map:
+            for key in keys[1:]:
+                device_map[key] = device_map[keys[0]]
 
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
@@ -219,7 +208,7 @@ class MiniGeminiVisionModel(VisonModel):
                 no_split_module_classes=['CLIPEncoderLayer', 'ConvNeXtStage'],
                 dtype=torch.half)
 
-        if len(keys) and keys[0] in device_map:
+        if keys[0] in device_map:
             add_device_hook(vision_tower, device_map[keys[0]])
             add_device_hook(vision_tower_aux, device_map[keys[0]])
 
