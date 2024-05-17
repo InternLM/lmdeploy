@@ -267,7 +267,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         const int sum_k_len = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
         // We are executing prefill & decoding kernels concurrently, but only have 1 workspace
         // disable split kv for prefill for now
-        auto      params    = CreateParams(offset, pf_batch_size, 1, pf_stream);
+        auto params = CreateParams(offset, pf_batch_size, 1, pf_stream);
         if constexpr (sizeof(T) == 2) {
             invokeProcessKV_v2_(params);
             /// TODO: skip flattening for `sm_80`
