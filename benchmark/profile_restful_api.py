@@ -114,7 +114,7 @@ class Engine:
                     # just put all of them together to compute tokens.
                     for choice in output.get('choices', []):
                         if stream_output:
-                            full_output += choice['delta']['content']
+                            full_output += choice['delta'].get('content', '')
                         else:
                             full_output += choice['message']['content']
                     timestamps.append(time.perf_counter())
