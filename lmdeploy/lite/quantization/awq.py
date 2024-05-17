@@ -277,15 +277,17 @@ def pseudo_quantize_tensor(w,
     assert torch.isnan(scales).sum() == 0
     assert torch.isnan(w).sum() == 0
 
-    w = (torch.clamp(torch.round(w / scales) + zeros, min_int, max_int) -
-         zeros) * scales
+    q_w = torch.clamp(torch.round(w / scales) + zeros, min_int, max_int)
+    w = (q_w - zeros) * scales
     assert torch.isnan(w).sum() == 0
 
-    w = w.reshape(org_w_shape)
     if return_scale_zeros:
-        zeros = zeros.view(org_w_shape[0], -1)
-        scales = scales.view(org_w_shape[0], -1)
-        return w, scales, zeros
+        zeros = zeros.view(org_w_shape[0], org_w_shape[-1] // w_group_size, -1)
+        scales = scales.view(org_w_shape[0], org_w_shape[-1] // w_group_size,
+                             -1)
+        q_w = q_w.reshape(org_w_shape)
+        return q_w, scales, zeros
+    w = w.reshape(org_w_shape)
     return w
 
 

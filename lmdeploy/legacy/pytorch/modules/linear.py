@@ -106,9 +106,11 @@ class WeightOnlyQLinear(nn.Module):
                       group_size)
         qlinear.bias = linear.bias
 
-        if qparams is not None:
+        if qparams is None:
             qparams = quantizer.calculate_qparams(linear.weight)
-        i32_w = quantizer.quant(linear.weight, qparams, real=True)
+            i32_w = quantizer.quant(linear.weight, qparams, real=True)
+        else:
+            i32_w = linear.weight.to(torch.int32)
         i32_w = i32_w.t().contiguous()
 
         pack_int_w = torch.zeros_like(qlinear.qweight).to(device)
