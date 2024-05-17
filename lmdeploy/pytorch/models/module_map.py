@@ -266,3 +266,19 @@ MODULE_MAP.update({
     'modeling_phi3.Phi3RMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
+
+# deepseek-v2
+MODULE_MAP.update({
+    'modeling_deepseek.DeepseekV2Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.PatchedDeepseekV2Attention',
+    'modeling_deepseek.DeepseekV2FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.PatchedDeepseekV2Attention',
+    'modeling_deepseek.DeepseekV2Model':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'modeling_deepseek.DeepseekV2MoE':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.PatchedDeepseekV2MoE',
+    'modeling_deepseek.DeepseekV2RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'modeling_deepseek.DeepseekV2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+})

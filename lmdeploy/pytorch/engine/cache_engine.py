@@ -41,9 +41,9 @@ class CacheEngine:
 
         self.block_size = cache_config.block_size
 
-        self.head_size = model_config.get_head_size()
         self.num_layers = model_config.num_layers
-        self.num_heads = model_config.num_key_value_heads
+        self.num_key_heads = model_config.num_key_value_heads
+        self.num_value_heads = model_config.num_value_heads
 
         self.kv_cache_dtype = model_config.dtype
 
@@ -81,32 +81,66 @@ class CacheEngine:
         """num gpu blocks."""
         return self.cache_config.num_cpu_blocks
 
+    @classmethod
+    def _get_single_block_shape(cls,
+                                model_config: ModelConfig,
+                                head_size: int,
+                                world_size: int = 1,
+                                local: bool = True):
+        """get single block shape."""
+        num_heads = model_config.num_key_value_heads
+        if local and not model_config.multi_query_attention:
+            assert num_heads % world_size == 0, \
+                f'num_heads: {num_heads}, world_size: {world_size}'
+            num_heads = num_heads // world_size
+        return (num_heads, head_size)
+
+    @classmethod
+    def _get_single_key_block_shape(cls,
+                                    model_config: ModelConfig,
+                                    world_size: int = 1,
+                                    local: bool = True):
+        """get key block shape impl."""
+        head_size = model_config.key_head_dim
+        return cls._get_single_block_shape(
+            model_config,
+            head_size=head_size,
+            world_size=world_size,
+            local=local,
+        )
+
+    @classmethod
+    def _get_single_value_block_shape(cls,
+                                      model_config: ModelConfig,
+                                      world_size: int = 1,
+                                      local: bool = True):
+        """get value block shape impl."""
+        head_size = model_config.value_head_dim
+        return cls._get_single_block_shape(
+            model_config,
+            head_size=head_size,
+            world_size=world_size,
+            local=local,
+        )
+
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of key block."""
-        num_heads = self.num_heads
-        if local and not self.model_config.multi_query_attention:
-            assert self.num_heads % self.world_size == 0, \
-                f'num_heads: {self.num_heads}, world_size: {self.world_size}'
-            num_heads = self.num_heads // self.world_size
-        return (
-            self.block_size,
-            num_heads,
-            self.head_size,
+        single_block_shape = self._get_single_key_block_shape(
+            self.model_config,
+            world_size=self.world_size,
+            local=local,
         )
+        return (self.block_size, *single_block_shape)
 
     def get_value_block_shape(self,
                               local: bool = False) -> Tuple[int, int, int]:
         """get shape of value block."""
-        num_heads = self.num_heads
-        if local and not self.model_config.multi_query_attention:
-            assert self.num_heads % self.world_size == 0, \
-                f'num_heads: {self.num_heads}, world_size: {self.world_size}'
-            num_heads = self.num_heads // self.world_size
-        return (
-            self.block_size,
-            num_heads,
-            self.head_size,
+        single_block_shape = self._get_single_value_block_shape(
+            self.model_config,
+            world_size=self.world_size,
+            local=local,
         )
+        return (self.block_size, *single_block_shape)
 
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""
@@ -190,8 +224,9 @@ class CacheEngine:
         """
         self._swap(self.local_gpu_cache, self.local_cpu_cache, src_to_dst)
 
-    @staticmethod
-    def get_cache_block_size(block_size: int,
+    @classmethod
+    def get_cache_block_size(cls,
+                             block_size: int,
                              model_config: ModelConfig,
                              world_size: int = 1) -> int:
         """Get the required cache size of the model.
@@ -203,14 +238,20 @@ class CacheEngine:
         Return:
             int: Required memory size in bytes.
         """
-        head_size = model_config.get_head_size()
         num_layers = model_config.num_layers
-        num_heads = model_config.num_key_value_heads
-        if not model_config.multi_query_attention:
-            num_heads = num_heads // world_size
 
-        key_cache_block = block_size * num_heads * head_size
-        value_cache_block = key_cache_block
+        key_shape = cls._get_single_key_block_shape(
+            model_config,
+            world_size=world_size,
+            local=True,
+        )
+        value_shape = cls._get_single_value_block_shape(
+            model_config,
+            world_size=world_size,
+            local=True,
+        )
+        key_cache_block = key_shape[0] * key_shape[1]
+        value_cache_block = value_shape[0] * value_shape[1]
         total = num_layers * (key_cache_block + value_cache_block)
 
         dtype_size = _get_dtype_size(model_config.dtype)
