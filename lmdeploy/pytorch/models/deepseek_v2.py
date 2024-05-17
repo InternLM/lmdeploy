@@ -10,7 +10,6 @@ from lmdeploy.pytorch.kernels.fused_moe import fused_moe
 
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
 from ..weight_loader.dist_utils import (colwise_parallelize_linear,
-                                        default_load_linear, load_no_recursive,
                                         rowwise_parallelize_linear)
 
 
@@ -19,17 +18,15 @@ class PatchedDeepseekV2Attention(nn.Module):
     def _load_weights(self, loader, rank: int, world_size: int,
                       device: torch.device):
         """load weights."""
-        for mod_name in ['q_a_proj', 'kv_a_proj_with_mqa']:
-            default_load_linear(getattr(self, mod_name),
-                                loader,
-                                rank=rank,
-                                prefix=mod_name)
-
-        for mod_name in ['q_a_layernorm', 'kv_a_layernorm']:
-            load_no_recursive(getattr(self, mod_name),
-                              loader,
-                              rank=rank,
-                              prefix=mod_name)
+        for mod_name in [
+                'q_a_proj', 'kv_a_proj_with_mqa', 'q_a_layernorm',
+                'kv_a_layernorm'
+        ]:
+            with loader.prefix_context(mod_name):
+                loader.load_model_weights(getattr(self, mod_name),
+                                          rank=rank,
+                                          world_size=world_size,
+                                          device=device)
 
         for mod_name in ['q_b_proj', 'kv_b_proj']:
             colwise_parallelize_linear(getattr(self, mod_name),

@@ -154,53 +154,52 @@ class ModelWeightLoader:
             yield new_prefix
         self._prefix = old_prefix
 
+    def load_model_weights(self,
+                           model: torch.nn.Module,
+                           rank: int = 0,
+                           world_size: int = 1,
+                           device: torch.device = 'cpu'):
+        """load model weights implementation."""
+        loader = self
 
-def _load_model_weights_impl(model: torch.nn.Module,
-                             loader: ModelWeightLoader,
-                             rank: int = 0,
-                             world_size: int = 1,
-                             device: torch.device = 'cpu'):
-    """load model weights implementation."""
+        def __load_no_recursive(mod: torch.nn.Module):
+            """load no recursive."""
+            for name, param in mod.named_parameters(recurse=False):
+                dtype = param.dtype
+                if not loader.has(name):
+                    logger.debug(f'rank [{rank}]'
+                                 f' failed to find weight: {name}.')
+                    param = torch.empty_like(param, device='cpu')
+                else:
+                    param = loader.pop(name)
+                if param.dtype != dtype:
+                    param = param.to(dtype)
+                mod.register_parameter(
+                    name, torch.nn.Parameter(param, requires_grad=False))
+            for name, param in mod.named_buffers(recurse=False):
+                dtype = param.dtype
+                if not loader.has(name):
+                    logger.debug(f'rank [{rank}]'
+                                 f' failed to find weight: {name}.')
+                    param = torch.empty_like(param, device='cpu')
+                else:
+                    param = loader.pop(name)
+                if param.dtype != dtype:
+                    param = param.to(dtype)
+                mod.register_buffer(name, param)
 
-    def __load_no_recursive(mod: torch.nn.Module):
-        """load no recursive."""
-        for name, param in mod.named_parameters(recurse=False):
-            dtype = param.dtype
-            if not loader.has(name):
-                logger.debug(f'rank [{rank}]'
-                             f' failed to find weight: {name}.')
-                param = torch.empty_like(param, device='cpu')
-            else:
-                param = loader.pop(name)
-            if param.dtype != dtype:
-                param = param.to(dtype)
-            mod.register_parameter(
-                name, torch.nn.Parameter(param, requires_grad=False))
-        for name, param in mod.named_buffers(recurse=False):
-            dtype = param.dtype
-            if not loader.has(name):
-                logger.debug(f'rank [{rank}]'
-                             f' failed to find weight: {name}.')
-                param = torch.empty_like(param, device='cpu')
-            else:
-                param = loader.pop(name)
-            if param.dtype != dtype:
-                param = param.to(dtype)
-            mod.register_buffer(name, param)
+        if hasattr(model, '_load_weights'):
+            model._load_weights(loader, rank, world_size, device=device)
+        else:
+            __load_no_recursive(model)
+            for name, child in model.named_children():
+                with loader.prefix_context(name):
+                    self.load_model_weights(child,
+                                            rank=rank,
+                                            world_size=world_size,
+                                            device=device)
 
-    if hasattr(model, '_load_weights'):
-        model._load_weights(loader, rank, world_size, device=device)
-    else:
-        __load_no_recursive(model)
-        for name, child in model.named_children():
-            with loader.prefix_context(name):
-                _load_model_weights_impl(child,
-                                         loader,
-                                         rank=rank,
-                                         world_size=world_size,
-                                         device=device)
-
-    model.to(device)
+        model.to(device)
 
 
 @torch.inference_mode()
@@ -219,10 +218,9 @@ def load_model_weights(model: torch.nn.Module,
     if adapters is None:
         adapters = dict()
     loader = ModelWeightLoader(checkpoint_path, adapters=adapters)
-    _load_model_weights_impl(model,
-                             loader,
-                             rank=rank,
-                             world_size=world_size,
-                             device=device)
+    loader.load_model_weights(model,
+                              rank=rank,
+                              world_size=world_size,
+                              device=device)
     model.tie_weights()
     model.eval()
