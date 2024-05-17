@@ -103,22 +103,15 @@ struct Impl<MMA_16816, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
         __device__ void Load(int k, int)
         {
             const int warp_id = threadIdx.x / WARP_SIZE;
-            const int lane_id = threadIdx.x % WARP_SIZE;
+            // const int lane_id = threadIdx.x % WARP_SIZE;
 
             const int offset_s = warp_id_m(warp_id) * WARP_M;
             const int offset_c = warp_id_k(warp_id) * WARP_K;
 
-            const int thr_s = lane_id % 16;
-            const int thr_c = lane_id / 16 * 8;
-
             SmemAccessor<T, SmemLayoutA> smem{data};
 
-            PRAGMA_UNROLL
-            for (int m = 0; m < ITER_M; ++m) {
-                const int s = offset_s + thr_s + m * OP_M;
-                const int c = offset_c + thr_c + k * OP_K;
-                ldsm_x4((Array<uint32_t, 4>&)frag_A[k][m], cast_smem_ptr_to_uint(&smem(s, c)));
-            }
+            SmemCopy_MMA_16816_A smem_copy_A;
+            CopySmem(smem_copy_A, smem, (T*)&frag_A[k], offset_s, offset_c + k * OP_K, WARP_M, OP_K);
         }
 
         __device__ void Advance()
@@ -155,24 +148,15 @@ struct Impl<MMA_16816, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
         __device__ void Load(int k, int)
         {
             const int warp_id = threadIdx.x / WARP_SIZE;
-            const int lane_id = threadIdx.x % WARP_SIZE;
 
             const int offset_c = warp_id_k(warp_id) * WARP_K;
             const int offset_s = warp_id_n(warp_id) * WARP_N;
 
-            const int thr_c = lane_id / 8 * 8 % 16;
-            const int thr_s = lane_id % 8 + lane_id / 16 * 8;
-
             SmemAccessor<T, SmemLayoutB> smem{data};
 
-            static_assert(ITER_N % 2 == 0);
+            static_assert(WARP_M % SmemCopy_MMA_16816_B::kWarpAccessS == 0);
 
-            PRAGMA_UNROLL
-            for (int n = 0; n < ITER_N; n += 2) {
-                const int s = offset_s + thr_s + n * OP_N;
-                const int c = offset_c + thr_c + k * OP_K;
-                ldsm_x4((Array<uint32_t, 4>&)frag_B[k][n], cast_smem_ptr_to_uint(&smem(s, c)));
-            }
+            CopySmem(SmemCopy_MMA_16816_B{}, smem, (T*)&frag_B[k], offset_s, offset_c + k * OP_K, WARP_N, OP_K);
         }
 
         __device__ void Transform(int) {}

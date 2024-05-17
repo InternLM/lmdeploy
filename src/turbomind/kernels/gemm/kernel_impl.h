@@ -23,7 +23,7 @@ public:
     {
         desc_.order_a = Impl::LayoutA;
         desc_.order_b = Impl::LayoutB;
-        desc_.order_c = Impl::LayoutC;
+        desc_.order_c = Gemm::LayoutC;
 
         desc_.type_a = get_data_type_v<typename Gemm::T>;
         desc_.type_b = get_data_type_v<typename Gemm::Tb>;
@@ -101,7 +101,7 @@ public:
         using Tq = typename Gemm::Tq;
         using Tc = typename Gemm::T;
 
-        if constexpr (1) {
+        if constexpr (0) {
             [[maybe_unused]] static const int _ = [] {
                 std::cout << "A:\n";
                 Print(typename Impl::ThreadMapA{});

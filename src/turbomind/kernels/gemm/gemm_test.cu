@@ -78,7 +78,7 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(16, 16, 32);
 
-    Run<T, Tb>(2048, 2048, 2048);
+    Run<T, Tb>(8192, 8192, 8192);
 }
 
 int main(int argc, char* argv[])

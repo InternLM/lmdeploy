@@ -82,6 +82,11 @@ struct GmemIteratorSm80 {
     using AccessType = Array<T, Map::kAccessC>;
     using Pointer    = get_pointer_type<T>;
 
+    using ThreadMap = Map;
+
+    static constexpr int ITER_S = Map::kIterS;
+    static constexpr int ITER_C = Map::kIterC;
+
     const char* src_data_;
     const char* src_ptr_;
     // int         src_delta_;

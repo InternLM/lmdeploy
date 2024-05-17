@@ -16,19 +16,26 @@ namespace turbomind::gemm {
 template<class Arch_, class Mainloop, class CtaMap_, bool AlignedM_, bool AlignedN_, bool SplitK_>
 struct GemmUniversal {
 
-    using Impl = typename Mainloop::Impl;
+    // using Impl = typename Mainloop::Impl;
+    using Impl = Mainloop;
 
-    using T  = typename Impl::T;
+    using T = typename Impl::Ta;
+
+    using Ta = typename Impl::Ta;
     using Tb = typename Impl::Tb;
     using Tq = typename Impl::Tq;
 
     using Arch   = Arch_;
     using CtaMap = CtaMap_;
 
+    static constexpr auto LayoutC = LayoutType::kRowMajor;
+
     static constexpr int CTA_M = Impl::CTA_M;
     static constexpr int CTA_N = Impl::CTA_N;
     static constexpr int CTA_K = Impl::CTA_K;
-    static constexpr int CTA_G = Impl::CTA_G;
+
+    static constexpr int G     = 128;
+    static constexpr int CTA_G = ceil_div(CTA_K, G);
 
     static constexpr bool AlignedM = AlignedM_;
     static constexpr bool AlignedN = AlignedN_;
@@ -41,9 +48,9 @@ struct GemmUniversal {
 
     static constexpr int WARP_CNT = Impl::WARP_CNT;
 
-    using IteratorA = typename Mainloop::template GmemIterA<AlignedM, true>;
-    using IteratorB = typename Mainloop::template GmemIterB<AlignedN, true>;
-    using IteratorQ = typename Mainloop::template GmemIterQ<true, AlignedN>;
+    using IteratorA = typename Mainloop::GmemIterA;
+    using IteratorB = typename Mainloop::GmemIterB;
+    using IteratorQ = typename Mainloop::GmemIterQ;
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
@@ -119,33 +126,6 @@ struct GemmUniversal {
         FragC frag_C{};
 
         int tile_iter = (gemm_k_size + CTA_K - 1) / CTA_K;
-
-        // IteratorA gmem_A{
-        //     param.A + offset_m * param.k + offset_k,  // ptr
-        //     param.k,                                  // stride s
-        //     CTA_K,                                    // stride k
-        //     AlignedM ? CTA_M : end_m,                 // max s
-        //     CTA_K,                                    // max c
-        // };
-        // constexpr int packed_n = Impl::kPackedN;
-        // IteratorB     gmem_B{
-        //     param.B + offset_n * param.k + offset_k * packed_n,  // ptr
-        //     param.k * packed_n,                                  // stride s
-        //     CTA_K * packed_n,                                    // stride k
-        //     ceil_div(AlignedN ? CTA_N : end_n, packed_n),        // max s
-        //     CTA_K * packed_n,                                    // max c
-        // };
-        // IteratorQ gmem_Q{
-        //     param.Q + offset_n + offset_k / Impl::G * param.n,  // ptr
-        //     param.n,                                            // stride s
-        //     CTA_G * param.n,                                    // stride k
-        //     CTA_G,                                              // max s
-        //     AlignedN ? CTA_N : end_n,                           // max c
-        // };
-
-        // if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
-        //     printf("lda=%d, ldb=%d, ldc=%d\n", param.lda, param.ldb, param.ldc);
-        // }
 
         auto offset_a = [&](int m, int k) { return Offset<Impl::LayoutA>(m, k, param.lda); };
 
@@ -235,7 +215,7 @@ struct GemmUniversal {
     __device__ void
     StoreC(FragC& frag_C, int offset_m, int offset_n, int end_m, int end_n, const Param& param, SharedStorage& storage)
     {
-        static_assert(Impl::LayoutC == LayoutType::kRowMajor);
+        static_assert(LayoutC == LayoutType::kRowMajor);
 
         Impl::template StoreC<T>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
             if (check_m(mi, end_m) && check_n(ni, end_n)) {

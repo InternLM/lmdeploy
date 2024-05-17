@@ -14,7 +14,9 @@ public:
         // register_sm80_f16_f16();
         // reigster_sm80_s16816gemm_f16_f16();
 
-        register_sm70_s884gemm_f16_f16();
+        reigster_sm80_s16816gemm_f16_f16_v2();
+
+        // register_sm70_s884gemm_f16_f16();
     }
 
     [[maybe_unused]] bool Add(std::unique_ptr<Kernel> kernel)
@@ -44,6 +46,9 @@ private:
 
     void reigster_sm80_s16816gemm_f16_f16();
     void register_sm70_s884gemm_f16_f16();
+
+
+    void reigster_sm80_s16816gemm_f16_f16_v2();
 
 private:
     std::shared_ptr<cudaDeviceProp>      device_prop_;

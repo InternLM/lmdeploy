@@ -39,7 +39,7 @@ void Registry::reigster_sm80_s16816gemm_f16_f16()
     // Add(std::make_unique<KernelImpl<typename Config<128, 128, 32, 128, 16, 32, 3,  false, 1, 1>::Kernel>>());
     // Add(std::make_unique<KernelImpl<typename Config<128, 128, 32, 64, 64, 32, 3,  false, 0, 1>::Kernel>>());
     // Add(std::make_unique<KernelImpl<typename Config<256, 128, 32, 64, 64, 32, 6,  false, 0, 1>::Kernel>>());
-    Add(std::make_unique<KernelImpl<typename Config<128, 128, 32, 64, 64, 32, 3,  false, 0, 1>::Kernel>>());
+    Add(std::make_unique<KernelImpl<typename Config<256, 128, 32, 64, 64, 32, 3,  false, 1, 1>::Kernel>>());
 
     // Add(std::make_unique<KernelImpl<typename Config< 16,  16, 16,  16, 16, 16, 3,  false, 0, 1>::Kernel>>());
     // clang-format on
