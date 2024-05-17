@@ -210,6 +210,14 @@ class ModelConfig:
                 cfg.eos_token_id = 151645
             return cfg
 
+        def __build_cogvlm():
+            cfg = __build_default()
+            cfg.unused_modules = ['model.vision']
+            return cfg
+
+        json_config = hf_config.to_dict()
+        model_arch = json_config.get('architectures', [None])[0]
+
         if hf_config.model_type == 'falcon':
             model_config = __build_falcon()
         elif hf_config.model_type == 'chatglm':
@@ -220,18 +228,15 @@ class ModelConfig:
             model_config = __build_dbrx()
         elif hf_config.model_type == 'qwen':
             model_config = __build_qwen()
+        elif model_arch == 'CogVLMForCausalLM':
+            model_config = __build_cogvlm()
         else:
             model_config = __build_default()
 
         model_config.dtype = _get_torch_dtype(hf_config)
 
         model_config.hf_config = hf_config
-        model_config.json_config = hf_config.to_dict()
-        model_config.model_arch = model_config.json_config.get(
-            'architectures', [None])[0]
-
-        # cogvlm
-        if model_config.model_arch == 'CogVLMForCausalLM':
-            model_config.unused_modules = ['model.vision']
+        model_config.json_config = json_config
+        model_config.model_arch = model_arch
 
         return model_config
