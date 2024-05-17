@@ -109,8 +109,10 @@ class Engine:
                         n=1,
                         max_tokens=output_seqlen,
                         stream=stream_output,
-                        session_id=session_id,
-                        ignore_eos=True):
+                        session_id=None,
+                        repetition_penalty=None,
+                        ignore_eos=None,
+                        skip_special_tokens=None):
                     # Here we ignore the index of the multiple outputs and
                     # just put all of them together to compute tokens.
                     for choice in output.get('choices', []):
