@@ -45,7 +45,8 @@ struct Add {
     static __inline__ __device__ void apply(uint data, int m, int n, half* C, int M, int N)
     {
         if (n < N) {
-            (half2&)C[n * M + m] += (half2&)data;
+            C[n * M + m] += ((half2&)data).x;
+            C[n * M + m + 1] += ((half2&)data).y;
         }
     }
 };
