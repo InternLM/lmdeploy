@@ -95,23 +95,29 @@ class Engine:
             timestamps = []
             timestamps.append(time.perf_counter())
             full_output = ''
-            for output in client.chat_completions_v1(
-                    model=self.model_name,
-                    messages=prompt,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    n=1,
-                    max_tokens=output_seqlen,
-                    stream=stream_output,
-                    session_id=session_id,
-                    ignore_eos=True):
-                # Here we ignore the index of the multiple outputs and
-                # just put all of them together to compute tokens.
-                for choice in output.get('choices', []):
-                    if stream_output:
-                        full_output += choice['delta']['content']
-                    else:
-                        full_output += choice['message']['content']
+            failed = 0
+            try:
+                for output in client.chat_completions_v1(
+                        model=self.model_name,
+                        messages=prompt,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        n=1,
+                        max_tokens=output_seqlen,
+                        stream=stream_output,
+                        session_id=session_id,
+                        ignore_eos=True):
+                    # Here we ignore the index of the multiple outputs and
+                    # just put all of them together to compute tokens.
+                    for choice in output.get('choices', []):
+                        if stream_output:
+                            full_output += choice['delta']['content']
+                        else:
+                            full_output += choice['message']['content']
+                    timestamps.append(time.perf_counter())
+            except Exception as e:
+                print(f'inference failed: {e}')
+                failed = 1
                 timestamps.append(time.perf_counter())
 
             first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
@@ -126,7 +132,7 @@ class Engine:
             total_tokens = input_seqlen + real_output_seqlen
             stats.append([
                 first_token_latency, real_output_seqlen, output_seqlen,
-                total_tokens, token_latency, tokenlizer_time
+                total_tokens, token_latency, tokenlizer_time, failed
             ])
             self.pbar.update(1)
 
@@ -170,7 +176,7 @@ class Engine:
             #       f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
             stats.append(np.array(_stats))
 
-        stats = np.concatenate(stats).reshape(-1, 6)
+        stats = np.concatenate(stats).reshape(-1, 7)
 
         tokenlizer_time = np.sum(stats[:, 5], axis=0) / concurrency
         elapsed_time -= tokenlizer_time
@@ -178,6 +184,7 @@ class Engine:
         first_token_latency_min = np.min(stats[:, 0], axis=0)
         first_token_latency_max = np.max(stats[:, 0], axis=0)
         first_token_latency_ave = np.mean(stats[:, 0], axis=0)
+        failed_requests = np.sum(stats[:, 6], axis=0)
         completion_tokens = np.sum(stats[:, 1], axis=0)
         request_output_tokens = np.sum(stats[:, 2], axis=0)
         total_tokens = np.sum(stats[:, 3], axis=0)
@@ -200,6 +207,10 @@ class Engine:
                   f'{first_token_latency_min:.3f}s, '
                   f'{first_token_latency_max:.3f}s, '
                   f'{first_token_latency_ave:.3f}s\n')
+
+        if failed_requests > 0:
+            print(f'number of failed requests: {failed_requests:.0f}\n')
+
         print(
             f'number of prompt tokens: {prompt_tokens:.0f}\n'
             f'number of completion tokens: {completion_tokens:.0f}\n'
