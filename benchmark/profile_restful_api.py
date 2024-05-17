@@ -19,6 +19,7 @@ def sample_requests(
     dataset_path: str,
     num_requests: int,
     tokenizer: Tokenizer,
+    role: str,
 ) -> List[Tuple[str, int, int]]:
     # Load the dataset.
     with open(dataset_path) as f:
@@ -40,7 +41,9 @@ def sample_requests(
     tokenized_dataset = []
     for i in range(len(dataset)):
         output_len = len(completion_token_ids[i])
-        tokenized_dataset.append((prompts[i], prompt_token_ids[i], output_len))
+        tokenized_dataset.append(
+            ([{"role": role, "content": prompts[i]}], prompt_token_ids[i], output_len)
+        )
 
     # Filter out too long sequences.
     filtered_dataset: List[Tuple[str, int, int]] = []
@@ -251,7 +254,9 @@ def main(server_addr: str,
          temperature: float = 1.0,
          stream_output: bool = False,
          csv: str = './profile_api_server.csv',
-         seed: int = 0):
+         seed: int = 0,
+         role: str = 'user',
+         ):
     """Benchmark the request througput of api server.
 
     Args:
@@ -269,6 +274,7 @@ def main(server_addr: str,
         stream_output (bool, optional): Indicator for streaming output. Defaults to False.
         csv (str, optional): The path to save the result.
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
+        role (str, optional): The role of the messages author in prompts. Defaults to 'user'
     """    # noqa
     addr_schem = urlparse(server_addr).scheme
     if addr_schem not in ['http', 'https']:
@@ -287,7 +293,7 @@ def main(server_addr: str,
                     api_key=api_key,
                     model_name=model_name)
 
-    requests = sample_requests(dataset, num_prompts, engine.tokenizer)
+    requests = sample_requests(dataset, num_prompts, engine.tokenizer, role)
 
     engine.process_request(requests, concurrency, stream_output)
 
