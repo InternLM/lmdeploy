@@ -44,7 +44,8 @@ public:
     void allocateWorkspace();
     void freeWorkspace();
 
-    ~UnifiedAttentionLayer() {
+    ~UnifiedAttentionLayer()
+    {
         freeBuffer();
         freeWorkspace();
     }
