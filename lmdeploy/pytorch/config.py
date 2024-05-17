@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal
 
 import torch
+from transformers import AutoModelForCausalLM
 
 
 def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
@@ -100,6 +101,7 @@ class ModelConfig:
     model_arch: str = None
     unused_modules: List[str] = None
     task_type: Literal['llm', 'vlm'] = 'llm'
+    auto_model_cls: Any = AutoModelForCausalLM
 
     def get_head_size(self):
         """get head size."""
@@ -113,6 +115,19 @@ class ModelConfig:
         from transformers import AutoConfig
         hf_config = AutoConfig.from_pretrained(
             pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
+
+        arch = hf_config.architectures[0]
+        # update hf_config for llava
+        if arch == 'LlavaLlamaForCausalLM':
+            from llava.model.language_model.llava_llama import LlamaConfig
+            hf_config = LlamaConfig.from_pretrained(
+                pretrained_model_name_or_path)
+        elif arch == 'LlavaMistralForCausalLM':
+            from llava.model.language_model.llava_mistral import \
+                LlavaMistralConfig
+            hf_config = LlavaMistralConfig.from_pretrained(
+                pretrained_model_name_or_path)
+
         return cls.from_hf_config(hf_config, pretrained_model_name_or_path)
 
     @classmethod
@@ -122,6 +137,7 @@ class ModelConfig:
 
         if model_path is None:
             model_path = ''
+        model_arch = getattr(hf_config, 'architectures', [None])[0]
 
         def __build_falcon():
             """build falcon."""
@@ -233,7 +249,47 @@ class ModelConfig:
             cfg.unused_modules = ['model.vision']
             return cfg
 
-        model_arch = getattr(hf_config, 'architectures', [None])[0]
+        def __build_llava():
+            from llava.model.language_model.llava_llama import \
+                LlavaLlamaForCausalLM
+            cfg = __build_default()
+            cfg.auto_model_cls = LlavaLlamaForCausalLM
+            cfg.unused_modules = ['model.vision_tower', 'model.mm_projector']
+            return cfg
+
+        def __build_llava_hf():
+            if model_arch == 'LlavaForConditionalGeneration':
+                from transformers import \
+                    LlavaForConditionalGeneration as _LlavaModel
+            elif model_arch == 'LlavaNextForConditionalGeneration':
+                from transformers import \
+                    LlavaNextForConditionalGeneration as _LlavaModel
+            else:
+                raise RuntimeError(
+                    f'Unsupported Llava model arch: {model_arch}')
+
+            text_config = hf_config.text_config
+            hidden_size = getattr(text_config, 'hidden_size', 4096)
+            num_attention_heads = getattr(text_config, 'num_attention_heads',
+                                          32)
+            num_key_value_heads = getattr(text_config, 'num_key_value_heads',
+                                          32)
+            num_hidden_layers = getattr(text_config, 'num_hidden_layers', 32)
+            bos_token_id = getattr(text_config, 'bos_token_id', 1)
+            eos_token_id = getattr(text_config, 'eos_token_id', 2)
+            head_dim = hidden_size // num_attention_heads
+
+            return ModelConfig(
+                hidden_size=hidden_size,
+                num_layers=num_hidden_layers,
+                num_attention_heads=num_attention_heads,
+                num_key_value_heads=num_key_value_heads,
+                bos_token_id=bos_token_id,
+                eos_token_id=eos_token_id,
+                head_dim=head_dim,
+                vocab_size=text_config.vocab_size,
+                unused_modules=['vision_tower', 'multi_modal_projector'],
+                auto_model_cls=_LlavaModel)
 
         if hf_config.model_type == 'falcon':
             model_config = __build_falcon()
@@ -247,6 +303,13 @@ class ModelConfig:
             model_config = __build_qwen()
         elif model_arch == 'CogVLMForCausalLM':
             model_config = __build_cogvlm()
+        elif model_arch == 'LlavaLlamaForCausalLM':
+            model_config = __build_llava()
+        elif model_arch in [
+                'LlavaForConditionalGeneration',
+                'LlavaNextForConditionalGeneration'
+        ]:
+            model_config = __build_llava_hf()
         else:
             model_config = __build_default()
 

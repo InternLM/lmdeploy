@@ -8,6 +8,8 @@ from .deepseek import DeepSeekVisionModel
 from .internvl import InternVLVisionModel
 from .internvl_llava import InternVLLlavaVisionModel
 from .llava import LlavaVisionModel
+from .llava_hf import LlavaHfVisionModel
+from .llava_next import LlavaNextVisionModel
 from .mini_gemeni import MiniGeminiVisionModel
 from .minicpmv import MiniCPMVModel
 from .qwen import QwenVisionModel
@@ -48,6 +50,10 @@ def load_vl_model(model_path: str, with_llm: bool = False):
         return MiniGeminiVisionModel(model_path, with_llm)
     if arch == 'MiniCPMV':
         return MiniCPMVModel(model_path, with_llm)
+    if arch == 'LlavaForConditionalGeneration':
+        return LlavaHfVisionModel(model_path, with_llm)
+    if arch == 'LlavaNextForConditionalGeneration':
+        return LlavaNextVisionModel(model_path, with_llm)
     raise ValueError(f'unsupported vl model with arch {arch}')
 
 

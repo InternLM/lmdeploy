@@ -45,11 +45,15 @@ _SUPPORTED_ARCHS = dict(
     # cogvlm-chat
     CogVLMForCausalLM=True,
     # llava
-    LlavaLlamaForCausalLM=False,
+    LlavaLlamaForCausalLM=True,
     # deepseekvl
     MultiModalityCausalLM=False,
     # StarCoder2
     Starcoder2ForCausalLM=True,
+    # llava hf
+    LlavaForConditionalGeneration=True,
+    # llava_next hf
+    LlavaNextForConditionalGeneration=True,
 )
 
 
