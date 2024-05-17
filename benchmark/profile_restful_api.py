@@ -41,13 +41,10 @@ def sample_requests(
     tokenized_dataset = []
     for i in range(len(dataset)):
         output_len = len(completion_token_ids[i])
-        tokenized_dataset.append(
-            (
-                [{'role': role, 'content': prompts[i]}],
-                prompt_token_ids[i],
-                output_len
-            )
-        )
+        tokenized_dataset.append(([{
+            'role': role,
+            'content': prompts[i]
+        }], prompt_token_ids[i], output_len))
 
     # Filter out too long sequences.
     filtered_dataset: List[Tuple[str, int, int]] = []
@@ -247,20 +244,21 @@ class Engine:
                 ])
 
 
-def main(server_addr: str,
-         tokenizer_path: str,
-         dataset: str,
-         api_key: Optional[str] = None,
-         model_name: Optional[str] = None,
-         concurrency: int = 128,
-         num_prompts: int = 5000,
-         top_p: float = 1.0,
-         temperature: float = 1.0,
-         stream_output: bool = False,
-         csv: str = './profile_api_server.csv',
-         seed: int = 0,
-         role: str = 'user',
-         ):
+def main(
+    server_addr: str,
+    tokenizer_path: str,
+    dataset: str,
+    api_key: Optional[str] = None,
+    model_name: Optional[str] = None,
+    concurrency: int = 128,
+    num_prompts: int = 5000,
+    top_p: float = 1.0,
+    temperature: float = 1.0,
+    stream_output: bool = False,
+    csv: str = './profile_api_server.csv',
+    seed: int = 0,
+    role: str = 'user',
+):
     """Benchmark the request througput of api server.
 
     Args:
