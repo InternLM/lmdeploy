@@ -119,11 +119,14 @@ class Engine:
             # assert output.pop('finish_reason') == 'length', \
             #     f'Error. session_id({session_id}) request {output_seqlen} ' \
             #     f'tokens, but `finish_reason` is not `length`'
+            tokenlizer_start = time.perf_counter()
             real_output_seqlen = len(self.tokenizer(full_output).input_ids)
+            tokenlizer_finish = time.perf_counter()
+            tokenlizer_time = tokenlizer_finish - tokenlizer_start
             total_tokens = input_seqlen + real_output_seqlen
             stats.append([
                 first_token_latency, real_output_seqlen, output_seqlen,
-                total_tokens, token_latency
+                total_tokens, token_latency, tokenlizer_time
             ])
             self.pbar.update(1)
 
@@ -167,7 +170,10 @@ class Engine:
             #       f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
             stats.append(np.array(_stats))
 
-        stats = np.concatenate(stats).reshape(-1, 5)
+        stats = np.concatenate(stats).reshape(-1, 6)
+
+        tokenlizer_time = np.sum(stats[:, 5], axis=0) / concurrency
+        elapsed_time -= tokenlizer_time
 
         first_token_latency_min = np.min(stats[:, 0], axis=0)
         first_token_latency_max = np.max(stats[:, 0], axis=0)
@@ -176,6 +182,7 @@ class Engine:
         request_output_tokens = np.sum(stats[:, 2], axis=0)
         total_tokens = np.sum(stats[:, 3], axis=0)
         prompt_tokens = total_tokens - completion_tokens
+        local_tokenlizer_throughput = completion_tokens / tokenlizer_time
         completion_token_throughput = completion_tokens / elapsed_time
         total_token_throughput = total_tokens / elapsed_time
         rps = len(requests) / elapsed_time
@@ -196,6 +203,7 @@ class Engine:
         print(
             f'number of prompt tokens: {prompt_tokens:.0f}\n'
             f'number of completion tokens: {completion_tokens:.0f}\n'
+            f'local tokenlizer throughput (completion token): {local_tokenlizer_throughput:.3f} token/s\n'  # noqa
             f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
             f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
             f'RPS (request per second): {rps:.3f} req/s\n'
