@@ -186,7 +186,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     auto stream_ptr = streams_.data();
 
-    auto CreateParams = [&](int offset, int batch_size, cudaStream_t stream) {
+    auto CreateParams = [&](int offset, int batch_size, int max_kv_splits, cudaStream_t stream) {
         AttentionParams<T> params{};
 #if 1
         params.out    = qkv_buf_3_;
@@ -243,7 +243,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.partial_M   = partial_M_;
         params.partial_O   = partial_O_;
         params.locks       = barriers_;
-        params.max_split_k = std::min(std::max(1, kMaxWorkspaceTokens / params.token_num), kMaxKVSplits);
+        params.max_split_k = std::min(std::max(1, kMaxWorkspaceTokens / params.token_num), max_kv_splits);
 
         params.arch   = arch_;
         params.stream = stream;
@@ -265,7 +265,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     if (pf_batch_size) {
         const int offset    = dc_batch_size;
         const int sum_k_len = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
-        auto      params    = CreateParams(offset, pf_batch_size, pf_stream);
+        // We are executing prefill & decoding kernels concurrently, but only have 1 workspace
+        // disable split kv for prefill for now
+        auto      params    = CreateParams(offset, pf_batch_size, 1, pf_stream);
         if constexpr (sizeof(T) == 2) {
             invokeProcessKV_v2_(params);
             /// TODO: skip flattening for `sm_80`
@@ -275,7 +277,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     }
 
     if (dc_batch_size) {
-        auto params = CreateParams(0, dc_batch_size, dc_stream);
+        auto params = CreateParams(0, dc_batch_size, kMaxKVSplits, dc_stream);
         if constexpr (sizeof(T) == 2) {
             dispatchDecoding<T>(params);
         }
