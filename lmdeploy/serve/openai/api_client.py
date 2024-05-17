@@ -137,7 +137,7 @@ class APIClient:
         pload = {
             k: v
             for k, v in locals().copy().items()
-            if k[:2] != '__' and k not in ['self'] and v != None and v != {}
+            if k[:2] != '__' and k not in ['self'] and v is not None and v != {}
         }
         response = requests.post(self.chat_completions_v1_url,
                                  headers=self.headers,
