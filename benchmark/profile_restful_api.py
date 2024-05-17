@@ -260,7 +260,7 @@ def main(server_addr: str,
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
     """    # noqa
     addr_schem = urlparse(server_addr).scheme
-    if addr_schem not in ["http", "https"]:
+    if addr_schem not in ['http', 'https']:
         print(f'[WARNING] server_addr of the api_server should '
               f'start with "http://" or "https://", but got "{server_addr}"')
         server_addr = 'http://' + server_addr.strip()
