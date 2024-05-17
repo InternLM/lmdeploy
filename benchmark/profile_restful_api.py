@@ -105,7 +105,7 @@ class Engine:
                     stream=stream_output,
                     session_id=session_id,
                     ignore_eos=True):
-                # Here we ignore the index of the multiple outputs and 
+                # Here we ignore the index of the multiple outputs and
                 # just put all of them together to compute tokens.
                 for choice in output.get("choices", []):
                     if stream_output:
