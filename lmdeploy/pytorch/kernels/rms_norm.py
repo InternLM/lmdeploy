@@ -7,16 +7,17 @@ from triton.runtime.jit import get_cuda_stream
 
 
 @triton.jit
-def rms_norm_kernel(input, weight, output, input_row_stride, n_cols, eps,
-                    N_COLS: tl.constexpr, BLOCK_N: tl.constexpr):
+def rms_norm_kernel(input, weight, output, input_row_stride: tl.constexpr,
+                    eps: tl.constexpr, N_COLS: tl.constexpr,
+                    BLOCK_N: tl.constexpr):
     """rms norm kernel."""
     prog_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_N)
 
-    w = tl.load(weight + offsets, mask=offsets < n_cols)
+    w = tl.load(weight + offsets, mask=offsets < N_COLS)
 
     x_ptr = input + prog_id * input_row_stride
-    x = tl.load(x_ptr + offsets, mask=offsets < n_cols)
+    x = tl.load(x_ptr + offsets, mask=offsets < N_COLS)
     xf = x.to(tl.float32)
 
     var = tl.sum(xf * xf, 0) * float(1.0 / N_COLS)
@@ -24,7 +25,7 @@ def rms_norm_kernel(input, weight, output, input_row_stride, n_cols, eps,
     out = (w * out).to(x.dtype)
 
     out_ptr = output + prog_id * input_row_stride
-    tl.store(out_ptr + offsets, out, mask=offsets < n_cols)
+    tl.store(out_ptr + offsets, out, mask=offsets < N_COLS)
 
 
 def rms_norm(hidden_states: Tensor, weight: Tensor, eps: float = 1e-6):
@@ -37,6 +38,7 @@ def rms_norm(hidden_states: Tensor, weight: Tensor, eps: float = 1e-6):
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
 
+    assert hidden_states.is_contiguous()
     feat_size = weight.shape[0]
     seq_len = hidden_states.numel() // hidden_states.size(-1)
     input_stride = hidden_states.stride(-2)
@@ -50,11 +52,10 @@ def rms_norm(hidden_states: Tensor, weight: Tensor, eps: float = 1e-6):
     rms_norm_kernel[grid](hidden_states,
                           weight,
                           out,
-                          input_stride,
-                          feat_size,
-                          eps,
-                          feat_size,
-                          BLOCK_N,
+                          input_row_stride=input_stride,
+                          eps=eps,
+                          N_COLS=feat_size,
+                          BLOCK_N=BLOCK_N,
                           num_warps=4,
                           num_stages=2,
                           **kernel_meta)

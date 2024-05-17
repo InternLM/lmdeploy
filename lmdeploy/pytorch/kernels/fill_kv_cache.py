@@ -49,7 +49,6 @@ def _fill_kv_cache_kernel(
     # initialize
     h_off = tl.arange(0, BLOCK_H)
     d_off = tl.arange(0, BLOCK_D)
-    dv_off = tl.arange(0, BLOCK_DV)
 
     q_startloc = tl.load(QStartLoc + batch_id)
     q_seqlen = tl.load(QSeqLens + batch_id)
@@ -88,14 +87,17 @@ def _fill_kv_cache_kernel(
                  k,
                  mask=mask)
 
-        maskv = (h_off[:, None] < num_heads) & (dv_off[None, :] < head_dim)
-        v = tl.load(vs_ptr + sidx * stride_vss + h_off[:, None] * stride_vsh +
-                    dv_off[None, :] * stride_vsd,
-                    mask=maskv)
-        tl.store(vc_ptr + bidx * stride_vcb + h_off[:, None] * stride_vch +
-                 dv_off[None, :] * stride_vcd,
-                 v,
-                 mask=maskv)
+        if BLOCK_DV > 0:
+            dv_off = tl.arange(0, BLOCK_DV)
+            maskv = (h_off[:, None] < num_heads) & (dv_off[None, :] < head_dim)
+            v = tl.load(vs_ptr + sidx * stride_vss +
+                        h_off[:, None] * stride_vsh +
+                        dv_off[None, :] * stride_vsd,
+                        mask=maskv)
+            tl.store(vc_ptr + bidx * stride_vcb + h_off[:, None] * stride_vch +
+                     dv_off[None, :] * stride_vcd,
+                     v,
+                     mask=maskv)
 
 
 def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,

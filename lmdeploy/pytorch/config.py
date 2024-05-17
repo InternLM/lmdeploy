@@ -77,8 +77,8 @@ class ModelConfig:
     bos_token_id: int
     eos_token_id: int
     head_dim: int
-    key_head_dim: int = None
-    value_head_dim: int = None
+    k_head_dim: int = None
+    v_head_dim: int = None
     sliding_window: int = -1
     dtype: torch.dtype = torch.float16
     multi_query_attention: bool = False
@@ -211,8 +211,8 @@ class ModelConfig:
 
         def __build_deepseek_v2():
             head_dim = (hf_config.kv_lora_rank + hf_config.qk_rope_head_dim)
-            key_head_dim = head_dim
-            value_head_dim = 0
+            k_head_dim = head_dim
+            v_head_dim = 0
             num_attention_heads = hf_config.num_attention_heads
             num_key_value_heads = 1
             init_kwargs = dict(attn_implementation='eager')
@@ -223,9 +223,10 @@ class ModelConfig:
                                bos_token_id=hf_config.bos_token_id,
                                eos_token_id=hf_config.eos_token_id,
                                head_dim=head_dim,
-                               key_head_dim=key_head_dim,
-                               value_head_dim=value_head_dim,
+                               k_head_dim=k_head_dim,
+                               v_head_dim=v_head_dim,
                                vocab_size=hf_config.vocab_size,
+                               multi_query_attention=True,
                                init_kwargs=init_kwargs)
 
         if hf_config.model_type == 'falcon':
@@ -243,12 +244,12 @@ class ModelConfig:
         else:
             model_config = __build_default()
 
-        if model_config.key_head_dim is None:
+        if model_config.k_head_dim is None:
             assert model_config.head_dim is not None
-            model_config.key_head_dim = model_config.head_dim
-        if model_config.value_head_dim is None:
+            model_config.k_head_dim = model_config.head_dim
+        if model_config.v_head_dim is None:
             assert model_config.head_dim is not None
-            model_config.value_head_dim = model_config.head_dim
+            model_config.v_head_dim = model_config.head_dim
 
         model_config.dtype = _get_torch_dtype(hf_config)
 

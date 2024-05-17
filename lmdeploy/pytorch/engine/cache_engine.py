@@ -40,11 +40,7 @@ class CacheEngine:
         self.model_config = model_config
 
         self.block_size = cache_config.block_size
-
         self.num_layers = model_config.num_layers
-        self.num_key_heads = model_config.num_key_value_heads
-        self.num_value_heads = model_config.num_value_heads
-
         self.kv_cache_dtype = model_config.dtype
 
         # Initialize the cache.
@@ -82,65 +78,42 @@ class CacheEngine:
         return self.cache_config.num_cpu_blocks
 
     @classmethod
-    def _get_single_block_shape(cls,
-                                model_config: ModelConfig,
-                                head_size: int,
-                                world_size: int = 1,
-                                local: bool = True):
+    def _get_block_shape_impl(cls,
+                              model_config: ModelConfig,
+                              block_size: int,
+                              head_size: int,
+                              world_size: int = 1,
+                              local: bool = True):
         """get single block shape."""
         num_heads = model_config.num_key_value_heads
         if local and not model_config.multi_query_attention:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
-        return (num_heads, head_size)
-
-    @classmethod
-    def _get_single_key_block_shape(cls,
-                                    model_config: ModelConfig,
-                                    world_size: int = 1,
-                                    local: bool = True):
-        """get key block shape impl."""
-        head_size = model_config.key_head_dim
-        return cls._get_single_block_shape(
-            model_config,
-            head_size=head_size,
-            world_size=world_size,
-            local=local,
-        )
-
-    @classmethod
-    def _get_single_value_block_shape(cls,
-                                      model_config: ModelConfig,
-                                      world_size: int = 1,
-                                      local: bool = True):
-        """get value block shape impl."""
-        head_size = model_config.value_head_dim
-        return cls._get_single_block_shape(
-            model_config,
-            head_size=head_size,
-            world_size=world_size,
-            local=local,
-        )
+        return (block_size, num_heads, head_size)
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of key block."""
-        single_block_shape = self._get_single_key_block_shape(
+        head_size = self.model_config.k_head_dim
+        return self._get_block_shape_impl(
             self.model_config,
+            block_size=self.block_size,
+            head_size=head_size,
             world_size=self.world_size,
             local=local,
         )
-        return (self.block_size, *single_block_shape)
 
     def get_value_block_shape(self,
                               local: bool = False) -> Tuple[int, int, int]:
         """get shape of value block."""
-        single_block_shape = self._get_single_value_block_shape(
+        head_size = self.model_config.v_head_dim
+        return self._get_block_shape_impl(
             self.model_config,
+            block_size=self.block_size,
+            head_size=head_size,
             world_size=self.world_size,
             local=local,
         )
-        return (self.block_size, *single_block_shape)
 
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""
@@ -239,32 +212,26 @@ class CacheEngine:
             int: Required memory size in bytes.
         """
         num_layers = model_config.num_layers
-
-        key_shape = cls._get_single_key_block_shape(
+        key_head_size = model_config.k_head_dim
+        value_head_size = model_config.v_head_dim
+        key_shape = cls._get_block_shape_impl(
             model_config,
+            block_size=block_size,
+            head_size=key_head_size,
             world_size=world_size,
             local=True,
         )
-        value_shape = cls._get_single_value_block_shape(
+        value_shape = cls._get_block_shape_impl(
             model_config,
+            block_size=block_size,
+            head_size=value_head_size,
             world_size=world_size,
             local=True,
         )
-        key_cache_block = key_shape[0] * key_shape[1]
-        value_cache_block = value_shape[0] * value_shape[1]
-        total = num_layers * (key_cache_block + value_cache_block)
-
-        dtype_size = _get_dtype_size(model_config.dtype)
-        return dtype_size * total
-
-
-def _get_dtype_size(dtype: torch.dtype) -> int:
-    """get size of the given dtype.
-
-    Args:
-        dtype (torch.dtype): Data type.
-
-    Return:
-        int: size in bytes.
-    """
-    return torch.tensor([], dtype=dtype).element_size()
+        dtype = model_config.dtype
+        key_block = torch.empty(key_shape, dtype=dtype, device='meta')
+        value_block = torch.empty(value_shape, dtype=dtype, device='meta')
+        mem_key_block = key_block.numel() * key_block.element_size()
+        mem_value_block = value_block.numel() * value_block.element_size()
+        total = num_layers * (mem_key_block + mem_value_block)
+        return total

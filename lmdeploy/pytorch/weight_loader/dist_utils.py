@@ -4,6 +4,7 @@ from typing import List
 import torch
 
 from lmdeploy.pytorch.models.q_modules import QLinear
+from lmdeploy.utils import get_logger
 
 from .model_weight_loader import ModelWeightLoader
 
@@ -13,6 +14,9 @@ except ImportError:
 
     class LoRALinear:
         pass
+
+
+logger = get_logger('lmdeploy')
 
 
 def get_prefixed_name(name: str, prefix: str):
@@ -271,5 +275,50 @@ def colwise_split_parallelize_linear(module: torch.nn.Module,
                                                     rank=rank,
                                                     world_size=world_size,
                                                     prefix=prefix)
+    else:
+        raise TypeError(f'Unsupported module: {type(module)}')
+
+
+def load_no_recursive(mod: torch.nn.Module,
+                      loader: ModelWeightLoader,
+                      rank: int = 0,
+                      prefix: str = ''):
+    """default load linear naive."""
+    for name, param in mod.named_parameters(recurse=False):
+        prefixed_name = get_prefixed_name(name, prefix)
+        dtype = param.dtype
+        if not loader.has(prefixed_name):
+            logger.debug(f'rank [{rank}]'
+                         f' failed to find weight: {name}.')
+            param = torch.empty_like(param, device='cpu')
+        else:
+            param = loader.pop(prefixed_name)
+        if param.dtype != dtype:
+            param = param.to(dtype)
+        mod.register_parameter(name,
+                               torch.nn.Parameter(param, requires_grad=False))
+    for name, param in mod.named_buffers(recurse=False):
+        prefixed_name = get_prefixed_name(name, prefix)
+        dtype = param.dtype
+        if not loader.has(prefixed_name):
+            logger.debug(f'rank [{rank}]'
+                         f' failed to find weight: {name}.')
+            param = torch.empty_like(param, device='cpu')
+        else:
+            param = loader.pop(prefixed_name)
+        if param.dtype != dtype:
+            param = param.to(dtype)
+        mod.register_buffer(name, param)
+
+
+def default_load_linear(module: torch.nn.Module,
+                        loader: ModelWeightLoader,
+                        rank: int = 0,
+                        prefix: str = ''):
+    """default load linear."""
+    if isinstance(module, (torch.nn.Linear, QLinear)):
+        load_no_recursive(module, loader, rank=rank, prefix=prefix)
+    elif isinstance(module, LoRALinear):
+        raise NotImplementedError('Not implemented, please contact us.')
     else:
         raise TypeError(f'Unsupported module: {type(module)}')
