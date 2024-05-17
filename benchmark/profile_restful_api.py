@@ -94,6 +94,7 @@ class Engine:
                 req_queue.get, [None, None, None]):
             timestamps = []
             timestamps.append(time.perf_counter())
+            full_output = ""
             for output in client.chat_completions_v1(
                     model=self.model_name,
                     messages=prompt,
@@ -104,6 +105,13 @@ class Engine:
                     stream=stream_output,
                     session_id=session_id,
                     ignore_eos=True):
+                # Here we ignore the index of the multiple outputs and 
+                # just put all of them together to compute tokens.
+                for choice in output.get("choices", []):
+                    if stream_output:
+                        full_output += choice["delta"]["content"]
+                    else:
+                        full_output += choice["message"]["content"]
                 timestamps.append(time.perf_counter())
 
             first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
@@ -111,9 +119,10 @@ class Engine:
             # assert output.pop('finish_reason') == 'length', \
             #     f'Error. session_id({session_id}) request {output_seqlen} ' \
             #     f'tokens, but `finish_reason` is not `length`'
-            total_tokens = input_seqlen + output_seqlen
+            real_output_seqlen = len(self.tokenizer(full_output).input_ids)
+            total_tokens = input_seqlen + real_output_seqlen
             stats.append([
-                first_token_latency, output_seqlen, output_seqlen,
+                first_token_latency, real_output_seqlen, output_seqlen,
                 total_tokens, token_latency
             ])
             self.pbar.update(1)
