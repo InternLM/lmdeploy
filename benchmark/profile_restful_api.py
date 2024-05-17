@@ -94,7 +94,7 @@ class Engine:
                 req_queue.get, [None, None, None]):
             timestamps = []
             timestamps.append(time.perf_counter())
-            full_output = ""
+            full_output = ''
             for output in client.chat_completions_v1(
                     model=self.model_name,
                     messages=prompt,
@@ -107,11 +107,11 @@ class Engine:
                     ignore_eos=True):
                 # Here we ignore the index of the multiple outputs and
                 # just put all of them together to compute tokens.
-                for choice in output.get("choices", []):
+                for choice in output.get('choices', []):
                     if stream_output:
-                        full_output += choice["delta"]["content"]
+                        full_output += choice['delta']['content']
                     else:
-                        full_output += choice["message"]["content"]
+                        full_output += choice['message']['content']
                 timestamps.append(time.perf_counter())
 
             first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
