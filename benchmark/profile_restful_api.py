@@ -5,6 +5,7 @@ import time
 from queue import Queue
 from threading import Thread
 from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 
 import fire
 import numpy as np
@@ -241,10 +242,12 @@ def main(server_addr: str,
         csv (str, optional): The path to save the result.
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
     """    # noqa
-    if not server_addr.startswith('http://'):
+    addr_schem = urlparse(server_addr).scheme
+    if addr_schem not in ["http", "https"]:
         print(f'[WARNING] server_addr of the api_server should '
-              f'start with "http://", but got "{server_addr}"')
+              f'start with "http://" or "https://", but got "{server_addr}"')
         server_addr = 'http://' + server_addr.strip()
+    print(f'[INFO] using server_addr: {server_addr}')
 
     random.seed(seed)
 
