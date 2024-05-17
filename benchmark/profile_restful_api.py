@@ -244,21 +244,19 @@ class Engine:
                 ])
 
 
-def main(
-    server_addr: str,
-    tokenizer_path: str,
-    dataset: str,
-    api_key: Optional[str] = None,
-    model_name: Optional[str] = None,
-    concurrency: int = 128,
-    num_prompts: int = 5000,
-    top_p: float = 1.0,
-    temperature: float = 1.0,
-    stream_output: bool = False,
-    csv: str = './profile_api_server.csv',
-    seed: int = 0,
-    role: str = 'user',
-):
+def main(server_addr: str,
+         tokenizer_path: str,
+         dataset: str,
+         api_key: Optional[str] = None,
+         model_name: Optional[str] = None,
+         concurrency: int = 128,
+         num_prompts: int = 5000,
+         top_p: float = 1.0,
+         temperature: float = 1.0,
+         stream_output: bool = False,
+         csv: str = './profile_api_server.csv',
+         seed: int = 0,
+         role: str = 'user'):
     """Benchmark the request througput of api server.
 
     Args:
