@@ -76,7 +76,7 @@ struct AttentionUniversal {
             return true;
         }
         else {
-            return CTA_H * max_split_cnt > 32;
+            return max_split_cnt > 32;
         }
     }
 
@@ -442,7 +442,8 @@ struct AttentionUniversal {
         else {
             StorePartial(frag_O, frag_M, frag_L, qi_begin, qi_end, head_idx, split_idx, params, storage);
 
-            if (iter_end == tile_count) {  // store actual split count
+            if (iter_end == tile_count) {
+                // Store actual split count, only used by separate reduction kernel
                 for (int ti = qi_begin + threadIdx.x; ti < qi_end; ti += kWarpCount * WARP_SIZE) {
                     params.split_cnt[ti] = split_idx + 1;
                 }
@@ -452,7 +453,7 @@ struct AttentionUniversal {
                 return;
             }
             else {
-                Reduce(qi_begin, head_idx, split_idx, iter_end != tile_count, params, cta_map, smem_buf);
+                Reduce(qi_begin, head_idx, split_idx, iter_end == tile_count, params, cta_map, smem_buf);
             }
         }
     }
@@ -469,10 +470,10 @@ struct AttentionUniversal {
         const auto index = (cta_map.batch_idx() * params.num_heads + cta_map.head_idx()) * params.max_split_k;
         const auto locks = params.locks + index;
 
-        if (is_last) {
+        if (!is_last) {  // all but last split
             sem_post(&locks[split_idx], 1, threadIdx.x == 0);
         }
-        else {
+        else {  // only the last split
             const int split_count = split_idx + 1;
 
             sem_wait_many(&locks[threadIdx.x], split_count - 1, threadIdx.x < split_count - 1);
