@@ -18,8 +18,32 @@ struct LDSM_x4_N {
     }
 };
 
+struct LDS_128 {
+    template<class T>
+    __device__ static void copy(const T* src, T* dst)
+    {
+        *(uint4*)dst = *(const uint4*)src;
+    }
+};
+
+struct LDS_64 {
+    template<class T>
+    __device__ static void copy(const T* src, T* dst)
+    {
+        *(uint2*)dst = *(const uint2*)src;
+    }
+};
+
+struct LDS_32 {
+    template<class T>
+    __device__ static void copy(const T* src, T* dst)
+    {
+        *(uint*)dst = *(const uint*)src;
+    }
+};
+
 struct SmemCopy_MMA_16816_A {
-    using CopyAtom = LDSM_x4_N;
+    using Copy = LDSM_x4_N;
 
     static constexpr int kFragmentSize = 8;
 
@@ -36,7 +60,7 @@ struct SmemCopy_MMA_16816_A {
 };
 
 struct SmemCopy_MMA_16816_B {
-    using CopyAtom = LDSM_x4_N;
+    using Copy = LDSM_x4_N;
 
     static constexpr int kWarpAccessC = 16;
     static constexpr int kWarpAccessS = 16;
@@ -67,5 +91,34 @@ __device__ void CopySmem(TiledCopy, Accessor smem, T* dst, int offset_s, int off
         }
     }
 }
+
+template<class Atom_, int S, int C>
+struct SmemCopy_ {
+
+    using Atom = Atom_;
+
+    static constexpr int ITER_S = S / Atom::kWarpAccessS;
+    static constexpr int ITER_C = C / Atom::kWarpAccessC;
+
+    static constexpr int DELTA_S = Atom::kWarpAccessS;
+    static constexpr int DELTA_C = Atom::kWarpAccessC;
+
+    template<class Accessor, class Pointer>
+    __device__ static Pointer copy(Accessor src, Pointer dst_ptr, int offset_s, int offset_c)
+    {
+        const int2 thr_cs = Atom::get_offset(threadIdx.x % WARP_SIZE);
+        PRAGMA_UNROLL
+        for (int s = 0; s < ITER_S; ++s) {
+            const int ss = offset_s + thr_cs.y + s * DELTA_S;
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                const int cc = offset_c + thr_cs.x + c * DELTA_C;
+                Atom::Copy::copy(&src(ss, cc), dst_ptr);
+                dst_ptr += Atom::kFragmentSize;
+            }
+        }
+        return dst_ptr;
+    }
+};
 
 }  // namespace turbomind::gemm

@@ -36,7 +36,7 @@ struct Config {
     struct OperandA {
         using Dtype      = half;
         using SmemLayout = SmemLayoutV2<CTA_M, CTA_K, std::min(16, CTA_M), 32, Swizzle<2, 3, 3>>;
-        using SmemCopy   = SmemCopy_MMA_16816_A;
+        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_A, WARP_M, 16>;
         using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_K, CTA_M, 8, WARP_CNT>, SmemLayout, AlignedM, true, 0>;
         static constexpr auto Layout = LayoutType::kRowMajor;
     };
@@ -44,7 +44,7 @@ struct Config {
     struct OperandB {
         using Dtype      = half;
         using SmemLayout = SmemLayoutV2<CTA_N, CTA_K, std::min(16, CTA_N), 32, Swizzle<2, 3, 3>>;
-        using SmemCopy   = SmemCopy_MMA_16816_B;
+        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B, WARP_N, 16>;
         using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>, SmemLayout, AlignedN, true, 1>;
         static constexpr auto Layout = LayoutType::kColMajor;
     };

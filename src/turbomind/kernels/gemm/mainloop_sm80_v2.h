@@ -168,20 +168,14 @@ struct MainloopSm80_v2 {
         const int offset_k = warp_id_k(warp_id) * TiledMma::K;
 
         auto Load = [&](int k) {
-            CopySmem(SmemCopyA{},
-                     SmemAccessorA{smem_A.pointer},
-                     frag_A[k][0].data(),
-                     offset_m,
-                     offset_k + k * SmemCopyA::kWarpAccessC,
-                     TiledMma::M,
-                     MMA_Atom::K);
-            CopySmem(SmemCopyB{},
-                     SmemAccessorB{smem_B.pointer},
-                     frag_B[k][0].data(),
-                     offset_n,
-                     offset_k + k * SmemCopyB::kWarpAccessC,
-                     TiledMma::N,
-                     MMA_Atom::K);
+            SmemCopyA::copy(SmemAccessorA{smem_A.pointer},
+                            frag_A[k][0].data(),
+                            offset_m,
+                            offset_k + k * SmemCopyA::Atom::kWarpAccessC);
+            SmemCopyB::copy(SmemAccessorB{smem_B.pointer},
+                            frag_B[k][0].data(),
+                            offset_n,
+                            offset_k + k * SmemCopyB::Atom::kWarpAccessC);
         };
 
         advance_and_wait_smem_stage();
