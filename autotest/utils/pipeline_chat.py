@@ -16,6 +16,7 @@ def run_pipeline_chat_test(config,
                            cases_info,
                            model_case,
                            type,
+                           worker_id: str = '',
                            extra: object = None,
                            use_local_model: bool = True):
     log_path = config.get('log_path')
@@ -57,8 +58,10 @@ def run_pipeline_chat_test(config,
     gen_config = GenerationConfig(top_k=1)
 
     config_log = os.path.join(
-        log_path,
-        'pipeline_config_' + type + model_case.split('/')[1] + '.log')
+        log_path, '_'.join([
+            'pipeline', 'config', type, worker_id,
+            model_case.split('/')[1] + '.log'
+        ]))
     file = open(config_log, 'w')
     file.writelines(' '.join([
         'reproduce config info:', hf_path,
@@ -78,8 +81,10 @@ def run_pipeline_chat_test(config,
             continue
         case_info = cases_info.get(case)
         pipeline_chat_log = os.path.join(
-            log_path, 'pipeline_chat_' + type + model_case.split('/')[1] +
-            '_' + case + '.log')
+            log_path, '_'.join([
+                'pipeline', 'chat', type,
+                model_case.split('/')[1], case + '.log'
+            ]))
 
         file = open(pipeline_chat_log, 'w')
 
@@ -104,12 +109,19 @@ def run_pipeline_chat_test(config,
     torch.cuda.empty_cache()
 
 
-def assert_pipeline_chat_log(config, cases_info, model_case, type):
+def assert_pipeline_chat_log(config,
+                             cases_info,
+                             model_case,
+                             type,
+                             worker_id: str = ''):
     log_path = config.get('log_path')
 
     config_log = os.path.join(
-        log_path,
-        'pipeline_config_' + type + model_case.split('/')[1] + '.log')
+        log_path, '_'.join([
+            'pipeline', 'config', type, worker_id,
+            model_case.split('/')[1] + '.log'
+        ]))
+
     allure.attach.file(config_log, attachment_type=allure.attachment_type.TEXT)
 
     for case in cases_info.keys():
@@ -120,8 +132,10 @@ def assert_pipeline_chat_log(config, cases_info, model_case, type):
         result = False
         with allure.step('case - ' + case):
             pipeline_chat_log = os.path.join(
-                log_path, 'pipeline_chat_' + type + model_case.split('/')[1] +
-                '_' + case + '.log')
+                log_path, '_'.join([
+                    'pipeline', 'chat', type,
+                    model_case.split('/')[1], case + '.log'
+                ]))
 
             allure.attach.file(pipeline_chat_log,
                                attachment_type=allure.attachment_type.TEXT)
@@ -142,12 +156,17 @@ def assert_pipeline_chat_log(config, cases_info, model_case, type):
                 assert result, msg
 
 
-def save_pipeline_common_log(config, log_name, content, write_type: str = 'w'):
+def save_pipeline_common_log(config,
+                             log_name,
+                             result,
+                             content,
+                             write_type: str = 'w'):
     log_path = config.get('log_path')
 
     config_log = os.path.join(log_path, log_name)
     file = open(config_log, write_type)
-    file.write(content)
+    file.writelines(f'result:{result}, reason: {content}')
+    file.close()
 
 
 def assert_pipeline_common_log(config, log_name):
@@ -171,6 +190,50 @@ def assert_pipeline_common_log(config, log_name):
                 msg = ''
 
     assert result, msg
+
+
+def assert_pipeline_single_return(output):
+    result = assert_pipeline_single_stream_element(output, is_last=True)
+    return result & (len(output.get('token_ids'))
+                     == output.get('generate_token_len'))
+
+
+def assert_pipeline_batch_return(output, size):
+    result = len(output) == size
+    for single_output in output:
+        result &= assert_pipeline_single_return(single_output)
+    return result
+
+
+def assert_pipeline_single_stream_return(output):
+    result = True
+    for i in range(0, len(output) - 1):
+        result &= assert_pipeline_single_stream_element(output[i])
+    result &= assert_pipeline_single_stream_element(output[-1], is_last=True)
+    return result
+
+
+def assert_pipeline_batch_stream_return(output, size):
+    result = True
+    for i in range(size):
+        output_list = [item for item in output if item.get('session_id') == i]
+        result &= assert_pipeline_single_stream_return(output_list)
+    return result
+
+
+def assert_pipeline_single_stream_element(output, is_last: bool = False):
+    result = True
+    result &= len(output.get('text')) > 0
+    result &= output.get('generate_token_len') > 0
+    result &= output.get('input_token_len') > 0
+    result &= output.get('session_id') >= 0
+    if is_last:
+        result &= output.get('finish_reason') in ['stop', 'length']
+    else:
+        result &= output.get('finish_reason') is None
+    result &= len(output.get('token_ids')) > 0
+    result &= output.get('logprobs') is None
+    return result
 
 
 PIC1 = 'https://raw.githubusercontent.com/' + \

@@ -21,20 +21,15 @@ def quantization(config,
     if quantization_type == 'w4a16':
         quantization_cmd = ' '.join([
             cuda_prefix, 'lmdeploy lite auto_awq', origin_model_path,
-            '--work-dir', quantization_model_path
+            '--work-dir', quantization_model_path, '--batch-size 32'
         ])
     elif quantization_type == 'w8a8':
         quantization_cmd = ' '.join([
             cuda_prefix, 'lmdeploy lite smooth_quant', origin_model_path,
-            '--work-dir', quantization_model_path
-        ])
-    elif quantization_type == 'kvint8':
-        quantization_cmd = ' '.join([
-            cuda_prefix, 'lmdeploy lite calibrate', origin_model_path,
-            '--work-dir', quantization_model_path
+            '--work-dir', quantization_model_path, '--batch-size 32'
         ])
     else:
-        return False, 'quantization type should in [w4a16, w8a8, kvint8], \
+        return False, 'quantization type should in [w4a16, w8a8], \
             now the type is ' + quantization_type
 
     with open(quantization_log, 'w') as f:
@@ -45,19 +40,6 @@ def quantization(config,
                        shell=True,
                        text=True,
                        encoding='utf-8')
-
-        if quantization_type == 'kvint8':
-            cp_cmd = ' '.join(
-                ['cp -r', origin_model_path, quantization_model_path])
-            f.writelines('reproduce command quantization_cmd: ' + cp_cmd +
-                         '\n')
-            print('reproduce command quantization_cmd: ' + cp_cmd)
-            subprocess.run([cp_cmd],
-                           stdout=f,
-                           stderr=f,
-                           shell=True,
-                           text=True,
-                           encoding='utf-8')
 
         f.writelines('reproduce command quantization_cmd: ' +
                      quantization_cmd + '\n')

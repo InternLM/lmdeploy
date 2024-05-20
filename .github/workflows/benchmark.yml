@@ -172,6 +172,14 @@ jobs:
           rm -rf ${result_dir}
           mkdir ${result_dir}
           python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
+      - name: Run generation benchmark - longtext
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(env.LONGTEXT_BENCHMARK, 'true')
+        env:
+          result_dir: benchmark-generation-longtext-turbomind
+        run: |
+          rm -rf ${result_dir}
+          mkdir ${result_dir}
+          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 128 --session-len 200000 -ct 1024 -pt 198000 --csv ${result_dir}/generation_longtext.csv > ${result_dir}/generation_longtext.log
       - name: Run generation benchmark - pytorch
         if: (!contains(env.MODEL_FORMAT, 'awq') && contains(fromJSON(github.event.inputs.backend), 'pytorch'))
         env:
