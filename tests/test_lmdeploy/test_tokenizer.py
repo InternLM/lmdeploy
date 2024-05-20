@@ -23,6 +23,7 @@ def test_tokenizer(model_path, input, interval, skip_special_tokens):
     tokenizer = HuggingFaceTokenizer(model_path)
     encoded = tokenizer.encode(input, False, add_special_tokens=False)
     output = ''
+    input = tokenizer.decode(encoded, skip_special_tokens=skip_special_tokens)
     state = DetokenizeState()
     for i in range(0, len(encoded), interval):
         offset = i + interval
