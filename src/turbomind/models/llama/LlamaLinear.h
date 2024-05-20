@@ -135,11 +135,11 @@ private:
     }
 
     void forwardInt4Lora(T*                         output_data,
-                       const T*                   input_data,
-                       int                        batch_size,
-                       const LlamaDenseWeight<T>& weight,
-                       Type                       type,
-                       int*                       lora_mask)
+                         const T*                   input_data,
+                         int                        batch_size,
+                         const LlamaDenseWeight<T>& weight,
+                         Type                       type,
+                         int*                       lora_mask)
     {
         FT_CHECK(type == kGemm);
         // output = lora(x) * scale
@@ -191,7 +191,6 @@ private:
             FT_CHECK_WITH_INFO(0, "Not implemented");
         }
     }
-
 
     void forwardInt4(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
     {
