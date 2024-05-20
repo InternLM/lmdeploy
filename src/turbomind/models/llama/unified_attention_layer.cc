@@ -58,8 +58,9 @@ void UnifiedAttentionLayer<T>::allocateBuffer(size_t            q_count,
 
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * q_count * local_head_num_ * size_per_head_, false);
 
-    tmp_kv_buf_ =
-        (T*)allocator_->reMalloc(tmp_kv_buf_, sizeof(T) * local_kv_head_num_ * 2 * k_count * size_per_head_, false);
+    // Pad the tmp buffer for linear KV cache by `MAX_CTA_S` to avoid illegal accesses
+    tmp_kv_buf_ = (T*)allocator_->reMalloc(
+        tmp_kv_buf_, sizeof(T) * local_kv_head_num_ * 2 * (k_count + MAX_CTA_S) * size_per_head_, false);
 
     is_allocate_buffer_ = true;
 }
