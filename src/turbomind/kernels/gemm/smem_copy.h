@@ -76,21 +76,6 @@ struct SmemCopy_MMA_16816_B {
     }
 };
 
-template<class TiledCopy, class Accessor, class T>
-__device__ void CopySmem(TiledCopy, Accessor smem, T* dst, int offset_s, int offset_c, int shape_s, int shape_c)
-{
-    const int2 thr_cs = TiledCopy::get_offset(threadIdx.x % WARP_SIZE);
-    PRAGMA_UNROLL
-    for (int s = 0; s < shape_s; s += TiledCopy::kWarpAccessS) {
-        const int ss = offset_s + thr_cs.y + s;
-        PRAGMA_UNROLL
-        for (int c = 0; c < shape_c; c += TiledCopy::kWarpAccessC) {
-            const int cc = offset_c + thr_cs.x + c;
-            TiledCopy::CopyAtom::copy(&smem(ss, cc), dst);
-            dst += TiledCopy::kFragmentSize;
-        }
-    }
-}
 
 template<class Atom_, int S, int C>
 struct SmemCopy_ {
