@@ -421,6 +421,7 @@ def paged_attention_fwd(
     kv_seqlens: Tensor,
     max_seqlen: int,
     window_size: int = None,
+    sm_scale: float = None,
 ):
     """Paged Attention forward.
 
@@ -456,7 +457,8 @@ def paged_attention_fwd(
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk, Lv == o.shape[-1]
 
-    sm_scale = 1.0 / (Lq**0.5)
+    if sm_scale is None:
+        sm_scale = 1.0 / (Lq**0.5)
     batch, head = q_seqlens.shape[0], q.shape[-2]
     kv_group_num = q.shape[-2] // k.shape[-2]
 

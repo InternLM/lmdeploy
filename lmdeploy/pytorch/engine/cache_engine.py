@@ -95,6 +95,8 @@ class CacheEngine:
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of key block."""
         head_size = self.model_config.k_head_dim
+        if head_size is None:
+            head_size = self.model_config.head_dim
         return self._get_block_shape_impl(
             self.model_config,
             block_size=self.block_size,
@@ -107,6 +109,8 @@ class CacheEngine:
                               local: bool = False) -> Tuple[int, int, int]:
         """get shape of value block."""
         head_size = self.model_config.v_head_dim
+        if head_size is None:
+            head_size = self.model_config.head_dim
         return self._get_block_shape_impl(
             self.model_config,
             block_size=self.block_size,
@@ -214,6 +218,10 @@ class CacheEngine:
         num_layers = model_config.num_layers
         key_head_size = model_config.k_head_dim
         value_head_size = model_config.v_head_dim
+        if key_head_size is None:
+            key_head_size = model_config.head_dim
+        if value_head_size is None:
+            value_head_size = model_config.head_dim
         key_shape = cls._get_block_shape_impl(
             model_config,
             block_size=block_size,

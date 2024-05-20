@@ -46,6 +46,23 @@ class PatchedDeepseekV2Attention(nn.Module):
         qk_nope_head_dim = self.qk_nope_head_dim
         v_head_dim = self.v_head_dim
 
+        def __update_pe(mod, head_dim, pe_dim_offset):
+            weight = mod.weight.data
+            # (num_heads, q_head_dim, input_dim)
+            weight = weight.unflatten(0, (-1, head_dim))
+            # (num_heads, nope_head_dim, input_dim)
+            w_pe = weight[:, pe_dim_offset:]
+            # (num_heads, nope_head_dim//2, 2, input_dim)
+            new_w_pe = w_pe.unflatten(1, (-1, 2))
+            # (num_heads, nope_head_dim, input_dim)
+            new_w_pe = new_w_pe.transpose(1, 2).flatten(1, 2)
+            weight[:, pe_dim_offset:] = new_w_pe
+
+        # prevent shuffle before apply rotary embedding
+        __update_pe(self.q_b_proj, self.q_head_dim, qk_nope_head_dim)
+        kv_dim = self.kv_lora_rank + self.qk_rope_head_dim
+        __update_pe(self.kv_a_proj_with_mqa, kv_dim, self.kv_lora_rank)
+
         kv_b_proj = self.kv_b_proj
         w_kc, w_vc = kv_b_proj.weight.unflatten(
             0, (-1, qk_nope_head_dim + v_head_dim)).split(
@@ -115,6 +132,7 @@ class PatchedDeepseekV2Attention(nn.Module):
             else:
                 cos = context._cos
                 sin = context._sin
+
             apply_rotary_pos_emb(q_pe,
                                  k_pe,
                                  cos,
@@ -161,6 +179,7 @@ class PatchedDeepseekV2Attention(nn.Module):
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
             max_seqlen=max_q_seq_length,
+            sm_scale=self.softmax_scale,
         )
 
         # (num_heads, q_len, nope_size)
@@ -195,7 +214,55 @@ class PatchedDeepseekV2Attention(nn.Module):
         )
 
 
+def _div_up(a, b):
+    """div up."""
+    return (a + b - 1) // b
+
+
 class PatchedDeepseekV2MoE(nn.Module):
+
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+
+        def __load_mlp(exp_id, exp):
+            """load mlp."""
+            with loader.prefix_context(f'experts.{exp_id}'):
+                loader.load_model_weights(
+                    exp,
+                    rank=rank,
+                    world_size=world_size,
+                    device=device,
+                    load_only=True,
+                )
+
+        def __drop_mlp(exp_id, exp):
+            """drop mlp."""
+            for name, _ in exp.named_parameters(recurse=True):
+                loader.pop(f'experts.{exp_id}.{name}')
+
+        num_experts = len(self.experts)
+        exp_per_rank = _div_up(num_experts, world_size)
+        first_exp = rank * exp_per_rank
+        last_exp = min(num_experts, first_exp + exp_per_rank)
+        for exp_id, exp in enumerate(self.experts):
+            if first_exp <= exp_id < last_exp:
+                __load_mlp(exp_id, exp)
+            else:
+                __drop_mlp(exp_id, exp)
+        self.experts = self.experts[first_exp:last_exp]
+        with loader.prefix_context('gate'):
+            loader.load_model_weights(self.gate,
+                                      rank=rank,
+                                      world_size=world_size,
+                                      device=device)
+
+        if self.config.n_shared_experts is not None:
+            with loader.prefix_context('shared_experts'):
+                loader.load_model_weights(self.shared_experts,
+                                          rank=rank,
+                                          world_size=world_size,
+                                          device=device)
 
     def _update_model_fn(self):
         """update model."""
@@ -247,11 +314,20 @@ class PatchedDeepseekV2MoE(nn.Module):
 
     def moe_infer(self, x, topk_ids, topk_weight):
         """moe infer."""
+        world_size = 1
+        rank = 0
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+            rank = dist.get_rank()
+        exp_per_rank = self.gate_up_weights.size(0)
+        expert_offset = rank * exp_per_rank
         ret = fused_moe(x,
                         self.gate_up_weights,
                         self.down_weights,
                         topk_weight,
                         topk_ids,
                         topk=self.num_experts_per_tok,
+                        expert_offset=expert_offset,
+                        num_experts=world_size * exp_per_rank,
                         renormalize=False)
         return ret

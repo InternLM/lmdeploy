@@ -154,11 +154,14 @@ class ModelWeightLoader:
             yield new_prefix
         self._prefix = old_prefix
 
-    def load_model_weights(self,
-                           model: torch.nn.Module,
-                           rank: int = 0,
-                           world_size: int = 1,
-                           device: torch.device = 'cpu'):
+    def load_model_weights(
+        self,
+        model: torch.nn.Module,
+        rank: int = 0,
+        world_size: int = 1,
+        device: torch.device = 'cpu',
+        load_only: bool = False,
+    ):
         """load model weights implementation."""
         loader = self
 
@@ -188,7 +191,7 @@ class ModelWeightLoader:
                     param = param.to(dtype)
                 mod.register_buffer(name, param)
 
-        if hasattr(model, '_load_weights'):
+        if not load_only and hasattr(model, '_load_weights'):
             model._load_weights(loader, rank, world_size, device=device)
         else:
             __load_no_recursive(model)
