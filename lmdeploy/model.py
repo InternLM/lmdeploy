@@ -1133,6 +1133,7 @@ class DeepseekVL(BaseChatTemplate):
             eoh='\n\n',
             assistant='Assistant: ',
             eoa='<｜end▁of▁sentence｜>',
+            session_len=16384,
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
                          eosys=eosys,
@@ -1140,6 +1141,7 @@ class DeepseekVL(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
+                         session_len=session_len,
                          **kwargs)
 
     @classmethod
@@ -1322,6 +1324,44 @@ class ChatmlDirect(BaseChatTemplate):
             return 'llava-chatml'
         if 'internvl-chat' in path and 'v1-2' in path:
             return 'internvl-zh-hermes2'
+
+
+@MODELS.register_module(name='phi-3')
+class Phi3Instruct(BaseChatTemplate):
+    """Chat template of InternLM model."""
+
+    def __init__(self,
+                 system='<|system|>\n',
+                 meta_instruction=None,
+                 eosys='<|end|>\n',
+                 user='<|user|>\n',
+                 eoh='<|end|>\n',
+                 assistant='<|assistant|>\n',
+                 eoa='<|end|>\n',
+                 separator='\n',
+                 stop_words=['<|end|>', '<|endoftext|>'],
+                 **kwargs):
+        super().__init__(system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if all([c in path for c in ['phi-3', 'instruct']]):
+            return 'phi-3'
 
 
 def best_match_model(query: str) -> Optional[str]:

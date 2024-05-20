@@ -8,7 +8,7 @@ from torch import nn
 from transformers import AutoTokenizer
 
 from lmdeploy.archs import get_task
-from lmdeploy.lite.quantization import CalibrationContext
+from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
 from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
                                  load_hf_from_pretrained)
 
@@ -128,7 +128,11 @@ def calibrate(model: str,
               calib_samples: int = 128,
               calib_seqlen: int = 2048,
               work_dir: str = './work_dir',
-              device: str = 'cuda') -> None:
+              device: str = 'cuda',
+              w_bits: int = 4,
+              w_group_size: int = 128,
+              search_scale: bool = False,
+              batch_size: int = 1) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
 
@@ -144,6 +148,13 @@ def calibrate(model: str,
             Defaults to './work_dir'.
         device (str, optional): The device to be used for calculation.
             Defaults to 'cuda'.
+        w_bits (int): Bit number for weight quantization.
+        w_group_size (int): Group size for weight quantization statistics.
+        search_scale (bool): Whether search scale ratio. Default to False,
+            which means only smooth quant with 0.5 ratio will be applied.
+        batch_size (int): The batch size for running the calib samples.
+            Low GPU mem requires small batch_size. Large batch_size
+            reduces the calibration time while costs more VRAM.
 
     Returns:
         model (nn.Module): The loaded huggingface model.
@@ -199,11 +210,23 @@ def calibrate(model: str,
                                         seqlen=calib_seqlen)
 
     # Initialize calibration context
-    calib_ctx = CalibrationContext(model,
-                                   tokenizer,
-                                   layer_type=layer_type,
-                                   norm_type=norm_type,
-                                   device=device)
+    if search_scale:
+        calib_ctx = CalibrationContextV2(model,
+                                         tokenizer,
+                                         layer_type=layer_type,
+                                         norm_type=norm_type,
+                                         device=device,
+                                         w_bits=w_bits,
+                                         w_group_size=w_group_size,
+                                         batch_size=batch_size,
+                                         search_scale=search_scale)
+    else:
+        calib_ctx = CalibrationContext(model,
+                                       tokenizer,
+                                       layer_type=layer_type,
+                                       norm_type=norm_type,
+                                       batch_size=batch_size,
+                                       device=device)
 
     with calib_ctx:
         all_data = torch.cat([

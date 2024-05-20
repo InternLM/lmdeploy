@@ -3,7 +3,7 @@ from typing import Union
 
 import numpy as np
 
-from ...adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
+from ...adapter.adapter import AdapterManager, SchedulerAdapter
 from ...block import LogicalTokenBlocks
 from ...messages import SchedulerSequence
 from .default_block_manager import DefaultBlockManager
@@ -44,9 +44,12 @@ class WindowBlockManager(DefaultBlockManager):
         num_cpu_blocks (int): number of cpu blocks.
     """
 
-    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int,
-                 window_size: int):
-        super().__init__(num_gpu_blocks, num_cpu_blocks)
+    def __init__(self,
+                 num_gpu_blocks: int,
+                 num_cpu_blocks: int,
+                 window_size: int,
+                 adapter_manager: AdapterManager = None):
+        super().__init__(num_gpu_blocks, num_cpu_blocks, adapter_manager)
         assert window_size > 0, ('expect window size > 0, '
                                  f'but get window_size = {window_size}')
         self.window_size = window_size
@@ -73,7 +76,7 @@ class WindowBlockManager(DefaultBlockManager):
             if adapter.is_actived():
                 return 0
             else:
-                return adapter.rank * len(adapter.target_modules)
+                return obj.num_required_blocks
 
         if isinstance(obj, SchedulerSequence):
             return __num_req_seq(obj)
@@ -94,7 +97,7 @@ class WindowBlockManager(DefaultBlockManager):
         num_required_blocks = self.num_required_blocks(msg, prealloc_size)
         num_free_phy = self.get_num_free_gpu_blocks()
         if msg.adapter_name is not None:
-            adapter = ADAPTER_MANAGER.get_adapter(msg.adapter_name)
+            adapter = self.adapter_manager.get_adapter(msg.adapter_name)
             num_required_blocks += self.num_required_blocks(adapter)
         return num_required_blocks <= num_free_phy + num_drop_blocks
 
@@ -150,23 +153,3 @@ class WindowBlockManager(DefaultBlockManager):
         # drop unused blocks
         if droped_blocks is not None:
             self.allocator.free(droped_blocks)
-
-    def allocate_adapter(self, adapter: SchedulerAdapter):
-        """Allocate cpu blocks for given adapter."""
-        num_required_blocks = self.num_required_blocks(adapter)
-        if num_required_blocks > 0:
-            blocks = self.allocator.allocate(num_required_blocks, 'cpu')
-            adapter.logical_blocks.append(blocks)
-
-    def free(self, msg: SchedulerSequence):
-        """Free all physical blocks allocated for the session."""
-        self.allocator.free(msg.logical_blocks.get_real_blocks())
-        msg.logical_blocks.reset()
-
-    def can_append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
-        """Return true if the message can append new slot."""
-        return self.can_allocate(msg, prealloc_size)
-
-    def append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
-        """Append new slot to message."""
-        return self.allocate(msg, prealloc_size)

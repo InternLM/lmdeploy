@@ -67,7 +67,7 @@ def test_restful_chat_tp2(config, common_case_config, worker_id):
 @pytest.mark.parametrize('prepare_environment', [{
     'model': 'Qwen/Qwen-7B-Chat',
     'cuda_prefix': None,
-    'tp_num': 2,
+    'tp_num': 1,
     'modelscope': True
 }],
                          indirect=True)

@@ -58,6 +58,7 @@ class TurbomindModelConfig:
     cache_max_entry_count: float = 0.8
     cache_block_seq_len: int = 64
     cache_chunk_size: int = -1
+    enable_prefix_caching: bool = False
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
     extra_tokens_per_iter: int = 0
@@ -162,12 +163,12 @@ class BaseOutputModel(ABC):
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
         """Generate turbomind model config (config.ini)."""
         _, bos_id, eos_id = self.input_model.tokenizer_info()
-        model = MODELS.get(cfg.model_name)()
+        model_info = self.input_model.model_info()
+        session_len = model_info.get('max_position_embeddings',
+                                     MODELS.get(cfg.model_name)().session_len)
         final_cfg = cfg.__dict__
         final_cfg.update(
-            dict(start_id=bos_id,
-                 end_id=eos_id,
-                 session_len=model.session_len + 8))
+            dict(start_id=bos_id, end_id=eos_id, session_len=session_len + 8))
         final_cfg.update(self.input_model.model_info())
 
         # head_num, vocab_size

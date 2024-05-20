@@ -18,16 +18,14 @@ def _x_a_mm_kernel(
     B_start_loc,
     B_seq_lens,
     B_adapter_id,
-    Rank_page_table,
-    Rank_page_start,
+    Rank_offset,
     Ranks,
     stride_xs,
     stride_xh,
-    stride_las,
-    stride_lah,
     stride_xas,
     stride_xar,
     stride_ptb,
+    stride_r,
     rank_step,
     BLOCK_M: tl.constexpr,
     BLOCK_R: tl.constexpr,
@@ -46,19 +44,17 @@ def _x_a_mm_kernel(
 
     start_loc = tl.load(B_start_loc + cur_batch)
     adapter_id = tl.load(B_adapter_id + cur_batch)
-    rank = tl.load(Ranks + adapter_id) // rank_step
-    page_start = tl.load(Rank_page_start + adapter_id)
+    rank = tl.load(Ranks + adapter_id * stride_r) // rank_step
 
-    page_table_off = adapter_id * stride_ptb + r_off + page_start
+    rank_off = adapter_id * stride_ptb + r_off
     rank_mask = r_off < rank
-    page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
     m_off = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     dm_off = tl.arange(0, BLOCK_DMODEL)
 
     x_off = (start_loc + m_off) * stride_xs
     xs_mask = m_off < seq_len
-    la_page_off = page_table * stride_las
+    la_page_off = tl.load(Rank_offset + rank_off, mask=rank_mask)
     acc = tl.zeros((BLOCK_M, BLOCK_R), dtype=tl.float32)
 
     # compute acc
@@ -74,7 +70,7 @@ def _x_a_mm_kernel(
                     other=0.0)
 
         # load lora a
-        lah_off = cur_dm_off * stride_lah
+        lah_off = cur_dm_off
         la_mask = rank_mask[None, :] and h_mask[:, None]
         la = tl.load(LoRA_A + la_page_off[None, :] + lah_off[:, None],
                      mask=la_mask,
@@ -101,16 +97,15 @@ def _acc_b_mm_kernel(
     B_seq_lens,
     B_adapter_id,
     B_scaling,
-    Rank_page_table,
-    Rank_page_start,
+    Rank_offset,
     Ranks,
     stride_xas,
     stride_xar,
     stride_os,
     stride_oh,
-    stride_lbs,
-    stride_lbh,
     stride_ptb,
+    stride_r,
+    stride_s,
     BLOCK_M: tl.constexpr,
     BLOCK_R: tl.constexpr,
     BLOCK_HO: tl.constexpr,
@@ -127,17 +122,15 @@ def _acc_b_mm_kernel(
 
     start_loc = tl.load(B_start_loc + cur_batch)
     adapter_id = tl.load(B_adapter_id + cur_batch)
-    scaling = tl.load(B_scaling + cur_batch)
-    rank = tl.load(Ranks + adapter_id)
-    page_start = tl.load(Rank_page_start + adapter_id)
+    scaling = tl.load(B_scaling + adapter_id * stride_s)
+    rank = tl.load(Ranks + adapter_id * stride_r)
 
-    page_table_off = adapter_id * stride_ptb + r_off + page_start
+    rank_off = adapter_id * stride_ptb + r_off
     rank_mask = r_off < rank
-    page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
     m_off = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     dm_off = tl.arange(0, BLOCK_DMODEL)
-    lb_page_off = page_table * stride_lbs
+    lb_page_off = tl.load(Rank_offset + rank_off, mask=rank_mask)
 
     xs_mask = m_off < seq_len
     o_off = (start_loc + m_off) * stride_os
@@ -156,7 +149,7 @@ def _acc_b_mm_kernel(
         h_mask = cur_dm_off < BLOCK_HO
 
         # load lora b
-        lbh_off = cur_dm_off * stride_lbh
+        lbh_off = cur_dm_off
         lb_mask = rank_mask[:, None] and h_mask[None, :]
         lb = tl.load(LoRA_B + lb_page_off[:, None] + lbh_off[None, :],
                      mask=lb_mask,
@@ -178,9 +171,8 @@ def mbgmm_a(x: Tensor,
             q_start_loc: Tensor,
             q_seqlens: Tensor,
             adapter_ids: Tensor,
-            rank_page_table: Tensor,
+            rank_offset: Tensor,
             ranks: Tensor,
-            rank_page_start: Tensor,
             max_seq_len: int,
             max_rank: int,
             rank_step: int = 1):
@@ -192,10 +184,6 @@ def mbgmm_a(x: Tensor,
         device_type = device.type
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
-
-    assert x.dim() == 2
-    assert lora_a.dim() == 2
-    assert rank_page_table.dim() == 2
 
     head_size = x.size(-1)
     batch_size = len(q_seqlens)
@@ -218,16 +206,14 @@ def mbgmm_a(x: Tensor,
                          q_start_loc,
                          q_seqlens,
                          adapter_ids,
-                         Rank_page_table=rank_page_table,
-                         Rank_page_start=rank_page_start,
+                         Rank_offset=rank_offset,
                          Ranks=ranks,
                          stride_xs=x.stride(0),
                          stride_xh=x.stride(1),
-                         stride_las=lora_a.stride(0),
-                         stride_lah=lora_a.stride(1),
                          stride_xas=xa.stride(0),
                          stride_xar=xa.stride(1),
-                         stride_ptb=rank_page_table.stride(0),
+                         stride_ptb=rank_offset.stride(0),
+                         stride_r=ranks.stride(0),
                          rank_step=rank_step,
                          BLOCK_M=BLOCK_M,
                          BLOCK_R=BLOCK_R,
@@ -245,9 +231,8 @@ def mbgmm_b(xa: Tensor,
             q_seqlens: Tensor,
             adapter_ids: Tensor,
             scaling: Tensor,
-            rank_page_table: Tensor,
+            rank_offset: Tensor,
             ranks: Tensor,
-            rank_page_start: Tensor,
             max_seq_len: int,
             max_rank: int,
             out_size: int = None):
@@ -259,10 +244,6 @@ def mbgmm_b(xa: Tensor,
         device_type = device.type
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
-
-    assert xa.dim() == 2
-    assert lora_b.dim() == 2
-    assert rank_page_table.dim() == 2
 
     if out_size is None:
         out_size = lora_b.size(-1)
@@ -286,16 +267,15 @@ def mbgmm_b(xa: Tensor,
                            q_seqlens,
                            adapter_ids,
                            scaling,
-                           Rank_page_table=rank_page_table,
-                           Rank_page_start=rank_page_start,
+                           Rank_offset=rank_offset,
                            Ranks=ranks,
                            stride_xas=xa.stride(0),
                            stride_xar=xa.stride(1),
                            stride_os=output.stride(0),
                            stride_oh=output.stride(1),
-                           stride_lbs=lora_b.stride(0),
-                           stride_lbh=lora_b.stride(1),
-                           stride_ptb=rank_page_table.stride(0),
+                           stride_ptb=rank_offset.stride(0),
+                           stride_r=ranks.stride(0),
+                           stride_s=scaling.stride(0),
                            BLOCK_M=BLOCK_M,
                            BLOCK_R=BLOCK_R,
                            BLOCK_HO=BLOCK_HO,

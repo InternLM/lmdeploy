@@ -1,4 +1,7 @@
-def assert_chat_completions_batch_return(output, model_name):
+def assert_chat_completions_batch_return(output,
+                                         model_name,
+                                         check_logprobs: bool = False,
+                                         logprobs_num: int = 5):
     assert output.get('usage').get('prompt_tokens') > 0
     assert output.get('usage').get('total_tokens') > 0
     assert output.get('usage').get('completion_tokens') > 0
@@ -15,28 +18,54 @@ def assert_chat_completions_batch_return(output, model_name):
         assert message.get('index') == 0
         assert len(message.get('message').get('content')) > 0
         assert message.get('message').get('role') == 'assistant'
+        if check_logprobs:
+            print(message.get('logprobs'))
+            len(message.get('logprobs').get('content')) == output.get(
+                'usage').get('completion_tokens')
+            for logprob in message.get('logprobs').get('content'):
+                assert_logprobs(logprob, logprobs_num)
+
+
+def assert_logprobs(logprobs, logprobs_num):
+    assert_logprob_element(logprobs)
+    assert len(logprobs.get('top_logprobs')) > 0 and type(
+        logprobs.get('top_logprobs')) == list and len(
+            logprobs.get('top_logprobs')) <= logprobs_num
+    for logprob_element in logprobs.get('top_logprobs'):
+        assert_logprob_element(logprob_element)
+
+
+def assert_logprob_element(logprob):
+    assert len(logprob.get('token')) > 0 and type(logprob.get('token')) == str
+    assert len(logprob.get('bytes')) > 0 and type(logprob.get('bytes')) == list
+    assert len(logprob.get('logprob')) > 0 and type(
+        logprob.get('logprob')) == float
 
 
 def assert_chat_completions_stream_return(output,
                                           model_name,
-                                          is_first: bool = False,
-                                          is_last: bool = False):
+                                          is_last: bool = False,
+                                          check_logprobs: bool = False,
+                                          logprobs_num: int = 5):
     assert output.get('id') is not None
-    if is_first is False:
-        assert output.get('object') == 'chat.completion.chunk'
+    assert output.get('object') == 'chat.completion.chunk'
     assert output.get('model') == model_name
     output_message = output.get('choices')
     assert len(output_message) == 1
     for message in output_message:
         assert message.get('delta').get('role') == 'assistant'
         assert message.get('index') == 0
+        assert len(message.get('delta').get('content')) >= 0
         if is_last is False:
             assert message.get('finish_reason') is None
-        if is_first is False and is_last is False:
-            assert len(message.get('delta').get('content')) >= 0
+            if check_logprobs:
+                assert_logprobs(message.get('logprobs'), logprobs_num)
+
         if is_last is True:
             assert len(message.get('delta').get('content')) == 0
             assert message.get('finish_reason') in ['stop', 'length']
+            if check_logprobs is True:
+                assert message.get('logprobs') is None
 
 
 def assert_chat_interactive_batch_return(output):

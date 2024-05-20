@@ -295,6 +295,30 @@ class ArgumentHelper:
                                    help='The sequence length for calibration')
 
     @staticmethod
+    def calib_batchsize(parser):
+        """Add argument batch_size to parser."""
+
+        return parser.add_argument(
+            '--batch-size',
+            type=int,
+            default=1,
+            help=\
+            'The batch size for running the calib samples. Low GPU mem requires small batch_size. Large batch_size reduces the calibration time while costs more VRAM'  # noqa
+        )
+
+    @staticmethod
+    def calib_search_scale(parser):
+        """Add argument batch_size to parser."""
+
+        return parser.add_argument(
+            '--search-scale',
+            type=bool,
+            default=False,
+            help=\
+            'Whether search scale ratio. Default to False, which means only smooth quant with 0.5 ratio will be applied'  # noqa
+        )
+
+    @staticmethod
     def device(parser):
         """Add argument device to parser."""
 
@@ -385,6 +409,15 @@ class ArgumentHelper:
             'it should be a multiple of 64. For Pytorch Engine, '
             'if Lora Adapter is specified, this parameter will '
             'be ignored')
+
+    @staticmethod
+    def enable_prefix_caching(parser):
+        """Add argument enable_prefix_caching to parser."""
+
+        return parser.add_argument('--enable-prefix-caching',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable cache and match prefix')
 
     @staticmethod
     def num_tokens_per_iter(parser):

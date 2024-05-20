@@ -283,6 +283,7 @@ def parse_args():
     session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
+    prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
 
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
@@ -290,6 +291,7 @@ def parse_args():
     tb_group._group_actions.append(session_len_act)
     tb_group._group_actions.append(cache_count_act)
     tb_group._group_actions.append(cache_block_seq_len_act)
+    tb_group._group_actions.append(prefix_caching_act)
     ArgumentHelper.model_format(tb_group, default='hf')
     ArgumentHelper.quant_policy(tb_group, default=0)
     ArgumentHelper.num_tokens_per_iter(tb_group)
@@ -313,7 +315,9 @@ def main():
             model_format=args.model_format,
             quant_policy=args.quant_policy,
             num_tokens_per_iter=args.num_tokens_per_iter,
-            max_prefill_iters=args.max_prefill_iters)
+            max_prefill_iters=args.max_prefill_iters,
+            enable_prefix_caching=args.enable_prefix_caching,
+        )
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
             session_len=args.session_len,
@@ -321,7 +325,9 @@ def main():
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
-            thread_safe=True)
+            thread_safe=True,
+            enable_prefix_caching=args.enable_prefix_caching,
+        )
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)
 

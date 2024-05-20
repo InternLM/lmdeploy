@@ -49,7 +49,7 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron:  '00 20 * * 1-5'
+    - cron:  '00 20 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -106,7 +106,7 @@ jobs:
       MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -293,6 +293,7 @@ jobs:
             --name "lmdeploy-ci-triton-$GITHUB_RUN_ID" \
             --workdir /__w/lmdeploy/lmdeploy \
             --env NCCL_LAUNCH_MODE=GROUP \
+            --pull never \
             -v $(pwd)/../../:/__w \
             -v ${HF_MODEL}:/root/workspace/hf_model \
             -v ${WORKDIR}:/root/workspace/workdir \
@@ -431,7 +432,7 @@ jobs:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -483,12 +484,6 @@ jobs:
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-chat-20b --tp 2 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
-      - name: Test lmdeploy restful api turbomind
-        if: matrix.backend == 'turbomind'
-        timeout-minutes: 40
-        run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
-          pytest autotest/interface/restful/test_restful_interface_func_turbomind.py -n 20 --alluredir=allure-results
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
         run: |
@@ -496,11 +491,9 @@ jobs:
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api pytorch
-        if: matrix.backend == 'pytorch'
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_interface_func_common.py -n 20 --alluredir=allure-results || true
-          pytest autotest/interface/restful/test_restful_interface_func_pytorch.py -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 --alluredir=allure-results
       - name: Kill api server
         if: always()
         run: |
@@ -511,11 +504,6 @@ jobs:
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
-      - name: Test lmdeploy restful api turbomind - base
-        if: matrix.backend == 'turbomind'
-        timeout-minutes: 40
-        run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=allure-results
       - name: Start restful api pytorch - base
         if: matrix.backend == 'pytorch'
         run: |
@@ -523,7 +511,6 @@ jobs:
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api pytorch - base
-        if: matrix.backend == 'pytorch'
         timeout-minutes: 40
         run: |
           pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=allure-results
