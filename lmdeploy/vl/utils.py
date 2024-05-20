@@ -35,6 +35,10 @@ def load_image(image_url: str) -> Image.Image:
         img = Image.open(BytesIO(response.content))
     elif image_url.startswith('data:image'):
         img = load_image_from_base64(image_url.split(',')[1])
+        try:
+            img.load()
+        except Exception as e:
+            raise ValueError('invalid base64 image') from e
     else:
         img = Image.open(image_url)
 
