@@ -160,8 +160,11 @@ def fused_moe_kernel(
         offs_am = offs_sid
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
-    b_ptrs = B + exp_id * stride_be + (offs_k[:, None] * stride_bk +
-                                       offs_bn[None, :] * stride_bn)
+
+    # deepseek has 160 experts, exp index would overflow int32
+    exp_off = tl.full((1, ), stride_be, dtype=tl.int64) * exp_id
+    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk +
+                            offs_bn[None, :] * stride_bn)
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 

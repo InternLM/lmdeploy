@@ -312,6 +312,17 @@ class PatchedDeepseekV2MoE(nn.Module):
         dist.all_reduce(outputs)
         return outputs
 
+    def forward(self, hidden_states):
+        identity = hidden_states
+        orig_shape = hidden_states.shape
+        topk_idx, topk_weight, _ = self.gate(hidden_states)
+        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+        y = self.moe_infer(hidden_states, topk_idx,
+                           topk_weight).view(*orig_shape)
+        if self.config.n_shared_experts is not None:
+            y = y + self.shared_experts.forward(identity)
+        return y
+
     def moe_infer(self, x, topk_ids, topk_weight):
         """moe infer."""
         world_size = 1
