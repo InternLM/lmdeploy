@@ -205,7 +205,6 @@ class MiniGeminiVisionModel(VisonModel):
                 del model.model.layers
                 del model.model.norm
             else:
-                model.config.use_cache = False
                 self.vl_model = model
 
         # # load weight

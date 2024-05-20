@@ -55,7 +55,7 @@ def vl_model_with_tokenizer(model_path: str,
     llm = vl_model
     if hasattr(vl_model, 'language_model'):  # deepseek vl
         llm = vl_model.language_model
-        llm.config.use_cache = False
+    llm.config.use_cache = False
     llm.half().eval()
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_path,

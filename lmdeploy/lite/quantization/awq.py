@@ -220,13 +220,6 @@ def quant_weights(model,
     from lmdeploy.lite.utils import QParams
     for name, fc in fcs.items():
         fc.to(device)
-        quantizer = WeightQuantizer(bits, symmetry, 'per_group', group_size)
-        fc.weight.data, scales, zeros = pseudo_quantize_tensor(
-            fc.weight.data, bits, group_size, return_scale_zeros=True)
-        q_linear = WeightOnlyQLinear.from_linear(fc,
-                                                 quantizer,
-                                                 qparams=QParams(
-                                                     scales, zeros))
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         pack_or_skip = 'packed'
@@ -236,7 +229,12 @@ def quant_weights(model,
         else:
             quantizer = WeightQuantizer(bits, symmetry, 'per_group',
                                         group_size)
-            q_linear = WeightOnlyQLinear.from_linear(fc, quantizer)
+            fc.weight.data, scales, zeros = pseudo_quantize_tensor(
+                fc.weight.data, bits, group_size, return_scale_zeros=True)
+            q_linear = WeightOnlyQLinear.from_linear(fc,
+                                                     quantizer,
+                                                     qparams=QParams(
+                                                         scales, zeros))
         setattr(parent, child_name, q_linear)
         fc.to('cpu')
 

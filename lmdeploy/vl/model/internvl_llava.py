@@ -101,7 +101,6 @@ class InternVLLlavaVisionModel(VisonModel):
                 del model.model.norm
             else:
                 self.vl_model = model
-                model.config.use_cache = False
 
         # move model to cpu
         with torch.device('cpu'):

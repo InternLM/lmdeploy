@@ -34,7 +34,6 @@ class QwenVisionModel(VisonModel):
                     setattr(model.transformer, key, None)
             else:
                 self.vl_model = model
-                model.config.use_cache = False
 
         buffers_aware_empty(model, 'cpu')
         load_model_from_weight_files(model, self.model_path)
