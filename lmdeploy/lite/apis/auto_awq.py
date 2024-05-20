@@ -52,7 +52,10 @@ def save_vl_model(vl_model, model_path, dst_path):
     for name in candidate:  # TODO not only local but also remote path
         tmp_path = osp.join(model_path, name)
         if osp.exists(tmp_path):
-            shutil.copy(tmp_path, osp.join(dst_path, name))
+            if osp.isfile(tmp_path):
+                shutil.copy(tmp_path, osp.join(dst_path, name))
+            elif osp.isdir(tmp_path):
+                shutil.copytree(tmp_path, osp.join(dst_path, name))
 
 
 def auto_awq(model: str,
