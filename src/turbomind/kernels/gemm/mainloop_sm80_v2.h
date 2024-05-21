@@ -1,3 +1,5 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #pragma once
 
 #include "src/turbomind/kernels/core/array_ops.h"
@@ -28,7 +30,15 @@ struct SmemIter {
     }
 };
 
-template<int M_, int N_, int K_, class TiledMma, class OperandA_, class OperandB_, class OperandQ_, int Stages_>
+template<int M_,
+         int N_,
+         int K_,
+         class TiledMma,
+         class OperandA_,
+         class OperandB_,
+         class OperandQ_,
+         class Transform_,
+         int Stages_>
 struct MainloopSm80_v2 {
 
     using MMA_Atom = typename TiledMma::MMA_Atom;
@@ -50,6 +60,8 @@ struct MainloopSm80_v2 {
     using OperandA = OperandA_;
     using OperandB = OperandB_;
     using OperandQ = OperandQ_;
+
+    using Transform = Transform_;
 
     using Ta = typename OperandA::Dtype;
     using Tb = typename OperandB::Dtype;
@@ -108,6 +120,9 @@ struct MainloopSm80_v2 {
     {
         typename MMA_Atom::FragA frag_A[TiledMma::ITER_K][TiledMma::ITER_M];
         typename MMA_Atom::FragB frag_B[TiledMma::ITER_K][TiledMma::ITER_N];
+
+        typename SmemCopyA::Frag data_A[TiledMma::ITER_K];
+        typename SmemCopyB::Frag data_B[TiledMma::ITER_K];
 
         SmemIter<get_pointer_type<Ta>, SmemLayoutA::kSize, Stages> smem_A{storage.A.data()};
         SmemIter<get_pointer_type<Tb>, SmemLayoutB::kSize, Stages> smem_B{storage.B.data()};
@@ -175,10 +190,10 @@ struct MainloopSm80_v2 {
         auto Load = [&](int k) {
             const int cur_k = offset_k + k * SmemCopyA::Atom::kWarpAccessC;
             SmemCopyA::copy(SmemAccessorA{smem_A.pointer},
-                            frag_A[k][0].data(),
+                            data_A[k],
                             OperandA::is_k_major ? int2{cur_k, offset_m} : int2{offset_m, cur_k});
             SmemCopyB::copy(SmemAccessorB{smem_B.pointer},
-                            frag_B[k][0].data(),
+                            data_B[k],
                             OperandB::is_k_major ? int2{cur_k, offset_n} : int2{offset_n, cur_k});
         };
 
@@ -186,6 +201,7 @@ struct MainloopSm80_v2 {
         // r: 0, w:-1
 
         Load(0);
+        Transform::transform(frag_A, frag_B, 0, data_A, data_B);
 
         if constexpr (kFusePrefetch) {
             prefetch(0);
@@ -221,6 +237,7 @@ struct MainloopSm80_v2 {
                 if (k + 1 == ITER_K - 1) {
                     advance_and_wait_smem_stage();
                 }
+                Transform::transform(frag_A, frag_B, (k + 1) % ITER_K, data_A, data_B);
             }
         }
 

@@ -10,6 +10,7 @@
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/transform.h"
 
 namespace turbomind::gemm {
 
@@ -37,7 +38,7 @@ struct Config {
     struct OperandA {
         using Dtype      = half;
         using SmemLayout = SmemLayoutV2<CTA_K, CTA_M, 16, 64, Swizzle<3, 3, 3>>;
-        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<true>, 16, WARP_M>;
+        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<half, true>, 16, WARP_M>;
         using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_M, CTA_K, 8, WARP_CNT>, SmemLayout, AlignedM, true, 0>;
         static constexpr auto Layout     = LayoutType::kColMajor;
         static constexpr bool is_k_major = false;
@@ -46,13 +47,13 @@ struct Config {
     struct OperandB {
         using Dtype      = half;
         using SmemLayout = SmemLayoutV2<CTA_K, CTA_N, 16, 64, Swizzle<3, 3, 3>>;
-        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_A<true>, 16, WARP_N>;
+        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_A<half, true>, 16, WARP_N>;
         using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_N, CTA_K, 8, WARP_CNT>, SmemLayout, AlignedN, true, 1>;
         static constexpr auto Layout     = LayoutType::kRowMajor;
         static constexpr bool is_k_major = false;
     };
 
-    using Mainloop = MainloopSm80_v2<CTA_M, CTA_N, CTA_K, TiledMma, OperandA, OperandB, OperandB, Stages>;
+    using Mainloop = MainloopSm80_v2<CTA_M, CTA_N, CTA_K, TiledMma, OperandA, OperandB, OperandB, Transform, Stages>;
 
     using Kernel = GemmUniversal<void, Mainloop, CtaMap, AlignedM, AlignedN, SplitK>;
 };

@@ -50,7 +50,7 @@ struct LDS_32 {
     }
 };
 
-template<bool Trans>
+template<class T, bool Trans>
 struct SmemCopy_MMA_16816_A {
     static constexpr int   kWarpAccessS  = 16;
     static constexpr int   kWarpAccessC  = 16;
@@ -63,9 +63,10 @@ struct SmemCopy_MMA_16816_A {
         };
     }
     using Copy = std::conditional_t<Trans, LDSM_x4_T, LDSM_x4_N>;
+    using Frag = Array<T, kFragmentSize>;
 };
 
-template<bool Trans>
+template<class T, bool Trans>
 struct SmemCopy_MMA_16816_B {
     static constexpr int   kWarpAccessC  = 16;
     static constexpr int   kWarpAccessS  = 16;
@@ -78,6 +79,7 @@ struct SmemCopy_MMA_16816_B {
         };
     }
     using Copy = std::conditional_t<Trans, LDSM_x4_T, LDSM_x4_N>;
+    using Frag = Array<T, kFragmentSize>;
 };
 
 template<class Atom_, int S, int C>
@@ -91,21 +93,21 @@ struct SmemCopy_ {
     static constexpr int DELTA_S = Atom::kWarpAccessS;
     static constexpr int DELTA_C = Atom::kWarpAccessC;
 
-    template<class Accessor, class Pointer>
-    __device__ static Pointer copy(Accessor src, Pointer dst_ptr, int2 offset_cs)
+    using Frag = typename Atom::Frag[ITER_S * ITER_C];
+
+    template<class Accessor>
+    __device__ static void copy(Accessor src, Frag& dst, int2 offset_cs)
     {
         const int2 thr_cs = Atom::get_offset(threadIdx.x % WARP_SIZE);
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
-            const int ss = offset_cs.y + thr_cs.y + s * DELTA_S;
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
+                const int ss = offset_cs.y + thr_cs.y + s * DELTA_S;
                 const int cc = offset_cs.x + thr_cs.x + c * DELTA_C;
-                Atom::Copy::copy(&src(ss, cc), dst_ptr);
-                dst_ptr += Atom::kFragmentSize;
+                Atom::Copy::copy(&src(ss, cc), dst[s * ITER_C + c].data());
             }
         }
-        return dst_ptr;
     }
 };
 
