@@ -119,6 +119,7 @@ def smooth_quant(model: str,
 
     if search_scale:
         awq_ratios = inp_stats['ratios']
+        act_scales = inp_stats['absmean']
         awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios, -1,
                    device)
     else:
