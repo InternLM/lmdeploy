@@ -34,8 +34,8 @@ def load_image(image_url: str) -> Image.Image:
         # Open the image using PIL
         img = Image.open(BytesIO(response.content))
     elif image_url.startswith('data:image'):
-        img = load_image_from_base64(image_url.split(',')[1])
         try:
+            img = load_image_from_base64(image_url.split(',')[1])
             img.load()
         except Exception as e:
             raise ValueError('invalid base64 image') from e
