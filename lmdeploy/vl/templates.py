@@ -94,10 +94,11 @@ class VLChatTemplateWrapper:
                     num_images += 1
                 elif item['type'] == 'text':
                     prompt = item['text']
-            new_item = {
-                'role': 'user',
-                'content': self.append_image_token(prompt, num_images)
-            }
+            # if IMAGE_TOKEN in user prompt, use user custom prompt instead
+            # of adding IMAGE_TOKEN to user prompt
+            if IMAGE_TOKEN not in prompt:
+                prompt = self.append_image_token(prompt, num_images)
+            new_item = {'role': 'user', 'content': prompt}
             new_messages.append(new_item)
         return new_messages
 
