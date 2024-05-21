@@ -109,8 +109,11 @@ class PatchedDeepseekV2Attention(nn.Module):
             q_nope, q_pe = torch.split(
                 q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
             # q_nope: (q_len, num_heads, kv_lora_rank)
-            q_nope = torch.bmm(q_nope.transpose(0, 1),
-                               self.w_kc).transpose(0, 1)
+            q_nope_out = q_nope.new_empty(q_len, num_heads, self.kv_lora_rank)
+            torch.bmm(q_nope.transpose(0, 1),
+                      self.w_kc,
+                      out=q_nope_out.transpose(0, 1))
+            q_nope = q_nope_out
 
             compressed_kv = self.kv_a_proj_with_mqa(hidden_states[0, :, None])
             # compressed_kv: (q_len, 1, kv_lora_rank)
@@ -183,12 +186,13 @@ class PatchedDeepseekV2Attention(nn.Module):
             shared_kv=True,
         )
 
-        # (num_heads, q_len, nope_size)
-        attn_output = attn_output.transpose(0, 1)
         # (num_heads, q_len, v_head_dim)
-        attn_output = torch.bmm(attn_output, self.w_vc)
+        attn_bmm_out = attn_output.new_empty(q_len, num_heads, self.v_head_dim)
+        torch.bmm(attn_output.transpose(0, 1),
+                  self.w_vc,
+                  out=attn_bmm_out.transpose(0, 1))
         # (1, q_len, o_proj_input)
-        attn_output = attn_output.permute(1, 0, 2).flatten(-2, -1)[None]
+        attn_output = attn_bmm_out.flatten(-2, -1)[None]
 
         attn_output = self.o_proj(attn_output)
         return attn_output, None, past_key_value
