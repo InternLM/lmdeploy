@@ -1,4 +1,6 @@
 import os
+import subprocess
+from subprocess import PIPE
 
 import allure
 import torch
@@ -84,7 +86,7 @@ def run_pipeline_chat_test(config,
         case_info = cases_info.get(case)
         pipeline_chat_log = os.path.join(
             log_path, '_'.join([
-                'pipeline', 'chat', type,
+                'pipeline', 'chat', type, worker_id,
                 model_case.split('/')[1], case + '.log'
             ]))
 
@@ -135,7 +137,7 @@ def assert_pipeline_chat_log(config,
         with allure.step('case - ' + case):
             pipeline_chat_log = os.path.join(
                 log_path, '_'.join([
-                    'pipeline', 'chat', type,
+                    'pipeline', 'chat', type, worker_id,
                     model_case.split('/')[1], case + '.log'
                 ]))
 
@@ -162,12 +164,13 @@ def save_pipeline_common_log(config,
                              log_name,
                              result,
                              content,
+                             msg: str = '',
                              write_type: str = 'w'):
     log_path = config.get('log_path')
 
     config_log = os.path.join(log_path, log_name)
     file = open(config_log, write_type)
-    file.writelines(f'result:{result}, reason: {content}')
+    file.writelines(f'result:{result}, reason: {msg}, content: {content}')
     file.close()
 
 
@@ -190,51 +193,74 @@ def assert_pipeline_common_log(config, log_name):
             if 'result:True, reason:' in line and result is False:
                 result = True
                 msg = ''
+    subprocess.run([' '.join(['rm -rf', config_log])],
+                   stdout=PIPE,
+                   stderr=PIPE,
+                   shell=True,
+                   text=True,
+                   encoding='utf-8')
 
     assert result, msg
 
 
 def assert_pipeline_single_return(output):
-    result = assert_pipeline_single_stream_element(output, is_last=True)
-    return result & (len(output.get('token_ids'))
-                     == output.get('generate_token_len'))
+    result = assert_pipeline_single_element(output, is_last=True)
+    if not result:
+        return result, 'single_stream_element is wrong'
+    return result & (len(output.token_ids) == output.generate_token_len
+                     or len(output.token_ids) == output.generate_token_len -
+                     1), 'token_is len is not correct'
 
 
-def assert_pipeline_batch_return(output, size):
-    result = len(output) == size
+def assert_pipeline_batch_return(output, size: int = 1):
+    if len(output) != size:
+        return False, 'length is not correct'
     for single_output in output:
-        result &= assert_pipeline_single_return(single_output)
-    return result
+        result, msg = assert_pipeline_single_return(single_output)
+        if result is False:
+            return result, msg
+    return True, ''
 
 
 def assert_pipeline_single_stream_return(output):
-    result = True
+    print(output)
     for i in range(0, len(output) - 1):
-        result &= assert_pipeline_single_stream_element(output[i])
-    result &= assert_pipeline_single_stream_element(output[-1], is_last=True)
-    return result
+        if assert_pipeline_single_element(output[i], is_stream=True) is False:
+            return False, f'single_stream_element is false, index is {i}'
+    if assert_pipeline_single_element(output[-1], is_stream=True,
+                                      is_last=True) is False:
+        return False, 'last single_stream_element is false'
+    return True, ''
 
 
-def assert_pipeline_batch_stream_return(output, size):
-    result = True
+def assert_pipeline_batch_stream_return(output, size: int = 1):
     for i in range(size):
-        output_list = [item for item in output if item.get('session_id') == i]
-        result &= assert_pipeline_single_stream_return(output_list)
-    return result
+        output_list = [item for item in output if item.session_id == i]
+        result, msg = assert_pipeline_single_stream_return(output_list)
+        if result is False:
+            return result, msg
+    return True, ''
 
 
-def assert_pipeline_single_stream_element(output, is_last: bool = False):
+def assert_pipeline_single_element(output,
+                                   is_stream: bool = False,
+                                   is_last: bool = False):
     result = True
-    result &= len(output.get('text')) > 0
-    result &= output.get('generate_token_len') > 0
-    result &= output.get('input_token_len') > 0
-    result &= output.get('session_id') >= 0
+    result &= output.generate_token_len > 0
+    result &= output.input_token_len > 0
+    result &= output.session_id >= 0
     if is_last:
-        result &= output.get('finish_reason') in ['stop', 'length']
+        result &= len(output.text) >= 0
+        result &= output.finish_reason in ['stop', 'length']
+        if is_stream:
+            result &= output.token_ids is None
+        else:
+            result &= len(output.token_ids) > 0
     else:
-        result &= output.get('finish_reason') is None
-    result &= len(output.get('token_ids')) > 0
-    result &= output.get('logprobs') is None
+        result &= len(output.text) > 0
+        result &= output.finish_reason is None
+        result &= len(output.token_ids) > 0
+    result &= output.logprobs is None
     return result
 
 
