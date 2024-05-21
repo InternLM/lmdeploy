@@ -97,6 +97,22 @@ response = pipe(('describe this image', image), gen_config=gen_config)
 print(response)
 ```
 
+### Set image token position
+
+By default, LMDeploy will insert the special image token into the user prompt based on the chat template provided by the algorithm repo. However, for some models, the location of the image token is not restricted, such as deepseek-vl, or the user needs to customize the image token position. In these cases, the user needs to manually insert the special image token into the prompt.
+
+```python
+from lmdeploy import pipeline
+from lmdeploy.vl import load_image
+from lmdeploy.vl.constants import IMAGE_TOKEN
+
+pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b')
+
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe((f'describe this image{IMAGE_TOKEN}', image))
+print(response)
+```
+
 ### Set chat template
 
 While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, [liuhaotian/llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) employs the 'vicuna' chat template, but the name 'vicuna' cannot be ascertained from the model's path. We can specify it by setting 'vicuna' to `ChatTemplateConfig` as follows:
