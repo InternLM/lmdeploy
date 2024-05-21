@@ -9,19 +9,19 @@
 |       Llama3        |   8B, 70B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM       |  7B - 20B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM2      |  7B - 20B   |    Yes    |   Yes   |   Yes   |  Yes  |
-| InternLM-XComposer  |     7B      |    Yes    |    -    |    -    |   -   |
-| InternLM-XComposer2 | 7B, 4khd-7B |    Yes    |    -    |    -    |   -   |
+| InternLM-XComposer  |     7B      |    Yes    |    -    |    -    |  Yes  |
+| InternLM-XComposer2 | 7B, 4khd-7B |    Yes    |    -    |    -    |  Yes  |
 |        QWen         | 1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       QWen1.5       | 1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       QWen-VL       |     7B      |    Yes    |    -    |    -    |   -   |
-|     DeepSeek-VL     |     7B      |    Yes    |    -    |    -    |   -   |
+|       QWen-VL       |     7B      |    Yes    |    -    |    -    |  Yes  |
+|     DeepSeek-VL     |     7B      |    Yes    |    -    |    -    |  Yes  |
 |      Baichuan       |     7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |      Baichuan2      |     7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |     Code Llama      |  7B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |         YI          |  6B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
-|   LLaVA(1.5,1.6)    |  7B - 34B   |    Yes    |    -    |    -    |   -   |
-|    InternVL-Chat    | v1.1- v1.5  |    Yes    |    -    |    -    |   -   |
-|   MiniGeminiLlama   |     7B      |    Yes    |   No    |   No    |  No   |
+|   LLaVA(1.5,1.6)    |  7B - 34B   |    Yes    |    -    |    -    |  Yes  |
+|    InternVL-Chat    | v1.1- v1.5  |    Yes    |    -    |    -    |  Yes  |
+|   MiniGeminiLlama   |     7B      |    Yes    |   No    |   No    |  Yes  |
 
 "-" means not verified yet.
 
