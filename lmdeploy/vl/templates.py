@@ -86,9 +86,9 @@ class VLChatTemplateWrapper:
             role = message['role']
             content = message['content']
             if role != 'user' or isinstance(content, str):
-                if role == 'assistant' and isinstance(content, list):
+                if isinstance(content, list):
                     text = content[0]['text']
-                    message = {'role': 'assistant', 'content': text}
+                    message = {'role': role, 'content': text}
                 new_messages.append(message)
                 continue
             num_images = 0
