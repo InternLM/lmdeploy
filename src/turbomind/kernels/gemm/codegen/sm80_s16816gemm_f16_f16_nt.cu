@@ -9,6 +9,7 @@
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
+#include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
 
@@ -38,17 +39,17 @@ struct Config {
         using SmemLayout = SmemLayoutV2<CTA_K, CTA_M, 16, 64, Swizzle<3, 3, 3>>;
         using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<true>, 16, WARP_M>;
         using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_M, CTA_K, 8, WARP_CNT>, SmemLayout, AlignedM, true, 0>;
-        static constexpr LayoutType Layout     = LayoutType::kColMajor;
-        static constexpr bool       is_k_major = false;
+        static constexpr auto Layout     = LayoutType::kColMajor;
+        static constexpr bool is_k_major = false;
     };
 
     struct OperandB {
         using Dtype      = half;
-        using SmemLayout = SmemLayoutV2<CTA_N, CTA_K, std::min(16, CTA_N), 64, Swizzle<3, 3, 3>>;
-        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<false>, WARP_N, 16>;
-        using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>, SmemLayout, AlignedN, true, 1>;
-        static constexpr LayoutType Layout     = LayoutType::kColMajor;
-        static constexpr bool       is_k_major = true;
+        using SmemLayout = SmemLayoutV2<CTA_K, CTA_N, 16, 64, Swizzle<3, 3, 3>>;
+        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_A<true>, 16, WARP_N>;
+        using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_N, CTA_K, 8, WARP_CNT>, SmemLayout, AlignedN, true, 1>;
+        static constexpr auto Layout     = LayoutType::kRowMajor;
+        static constexpr bool is_k_major = false;
     };
 
     using Mainloop = MainloopSm80_v2<CTA_M, CTA_N, CTA_K, TiledMma, OperandA, OperandB, OperandB, Stages>;
@@ -58,11 +59,11 @@ struct Config {
 
 }  // namespace
 
-void Registry::reigster_sm80_s16816gemm_f16_f16_v2()
+void Registry::reigster_sm80_s16816gemm_f16_f16_nt()
 {
     // clang-format off
     // Add(std::make_unique<KernelImpl<typename Config<128, 128, 32, 128, 16, 32, 3,  false, 1, 1>::Kernel>>());
-    Add(std::make_unique<KernelImpl<typename Config<128, 256, 64, 64, 64, 64, 3, false, 1, 1>::Kernel>>());
+    Add(std::make_unique<KernelImpl<typename Config<256, 128, 64, 64, 64, 64, 3, false, 0, 0>::Kernel>>());
     // Add(std::make_unique<KernelImpl<typename Config<128, 128, 32, 64, 64, 32, 3,  false, 0, 0>::Kernel>>());
     // Add(std::make_unique<KernelImpl<typename Config<256, 128, 32, 64, 64, 32, 6,  false, 0, 1>::Kernel>>());
     // Add(std::make_unique<KernelImpl<typename Config<256, 128, 32, 64, 64, 32, 3,  false, 1, 1>::Kernel>>());

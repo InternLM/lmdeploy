@@ -127,25 +127,22 @@ struct GemmUniversal {
 
         int tile_iter = (gemm_k_size + CTA_K - 1) / CTA_K;
 
-        auto offset_a = [&](int m, int k) { return Offset<Impl::LayoutA>(m, k, param.lda); };
-
-        IteratorA gmem_A{
+        auto           offset_a     = [&](int m, int k) { return Offset<Impl::LayoutA>(m, k, param.lda); };
+        constexpr bool is_k_major_A = Impl::OperandA::is_k_major;
+        IteratorA      gmem_A{
             param.A + offset_a(offset_m, offset_k),  // ptr
             param.lda,                               // stride s
-            CTA_K,                                   // offset_a(0, CTA_K),                      // stride k
-            AlignedM ? CTA_M : end_m,                // max s
-            CTA_K,                                   // max c
+            offset_a(0, CTA_K),                      // stride k
+            is_k_major_A ? int2{CTA_K, end_m} : int2{end_m, CTA_K},
         };
 
-        auto offset_b = [&](int k, int n) { return Offset<Impl::LayoutB>(k, n, param.ldb); };
-        // constexpr int packed_n = Impl::kPackedN;
-        IteratorB gmem_B{
+        auto           offset_b     = [&](int k, int n) { return Offset<Impl::LayoutB>(k, n, param.ldb); };
+        constexpr bool is_k_major_B = Impl::OperandB::is_k_major;
+        IteratorB      gmem_B{
             param.B + offset_b(offset_k, offset_n),  // ptr
             param.ldb,                               // stride s
-            CTA_K,                                   // offset_b(CTA_K, 0),                            // stride k
-            AlignedN ? CTA_N : end_n,
-            // ceil_div(AlignedN ? CTA_N : end_n, packed_n),  // max s
-            CTA_K,  // max c
+            offset_b(CTA_K, 0),                      // stride k
+            is_k_major_B ? int2{CTA_K, end_n} : int2{end_n, CTA_K},
         };
 
         auto      offset_q = [&](int k, int n) { return Offset<Impl::LayoutQ>(k / Impl::G, n, param.ldq); };
@@ -153,8 +150,7 @@ struct GemmUniversal {
             param.Q + offset_q(offset_k, offset_n),  // ptr
             param.ldq,                               // stride s
             offset_q(CTA_G, 0),                      // stride k
-            CTA_G,                                   // max s
-            AlignedN ? CTA_N : end_n,                // max c
+            int2{end_n, CTA_G},
         };
 
         Mainloop mainloop{};
@@ -219,7 +215,6 @@ struct GemmUniversal {
 
         Impl::template StoreC<T>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
             if (check_m(mi, end_m) && check_n(ni, end_n)) {
-                // Store(&param.C[(offset_m + mi) * param.n + offset_n + ni], cast<T>(vec));  //
                 Store(&param.C[(offset_m + mi) * param.ldc + offset_n + ni], cast<T>(vec));
             }
         });

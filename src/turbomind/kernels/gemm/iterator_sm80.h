@@ -117,8 +117,7 @@ struct GmemIteratorSm80 {
 
     // static_assert(!Map::kPartialC);
 
-    __device__ GmemIteratorSm80(Pointer data, int stride_s, int stride_k, int max_s, int max_c):
-        smem_data_{Pointer{nullptr}}
+    __device__ GmemIteratorSm80(Pointer data, int stride_s, int stride_k, int2 max_cs): smem_data_{Pointer{nullptr}}
     {
         if constexpr (Disable) {
             return;
@@ -142,7 +141,7 @@ struct GmemIteratorSm80 {
                 for (int c = 0; c < Map::kIterC; ++c) {
                     int ss = offset_s_ + s * Map::kDeltaS;
                     int cc = offset_c_ + c * Map::kDeltaC;
-                    if (ss < max_s && cc < max_c) {
+                    if (ss < max_cs.y && cc < max_cs.x) {
                         pred_.set(s, c);
                     }
                 }

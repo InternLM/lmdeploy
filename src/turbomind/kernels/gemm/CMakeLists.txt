@@ -18,6 +18,7 @@ add_library(gemm2 gemm.cu kernel.cu transcript.cu dispatch_cache.cu gpu_metric.c
         # codegen/sm80_s16816gemm_f16_f16.cu
         # codegen/sm70_s884gemm_f16_f16.cu
         codegen/sm80_s16816gemm_f16_f16_v2.cu
+        codegen/sm80_s16816gemm_f16_f16_nt.cu
         )
 
 add_executable(gemm_bench gemm_bench.cu test_utils.cu cache_utils.cu)

@@ -87,8 +87,8 @@ struct Transcript {
         [[maybe_unused]] const int packed_n   = cta_cnt_n * MMA_CNT_N / P_N;
         const int                  q_packed_n = cta_cnt_n * MMA_CNT_N / P_Q_N;
 
-        GmemIterB gmem_B{(T*)param.B + cta_idx_n * CTA_N * param.k, param.k, CTA_K, CTA_N, CTA_K};
-        GmemIterQ gmem_Q{(Tq*)param.Q + cta_idx_n * CTA_N, param.n, CTA_G * param.n, CTA_G, CTA_N};
+        GmemIterB gmem_B{(T*)param.B + cta_idx_n * CTA_N * param.k, param.k, CTA_K, int2{CTA_K, CTA_N}};
+        GmemIterQ gmem_Q{(Tq*)param.Q + cta_idx_n * CTA_N, param.n, CTA_G * param.n, int2{CTA_N, CTA_G}};
 
         if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
             printf("P_Q_K=%d, P_Q_N=%d, q_packed_n=%d\n", P_Q_K, P_Q_N, q_packed_n);

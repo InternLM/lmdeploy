@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/gemm/types.h"
 #include <cuda_pipeline_primitives.h>
 
 namespace turbomind::gemm {
@@ -27,7 +28,7 @@ struct SmemIter {
     }
 };
 
-template<int M_, int N_, int K_, class TiledMma, class OperandA, class OperandB, class OperandQ, int Stages_>
+template<int M_, int N_, int K_, class TiledMma, class OperandA_, class OperandB_, class OperandQ_, int Stages_>
 struct MainloopSm80_v2 {
 
     using MMA_Atom = typename TiledMma::MMA_Atom;
@@ -45,6 +46,10 @@ struct MainloopSm80_v2 {
     static constexpr int WARP_K = TiledMma::K;
 
     static constexpr int G = 128;
+
+    using OperandA = OperandA_;
+    using OperandB = OperandB_;
+    using OperandQ = OperandQ_;
 
     using Ta = typename OperandA::Dtype;
     using Tb = typename OperandB::Dtype;
@@ -168,14 +173,13 @@ struct MainloopSm80_v2 {
         const int offset_k = warp_id_k(warp_id) * TiledMma::K;
 
         auto Load = [&](int k) {
+            const int cur_k = offset_k + k * SmemCopyA::Atom::kWarpAccessC;
             SmemCopyA::copy(SmemAccessorA{smem_A.pointer},
                             frag_A[k][0].data(),
-                            offset_m,
-                            offset_k + k * SmemCopyA::Atom::kWarpAccessC);
+                            OperandA::is_k_major ? int2{cur_k, offset_m} : int2{offset_m, cur_k});
             SmemCopyB::copy(SmemAccessorB{smem_B.pointer},
                             frag_B[k][0].data(),
-                            offset_n,
-                            offset_k + k * SmemCopyB::Atom::kWarpAccessC);
+                            OperandB::is_k_major ? int2{cur_k, offset_n} : int2{offset_n, cur_k});
         };
 
         advance_and_wait_smem_stage();

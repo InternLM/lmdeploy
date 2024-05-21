@@ -93,10 +93,12 @@ public:
 
         if (flag_a) {
             rng_.GenerateUniform(a_.data().get(), a_.size(), 1, -.5f);
+            // thrust::fill_n(a_.begin(), a_.size(), 0);
         }
 
         if (flag_b) {
             rng_.GenerateUniform(b_.data().get(), b_.size(), 1, -.5f);
+            // thrust::fill_n(b_.begin(), b_.size(), 0);
         }
 
         bool flag_p = flag_b;
@@ -156,7 +158,7 @@ public:
         auto status = gemm_.Run(operation,
                                 nullptr,
                                 a_.data().get(),
-                                MatrixLayout{get_data_type_v<T>, LayoutType::kRowMajor, m_, k_, k_},
+                                MatrixLayout{get_data_type_v<T>, LayoutType::kColMajor, m_, k_, m_},
                                 b_.data().get(),
                                 MatrixLayout{get_data_type_v<Tb>, LayoutType::kColMajor, k_, n_, k_},
                                 nullptr,
@@ -187,7 +189,9 @@ public:
 
     void CompareC()
     {
-        computeRefCublas(c_ref_.data().get(), a_.data().get(), b_.data().get(), m_, n_, k_, stream_);
+        for (int i = 0; i < 10; ++i) {
+            computeRefCublas(c_ref_.data().get(), a_.data().get(), b_.data().get(), m_, n_, k_, stream_);
+        }
 
         // c_f_.resize(m_ * n_);
         // computeRefCublas(c_f_.data().get(), a_.data().get(), b_f_.data().get(), m_, n_, k_, stream_);
@@ -263,7 +267,7 @@ private:
         // TNT (A and B are swapped for transposing C)
         cublasGemmEx(cublas_,
                      CUBLAS_OP_T,
-                     CUBLAS_OP_N,
+                     CUBLAS_OP_T,
                      n,
                      m,
                      k,
@@ -273,7 +277,7 @@ private:
                      k,
                      A,
                      CUDA_R_16F,
-                     k,
+                     m,
                      &beta,
                      C,
                      CUDA_R_16F,
