@@ -63,15 +63,17 @@ def run_pipeline_chat_test(config,
             model_case.split('/')[1] + '.log'
         ]))
     file = open(config_log, 'w')
-    file.writelines(' '.join([
-        'reproduce config info:', hf_path,
-        str(backend_config),
-        str(gen_config)
+    file.writelines('\n'.join([
+        'reproduce config info:', 'engine_config = ' + str(backend_config),
+        'gen_config = ' + str(gen_config),
+        'pipe = pipeline("' + hf_path + '",  backend_config=engine_config)',
+        'res = pipe("Hi, pls introduce shanghai", gen_config=gen_config)'
     ]))
-    print(' '.join([
-        'reproduce config info:', hf_path,
-        str(backend_config),
-        str(gen_config)
+    print('\n'.join([
+        'reproduce config info:', 'engine_config = ' + str(backend_config),
+        'gen_config = ' + str(gen_config),
+        'pipe = pipeline("' + hf_path + '",  backend_config=engine_config)',
+        'res = pipe("Hi, pls introduce shanghai", gen_config=gen_config)'
     ]))
     file.close
 
@@ -298,8 +300,10 @@ def run_pipeline_vl_chat_test(config, model_case):
     prompts = [('describe this image', load_image(img_url))
                for img_url in image_urls]
     response = pipe(prompts)
-    result = 'ski' in response[0].text.lower() and (
-        'tiger' in response[1].text.lower() or '虎' in response[1].text.lower())
+    result = ('ski' in response[0].text.lower()
+              or '滑雪' in response[0].text.lower()) and (
+                  'tiger' in response[1].text.lower()
+                  or '虎' in response[1].text.lower())
     file.writelines('result:' + str(result) +
                     ', reason: Batch example: ski or tiger not in ' +
                     str(response) + '\n')

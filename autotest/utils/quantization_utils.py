@@ -32,6 +32,9 @@ def quantization(config,
         return False, 'quantization type should in [w4a16, w8a8], \
             now the type is ' + quantization_type
 
+    if 'llama-3' in origin_model_name.lower():
+        quantization_cmd += ' --search-scale True'
+
     with open(quantization_log, 'w') as f:
         # remove existing folder
         subprocess.run([' '.join(['rm -rf', quantization_model_path])],
