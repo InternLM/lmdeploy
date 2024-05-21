@@ -11,40 +11,12 @@ TRITON_VERSION = version.parse(triton.__version__)
 
 assert TRITON_VERSION >= version.parse('2.1.0')
 
-if TRITON_VERSION >= version.parse('2.2.0'):
 
-    @triton.jit
-    def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
-                            BLOCK: tl.constexpr, num_blocks: int):
-        """load block offsets."""
-        if num_sub_blocks > 1:
-            offs_sub = tl.arange(0, num_sub_blocks)
-            offs_n = tl.arange(0, BLOCK // num_sub_blocks)
-            mask = block_id * num_sub_blocks + offs_sub < num_blocks
-            ret = tl.load(
-                offset_ptr + block_id * num_sub_blocks + offs_sub,
-                mask=mask)[:, None] * BLOCK // num_sub_blocks + offs_n[None, :]
-            return tl.ravel(ret)
-        else:
-            offs_n = tl.arange(0, BLOCK)
-            return tl.load(offset_ptr + block_id) * BLOCK + offs_n
-else:
-
-    @triton.jit
-    def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
-                            BLOCK: tl.constexpr, num_blocks: int):
-        """load block offsets triton<2.2.0."""
-        if num_sub_blocks > 1:
-            offs_sub = tl.arange(0, num_sub_blocks)
-            offs_n = tl.arange(0, BLOCK // num_sub_blocks)
-            mask = block_id * num_sub_blocks + offs_sub < num_blocks
-            ret = tl.load(
-                offset_ptr + block_id * num_sub_blocks + offs_sub,
-                mask=mask)[None, :] * BLOCK // num_sub_blocks + offs_n[:, None]
-            return tl.ravel(ret)
-        else:
-            offs_n = tl.arange(0, BLOCK)
-            return tl.load(offset_ptr + block_id) * BLOCK + offs_n
+@triton.jit
+def _load_block_offsets(offset_ptr, block_id, BLOCK: tl.constexpr):
+    """load block offsets."""
+    offs_n = tl.arange(0, BLOCK)
+    return tl.load(offset_ptr + block_id) * BLOCK + offs_n
 
 
 @triton.jit
@@ -73,9 +45,9 @@ def _fwd_split_kernel(
     kv_group_num,
     block_per_cta,
     window_size: tl.constexpr,
-    num_sub_blocks: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
+    shared_kv: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_DV: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -117,7 +89,6 @@ def _fwd_split_kernel(
     kv_len_per_prog = block_per_cta * BLOCK_N
     loop_start = kv_len_per_prog * split_k_id
     loop_end = tl.minimum(loop_start + kv_len_per_prog, kv_seqlen)
-    num_blocks = tl.cdiv(kv_seqlen, BLOCK_N // num_sub_blocks)
 
     # load block offset
     # dirty
@@ -126,8 +97,7 @@ def _fwd_split_kernel(
         start_block_id = tl.maximum(history_len - window_size,
                                     loop_start) // BLOCK_N
         kv_min_loc = tl.maximum(history_len - window_size, 0)
-    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                   num_sub_blocks, BLOCK_N, num_blocks)
+    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, BLOCK_N)
 
     loop_start = start_block_id * BLOCK_N
     for start_n in range(loop_start, loop_end, BLOCK_N):
@@ -142,17 +112,20 @@ def _fwd_split_kernel(
             other=0.0,
         )
 
-        v = tl.load(
-            v_ptrs + b_offset[:, None] * stride_vbs,
-            mask=mask & mask_dv[None, :],
-            other=0.0,
-        )
+        if shared_kv:
+            v = k
+        else:
+            v = tl.load(
+                v_ptrs + b_offset[:, None] * stride_vbs,
+                mask=mask & mask_dv[None, :],
+                other=0.0,
+            )
 
         # prefetch b_offset
         if start_n + BLOCK_N < loop_end:
             start_block_id += 1
             b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           num_sub_blocks, BLOCK_N, num_blocks)
+                                           BLOCK_N)
 
         qk = tl.sum(q[None, :] * k, 1)
         qk *= sm_scale
@@ -290,9 +263,9 @@ def _fwd_kernel(
     stride_boffb,
     kv_group_num,
     window_size: tl.constexpr,
-    num_sub_blocks: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
+    shared_kv: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_DV: tl.constexpr,
@@ -336,18 +309,16 @@ def _fwd_kernel(
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
-    acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
 
     block_mask = tl.where(block_start_loc < q_seqlen, 1, 0)
-    num_blocks = tl.cdiv(kv_seqlen, BLOCK_N // num_sub_blocks)
 
     # this is dirty
     start_block_id = kv_seqlen - kv_seqlen
     if window_size > 0:
         start_block_id = tl.maximum(history_len - window_size, 0) // BLOCK_N
         kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
-    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                   num_sub_blocks, BLOCK_N, num_blocks)
+    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, BLOCK_N)
     kv_start_loc = start_block_id * BLOCK_N
     for start_n in range(kv_start_loc, block_mask * kv_seqlen, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -358,16 +329,19 @@ def _fwd_kernel(
             mask=(start_n + offs_n[None, :] < kv_seqlen) & mask_d[:, None],
             other=0.0,
         )
-
-        v = tl.load(
-            v_ptrs + b_offset[:, None] * stride_vbs,
-            mask=(start_n + offs_n[:, None] < kv_seqlen) & mask_dv[None, :],
-            other=0.0,
-        )
+        if shared_kv:
+            v = tl.trans(k)
+        else:
+            v = tl.load(
+                v_ptrs + b_offset[:, None] * stride_vbs,
+                mask=(start_n + offs_n[:, None] < kv_seqlen)
+                & mask_dv[None, :],
+                other=0.0,
+            )
         if start_n + BLOCK_N < kv_seqlen:
             start_block_id = start_n // BLOCK_N + 1
             b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           num_sub_blocks, BLOCK_N, num_blocks)
+                                           BLOCK_N)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -422,6 +396,7 @@ def paged_attention_fwd(
     max_seqlen: int,
     window_size: int = None,
     sm_scale: float = None,
+    shared_kv: int = False,
 ):
     """Paged Attention forward.
 
@@ -464,15 +439,19 @@ def paged_attention_fwd(
 
     num_warps = 4 if Lk <= 64 else 8
 
-    BLOCK = 64 if k.size(1) < 16 else k.size(1)
+    BLOCK = k.size(1)
+    assert BLOCK >= 16
     BLOCK_DMODEL = triton.next_power_of_2(Lk)
-    BLOCK_DV = triton.next_power_of_2(Lv)
-    num_sub_blocks = BLOCK // k.size(1)
+    if shared_kv:
+        BLOCK_DV = BLOCK_DMODEL
+    else:
+        BLOCK_DV = triton.next_power_of_2(Lv)
+    BLOCK_M = max(16, min(BLOCK, 16384 // BLOCK_DMODEL))
 
     kernel_meta = _kernel_meta()
     is_decoding = q.shape[-3] == q_seqlens.size(0)
     if not is_decoding:
-        grid = (batch, head, triton.cdiv(max_seqlen, BLOCK))
+        grid = (batch, head, triton.cdiv(max_seqlen, BLOCK_M))
         _fwd_kernel[grid](q,
                           k,
                           v,
@@ -497,10 +476,10 @@ def paged_attention_fwd(
                           stride_boffb=block_offsets.stride(0),
                           kv_group_num=kv_group_num,
                           window_size=window_size,
-                          num_sub_blocks=num_sub_blocks,
                           head_size=Lk,
                           head_size_v=Lv,
-                          BLOCK_M=BLOCK,
+                          shared_kv=shared_kv,
+                          BLOCK_M=BLOCK_M,
                           BLOCK_DMODEL=BLOCK_DMODEL,
                           BLOCK_DV=BLOCK_DV,
                           BLOCK_N=BLOCK,
@@ -536,9 +515,9 @@ def paged_attention_fwd(
                                 kv_group_num=kv_group_num,
                                 block_per_cta=block_per_cta,
                                 window_size=window_size,
-                                num_sub_blocks=num_sub_blocks,
                                 head_size=Lk,
                                 head_size_v=Lv,
+                                shared_kv=shared_kv,
                                 BLOCK_DMODEL=BLOCK_DMODEL,
                                 BLOCK_DV=BLOCK_DV,
                                 BLOCK_N=BLOCK,

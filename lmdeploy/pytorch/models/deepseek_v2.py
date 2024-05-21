@@ -180,6 +180,7 @@ class PatchedDeepseekV2Attention(nn.Module):
             kv_seqlens=kv_seq_length,
             max_seqlen=max_q_seq_length,
             sm_scale=self.softmax_scale,
+            shared_kv=True,
         )
 
         # (num_heads, q_len, nope_size)
