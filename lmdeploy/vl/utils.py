@@ -32,14 +32,12 @@ def load_image(image_url: str) -> Image.Image:
         response.raise_for_status()
 
         # Open the image using PIL
-        img = Image.open(BytesIO(response.content))
+        image_url = BytesIO(response.content)
     elif image_url.startswith('data:image'):
-        try:
-            img = load_image_from_base64(image_url.split(',')[1])
-            img.load()
-        except Exception as e:
-            raise ValueError('invalid base64 image') from e
-    else:
+        image_url = BytesIO(base64.b64decode(image_url.split(',')[1]))
+    try:
         img = Image.open(image_url)
-
+        img.load()
+    except Exception as e:
+        raise ValueError('invalid image url') from e
     return img
