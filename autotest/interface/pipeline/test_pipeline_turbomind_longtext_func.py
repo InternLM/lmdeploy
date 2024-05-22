@@ -112,6 +112,7 @@ def passkey_retrival(config, model, log_name):
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
                                            session_len=SESSION_LEN_PASSKEY,
+                                           use_logn_attn=True,
                                            tp=tp_num)
 
     pipe = pipeline(model_path, backend_config=backend_config)
