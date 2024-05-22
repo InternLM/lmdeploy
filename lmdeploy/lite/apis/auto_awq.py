@@ -49,7 +49,7 @@ def save_vl_model(vl_model, model_path, dst_path):
         'preprocessor_config.json', 'processor_config.json', 'vit',
         'generation_config.json'
     ]
-    for name in candidate:  # TODO not only local but also remote path
+    for name in candidate:
         tmp_path = osp.join(model_path, name)
         if osp.exists(tmp_path):
             if osp.isfile(tmp_path):
@@ -87,6 +87,11 @@ def auto_awq(model: str,
             which means only smooth quant with 0.5 ratio will be applied.
         device (str): Device type of running.
     """
+    if not osp.exists(model):
+        print(f'can\'t find model from local_path {model}, '
+              'try to download from remote')
+        from lmdeploy.utils import get_model
+        model = get_model(model)
     model_path = model
     vl_model, model, tokenizer, work_dir = calibrate(model,
                                                      calib_dataset,
