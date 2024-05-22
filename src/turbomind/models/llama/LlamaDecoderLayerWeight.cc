@@ -84,6 +84,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
             }
         }
     }
+    fused_up_and_gate_ = weight_type_ == WeightType::kINT4 && ffn_weights.gating.lora.policy != LoraPolicy::kPlora;
 
     self_attn_weights.qkv.input_dims  = hidden_units_;
     self_attn_weights.qkv.output_dims = (head_num + 2 * kv_head_num) * size_per_head / tensor_para_size_;
@@ -338,7 +339,7 @@ void LlamaDecoderLayerWeight<T>::mallocWeights()
     turbomind::mallocWeights(self_attn_weights.qkv, attn_bias_);
     turbomind::mallocWeights(self_attn_weights.output, attn_bias_);
 
-    if (weight_type_ == WeightType::kINT4 && ffn_weights.gating.lora.policy != LoraPolicy::kPlora) {
+    if (fused_up_and_gate_) {
         turbomind::mallocWeights(ffn_weights.fused_gating_intermediate, false);
     }
     else {
@@ -358,7 +359,7 @@ LlamaDecoderLayerWeight<T>::~LlamaDecoderLayerWeight()
     freeWeights(self_attn_weights.qkv);
     freeWeights(self_attn_weights.output);
 
-    if (weight_type_ == WeightType::kINT4 && ffn_weights.gating.lora.policy != LoraPolicy::kPlora) {
+    if (fused_up_and_gate_) {
         freeWeights(ffn_weights.fused_gating_intermediate);
     }
     else {
@@ -389,7 +390,7 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
 
     loadWeights(self_attn_weights.output, dir_path + ".attention.wo", tensor_para_rank_, type, tensor_para_size_, 0);
 
-    if (weight_type_ == WeightType::kINT4 && ffn_weights.gating.lora.policy != LoraPolicy::kPlora) {
+    if (fused_up_and_gate_) {
         loadWeights(ffn_weights.fused_gating_intermediate,
                     dir_path + ".feed_forward.w13",
                     tensor_para_rank_,
@@ -422,7 +423,7 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
 
     getWeightTensor(self_attn_weights.output, attn_bias_, get_prefix("attention.wo"), output);
 
-    if (weight_type_ == WeightType::kINT4 && ffn_weights.gating.lora.policy != LoraPolicy::kPlora) {
+    if (fused_up_and_gate_) {
         getWeightTensor(ffn_weights.fused_gating_intermediate, false, get_prefix("feed_forward.w13"), output);
     }
     else {
