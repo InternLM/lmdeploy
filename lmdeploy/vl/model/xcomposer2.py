@@ -88,7 +88,7 @@ class Xcomposer2VisionModel(VisonModel):
     def _forward_4khd_7b(self, images: List[Image]) -> List[torch.Tensor]:
         """internlm-xcomposer2-4khd-7b vit forward."""
         outputs = [x.convert('RGB') for x in images]
-        outputs = [self.HD_transform(x, hd_num=25) for x in images]
+        outputs = [self.HD_transform(x, hd_num=25) for x in outputs]
         outputs = [
             self.model.vis_processor(x).unsqueeze(0).to(dtype=torch.half)
             for x in outputs
