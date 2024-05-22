@@ -287,7 +287,7 @@ class VisonConfig:
 
     Args:
         max_batch_size (int): the max image size passed to the model, since
-            some model will use image patch, the actual running batch could
+            some models will use image patch, the actual running batch could
             be larger than this value.
     """
     max_batch_size: int = 1

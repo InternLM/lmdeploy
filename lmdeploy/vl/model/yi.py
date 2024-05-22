@@ -4,7 +4,6 @@ from contextlib import contextmanager
 
 import torch.nn as nn
 
-from lmdeploy.messages import VisonConfig
 from lmdeploy.vl.model.llava import LlavaVisionModel, check_llava_install
 
 from .utils import disable_transformers_logging, rewrite_ctx
@@ -84,8 +83,8 @@ def init_yi_model():
 class YiVisionModel(LlavaVisionModel):
     """Yi visual model."""
 
-    def __init__(self, model_path, vision_config: VisonConfig = None):
-        super().__init__(model_path=model_path, vision_config=vision_config)
+    def __init__(self, model_path):
+        super().__init__(model_path=model_path)
 
     def build_model(self):
         """build model & load weights."""
