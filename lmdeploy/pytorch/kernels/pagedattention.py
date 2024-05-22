@@ -486,7 +486,8 @@ def paged_attention_fwd(
                           num_stages=1,
                           **kernel_meta)
     else:
-        num_warps = 4 if Lk <= 512 else 8
+        # num_warps = 4 if Lk <= 512 else 8
+        num_warps = max(4, BLOCK_DMODEL // 64)
         SPLIT_K = 4
         grid = (batch, head, SPLIT_K)
         block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
