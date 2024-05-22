@@ -241,7 +241,8 @@ jobs:
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'interface-pipeline'))
         run: |
           pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --alluredir=allure-results || true
-          pytest autotest/interface/pipeline/test_pipeline_turbomind_longtext_func.py -m 'not pr_test' --alluredir=allure-results
+          pytest autotest/interface/pipeline/test_pipeline_turbomind_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
+          pytest autotest/interface/pipeline/test_pipeline_turbomind_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - local testcase
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
         run: |

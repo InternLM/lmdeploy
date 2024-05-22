@@ -431,7 +431,7 @@ jobs:
       - name: Start restful api turbomind - kvint4
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
         run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level ${{inputs.log_level}} > turbomind_kvint4_run.log 2>&1 &
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MAX_BATCH_SIZE $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level ${{inputs.log_level}} > turbomind_kvint4_run.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Run restful benchmark -kvint4
@@ -456,7 +456,7 @@ jobs:
       - name: Start restful api turbomind - kvint8
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
         run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --quant-policy 8 --log-level ${{inputs.log_level}} > turbomind_kvint8_run.log 2>&1 &
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MAX_BATCH_SIZE $MODEL_FORMAT $TP_INFO --quant-policy 8 --log-level ${{inputs.log_level}} > turbomind_kvint8_run.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Run restful benchmark -kvint8

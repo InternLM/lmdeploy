@@ -43,7 +43,8 @@ def test_return_with_prompt(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -74,7 +75,8 @@ def test_return_with_prompt_stream(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -103,7 +105,8 @@ def test_return_with_multi_prompt(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -134,7 +137,8 @@ def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -164,7 +168,8 @@ def test_return_with_message(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -195,7 +200,8 @@ def test_return_with_message_stream(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -231,7 +237,8 @@ def test_return_with_message_batch(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -268,7 +275,8 @@ def test_return_with_message_batch_stream(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -301,7 +309,8 @@ def test_backend_config_session_len(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -336,7 +345,8 @@ def test_gen_config_min_new_tokens(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -376,7 +386,8 @@ def test_gen_config_stop_words(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -413,7 +424,8 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -453,7 +465,8 @@ def test_gen_config_special_words_false(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -493,7 +506,8 @@ def test_gen_config_special_words_true(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -528,7 +542,8 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend,
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -561,7 +576,8 @@ def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend,
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -592,7 +608,8 @@ def test_gen_config_minimun_topp(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -626,7 +643,8 @@ def test_gen_config_minimun_topk(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -661,7 +679,8 @@ def test_gen_config_diff_random_seed(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -694,7 +713,8 @@ def test_gen_config_same_random_seed(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -731,7 +751,8 @@ def test_gen_config_max_new_tokens(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -767,7 +788,8 @@ def test_gen_config_ignore_eos(config, model, backend, worker_id):
     p.start()
     p.join()
     assert_pipeline_common_log(config, file_name)
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -806,7 +828,8 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
 
     del pipe
     torch.cuda.empty_cache()
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.tmp
@@ -846,7 +869,8 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
         backend_config = backend(num_tokens_per_iter=-1)
         pipeline(model_path, backend_config=backend_config)
 
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.tmp
@@ -881,7 +905,8 @@ def test_backend_config_validate_pytorch(config, model, backend, worker_id):
         backend_config = backend(num_gpu_blocks=-1)
         pipeline(model_path, backend_config=backend_config)
 
-    del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
@@ -896,4 +921,5 @@ def test_backend_config_tp(config, model, backend, worker_id):
         pipe = pipeline(model_path, backend_config=backend_config)
         del pipe
         torch.cuda.empty_cache()
-        del os.environ['CUDA_VISIBLE_DEVICES']
+        if 'gw' in worker_id:
+            del os.environ['CUDA_VISIBLE_DEVICES']
