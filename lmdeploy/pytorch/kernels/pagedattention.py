@@ -309,7 +309,7 @@ def _fwd_kernel(
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
-    acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
 
     block_mask = tl.where(block_start_loc < q_seqlen, 1, 0)
 
@@ -437,8 +437,6 @@ def paged_attention_fwd(
     batch, head = q_seqlens.shape[0], q.shape[-2]
     kv_group_num = q.shape[-2] // k.shape[-2]
 
-    num_warps = 4 if Lk <= 64 else 8
-
     BLOCK = k.size(1)
     assert BLOCK >= 16
     BLOCK_DMODEL = triton.next_power_of_2(Lk)
@@ -451,6 +449,7 @@ def paged_attention_fwd(
     kernel_meta = _kernel_meta()
     is_decoding = q.shape[-3] == q_seqlens.size(0)
     if not is_decoding:
+        num_warps = 4 if Lk <= 64 else 8
         grid = (batch, head, triton.cdiv(max_seqlen, BLOCK_M))
         _fwd_kernel[grid](q,
                           k,
@@ -487,6 +486,7 @@ def paged_attention_fwd(
                           num_stages=1,
                           **kernel_meta)
     else:
+        num_warps = 4 if Lk <= 512 else 8
         SPLIT_K = 4
         grid = (batch, head, SPLIT_K)
         block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
@@ -521,7 +521,7 @@ def paged_attention_fwd(
                                 BLOCK_DMODEL=BLOCK_DMODEL,
                                 BLOCK_DV=BLOCK_DV,
                                 BLOCK_N=BLOCK,
-                                num_warps=4,
+                                num_warps=num_warps,
                                 num_stages=1,
                                 **kernel_meta)
 

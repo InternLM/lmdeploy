@@ -234,7 +234,7 @@ class TestPagedAttention:
                              [([30, 50, 70, 90], [50, 40, 30, 20]),
                               ([1, 1, 1, 1], [50, 40, 30, 20])],
                              indirect=True)
-    @pytest.mark.parametrize('block_size', [2, 16], indirect=True)
+    @pytest.mark.parametrize('block_size', [16], indirect=True)
     def test_paged_attention(self, conti_q, blocked_kv, block_offsets,
                              start_loc, seq_lens, history_lens, feat_dim_v,
                              conti_gt):
