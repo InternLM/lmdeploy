@@ -228,7 +228,7 @@ class TestPagedAttention:
         yield _conti_input(gt, seq_lens)
 
     @pytest.mark.parametrize('feat_dim_v', [32], indirect=True)
-    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(4, 2)],
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(8, 2), (2, 2)],
                              indirect=True)
     @pytest.mark.parametrize(['seq_lens', 'history_lens'],
                              [([30, 50, 70, 90], [50, 40, 30, 20]),

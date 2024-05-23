@@ -172,6 +172,158 @@ def _fwd_split_kernel(
 
 
 @triton.jit
+def _fwd_grouped_split_kernel(
+    Q,
+    K,
+    V,
+    sm_scale,
+    KV_seqlens,
+    Block_offsets,
+    Acc_out,
+    stride_qbs,
+    stride_qh,
+    stride_qd,
+    stride_kbs,
+    stride_kh,
+    stride_kd,
+    stride_vbs,
+    stride_vh,
+    stride_vd,
+    stride_ok,
+    stride_obs,
+    stride_oh,
+    stride_od,
+    stride_boffb,
+    kv_group_num: tl.constexpr,
+    block_per_cta,
+    window_size: tl.constexpr,
+    head_size: tl.constexpr,
+    head_size_v: tl.constexpr,
+    shared_kv: tl.constexpr,
+    BLOCK_DMODEL: tl.constexpr,
+    BLOCK_DV: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_H: tl.constexpr,
+):
+    """first step kernel of split k attention."""
+    cur_batch = tl.program_id(0)
+    cur_kv_head = tl.program_id(1)
+    split_k_id = tl.program_id(2)
+
+    heads_per_cta = min(BLOCK_H, kv_group_num)
+    cur_head = cur_kv_head * heads_per_cta + tl.arange(0, BLOCK_H)
+    mask_h = cur_head < cur_kv_head * heads_per_cta + heads_per_cta
+
+    q_seqlen = 1
+    kv_seqlen = tl.load(KV_seqlens + cur_batch)
+    history_len = kv_seqlen - q_seqlen
+
+    # initialize offsets
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_d = tl.arange(0, BLOCK_DMODEL)
+    mask_d = offs_d < head_size
+    offs_dv = tl.arange(0, BLOCK_DV)
+    mask_dv = offs_dv < head_size_v
+    off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd)
+    off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd)
+
+    off_q = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh +
+             offs_d[None, :] * stride_qd)
+    q = tl.load(Q + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
+
+    k_ptrs = K + off_k
+    v_ptrs = V + off_v
+
+    block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
+
+    # initialize pointer to m and l
+    m_i = tl.zeros([BLOCK_H], dtype=tl.float32) - float('inf')
+    l_i = tl.zeros([BLOCK_H], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_H, BLOCK_DV], dtype=tl.float32)
+
+    kv_len_per_prog = block_per_cta * BLOCK_N
+    loop_start = kv_len_per_prog * split_k_id
+    loop_end = tl.minimum(loop_start + kv_len_per_prog, kv_seqlen)
+
+    # load block offset
+    # dirty
+    start_block_id = loop_start // BLOCK_N
+    if window_size > 0:
+        start_block_id = tl.maximum(history_len - window_size,
+                                    loop_start) // BLOCK_N
+        kv_min_loc = tl.maximum(history_len - window_size, 0)
+    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, BLOCK_N)
+
+    loop_start = start_block_id * BLOCK_N
+    for start_n in range(loop_start, loop_end, BLOCK_N):
+        start_n = tl.multiple_of(start_n, BLOCK_N)
+
+        mask = (start_n + offs_n) < kv_seqlen
+
+        # -- compute qk ----
+        k = tl.load(
+            k_ptrs + b_offset[None, :] * stride_kbs,
+            mask=mask[None, :] & mask_d[:, None],
+            other=0.0,
+        )
+
+        if shared_kv:
+            v = tl.trans(k)
+        else:
+            v = tl.load(
+                v_ptrs + b_offset[:, None] * stride_vbs,
+                mask=mask[:, None] & mask_dv[None, :],
+                other=0.0,
+            )
+
+        # prefetch b_offset
+        if start_n + BLOCK_N < loop_end:
+            start_block_id += 1
+            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
+                                           BLOCK_N)
+
+        qk = tl.zeros([BLOCK_H, BLOCK_N], dtype=tl.float32)
+        qk += tl.dot(q, k)
+        qk *= sm_scale
+        # NOTE: inf - inf = nan, and nan will leads to error
+        qk_mask = history_len >= (start_n + offs_n)
+        if window_size > 0:
+            qk_mask = qk_mask and ((start_n + offs_n) >= kv_min_loc)
+        qk = tl.where(
+            qk_mask[None, :],
+            qk,
+            -float('inf'),
+        )
+
+        # -- compute p, m_i and l_i
+        m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+        p = tl.exp(qk - m_i_new[:, None])
+        alpha = tl.exp(m_i - m_i_new)
+        l_i_new = alpha * l_i + tl.sum(p, 1)
+
+        # -- update output accumulator --
+        # scale acc
+        acc = acc * alpha[:, None]
+
+        # update acc
+        p, v = _convert_pv(p, v)
+        acc += tl.dot(p, v)
+        # update m_i and l_i
+        l_i = l_i_new
+        m_i = m_i_new
+
+    # initialize pointers to output
+    off_acc = (cur_batch * stride_obs + split_k_id * stride_ok +
+               cur_head[:, None] * stride_oh + offs_dv[None, :] * stride_od)
+    tl.store(Acc_out + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
+
+    off_meta = (cur_batch * stride_obs + split_k_id * stride_ok +
+                cur_head * stride_oh + head_size_v)
+    tl.store(Acc_out + off_meta, m_i, mask=mask_h)
+    tl.store(Acc_out + off_meta + 1, l_i, mask=mask_h)
+
+
+@triton.jit
 def _reduce_split_kernel(
     Acc,
     Out,
@@ -494,45 +646,83 @@ def paged_attention_fwd(
                           num_stages=1,
                           **kernel_meta)
     else:
-        # num_warps = 4 if Lk <= 512 else 8
         num_warps = max(4, BLOCK_DMODEL // 64)
         SPLIT_K = 4
-        grid = (batch, head, SPLIT_K)
         block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
         acc = q.new_empty(batch, head, SPLIT_K, Lv + 2, dtype=torch.float32)
-        _fwd_split_kernel[grid](q,
-                                k,
-                                v,
-                                sm_scale,
-                                kv_seqlens,
-                                block_offsets,
-                                acc,
-                                stride_qbs=q.stride(-3),
-                                stride_qh=q.stride(-2),
-                                stride_qd=q.stride(-1),
-                                stride_kbs=k.stride(-3),
-                                stride_kh=k.stride(-2),
-                                stride_kd=k.stride(-1),
-                                stride_vbs=v.stride(-3),
-                                stride_vh=v.stride(-2),
-                                stride_vd=v.stride(-1),
-                                stride_ok=acc.stride(-2),
-                                stride_obs=acc.stride(-4),
-                                stride_oh=acc.stride(-3),
-                                stride_od=acc.stride(-1),
-                                stride_boffb=block_offsets.stride(0),
-                                kv_group_num=kv_group_num,
-                                block_per_cta=block_per_cta,
-                                window_size=window_size,
-                                head_size=Lk,
-                                head_size_v=Lv,
-                                shared_kv=shared_kv,
-                                BLOCK_DMODEL=BLOCK_DMODEL,
-                                BLOCK_DV=BLOCK_DV,
-                                BLOCK_N=BLOCK,
-                                num_warps=num_warps,
-                                num_stages=1,
-                                **kernel_meta)
+        if kv_group_num <= 2 or shared_kv:
+            grid = (batch, head, SPLIT_K)
+            _fwd_split_kernel[grid](q,
+                                    k,
+                                    v,
+                                    sm_scale,
+                                    kv_seqlens,
+                                    block_offsets,
+                                    acc,
+                                    stride_qbs=q.stride(-3),
+                                    stride_qh=q.stride(-2),
+                                    stride_qd=q.stride(-1),
+                                    stride_kbs=k.stride(-3),
+                                    stride_kh=k.stride(-2),
+                                    stride_kd=k.stride(-1),
+                                    stride_vbs=v.stride(-3),
+                                    stride_vh=v.stride(-2),
+                                    stride_vd=v.stride(-1),
+                                    stride_ok=acc.stride(-2),
+                                    stride_obs=acc.stride(-4),
+                                    stride_oh=acc.stride(-3),
+                                    stride_od=acc.stride(-1),
+                                    stride_boffb=block_offsets.stride(0),
+                                    kv_group_num=kv_group_num,
+                                    block_per_cta=block_per_cta,
+                                    window_size=window_size,
+                                    head_size=Lk,
+                                    head_size_v=Lv,
+                                    shared_kv=shared_kv,
+                                    BLOCK_DMODEL=BLOCK_DMODEL,
+                                    BLOCK_DV=BLOCK_DV,
+                                    BLOCK_N=BLOCK,
+                                    num_warps=num_warps,
+                                    num_stages=1,
+                                    **kernel_meta)
+        else:
+            BLOCK_H = 16
+            grid = (batch, head // min(BLOCK_H, kv_group_num), SPLIT_K)
+            _fwd_grouped_split_kernel[grid](
+                q,
+                k,
+                v,
+                sm_scale,
+                kv_seqlens,
+                block_offsets,
+                acc,
+                stride_qbs=q.stride(-3),
+                stride_qh=q.stride(-2),
+                stride_qd=q.stride(-1),
+                stride_kbs=k.stride(-3),
+                stride_kh=k.stride(-2),
+                stride_kd=k.stride(-1),
+                stride_vbs=v.stride(-3),
+                stride_vh=v.stride(-2),
+                stride_vd=v.stride(-1),
+                stride_ok=acc.stride(-2),
+                stride_obs=acc.stride(-4),
+                stride_oh=acc.stride(-3),
+                stride_od=acc.stride(-1),
+                stride_boffb=block_offsets.stride(0),
+                kv_group_num=kv_group_num,
+                block_per_cta=block_per_cta,
+                window_size=window_size,
+                head_size=Lk,
+                head_size_v=Lv,
+                shared_kv=shared_kv,
+                BLOCK_DMODEL=BLOCK_DMODEL,
+                BLOCK_DV=BLOCK_DV,
+                BLOCK_N=BLOCK,
+                BLOCK_H=BLOCK_H,
+                num_warps=num_warps,
+                num_stages=1,
+                **kernel_meta)
 
         grid = (batch, head)
         _reduce_split_kernel[grid](acc,
