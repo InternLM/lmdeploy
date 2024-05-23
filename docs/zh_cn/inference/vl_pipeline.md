@@ -106,7 +106,7 @@ from lmdeploy import pipeline
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b')
+pipe = pipeline('deepseek-ai/deepseek-vl-7b-chat')
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe((f'describe this image{IMAGE_TOKEN}', image))
