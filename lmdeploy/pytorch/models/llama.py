@@ -12,7 +12,8 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb as apply_rotary_pos_emb_old
-from ..kernels import fill_kv_cache, fused_rotary_emb, paged_attention_fwd
+from ..kernels import (fill_kv_cache, fused_rotary_emb, paged_attention_fwd,
+                       rms_norm)
 from .functional import attention_forward_with_rerope, repeat_kv
 
 TRANSFORMERS_VERSION = version.parse(transformers.__version__)
@@ -25,7 +26,6 @@ class LlamaRMSNorm(nn.Module):
         """forward."""
         # torch.nn.functional.normalize based implementation might leads
         # to wrong output
-        from ..kernels import rms_norm
         ret = rms_norm(hidden_states, self.weight, self.variance_epsilon)
 
         return ret

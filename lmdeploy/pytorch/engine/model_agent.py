@@ -636,11 +636,13 @@ class BaseModelAgent(AutoModelAgent):
                      adapters: Dict[str, str] = None,
                      trust_remote_code: bool = True):
         """build patched model."""
+        device = 'cuda'
         with LoadNoInit():
             hf_model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code,
+                device_map=device,
                 **self.model_config.init_kwargs)
             hf_model.eval()
             hf_model.config.use_cache = True
@@ -655,7 +657,6 @@ class BaseModelAgent(AutoModelAgent):
         if adapters:
             _unparam_lora_weight(patched_model)
 
-        patched_model = patched_model.cuda()
         return patched_model
 
     def get_loralinear_info(self):

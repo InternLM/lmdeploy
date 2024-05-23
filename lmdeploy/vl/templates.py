@@ -125,7 +125,7 @@ class InternVLChatTemplateWrapper(VLChatTemplateWrapper):
     def append_image_token(self, prompt, num_images: int):
         """append image tokens to user prompt."""
         # not sure whether support multi images.
-        return f'<img>{IMAGE_TOKEN}</img>\n' * num_images + prompt
+        return f'<img>{IMAGE_TOKEN * num_images}</img>\n' + prompt
 
 
 class DeepSeekVLChatTemplateWrapper(VLChatTemplateWrapper):
