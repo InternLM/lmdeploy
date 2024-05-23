@@ -114,6 +114,20 @@ print(response)
 
 For more information about customizing a chat template, please refer to [this](../advance/chat_template.md) guide
 
+### Setting vision model parameters
+
+The default parameters of the visual model can be modified by setting `VisonConfig`.
+
+```python
+from lmdeploy import pipeline, VisonConfig
+from lmdeploy.vl import load_image
+vision_config=VisonConfig(max_batch_size=16)
+pipe = pipeline('liuhaotian/llava-v1.5-7b', vision_config=vision_config)
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image))
+print(response)
+```
+
 ## Multi-images inference
 
 When dealing with multiple images, you can put them all in one list. Keep in mind that multiple images will lead to a higher number of input tokens, and as a result, the size of the [context window](#set-context-window-size) typically needs to be increased.

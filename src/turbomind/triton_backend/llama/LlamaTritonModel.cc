@@ -280,7 +280,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
 
     /// TODO: this stream handle is leaked
     cudaStream_t stream{};
-    ft::check_cuda_error(cudaStreamCreate(&stream));
+    ft::check_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
     allocator->setStream(stream);
 

@@ -114,6 +114,20 @@ print(response)
 
 关于如何自定义对话模版，请参考[这里](../advance/chat_template.md)
 
+### 设置视觉模型参数
+
+可通过设置 `VisonConfig` 修改视觉模型默认参数
+
+```python
+from lmdeploy import pipeline, VisonConfig
+from lmdeploy.vl import load_image
+vision_config=VisonConfig(max_batch_size=16)
+pipe = pipeline('liuhaotian/llava-v1.5-7b', vision_config=vision_config)
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image))
+print(response)
+```
+
 ## 多图推理
 
 对于多图的场景，在推理时，只要把它们放在一个列表中即可。不过，多图意味着输入 token 数更多，所以通常需要[增大推理的上下文长度](#设置上下文长度)

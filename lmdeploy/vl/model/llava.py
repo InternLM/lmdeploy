@@ -10,7 +10,7 @@ from PIL.Image import Image
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import load_model_from_weight_files, rewrite_ctx
+from lmdeploy.vl.model.utils import disable_logging, rewrite_ctx
 
 logger = get_logger('lmdeploy')
 
@@ -56,9 +56,8 @@ def init_llava_vision_tower(config):
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self, model_path: str):
         self.model_path = model_path
-        self.device = device
         self.build_model()
 
     def build_model(self):
@@ -84,18 +83,22 @@ class LlavaVisionModel(VisonModel):
             del model.model.layers
             del model.model.norm
 
-        # move model to cpu
-        with torch.device('cpu'):
-            model.to_empty(device='cpu')
-        # init empty vision_tower, the embedding layer in CLIPVisionModel
-        # can't init right under init_empty_weights
+        # init empty vision_tower,
         with init_llava_vision_tower(self.config):
             vision_tower = model.get_vision_tower()
             vision_tower.is_loaded = False
             vision_tower.load_model()
-        # load weight
-        load_model_from_weight_files(model, self.model_path)
-        model.to(self.device).eval().half()
+            # for llava-v1.5, the vit is not in llm ckpt
+            vision_tower.to(dtype=torch.half)
+
+        from accelerate import load_checkpoint_and_dispatch
+        with disable_logging():
+            load_checkpoint_and_dispatch(
+                model=model,
+                checkpoint=self.model_path,
+                device_map='auto',
+                no_split_module_classes=['CLIPEncoderLayer'],
+                dtype=torch.half)
 
         self.model = model.model
         self.vision_tower = model.model.vision_tower
@@ -126,9 +129,13 @@ class LlavaVisionModel(VisonModel):
         image_sizes = [x.size for x in images]
         images = self.preprocess(images)
         if isinstance(images, list):
-            images = [x.to(self.device, dtype=torch.float16) for x in images]
+            images = [
+                x.to(device=self.vision_tower.device, dtype=torch.float16)
+                for x in images
+            ]
         else:
-            images = images.to(self.device, dtype=torch.float16)
+            images = images.to(device=self.vision_tower.device,
+                               dtype=torch.float16)
         if type(images) is list or images.ndim == 5:
             if type(images) is list:
                 images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
