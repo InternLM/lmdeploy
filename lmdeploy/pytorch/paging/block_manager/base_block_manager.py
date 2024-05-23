@@ -4,7 +4,7 @@ from typing import Dict, Union
 
 import numpy as np
 
-from ...adapter.adapter import SchedulerAdapter
+from ...adapter.adapter import AdapterManager, SchedulerAdapter
 from ...messages import SchedulerSequence
 
 
@@ -236,13 +236,20 @@ class BaseBlockManager:
         num_cpu_blocks (int): number of cpu blocks.
     """
 
-    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int) -> None:
+    def __init__(self,
+                 num_gpu_blocks: int,
+                 num_cpu_blocks: int,
+                 adapter_manager: AdapterManager = None) -> None:
         self.num_gpu_blocks = num_gpu_blocks
         self.num_cpu_blocks = num_cpu_blocks
 
         self.allocator = LogicalAllocator(num_cpu_blocks, num_gpu_blocks)
 
         self.block_tables: Dict[int, BlockTable] = {}
+
+        if adapter_manager is None:
+            adapter_manager = AdapterManager(dict(), 0)
+        self.adapter_manager = adapter_manager
 
     @classmethod
     def num_required_blocks(cls,

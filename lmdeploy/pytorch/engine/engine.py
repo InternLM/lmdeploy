@@ -11,13 +11,13 @@ from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                ResponseType)
 from lmdeploy.utils import get_logger, get_model, logging_timer
 
-from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
+from ..adapter.adapter import AdapterManager, SchedulerAdapter
 from ..check_env import check_adapters, check_env, check_model
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
-from .model_agent import AutoModelAgent, ModelInputs
+from .model_agent import AdapterInfo, AutoModelAgent, ModelInputs
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -58,9 +58,9 @@ def _paging_adapters(adapters: dict, model_agent: AutoModelAgent,
                      scheduler: Scheduler):
     adapters = adapters or dict()
     weight_maps = []
-    for name, path in adapters.items():
-        weight_map = scheduler.add_adapter(path, name)
-        weight_map.block_table = torch.tensor(weight_map.block_table)
+    for name in adapters:
+        weight_map = scheduler.add_adapter(name)
+        weight_map.rank_offset = torch.tensor(weight_map.rank_offset)
         weight_maps.append(weight_map)
     model_agent.paging_adapters(weight_maps)
 
@@ -138,7 +138,9 @@ class Engine:
             tp=tp)
 
         cache_config = self.model_agent.cache_config
-        self.scheduler = Scheduler(scheduler_config, cache_config)
+        self.adapter_manager = self._build_adapter_manager(adapters)
+        self.scheduler = Scheduler(scheduler_config, cache_config,
+                                   self.adapter_manager)
 
         if adapters:
             _paging_adapters(adapters,
@@ -197,6 +199,14 @@ class Engine:
 
         # buffers to create inputs
         self._seq_length_buf = torch.ones(max_batches, dtype=torch.long)
+
+    def _build_adapter_manager(self, adapters):
+        if adapters is not None and len(adapters) > 0:
+            linear_info = self.model_agent.get_loralinear_info()
+        else:
+            linear_info = dict()
+        block_numel = self.model_agent.get_block_numel()
+        return AdapterManager(linear_info, block_numel)
 
     def _bind_request_manager(self):
         """bind request manager."""
@@ -357,18 +367,11 @@ class Engine:
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
         local_adapter_ids = None
-        global_adapter_ids = None
-        adapter_offsets = None
-        max_rank = 0
-        if ADAPTER_MANAGER.num_adapters() > 1:
+        adapter_info = None
+        if self.adapter_manager.num_adapters() > 1:
             local_adapter_ids = _get_adapter_ids(messages, adapters)
             local_adapter_ids = seq_length.new_tensor(local_adapter_ids)
-            adapter_offsets = self.scheduler.get_block_tables(adapters)
-            adapter_offsets = _tensorlize_block_offsets(adapter_offsets)
-            global_adapter_ids = [ada.idx for ada in adapters]
-            global_adapter_ids = seq_length.new_tensor(global_adapter_ids)
-            ranks = [ada.rank for ada in adapters]
-            max_rank = max(ranks)
+            adapter_info = AdapterInfo.from_adapters(adapters)
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
@@ -385,9 +388,7 @@ class Engine:
                            is_decoding=is_decoding,
                            num_ignored_history=num_ignored_history,
                            local_adapter_ids=local_adapter_ids,
-                           global_adapter_ids=global_adapter_ids,
-                           adapter_offsets=adapter_offsets,
-                           max_rank=max_rank,
+                           adapter_info=adapter_info,
                            meta=meta)
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,

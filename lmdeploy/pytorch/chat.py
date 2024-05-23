@@ -2,10 +2,10 @@
 
 import os
 import random
-from typing import List
+from typing import List, Optional
 
 from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
-from lmdeploy.model import MODELS, best_match_model
+from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -51,7 +51,8 @@ def run_chat(model_path: str,
              engine_config: PytorchEngineConfig,
              gen_config: EngineGenerationConfig = None,
              session_id: int = 1,
-             trust_remote_code: bool = True):
+             trust_remote_code: bool = True,
+             chat_template_config: Optional[ChatTemplateConfig] = None):
     """An example to perform model inference through the command line
     interface.
 
@@ -83,7 +84,13 @@ def run_chat(model_path: str,
         model_name = best_match_model(model_path)
         assert model_name is not None, 'Can not find match model template'
         print(f'match template: <{model_name}>')
-    model = MODELS.get(model_name)()
+
+    if chat_template_config is not None:
+        if chat_template_config.model_name is None:
+            chat_template_config.model_name = model_name
+        model = chat_template_config.chat_template
+    else:
+        model = MODELS.get(model_name)()
     stop_words = _stop_words(model.stop_words, tokenizer)
 
     while True:
@@ -138,7 +145,8 @@ def main(model_path: str,
          tp: int = 1,
          stream_output: bool = True,
          adapter: str = None,
-         trust_remote_code: bool = True):
+         trust_remote_code: bool = True,
+         chat_template: str = None):
     """An example to perform model inference through the command line
     interface.
 
@@ -154,6 +162,8 @@ def main(model_path: str,
         stream_output (bool): indicator for streaming output or not
         adapter (str): path to lora adapter.
         trust_remote_code (bool): Trust remote code.
+        chat_template (str): A JSON file or string that specifies the
+            chat template configuration.
     """
     adapters = None
     if adapter is not None:
@@ -167,11 +177,15 @@ def main(model_path: str,
                                         temperature=temperature,
                                         repetition_penalty=repetition_penalty,
                                         ignore_eos=False)
+    chat_template_config = None
+    if chat_template is not None and os.path.exists(chat_template):
+        chat_template_config = ChatTemplateConfig.from_json(chat_template)
     return run_chat(model_path,
                     engine_config,
                     gen_config,
                     session_id=session_id,
-                    trust_remote_code=trust_remote_code)
+                    trust_remote_code=trust_remote_code,
+                    chat_template_config=chat_template_config)
 
 
 if __name__ == '__main__':

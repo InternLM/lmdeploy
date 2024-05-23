@@ -13,16 +13,19 @@ from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer
     '01-ai/Yi-6B-Chat', 'WizardLM/WizardLM-70B-V1.0',
     'codellama/CodeLlama-34b-Instruct-hf', 'tiiuae/falcon-7b'
 ])
-@pytest.mark.parametrize('input', [
-    'hi, this is a test 😆😆! ' * 5, '為什麼我還在用繁體字 😆😆 gg! ' * 5,
-    ' License at\n#\n#' + ' ' * 100 + 'ht', '   '
-])
+@pytest.mark.parametrize('input',
+                         [' hi, this is a test 😆😆! 為什麼我還在用繁體字 😆😆       ' * 5])
 @pytest.mark.parametrize('interval', [1, 3])
+@pytest.mark.parametrize('add_special_tokens', [True, False])
 @pytest.mark.parametrize('skip_special_tokens', [True, False])
-def test_tokenizer(model_path, input, interval, skip_special_tokens):
+def test_tokenizer(model_path, input, interval, add_special_tokens,
+                   skip_special_tokens):
     tokenizer = HuggingFaceTokenizer(model_path)
-    encoded = tokenizer.encode(input, False, add_special_tokens=False)
+    encoded = tokenizer.encode(input,
+                               False,
+                               add_special_tokens=add_special_tokens)
     output = ''
+    input = tokenizer.decode(encoded, skip_special_tokens=skip_special_tokens)
     state = DetokenizeState()
     for i in range(0, len(encoded), interval):
         offset = i + interval

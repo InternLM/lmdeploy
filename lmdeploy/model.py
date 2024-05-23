@@ -262,12 +262,38 @@ class Vicuna(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'llava' in path and 'v1.5' in path:
-            return 'vicuna'
-        if 'vicuna' in path:
+        if 'vicuna' in path and 'llava' not in path:
             return 'vicuna'
         if 'wizardlm' in path:
             return 'wizardlm'
+
+
+@MODELS.register_module(name='llava-v1')
+class Llavav1(Vicuna):
+    """Chat template of llava-v1 model."""
+
+    def __init__(
+            self,
+            meta_instruction="""A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.""",  # noqa: E501
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction, **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'llava' in path and 'v1' in path and 'v1.6-34b' not in path:
+            return 'llava-v1'
 
 
 @MODELS.register_module(name='mini-gemini-vicuna')
@@ -1133,6 +1159,7 @@ class DeepseekVL(BaseChatTemplate):
             eoh='\n\n',
             assistant='Assistant: ',
             eoa='<｜end▁of▁sentence｜>',
+            session_len=16384,
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
                          eosys=eosys,
@@ -1140,6 +1167,7 @@ class DeepseekVL(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
+                         session_len=session_len,
                          **kwargs)
 
     @classmethod
@@ -1291,12 +1319,12 @@ class ChatmlDirect(BaseChatTemplate):
     def __init__(self,
                  system='<|im_start|>system\n',
                  meta_instruction='Answer the questions.',
-                 eosys='<|im_end|>\n',
+                 eosys='<|im_end|>',
                  user='<|im_start|>user\n',
-                 eoh='<|im_end|>\n',
+                 eoh='<|im_end|>',
                  assistant='<|im_start|>assistant\n',
                  eoa='<|im_end|>',
-                 separator='\n',
+                 separator='',
                  session_len=4096,
                  **kwargs):
         super().__init__(system,
@@ -1322,6 +1350,44 @@ class ChatmlDirect(BaseChatTemplate):
             return 'llava-chatml'
         if 'internvl-chat' in path and 'v1-2' in path:
             return 'internvl-zh-hermes2'
+
+
+@MODELS.register_module(name='phi-3')
+class Phi3Instruct(BaseChatTemplate):
+    """Chat template of InternLM model."""
+
+    def __init__(self,
+                 system='<|system|>\n',
+                 meta_instruction=None,
+                 eosys='<|end|>\n',
+                 user='<|user|>\n',
+                 eoh='<|end|>\n',
+                 assistant='<|assistant|>\n',
+                 eoa='<|end|>\n',
+                 separator='\n',
+                 stop_words=['<|end|>', '<|endoftext|>'],
+                 **kwargs):
+        super().__init__(system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if all([c in path for c in ['phi-3', 'instruct']]):
+            return 'phi-3'
 
 
 def best_match_model(query: str) -> Optional[str]:
