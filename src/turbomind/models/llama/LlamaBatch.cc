@@ -365,8 +365,8 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             seq.rope_theta = model_->attn_params_.rotary_embedding_base;
             if (model_->attn_params_.use_dynamic_ntk) {
                 auto scaling_factor = model_->attn_params_.rope_scaling_factor;
-                if (scaling_factor >= 1.f) {  // infer by `seq_len_limit`
-                    auto max_seq_len = state.seq_len_limit[idx];
+                if (scaling_factor >= 1.f) {  // infer by current context length
+                    auto max_seq_len = state.h_context_length[idx];
                     auto max_pos_emb = model_->attn_params_.max_position_embeddings;
                     if (max_seq_len > max_pos_emb) {
                         scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);

@@ -434,3 +434,10 @@ class ArgumentHelper:
             type=int,
             default=1,
             help='the max number of forward passes in prefill stage')
+
+    @staticmethod
+    def vision_max_batch_size(parser):
+        return parser.add_argument('--vision-max-batch-size',
+                                   type=int,
+                                   default=1,
+                                   help='the vision model batch size')

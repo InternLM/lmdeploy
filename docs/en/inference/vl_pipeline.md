@@ -99,20 +99,33 @@ print(response)
 
 ### Set chat template
 
-While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, [liuhaotian/llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) employs the 'vicuna' chat template, but the name 'vicuna' cannot be ascertained from the model's path. We can specify it by setting 'vicuna' to `ChatTemplateConfig` as follows:
+While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, [liuhaotian/llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) employs the ['llava-v1'](https://github.com/haotian-liu/LLaVA/blob/v1.2.2/llava/conversation.py#L325-L335) chat template, if user have a custom folder name instead of the official 'llava-v1.5-7b', the user needs to specify it by setting 'llava-v1' to `ChatTemplateConfig` as follows:
 
 ```python
 from lmdeploy import pipeline, ChatTemplateConfig
 from lmdeploy.vl import load_image
-pipe = pipeline('liuhaotian/llava-v1.5-7b',
-                chat_template_config=ChatTemplateConfig(model_name='vicuna'))
-
+pipe = pipeline('local_model_folder',
+                chat_template_config=ChatTemplateConfig(model_name='llava-v1'))
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))
 print(response)
 ```
 
 For more information about customizing a chat template, please refer to [this](../advance/chat_template.md) guide
+
+### Setting vision model parameters
+
+The default parameters of the visual model can be modified by setting `VisonConfig`.
+
+```python
+from lmdeploy import pipeline, VisonConfig
+from lmdeploy.vl import load_image
+vision_config=VisonConfig(max_batch_size=16)
+pipe = pipeline('liuhaotian/llava-v1.5-7b', vision_config=vision_config)
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image))
+print(response)
+```
 
 ## Multi-images inference
 
