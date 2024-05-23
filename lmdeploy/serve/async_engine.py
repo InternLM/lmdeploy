@@ -14,6 +14,7 @@ from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                PytorchEngineConfig, Response,
                                TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
+from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
 
@@ -137,7 +138,7 @@ def _get_event_loop():
     return event_loop
 
 
-class AsyncEngine:
+class AsyncEngine(LogitsMixin):
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
     Args:
