@@ -97,9 +97,9 @@ response = pipe(('describe this image', image), gen_config=gen_config)
 print(response)
 ```
 
-### Set image token position
+### Customize image token position
 
-By default, LMDeploy will insert the special image token into the user prompt based on the chat template provided by the algorithm repo. However, for some models, the location of the image token is not restricted, such as deepseek-vl, or the user needs to customize the image token position. In these cases, the user needs to manually insert the special image token into the prompt.
+By default, LMDeploy will inserts the special image token into the user prompt based on the chat template provided by the algorithm repo. However, for some models, the location of the image token is not restricted, such as deepseek-vl, or the user needs to customize the image token position. In these cases, the user needs to manually insert the special image token into the prompt.
 
 ```python
 from lmdeploy import pipeline
