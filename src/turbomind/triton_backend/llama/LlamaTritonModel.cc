@@ -378,7 +378,7 @@ LlamaTritonModel<T>::createModelInstance(int                                    
     std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator(
         new ft::Allocator<ft::AllocatorType::CUDA>(device_id));
 
-    allocator->setStream(instance->allocator->returnStream());
+    allocator->setStream(stream);
 
     return std::make_unique<LlamaTritonModelInstance<T>>(instance, std::move(allocator), device_id);
 }
