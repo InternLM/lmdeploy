@@ -41,7 +41,6 @@ jobs:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
         - /nvme/share_data/github-actions/packages:/root/packages
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-        - /nvme/qa_test_models:/nvme/qa_test_models
     steps:
       - name: Setup systems
         run: |
@@ -61,7 +60,6 @@ jobs:
           python3 -m pip install -r requirements/build.txt
           mkdir build
           cd build
-          cp -r /nvme/qa_test_models/offline_pkg/_deps_ut ./_deps
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
               -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
