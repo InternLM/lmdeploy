@@ -172,6 +172,8 @@ class PatchedDeepseekV2Attention(nn.Module):
         )
 
         attn_output = query_states[..., :nope_size]
+        block_size = past_key_value[0].size(1)
+        shared_kv = block_size >= 64
         paged_attention_fwd(
             query_states,
             past_key_value[0],
@@ -183,7 +185,7 @@ class PatchedDeepseekV2Attention(nn.Module):
             kv_seqlens=kv_seq_length,
             max_seqlen=max_q_seq_length,
             sm_scale=self.softmax_scale,
-            shared_kv=True,
+            shared_kv=shared_kv,
         )
 
         # (num_heads, q_len, v_head_dim)

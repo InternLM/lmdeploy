@@ -650,7 +650,7 @@ def paged_attention_fwd(
         SPLIT_K = 4
         block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
         acc = q.new_empty(batch, head, SPLIT_K, Lv + 2, dtype=torch.float32)
-        if kv_group_num <= 2 or shared_kv:
+        if kv_group_num <= 2 or shared_kv or BLOCK_DMODEL >= 512:
             grid = (batch, head, SPLIT_K)
             _fwd_split_kernel[grid](q,
                                     k,
