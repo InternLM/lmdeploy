@@ -141,8 +141,8 @@ class DeepSeekVLChatTemplateWrapper(VLChatTemplateWrapper):
         """append image tokens to user prompt."""
         logger.error(
             f'for deepseek-vl model, the user should insert the {IMAGE_TOKEN} '
-            'to user prompt manually, please read '
-            'docs/en/inference/vl_pipeline.md for more details.')
+            'to user prompt manually, please read https://lmdeploy.readthedocs'
+            '.io/en/latest/inference/vl_pipeline.html for more details.')
         if num_images == 1:
             return f'{IMAGE_TOKEN}{prompt}'
         res = ''
