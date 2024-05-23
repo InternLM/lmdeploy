@@ -72,11 +72,10 @@ struct AttentionUniversal {
     __device__ __host__ static bool need_separate_reduce(int max_split_cnt)
     {
         if constexpr (CTA_Q > 1) {
-            // using `max_split_cnt > 1` here make the kernel slightly slower
-            return true;
+            return max_split_cnt > 1;
         }
         else {
-            return CTA_H * max_split_cnt > 32;
+            return max_split_cnt > 32;
         }
     }
 
@@ -436,24 +435,24 @@ struct AttentionUniversal {
             Impl::Merge(frag_O, frag_M, frag_L, params.inv_sqrt_dh, storage);
         }
 
+        const bool separate_reduce = need_separate_reduce(cta_map.split_count());
+
+        if (separate_reduce && iter_end == tile_count && head_idx == 0) {
+            // Store actual split count, only used by separate reduction kernel
+            for (int ti = threadIdx.x; ti < CTA_Q; ti += kWarpCount * WARP_SIZE) {
+                if (qi_begin + ti < qi_end) {
+                    params.split_cnt[qi_begin + ti] = split_idx ? split_idx + 1 : 0;
+                }
+            }
+        }
+
         if (iter_begin == 0 && iter_end == tile_count) {
             StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params, storage);
         }
         else {
             StorePartial(frag_O, frag_M, frag_L, qi_begin, qi_end, head_idx, split_idx, params, storage);
-
-            if (iter_end == tile_count) {  // store actual split count
-                for (int ti = qi_begin + threadIdx.x; ti < qi_end; ti += kWarpCount * WARP_SIZE) {
-                    params.split_cnt[ti] = split_idx + 1;
-                }
-            }
-
-            if (need_separate_reduce(cta_map.split_count())) {
-                return;
-            }
-            else {
-                Reduce(qi_begin, head_idx, split_idx, iter_end != tile_count, params, cta_map, smem_buf);
-            }
+            if (!separate_reduce)
+                Reduce(qi_begin, head_idx, split_idx, iter_end == tile_count, params, cta_map, smem_buf);
         }
     }
 
@@ -469,10 +468,10 @@ struct AttentionUniversal {
         const auto index = (cta_map.batch_idx() * params.num_heads + cta_map.head_idx()) * params.max_split_k;
         const auto locks = params.locks + index;
 
-        if (is_last) {
+        if (!is_last) {  // all but last split
             sem_post(&locks[split_idx], 1, threadIdx.x == 0);
         }
-        else {
+        else {  // only the last split
             const int split_count = split_idx + 1;
 
             sem_wait_many(&locks[threadIdx.x], split_count - 1, threadIdx.x < split_count - 1);

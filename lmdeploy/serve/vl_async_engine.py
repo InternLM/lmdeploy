@@ -16,7 +16,8 @@ class VLAsyncEngine(AsyncEngine):
     """Visual Language Async inference engine."""
 
     def __init__(self, model_path: str, **kwargs) -> None:
-        self.vl_encoder = ImageEncoder(model_path)
+        vision_config = kwargs.pop('vision_config', None)
+        self.vl_encoder = ImageEncoder(model_path, vision_config)
         super().__init__(model_path, **kwargs)
         if self.model_name == 'base':
             raise RuntimeError(
