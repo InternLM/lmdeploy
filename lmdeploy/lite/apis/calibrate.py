@@ -178,8 +178,7 @@ def calibrate(model: str,
         vl_model = None
     elif model_type == 'vlm':
         from lmdeploy.vl.model.builder import vl_model_with_tokenizer
-        vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model,
-                                                             device='cpu')
+        vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model)
 
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:

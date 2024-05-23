@@ -74,10 +74,11 @@ class DeepSeekVisionModel(VisonModel):
 
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
-            load_checkpoint_and_dispatch(model=model,
-                                         checkpoint=self.model_path,
-                                         device_map=device_map,
-                                         dtype=torch.half)
+            load_checkpoint_and_dispatch(
+                model=model,
+                checkpoint=self.model_path,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
+                dtype=torch.half)
 
         self.vision_model = model.vision_model.eval()
         self.aligner = model.aligner.eval()

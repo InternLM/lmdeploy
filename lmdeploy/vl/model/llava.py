@@ -104,7 +104,7 @@ class LlavaVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map='auto',
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['CLIPEncoderLayer'],
                 dtype=torch.half)
 

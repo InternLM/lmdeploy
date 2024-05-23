@@ -56,7 +56,7 @@ class QwenVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=device_map,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['VisualAttentionBlock'],
                 dtype=torch.half)
 
