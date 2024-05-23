@@ -14,6 +14,7 @@
 #include <iostream>
 #include <numeric>
 #include <random>
+#include <thrust/device_vector.h>
 #include <thrust/universal_vector.h>
 #include <utility>
 
@@ -198,7 +199,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
 #define KV_INT4 0
 
-#define DECODING 1
+#define DECODING 0
 
 template<class T>
 int test_attention()
@@ -250,13 +251,13 @@ int test_attention()
 
     // prefill
     constexpr size_t kHeadNum     = 32;
-    constexpr size_t KvHeadNum    = kHeadNum;
-    constexpr size_t kBatchSize   = 1;
-    constexpr size_t kInputLen    = 16384;
+    constexpr size_t KvHeadNum    = kHeadNum / 1;
+    constexpr size_t kBatchSize   = 2;
+    constexpr size_t kInputLen    = 8192;
     constexpr size_t kSequenceLen = 0;
     constexpr int    kMaxSplitK   = 1;
 
-    constexpr int kBlockSz     = 128;
+    constexpr int kBlockSz     = 64;
 
 #endif
 
@@ -285,7 +286,8 @@ int test_attention()
     thrust::universal_vector<T> k_cache(kBatchSize * KvHeadNum * kContextLen * kHeadDim);
     thrust::universal_vector<T> v_cache(kBatchSize * KvHeadNum * kContextLen * kHeadDim);
 
-    thrust::universal_vector<T> kv_cache(KvHeadNum * 2 * kBatchSize * kContextLen * kHeadDim);
+    // flattened float point KV cache
+    thrust::device_vector<T> kv_cache(KvHeadNum * 2 * (kBatchSize * kContextLen + MAX_CTA_S) * kHeadDim);
 
     thrust::universal_vector<T> qkv(kBatchSize * kInputLen * (kHeadNum + KvHeadNum * 2) * kHeadDim);
     thrust::universal_vector<T> output(kBatchSize * kInputLen * kHeadNum * kHeadDim);
@@ -298,19 +300,16 @@ int test_attention()
     thrust::universal_vector<int>   cu_seqlens(kBatchSize + 1);
     thrust::universal_vector<int>   cu_kv_lens(kBatchSize + 1);
 
-    thrust::universal_vector<float> partial_M(kTokenNum * kHeadNum * kMaxSplitK);
-    thrust::universal_vector<float> partial_L(kTokenNum * kHeadNum * kMaxSplitK);
-    thrust::universal_vector<float> partial_O(kTokenNum * kHeadNum * kMaxSplitK * kHeadDim);
-    thrust::universal_vector<int>   split_cnt(kTokenNum);
-    thrust::universal_vector<int>   semaphores(kTokenNum * kHeadNum * kMaxSplitK);
-
-    thrust::universal_vector<T> kv_cache_quant_data(kBatchSize * KvHeadNum * 2 * kContextLen * 2);
-    thrust::fill(kv_cache_quant_data.begin(), kv_cache_quant_data.end(), T{0.});
+    thrust::device_vector<float> partial_M(kTokenNum * kHeadNum * kMaxSplitK);
+    thrust::device_vector<float> partial_L(kTokenNum * kHeadNum * kMaxSplitK);
+    thrust::device_vector<float> partial_O(kTokenNum * kHeadNum * kMaxSplitK * kHeadDim);
+    thrust::device_vector<int>   split_cnt(kTokenNum);
+    thrust::device_vector<int>   semaphores(kTokenNum * kHeadNum * kMaxSplitK);
 
     thrust::universal_vector<float> qk_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
     thrust::universal_vector<T>     pr_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
 
-    std::fill(semaphores.begin(), semaphores.end(), 0);
+    thrust::fill(semaphores.begin(), semaphores.end(), 0);
 
     rng.GenerateNormal(qkv.data().get(), qkv.size(), 1.f, 0.f);
 
