@@ -41,6 +41,7 @@ jobs:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
       DOCKER_TAG: cuda11.8
+      OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
