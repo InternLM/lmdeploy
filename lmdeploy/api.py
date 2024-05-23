@@ -76,7 +76,6 @@ def pipeline(model_path: str,
         backend_config = autoget_backend_config(model_path, backend_config)
     backend = 'pytorch' if type(
         backend_config) is PytorchEngineConfig else 'turbomind'
-
     logger.info(f'Using {backend} engine')
     if 'tp' in kwargs:
         logger.warning(

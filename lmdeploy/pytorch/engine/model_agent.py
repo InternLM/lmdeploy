@@ -164,9 +164,9 @@ class AdapterInfo:
 @dataclass
 class VisionModelInputs:
     """Vision model inputs."""
-    history_lengths: torch.LongTensor
-    history_image_nums: torch.LongTensor
-    history_image_token_lengths: torch.LongTensor
+    history_lengths: torch.LongTensor = None
+    history_image_nums: torch.LongTensor = None
+    history_image_token_lengths: torch.LongTensor = None
     input_embeddings: List[List[torch.Tensor]] = None
     input_embedding_indexing: torch.BoolTensor = None
 
@@ -229,7 +229,6 @@ class ModelInputs:
         assert self.is_decoding
         self.history_lengths = self.history_lengths + 1
         self.max_history_length = self.max_history_length + 1
-
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
@@ -259,7 +258,6 @@ class ModelInputs:
                 block_end += 1
 
             block_offsets = self.block_offsets[:, :block_end]
-
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
@@ -372,7 +370,7 @@ class StepContext:
         position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
                                                   device)
         # seq_len + history_length
-        kv_seq_length = q_seq_length + inputs.history_lengths
+        kv_seq_length = q_seq_length + history_lengths
         max_kv_seq_length = max_q_seq_length + inputs.max_history_length
 
         window_size = getattr(cache_config, 'window_size', 0)
@@ -454,12 +452,10 @@ def model_forward(patched_model: torch.nn.Module,
                   world_size: int = 1,
                   stream: torch.cuda.Stream = None):
     """perform model forward."""
-
     stream = stream or torch.cuda.current_stream()
     with torch.inference_mode(), torch.cuda.stream(stream):
         # forward
         inputs = inputs.to_device('cuda')
-
         context = StepContext.new(
             inputs=inputs,
             world_size=world_size,

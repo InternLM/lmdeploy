@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 import torch
 
@@ -86,6 +86,7 @@ class ModelConfig:
     init_kwargs: Dict[str, Any] = field(default_factory=dict)
     model_arch: str = None
     unused_modules: List[str] = None
+    task_type: Literal['llm', 'vlm'] = 'llm'
 
     def get_head_size(self):
         """get head size."""
@@ -104,6 +105,8 @@ class ModelConfig:
     @classmethod
     def from_hf_config(cls, hf_config: Any, model_path: str = None):
         """from huggingface config."""
+        from lmdeploy.archs import check_vl_llm
+
         if model_path is None:
             model_path = ''
 
@@ -238,5 +241,6 @@ class ModelConfig:
         model_config.hf_config = hf_config
         model_config.json_config = json_config
         model_config.model_arch = model_arch
-
+        if check_vl_llm(json_config):
+            model_config.task_type = 'vlm'
         return model_config

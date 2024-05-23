@@ -95,8 +95,7 @@ class Engine:
     def __init__(self,
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
-                 trust_remote_code: bool = True,
-                 **kwargs) -> None:
+                 trust_remote_code: bool = True) -> None:
         check_env()
         check_model(model_path, trust_remote_code)
         if engine_config is None:
@@ -388,32 +387,42 @@ class Engine:
         num_ignored_history = torch.tensor(num_ignored_history)
 
         # for vlm
-        history_image_nums = torch.LongTensor(
-            [msg.history_image_num for msg in messages])
-        history_image_token_lengths = torch.LongTensor(
-            [msg.history_image_token_len for msg in messages])
-        input_embeddings = None
-        input_embedding_indexing = None
-        has_embedding = any(
-            [len(msg.input_embeddings) > 0 for msg in messages])
-        if has_embedding:
-            input_embeddings = [[None] * max_q_seq_length] * len(messages)
-            input_embedding_indexing = torch.zeros(
-                (batch_size, max_q_seq_length), dtype=torch.bool)
-            for msg_id, msg in enumerate(messages):
-                for emb in msg.input_embeddings:
-                    # make slice index relative to embeddings
-                    emb_start = emb.start - msg.history_len
-                    emb_end = emb.end - msg.history_len
-                    input_embeddings[msg_id][emb_start:emb_end] = list(
-                        torch.from_numpy(emb.embeddings).split(1, dim=0))
-                    input_embedding_indexing[msg_id][emb_start:emb_end] = True
-        vision_embedding_inputs = VisionModelInputs(
-            history_lengths=history_lengths,
-            history_image_nums=history_image_nums,
-            history_image_token_lengths=history_image_token_lengths,
-            input_embeddings=input_embeddings,
-            input_embedding_indexing=input_embedding_indexing)
+        vision_embedding_inputs = None
+        if self.model_config.task_type == 'vlm':
+            history_image_nums = None
+            history_image_token_lengths = None
+            history_lengths_for_vlm = None
+            # only for cogvlm
+            if self.model_config.model_arch == 'CogVLMForCausalLM':
+                history_image_nums = torch.LongTensor(
+                    [msg.history_image_num for msg in messages])
+                history_image_token_lengths = torch.LongTensor(
+                    [msg.history_image_token_len for msg in messages])
+                history_lengths_for_vlm = history_lengths
+            input_embeddings = None
+            input_embedding_indexing = None
+            has_embedding = any(
+                [len(msg.input_embeddings) > 0 for msg in messages])
+            if has_embedding:
+                input_embeddings = [[None] * max_q_seq_length] * len(messages)
+                input_embedding_indexing = torch.zeros(
+                    (batch_size, max_q_seq_length), dtype=torch.bool)
+                for msg_id, msg in enumerate(messages):
+                    for emb in msg.input_embeddings:
+                        # make slice index relative to embeddings
+                        emb_start = emb.start - msg.history_len
+                        emb_end = emb.end - msg.history_len
+                        input_embeddings[msg_id][emb_start:emb_end] = list(
+                            torch.from_numpy(emb.embeddings).split(1, dim=0))
+                        input_embedding_indexing[msg_id][
+                            emb_start:emb_end] = True
+
+            vision_embedding_inputs = VisionModelInputs(
+                history_lengths=history_lengths_for_vlm,
+                history_image_nums=history_image_nums,
+                history_image_token_lengths=history_image_token_lengths,
+                input_embeddings=input_embeddings,
+                input_embedding_indexing=input_embedding_indexing)
 
         return ModelInputs(input_ids=input_ids,
                            seq_length=seq_length,
