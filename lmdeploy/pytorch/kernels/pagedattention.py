@@ -7,6 +7,10 @@ from packaging import version
 from torch import Tensor
 from triton.runtime.jit import get_cuda_stream
 
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
+
 TRITON_VERSION = version.parse(triton.__version__)
 
 assert TRITON_VERSION >= version.parse('2.1.0')
@@ -445,6 +449,10 @@ def paged_attention_fwd(
     else:
         BLOCK_DV = triton.next_power_of_2(Lv)
     BLOCK_M = max(16, min(BLOCK, 16384 // BLOCK_DMODEL))
+    if Lk > 512 and BLOCK > 32:
+        logger.warning(f'`head_dim={Lk}` and `block_size={BLOCK}` '
+                       'might leads to bad performance. '
+                       'Please reduce `block_size`.')
 
     kernel_meta = _kernel_meta()
     is_decoding = q.shape[-3] == q_seqlens.size(0)
