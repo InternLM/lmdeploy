@@ -10,9 +10,9 @@ from transformers import AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import load_model_from_weight_files, rewrite_ctx
+from lmdeploy.vl.model.utils import rewrite_ctx
 
-from .utils import buffers_aware_empty, disable_transformers_logging
+from .utils import disable_logging, disable_transformers_logging
 
 logger = get_logger('lmdeploy')
 
@@ -67,10 +67,9 @@ def init_empty_vit():
 class InternVLLlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path, device='cuda:0', with_llm: bool = False):
+    def __init__(self, model_path, with_llm: bool = False):
         self.with_llm = with_llm
         self.model_path = model_path
-        self.device = device
         # check llava install
         check_llava_install()
         self.build_model()
@@ -102,10 +101,6 @@ class InternVLLlavaVisionModel(VisonModel):
             else:
                 self.vl_model = model
 
-        # move model to cpu
-        with torch.device('cpu'):
-            buffers_aware_empty(model, 'cpu')
-            # init embedding layer in CLIPVisionModel
             with init_empty_vit():
                 vision_tower = model.get_vision_tower()
                 vision_tower.is_loaded = False
@@ -122,9 +117,15 @@ class InternVLLlavaVisionModel(VisonModel):
                                                               width=crop_size)
                 vision_tower.image_processor.size = dict(
                     shortest_edge=crop_size)
-        # load weight
-        load_model_from_weight_files(model, self.model_path)
-        model.to(self.device).eval().half()
+
+        from accelerate import load_checkpoint_and_dispatch
+        with disable_logging():
+            load_checkpoint_and_dispatch(
+                model=model,
+                checkpoint=self.model_path,
+                device_map='auto',
+                no_split_module_classes=['InternVisionEncoderLayer'],
+                dtype=torch.half)
 
         self.model = model.model
         self.vision_tower = model.model.vision_tower
@@ -152,9 +153,12 @@ class InternVLLlavaVisionModel(VisonModel):
         """forward."""
         images = self.preprocess(images)
         if isinstance(images, list):
-            images = [x.to(self.device, dtype=torch.float16) for x in images]
+            images = [
+                x.to(self.vision_tower.device, dtype=torch.float16)
+                for x in images
+            ]
         else:
-            images = images.to(self.device, dtype=torch.float16)
+            images = images.to(self.vision_tower.device, dtype=torch.float16)
 
         if type(images) is list or images.ndim == 5:
             concat_images = torch.cat([image for image in images], dim=0)

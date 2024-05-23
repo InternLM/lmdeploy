@@ -10,6 +10,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
+from ..kernels.fused_moe import fused_moe
 
 
 class PatchedMixtralAttention(nn.Module):
@@ -68,11 +69,23 @@ class PatchedMixtralAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             if hasattr(self, 'rotary_emb'):
-                cos, sin = self.rotary_emb(value_states,
-                                           seq_len=max_kv_seq_length)
+                if not hasattr(context, '_cos'):
+                    cos, sin = self.rotary_emb(value_states,
+                                               seq_len=max_kv_seq_length)
+                    context._cos = cos
+                    context._sin = sin
+                else:
+                    cos = context._cos
+                    sin = context._sin
                 query_states, key_states = apply_rotary_pos_emb(
-                    query_states, key_states, cos, sin, position_ids,
-                    getattr(context, 'position_ids_1d', None))
+                    query_states,
+                    key_states,
+                    cos,
+                    sin,
+                    position_ids,
+                    context.position_ids_1d,
+                    q_embed=query_states,
+                    k_embed=key_states)
             return query_states, key_states, value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
@@ -161,6 +174,81 @@ class PatchedMixtralBLockSparseTop2MLP(nn.Module):
         """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs
+
+
+class PatchedMixtralSparseMoeBlock(nn.Module):
+
+    def _update_model_fn(self):
+        """update model."""
+        num_experts = self.num_experts
+
+        def __get_meta():
+            exp = self.experts[0]
+            ffn_dim = exp.w1.weight.size(0)
+            hidden_dim = exp.w2.weight.size(0)
+            dtype = exp.w1.weight.dtype
+            device = exp.w1.weight.device
+            return ffn_dim, hidden_dim, dtype, device
+
+        def __copy_assign_param(param, weight):
+            """copy assign."""
+            weight.copy_(param.data)
+            param.data = weight
+
+        ffn_dim, hidden_dim, dtype, device = __get_meta()
+
+        gate_up_weights = torch.empty(num_experts,
+                                      ffn_dim * 2,
+                                      hidden_dim,
+                                      device=device,
+                                      dtype=dtype)
+        down_weights = torch.empty(num_experts,
+                                   hidden_dim,
+                                   ffn_dim,
+                                   device=device,
+                                   dtype=dtype)
+        for exp_id, exp in enumerate(self.experts):
+            __copy_assign_param(exp.w1.weight,
+                                gate_up_weights[exp_id, :ffn_dim])
+            __copy_assign_param(exp.w3.weight, gate_up_weights[exp_id,
+                                                               ffn_dim:])
+            __copy_assign_param(exp.w2.weight, down_weights[exp_id])
+
+        torch.cuda.empty_cache()
+
+        self.register_buffer('gate_up_weights', gate_up_weights)
+        self.register_buffer('down_weights', down_weights)
+
+    @classmethod
+    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+        """Distribution output hook."""
+        dist.all_reduce(outputs[0])
+        return outputs
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """rewrite moe forward."""
+
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+        router_logits = self.gate(hidden_states)
+
+        routing_weights = torch.softmax(router_logits,
+                                        dim=-1,
+                                        dtype=torch.float32)
+        topk_weights, topk_ids = torch.topk(routing_weights,
+                                            self.top_k,
+                                            dim=-1)
+        del routing_weights
+        out_states = fused_moe(hidden_states,
+                               self.gate_up_weights,
+                               self.down_weights,
+                               topk_weights,
+                               topk_ids,
+                               topk=self.top_k,
+                               renormalize=True)
+
+        out_states = out_states.reshape(batch_size, sequence_length, -1)
+        return out_states, router_logits
 
 
 class PatchedMixtralModel(nn.Module):

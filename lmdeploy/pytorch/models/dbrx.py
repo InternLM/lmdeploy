@@ -10,6 +10,8 @@ from torch.distributed._tensor import DeviceMesh, Shard, distribute_tensor
 from transformers.cache_utils import Cache
 from transformers.modeling_outputs import MoeModelOutputWithPast
 
+from lmdeploy.pytorch.kernels.fused_moe import fused_moe
+
 from ..dist_utils import rowwise_parallelize_linear_fn, try_to_local
 from ..kernels import fill_kv_cache, fused_rotary_emb, paged_attention_fwd
 
@@ -59,7 +61,6 @@ class PatchedDbrxAttention(nn.Module):
     def _contiguous_batching_forward_impl(
         self,
         hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         world_size: int = 1,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
@@ -99,7 +100,15 @@ class PatchedDbrxAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             scaling_factor = 1.0
-            inv_freq = self.rotary_emb.inv_freq
+            rotary_emb = self.rotary_emb
+            if rotary_emb.inv_freq is None:
+                rotary_emb.inv_freq = 1.0 / (rotary_emb.base**(torch.arange(
+                    0,
+                    rotary_emb.dim,
+                    2,
+                    dtype=torch.int64,
+                    device=query_states.device).float() / rotary_emb.dim))
+            inv_freq = rotary_emb.inv_freq
             query_states, key_states = fused_rotary_emb(
                 query_states[None],
                 key_states[None],
@@ -162,7 +171,6 @@ class PatchedDbrxAttention(nn.Module):
             world_size = dist.get_world_size()
         return self._contiguous_batching_forward_impl(
             hidden_states,
-            position_ids,
             past_key_value,
             world_size=world_size,
         )
@@ -174,31 +182,64 @@ class PatchedDbrxExpertGLU(nn.Module):
                                  device_mesh: DeviceMesh):
         """Distribution partition callback."""
 
-        world_size = dist.get_world_size()
+        def __partition(name, param):
+            param = param.unflatten(0, (self.moe_num_experts, -1))
+            dist_tensor = distribute_tensor(param, device_mesh, [Shard(1)])
+            dist_tensor = try_to_local(dist_tensor)
+            dist_param = torch.nn.Parameter(dist_tensor.flatten(0, 1))
+            del dist_tensor
+            mod.register_parameter(name, dist_param)
 
-        def __partiton_moe(weight: nn.Parameter, name: str):
-            weight = weight.view(self.moe_num_experts, self.ffn_hidden_size,
-                                 self.hidden_size)
-            weight = distribute_tensor(weight, device_mesh, [Shard(1)])
-            weight = try_to_local(weight)
-            weight = weight.flatten(0, 1)
-            self.register_parameter(name, nn.Parameter(weight))
+        if mod_name == '':
+            __partition('w1', mod.w1)
+            __partition('v1', mod.v1)
+            __partition('w2', mod.w2)
 
-        if getattr(self, '__finish_partition', False):
-            return
+    def _update_model_fn(self):
+        """update model."""
+        ffn_hidden_size = self.w1.size(0) // self.moe_num_experts
+        gate_up_weights = self.w1.new_empty(self.moe_num_experts,
+                                            ffn_hidden_size * 2,
+                                            self.w1.size(1))
+        gate_up_weights[:, :ffn_hidden_size].copy_(
+            self.w1.unflatten(0, (self.moe_num_experts, -1)))
+        gate_up_weights[:, ffn_hidden_size:].copy_(
+            self.v1.unflatten(0, (self.moe_num_experts, -1)))
+        delattr(self, 'w1')
+        delattr(self, 'v1')
+        down_weights = self.w2.data.unflatten(
+            0, (self.moe_num_experts, -1)).transpose(1, 2).contiguous()
+        delattr(self, 'w2')
+        torch.cuda.empty_cache()
 
-        __partiton_moe(self.w1, 'w1')
-        __partiton_moe(self.v1, 'v1')
-        __partiton_moe(self.w2, 'w2')
+        self.register_buffer('gate_up_weights', gate_up_weights)
+        self.register_buffer('down_weights', down_weights)
 
-        self.ffn_hidden_size = self.ffn_hidden_size // world_size
-        self.__finish_partition = True
+
+class PatchedDbrxExperts(nn.Module):
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
         """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs
+
+    def forward(self, x: torch.Tensor, weights: torch.Tensor,
+                top_weights: torch.Tensor,
+                top_experts: torch.LongTensor) -> torch.Tensor:
+        """moe forward."""
+        q_len = x.size(1)
+        x = x.flatten(0, 1)
+        out_states = fused_moe(x,
+                               self.mlp.gate_up_weights,
+                               self.mlp.down_weights,
+                               top_weights,
+                               top_experts,
+                               topk=top_weights.size(1),
+                               renormalize=False)
+
+        out_states = out_states.unflatten(0, (-1, q_len))
+        return out_states
 
 
 class PatchedDbrxModel(nn.Module):

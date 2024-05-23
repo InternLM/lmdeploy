@@ -72,8 +72,7 @@ struct AttentionUniversal {
     __device__ __host__ static bool need_separate_reduce(int max_split_cnt)
     {
         if constexpr (CTA_Q > 1) {
-            // using `max_split_cnt > 1` here make the kernel slightly slower
-            return true;
+            return max_split_cnt > 1;
         }
         else {
             return max_split_cnt > 32;
@@ -436,25 +435,24 @@ struct AttentionUniversal {
             Impl::Merge(frag_O, frag_M, frag_L, params.inv_sqrt_dh, storage);
         }
 
+        const bool separate_reduce = need_separate_reduce(cta_map.split_count());
+
+        if (separate_reduce && iter_end == tile_count && head_idx == 0) {
+            // Store actual split count, only used by separate reduction kernel
+            for (int ti = threadIdx.x; ti < CTA_Q; ti += kWarpCount * WARP_SIZE) {
+                if (qi_begin + ti < qi_end) {
+                    params.split_cnt[qi_begin + ti] = split_idx ? split_idx + 1 : 0;
+                }
+            }
+        }
+
         if (iter_begin == 0 && iter_end == tile_count) {
             StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params, storage);
         }
         else {
             StorePartial(frag_O, frag_M, frag_L, qi_begin, qi_end, head_idx, split_idx, params, storage);
-
-            if (iter_end == tile_count) {
-                // Store actual split count, only used by separate reduction kernel
-                for (int ti = qi_begin + threadIdx.x; ti < qi_end; ti += kWarpCount * WARP_SIZE) {
-                    params.split_cnt[ti] = split_idx + 1;
-                }
-            }
-
-            if (need_separate_reduce(cta_map.split_count())) {
-                return;
-            }
-            else {
+            if (!separate_reduce)
                 Reduce(qi_begin, head_idx, split_idx, iter_end == tile_count, params, cta_map, smem_buf);
-            }
         }
     }
 
