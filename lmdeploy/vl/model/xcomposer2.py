@@ -36,7 +36,8 @@ def init_empty_vit():
 class Xcomposer2VisionModel(VisonModel):
     """InternLM-Xcomposer2 vision model."""
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path, with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.build_model()
 
@@ -52,8 +53,11 @@ class Xcomposer2VisionModel(VisonModel):
             model.vit.resize_pos()
             model.vit.vision_tower.vision_model.post_layernorm.to_empty(
                 device='cpu').half()
-            del model.model
-            del model.output
+            if not self.with_llm:
+                del model.model
+                del model.output
+            else:
+                self.vl_model = model
 
         # additional components.
         with add_sys_path(self.model_path):
@@ -87,7 +91,7 @@ class Xcomposer2VisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=device_map,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['CLIPEncoderLayer'],
                 dtype=torch.half)
 
