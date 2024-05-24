@@ -5,7 +5,7 @@ on:
     inputs:
       repo_org:
         required: false
-        description: 'Tested repository organization name. Default is InternLM'
+        description: 'Tested repository organization name. Default is InternLM/lmdeploy'
         type: string
         default: 'InternLM/lmdeploy'
       repo_ref:
