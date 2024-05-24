@@ -203,7 +203,7 @@ class VisionModelInputs:
                     indexing[s:e] for indexing, s, e in zip(
                         self.input_embedding_indexing, starts, ends)
                 ],
-                                                     dim=0).unsqueeze(0)
+                                                     dim=0)
                 input_embeddings = torch.cat(input_embedding_li, dim=0)
         return input_embeddings, input_embedding_indexing
 

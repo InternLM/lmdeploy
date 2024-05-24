@@ -9,8 +9,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_split_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
-from ..kernels import (apply_rotary_pos_emb, fill_kv_cache, fused_rotary_emb,
-                       paged_attention_fwd)
+from ..kernels import fill_kv_cache, fused_rotary_emb, paged_attention_fwd
 
 LANGUAGE_TOKEN_TYPE = 0
 VISION_TOKEN_TYPE = 1
@@ -250,10 +249,15 @@ class PatchedCogVLMModel(nn.Module):
         position_ids = _get_cogvlm_position_ids(context)
 
         if vision_embeddings is not None and len(vision_embeddings) > 0:
+            token_type_ids = vision_embedding_indexing.int().unsqueeze(0)
+            vision_embedding_indexing = torch.arange(
+                vision_embedding_indexing.numel(),
+                device=vision_embedding_indexing.device
+            )[vision_embedding_indexing]
             # multi-modality
-            token_type_ids = vision_embedding_indexing.int()
-            inputs_embeds[vision_embedding_indexing] = vision_embeddings.to(
-                inputs_embeds)
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
         else:
             token_type_ids = torch.ones_like(
                 input_ids, dtype=torch.int,

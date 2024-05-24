@@ -243,8 +243,6 @@ class HistoryEmbeddings:
     """History embeddings."""
 
     def __init__(self, embeddings: List[InputEmbeddings] = None):
-        self._num_history_images: int = 0
-        self._num_history_image_tokens: int = 0
         self._embeddings: List[InputEmbeddings] = []
         if embeddings is not None:
             self._embeddings.extend(embeddings)
