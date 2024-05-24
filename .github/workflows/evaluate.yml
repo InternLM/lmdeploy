@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[tb_internlm2_chat_7b,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_llama2_chat_7b,tb_qwen1_5_chat_7b,tb_llama_3_8b_instruct,pt_internlm2_chat_7b,pt_internlm2_chat_20b,pt_llama2_chat_7b,pt_qwen1_5_chat_7b,pt_qwen1_5_moe_2_7b_chatpt_qwen1_5_moe_2_7b_chat,pt_llama_3_8b_instruct,tb_internlm2_chat_7b_kvint4,tb_internlm2_chat_20b_kvint4,tb_qwen1_5_chat_7b_kvint4,tb_llama_3_8b_instruct_kvint4]'
+        default: '[tb_internlm2_chat_7b,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_llama2_chat_7b,tb_qwen1_5_chat_7b,tb_llama_3_8b_instruct,pt_internlm2_chat_7b,pt_internlm2_chat_20b,pt_llama2_chat_7b,pt_qwen1_5_chat_7b,pt_qwen1_5_moe_2_7b_chat,pt_llama_3_8b_instruct,tb_internlm2_chat_7b_kvint4,tb_internlm2_chat_20b_kvint4,tb_qwen1_5_chat_7b_kvint4,tb_llama_3_8b_instruct_kvint4]'
       datasets:
         required: true
         description: 'Tested datasets list. eg. [*mmlu_datasets, *ceval_datasets, *WiC_datasets, *WSC_datasets, *triviaqa_datasets, *gsm8k_datasets, *race_datasets, *crowspairs_datasets]'
@@ -28,6 +28,11 @@ on:
         description: 'CUDA_VISIBLE_DEVICES.'
         type: string
         default: '0,1,2,3,4,5,6,7'
+      dependency_pkgs:
+        required: true
+        description: 'Dependency packages, you can also set a specific version'
+        type: string
+        default: 'pynvml packaging protobuf transformers_stream_generator transformers=4.44.0'
 
 
 jobs:
@@ -102,7 +107,7 @@ jobs:
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install pynvml packaging protobuf transformers_stream_generator
+          python3 -m pip install ${{inputs.dependency_pkgs }}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
