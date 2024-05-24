@@ -609,7 +609,7 @@ def paged_attention_fwd(
     kernel_meta = _kernel_meta()
     is_decoding = q.shape[-3] == q_seqlens.size(0)
     if not is_decoding:
-        num_warps = 4 if Lk <= 64 else 8
+        num_warps = 4
         grid = (batch, head, triton.cdiv(max_seqlen, BLOCK_M))
         _fwd_kernel[grid](q,
                           k,
@@ -686,7 +686,7 @@ def paged_attention_fwd(
                                     num_stages=1,
                                     **kernel_meta)
         else:
-            BLOCK_H = 16
+            BLOCK_H = max(16, min(BLOCK, kv_group_num))
             grid = (batch, head // min(BLOCK_H, kv_group_num), SPLIT_K)
             _fwd_grouped_split_kernel[grid](
                 q,
