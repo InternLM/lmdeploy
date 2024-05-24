@@ -81,10 +81,6 @@ struct MainloopSm80_v2 {
     using GmemIterB = typename OperandB::GmemIter;
     using GmemIterQ = typename OperandQ::GmemIter;
 
-    static constexpr auto LayoutA = OperandA::Layout;
-    static constexpr auto LayoutB = OperandB::Layout;
-    static constexpr auto LayoutQ = OperandQ::Layout;
-
     static constexpr int WARP_CNT_M = M_ / TiledMma::M;
     static constexpr int WARP_CNT_N = N_ / TiledMma::N;
     static constexpr int WARP_CNT_K = K_ / TiledMma::K;
@@ -96,6 +92,12 @@ struct MainloopSm80_v2 {
     static constexpr int kBatchA = ceil_div(GmemIterA::ITER_S, kMaxPrefetchIter);
     static constexpr int kBatchB = ceil_div(GmemIterB::ITER_S, kMaxPrefetchIter);
     // static constexpr int kBatchQ = ceil_div(GmemIterQ::ITER_S, kMaxPrefetchIter);
+
+    template<bool k_major>
+    static constexpr int2 mk2cs(int m, int k)
+    {
+        return k_major ? int2{k, m} : int2{m, k};
+    }
 
     struct SharedStorage {
         __align__(16) Array<Ta, Stages * SmemLayoutA::kSize> A;
@@ -188,13 +190,11 @@ struct MainloopSm80_v2 {
         const int offset_k = warp_id_k(warp_id) * TiledMma::K;
 
         auto Load = [&](int k) {
-            const int cur_k = offset_k + k * SmemCopyA::Atom::kWarpAccessC;
-            SmemCopyA::copy(SmemAccessorA{smem_A.pointer},
-                            data_A[k],
-                            OperandA::is_k_major ? int2{cur_k, offset_m} : int2{offset_m, cur_k});
-            SmemCopyB::copy(SmemAccessorB{smem_B.pointer},
-                            data_B[k],
-                            OperandB::is_k_major ? int2{cur_k, offset_n} : int2{offset_n, cur_k});
+            const int      current_k = offset_k + k * MMA_Atom::K;
+            constexpr bool k_major_A = OperandA::kOrder == Order::kRowMajor;
+            constexpr bool k_major_B = OperandB::kOrder == Order::kColMajor;
+            SmemCopyA::copy(SmemAccessorA{smem_A.pointer}, data_A[k], mk2cs<k_major_A>(offset_m, current_k));
+            SmemCopyB::copy(SmemAccessorB{smem_B.pointer}, data_B[k], mk2cs<k_major_B>(offset_n, current_k));
         };
 
         advance_and_wait_smem_stage();

@@ -132,7 +132,7 @@ public:
             dispatch_policy_,
         };
 
-        const MatrixLayout c_desc{get_data_type_v<T>, LayoutType::kRowMajor, m_, n_, n_};
+        const MatrixLayout c_desc{get_data_type_v<T>, Order::kRowMajor, m_, n_, n_};
 
         const Workspace workspace{barriers_.data().get(),
                                   sizeof(int) * barriers_.size(),
@@ -142,11 +142,11 @@ public:
         // auto status = gemm_.Run(operation,
         //                         nullptr,
         //                         a_.data().get(),
-        //                         MatrixLayout{get_data_type_v<T>, LayoutType::kRowMajor, m_, k_, k_},
+        //                         MatrixLayout{get_data_type_v<T>, Order::kRowMajor, m_, k_, k_},
         //                         b_pack_.data().get(),
-        //                         MatrixLayout{get_data_type_v<Tb>, LayoutType::kFragment_81616, k_, n_, k_},
+        //                         MatrixLayout{get_data_type_v<Tb>, Order::kFragment_81616, k_, n_, k_},
         //                         q_pack_.data().get(),
-        //                         MatrixLayout{get_data_type_v<T>, LayoutType::kColMajor, k_ / g_, n_, n_},
+        //                         MatrixLayout{get_data_type_v<T>, Order::kColMajor, k_ / g_, n_, n_},
         //                         nullptr,
         //                         c_.data().get(),
         //                         c_desc,
@@ -158,11 +158,11 @@ public:
         auto status = gemm_.Run(operation,
                                 nullptr,
                                 a_.data().get(),
-                                MatrixLayout{get_data_type_v<T>, LayoutType::kColMajor, m_, k_, m_},
+                                MatrixLayout{get_data_type_v<T>, Order::kColMajor, m_, k_, m_},
                                 b_.data().get(),
-                                MatrixLayout{get_data_type_v<Tb>, LayoutType::kColMajor, k_, n_, k_},
+                                MatrixLayout{get_data_type_v<Tb>, Order::kColMajor, k_, n_, k_},
                                 nullptr,
-                                MatrixLayout{get_data_type_v<T>, LayoutType::kRowMajor, 0, 0, 0},
+                                MatrixLayout{get_data_type_v<T>, Order::kRowMajor, 0, 0, 0},
                                 nullptr,
                                 c_.data().get(),
                                 c_desc,
@@ -254,6 +254,8 @@ private:
         //                     k_,
         //                     g_,
         //                     stream_);
+
+        // Convert(a_.data(), {}, )
     }
 
     void computeRefCublas(half* C, const half* A, const half* B, int m, int n, int k, cudaStream_t stream)
@@ -301,6 +303,7 @@ private:
     universal_vector<T>        q_;    // quant param `b_q_`
     universal_vector<T>        c_f_;  // ref C computed by `b_f_`
 
+    universal_vector<Array<T, 8>>  a_pack_;  // packed A
     universal_vector<Array<Tb, 8>> b_pack_;  // packed B
     universal_vector<T>            q_pack_;  // packed Q
 

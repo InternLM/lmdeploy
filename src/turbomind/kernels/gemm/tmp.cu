@@ -36,18 +36,21 @@ struct Config {
 
     struct OperandA {
         using Dtype      = half;
-        using SmemLayout = SmemLayoutV2<CTA_K, CTA_M, 16, 64, Swizzle<3, 3, 3>>;
-        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<half, true>, 16, WARP_M>;
-        using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_M, CTA_K, 8, WARP_CNT>, SmemLayout, AlignedM, true, 0>;
-        static constexpr Order kOrder = Order::kColMajor;
+        using SmemLayout = SmemLayoutV2<CTA_M / 16, CTA_K * 16>;
+        using SmemCopy   = SmemCopy_Packed<half, WARP_M, 16, 1, 1>;
+        using GmemIter =
+            GmemIteratorSm80<Dtype, ThreadMap<CTA_K * 16, CTA_M / 16, 8, WARP_CNT>, SmemLayout, false, true, 0>;
+        static constexpr Order kOrder     = Order::kColMajor;
+        static constexpr bool  is_k_major = true;
     };
 
     struct OperandB {
         using Dtype      = half;
-        using SmemLayout = SmemLayoutV2<CTA_N, CTA_K, std::min(16, CTA_N), 64, Swizzle<3, 3, 3>>;
+        using SmemLayout = SmemLayoutV2<CTA_N, CTA_K, std::min(16, CTA_N), 32, Swizzle<2, 3, 3>>;
         using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<half, false>, WARP_N, 16>;
         using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>, SmemLayout, AlignedN, true, 1>;
-        static constexpr Order kOrder = Order::kColMajor;
+        static constexpr Order kOrder     = Order::kColMajor;
+        static constexpr bool  is_k_major = true;
     };
 
     using Mainloop = MainloopSm80_v2<CTA_M, CTA_N, CTA_K, TiledMma, OperandA, OperandB, OperandB, Transform, Stages>;
@@ -57,17 +60,10 @@ struct Config {
 
 }  // namespace
 
-void Registry::reigster_sm80_s16816gemm_f16_f16_v2()
+Kernel& gKernel()
 {
-    // clang-format off
-    // Add(std::make_unique<KernelImpl<typename Config<128, 128, 32, 128, 16, 32, 3,  false, 1, 1>::Kernel>>());
-    Add(std::make_unique<KernelImpl<typename Config<256, 128, 64, 64, 64, 64, 3, false, 1, 1>::Kernel>>());
-    // Add(std::make_unique<KernelImpl<typename Config<128, 128, 32, 64, 64, 32, 3,  false, 0, 0>::Kernel>>());
-    // Add(std::make_unique<KernelImpl<typename Config<256, 128, 32, 64, 64, 32, 6,  false, 0, 1>::Kernel>>());
-    // Add(std::make_unique<KernelImpl<typename Config<256, 128, 32, 64, 64, 32, 3,  false, 1, 1>::Kernel>>());
-
-    // Add(std::make_unique<KernelImpl<typename Config< 16,  16, 32,  16, 16, 32, 3,  false, 1, 1>::Kernel>>());
-    // clang-format on
+    static KernelImpl<typename Config<32, 32, 32, 32, 32, 32, 3, false, 1, 1>::Kernel> inst{};
+    return inst;
 }
 
 }  // namespace turbomind::gemm

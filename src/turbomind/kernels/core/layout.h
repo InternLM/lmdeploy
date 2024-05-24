@@ -56,7 +56,7 @@ struct SmemLayoutV2 {
     static constexpr int C = C_;
 
     static constexpr int S0 = S0_ < 0 ? S : S0_;
-    static constexpr int C0 = C0_ < 0 ? C : C0_;;
+    static constexpr int C0 = C0_ < 0 ? C : C0_;
 
     static_assert(S % S0 == 0);
     static_assert(C % C0 == 0);
@@ -124,11 +124,25 @@ struct SmemAccessor {
         return ptr_[layout_(s, c, offset)];
     }
 
-    // __device__ T& operator()(int s, int c, int offset)
-    // {
-    //     // return *((T*)((char*)ptr_ + offset) + layout_(s, c));
-    //     return *(T*)((char*)(ptr_ + layout_(s, c)) + offset);
-    // }
+    __device__ T& operator()(int idx)
+    {
+        return ptr_[idx];
+    }
+};
+
+template<class T0, class T1>
+struct Stride {
+    T0 v0;
+    T1 v1;
+
+    // CTAD
+    __host__ __device__ Stride(T0 v0, T1 v1): v0{v0}, v1{v1} {}
+
+    template<class I0, class I1>
+    __host__ __device__ constexpr auto operator()(I0 i0, I1 i1) const
+    {
+        return v0 * i0 + v1 * i1;
+    }
 };
 
 }  // namespace turbomind

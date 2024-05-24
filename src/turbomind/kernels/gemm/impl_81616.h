@@ -130,10 +130,10 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
         std::min<int>(16 / sizeof(Tq), std::max(1, (CTA_N * CTA_G) / (WARP_CNT * WARP_SIZE)));
     using ThreadMapQ = gemm::ThreadMap<CTA_N, CTA_G, kGmemAccessSizeQ, WARP_CNT>;
 
-    static constexpr auto LayoutA = LayoutType::kRowMajor;
-    static constexpr auto LayoutB = LayoutType::kFragment_81616;
-    static constexpr auto LayoutQ = LayoutType::kRowMajor;
-    static constexpr auto LayoutC = LayoutType::kRowMajor;
+    static constexpr auto LayoutA = Order::kRowMajor;
+    static constexpr auto LayoutB = Order::kFragment_81616;
+    static constexpr auto LayoutQ = Order::kRowMajor;
+    static constexpr auto LayoutC = Order::kRowMajor;
 
     // static constexpr int kGmemAccessSizeC =
     //     std::min<int>(16 / sizeof(T), std::max(1, (CTA_K * CTA_M) / (WARP_CNT * WARP_SIZE)));

@@ -21,9 +21,9 @@ public:
 
     KernelImpl()
     {
-        desc_.order_a = Impl::LayoutA;
-        desc_.order_b = Impl::LayoutB;
-        desc_.order_c = Gemm::LayoutC;
+        desc_.order_a = Impl::OperandA::kOrder;
+        desc_.order_b = Impl::OperandB::kOrder;
+        desc_.order_c = Gemm::kOrderC;
 
         desc_.type_a = get_data_type_v<typename Gemm::T>;
         desc_.type_b = get_data_type_v<typename Gemm::Tb>;

@@ -8,10 +8,25 @@
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/sync.h"
+#include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/thread_map.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
+
+template<Order order>
+__host__ __device__ auto make_stride(int ld)
+{
+    if constexpr (order == Order::kColMajor) {
+        return Stride{std::integral_constant<int, 1>{}, ld};
+    }
+    else if constexpr (order == Order::kRowMajor) {
+        return Stride{ld, std::integral_constant<int, 1>{}};
+    }
+    else {
+        return 0;
+    }
+}
 
 template<class Arch_, class Mainloop, class CtaMap_, bool AlignedM_, bool AlignedN_, bool SplitK_>
 struct GemmUniversal {
@@ -28,7 +43,7 @@ struct GemmUniversal {
     using Arch   = Arch_;
     using CtaMap = CtaMap_;
 
-    static constexpr auto LayoutC = LayoutType::kRowMajor;
+    static constexpr Order kOrderC = Order::kRowMajor;
 
     static constexpr int CTA_M = Impl::CTA_M;
     static constexpr int CTA_N = Impl::CTA_N;
@@ -54,48 +69,26 @@ struct GemmUniversal {
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
-    // row.col.row
+    using PtrA = get_pointer_type<Ta>;
+    using PtrB = get_pointer_type<Tb>;
+
     struct Param {
-        int m;
-        int n;
-        int k;
-
-        T*  A;
-        int lda;
-
-        get_pointer_type<Tb> B;
-        int                  ldb;
-
-        Tq* Q;
-        int ldq;
-
-        T*  C;
-        int ldc;
-
-        int  log_tile;
-        int3 tiled_shape;
-
+        int    m;
+        int    n;
+        int    k;
+        PtrA   A;
+        int    lda;
+        PtrB   B;
+        int    ldb;
+        Tq*    Q;
+        int    ldq;
+        T*     C;
+        int    ldc;
+        int    log_tile;
+        int3   tiled_shape;
         float* partial_C;  // (k, m, n)
         int*   locks;      // (m/cta_m, n/cta_n, k)
     };
-
-    template<LayoutType layout>
-    __device__ int Offset(int rows, int cols, int ld)
-    {
-        if constexpr (layout == LayoutType::kRowMajor) {
-            return rows * ld + cols;
-        }
-        else if constexpr (layout == LayoutType::kColMajor) {
-            return cols * ld + rows;
-        }
-        else if constexpr (layout == LayoutType::kFragment_81616) {  // k-major
-            return cols * ld + rows * Impl::kPackedN;
-        }
-        else {
-            static_assert(layout != layout, "not implemented");
-            return 0;
-        }
-    }
 
     __device__ void operator()(const Param& param, const CtaMap& cta_map, char* smem_buf)
     {
@@ -127,29 +120,28 @@ struct GemmUniversal {
 
         int tile_iter = (gemm_k_size + CTA_K - 1) / CTA_K;
 
-        auto           offset_a     = [&](int m, int k) { return Offset<Impl::LayoutA>(m, k, param.lda); };
-        constexpr bool is_k_major_A = Impl::OperandA::is_k_major;
-        IteratorA      gmem_A{
-            param.A + offset_a(offset_m, offset_k),  // ptr
+        auto layout_a = make_stride<Impl::OperandA::kOrder>(param.lda);
+        auto layout_b = make_stride<Impl::OperandB::kOrder>(param.ldb);
+        auto layout_q = make_stride<Impl::OperandQ::kOrder>(param.ldq);
+
+        IteratorA gmem_A{
+            param.A + layout_a(offset_m, offset_k),  // ptr
             param.lda,                               // stride s
-            offset_a(0, CTA_K),                      // stride k
-            is_k_major_A ? int2{CTA_K, end_m} : int2{end_m, CTA_K},
+            layout_a(0, CTA_K),                      // stride k
+            mk2cs<Impl::OperandA::kOrder == Order::kRowMajor>(end_m, CTA_K),
         };
 
-        auto           offset_b     = [&](int k, int n) { return Offset<Impl::LayoutB>(k, n, param.ldb); };
-        constexpr bool is_k_major_B = Impl::OperandB::is_k_major;
-        IteratorB      gmem_B{
-            param.B + offset_b(offset_k, offset_n),  // ptr
+        IteratorB gmem_B{
+            param.B + layout_b(offset_k, offset_n),  // ptr
             param.ldb,                               // stride s
-            offset_b(CTA_K, 0),                      // stride k
-            is_k_major_B ? int2{CTA_K, end_n} : int2{end_n, CTA_K},
+            layout_b(CTA_K, 0),                      // stride k
+            mk2cs<Impl::OperandB::kOrder == Order::kColMajor>(end_n, CTA_K),
         };
 
-        auto      offset_q = [&](int k, int n) { return Offset<Impl::LayoutQ>(k / Impl::G, n, param.ldq); };
         IteratorQ gmem_Q{
-            param.Q + offset_q(offset_k, offset_n),  // ptr
+            param.Q + layout_q(offset_k, offset_n),  // ptr
             param.ldq,                               // stride s
-            offset_q(CTA_G, 0),                      // stride k
+            layout_q(CTA_G, 0),                      // stride k
             int2{end_n, CTA_G},
         };
 
@@ -188,6 +180,12 @@ struct GemmUniversal {
         }
     }
 
+    template<bool k_major>
+    __device__ static constexpr int2 mk2cs(int m, int k)
+    {
+        return k_major ? int2{k, m} : int2{m, k};
+    }
+
     __device__ static constexpr bool check_m(int mi, int end_m)
     {
         if constexpr (AlignedM) {
@@ -211,11 +209,13 @@ struct GemmUniversal {
     __device__ void
     StoreC(FragC& frag_C, int offset_m, int offset_n, int end_m, int end_n, const Param& param, SharedStorage& storage)
     {
-        static_assert(LayoutC == LayoutType::kRowMajor);
+        static_assert(kOrderC == Order::kRowMajor);
+
+        const auto layout_c = make_stride<kOrderC>(param.ldc);
 
         Impl::template StoreC<T>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
             if (check_m(mi, end_m) && check_n(ni, end_n)) {
-                Store(&param.C[(offset_m + mi) * param.ldc + offset_n + ni], cast<T>(vec));
+                Store(param.C + layout_c(offset_m + mi, offset_n + ni), cast<T>(vec));
             }
         });
     }

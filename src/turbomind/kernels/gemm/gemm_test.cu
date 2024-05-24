@@ -1,8 +1,12 @@
 
 #include "src/turbomind/kernels/attention/quantization.h"
+
 #include "src/turbomind/kernels/gemm/cache_utils.h"
+#include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
+#include <thrust/universal_vector.h>
 #include "src/turbomind/kernels/gemm/gpu_metric.h"
+#include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/quantization.h"
 #include "src/turbomind/kernels/gemm/test_utils.h"
 #include "src/turbomind/kernels/gemm/testbed.h"
@@ -10,7 +14,7 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include <fstream>
 #include <limits>
-#include <thrust/universal_vector.h>
+
 #include <type_traits>
 
 using namespace turbomind;
@@ -81,6 +85,14 @@ void Test(int bsz, int tp)
     Run<T, Tb>(16384, 16384, 16384);
 }
 
+namespace turbomind::gemm {
+
+Kernel& gKernel();
+
+}
+
+using namespace gemm;
+
 int main(int argc, char* argv[])
 {
     // gemm::MeasureL2CacheThroughput();
@@ -88,6 +100,7 @@ int main(int argc, char* argv[])
     // Test<half, uint4_t>(1, 1);
     // Test<half, uint4_t>(8, 1);
     Test<half, half>(16, 1);
+    return 0;
     // Test<half, uint4_t>(32, 1);
     // Test<half, uint4_t>(64, 1);
     // Test<half, uint4_t>(128, 1);
@@ -97,6 +110,76 @@ int main(int argc, char* argv[])
     // Test<half, uint4_t>(2048, 1);
     // Test<half, uint4_t>(4096, 1);
     // Test<half, uint4_t>(8192, 1);
+
+    const int M = 32;
+    const int N = 128;
+    const int K = 32;
+
+    universal_vector<half> a(M * K);
+    universal_vector<half> p(M * K);
+
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < K; ++j) {
+            a[i * K + j] = 1;//i * K + j;
+        }
+    }
+
+    Convert(a.data().get(),
+            MatrixLayout{DataType::F16, Order::kRowMajor, 32, 32, 32},
+            p.data().get(),
+            MatrixLayout{DataType::F16, Order::kFragment_16816_A, 32, 32, 32},
+            0);
+
+    cudaDeviceSynchronize();
+
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < K; ++j) {
+            int index = (int)p[i * K + j];
+            int row   = index / K;
+            int col   = index % K;
+            printf("(%2d,%2d) ", row, col);
+        }
+        printf("\n");
+    }
+
+    universal_vector<half> b(N * K);
+    thrust::fill_n(b.begin(), b.size(), 1);
+
+    universal_vector<half> c(M * N);
+
+    Workspace workspace{};
+
+    const float alpha = 1.f;
+    const float beta  = 0.f;
+
+    const MatrixLayout c_desc{DataType::F16, Order::kRowMajor, M, N, N};
+
+    gKernel().Launch({},
+                     &alpha,
+                     a.data().get(),
+                     MatrixLayout{DataType::F16, Order::kFragment_16816_A, M, K},
+                     b.data().get(),
+                     MatrixLayout{DataType::F16, Order::kColMajor, N, K, K},
+                     nullptr,
+                     MatrixLayout{},
+                     &beta,
+                     c.data().get(),
+                     c_desc,
+                     c.data().get(),
+                     c_desc,
+                     0,
+                     1,
+                     workspace,
+                     0);
+
+    cudaDeviceSynchronize();
+
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < N; ++j) {
+            printf("%2.0f ", (float)c[i * N + j]);
+        }
+        printf("\n");
+    }
 
     return 0;
 }

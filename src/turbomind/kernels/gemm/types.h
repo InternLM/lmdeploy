@@ -10,9 +10,11 @@
 
 namespace turbomind::gemm {
 
-enum class LayoutType : int {
-    kColMajor,
-    kRowMajor,
+enum class Order : int {
+    kColMajor         = 0,
+    kRowMajor         = 1,
+    kFragment_16816_A = 2,
+    kFragment_16816_B = 4,
     kFragment_884,
     kFragment_81616,
     kFragment_16816,
@@ -107,11 +109,11 @@ struct Operation {
 };
 
 struct MatrixLayout {
-    DataType   type;
-    LayoutType order;
-    int        rows;
-    int        cols;
-    int        ld;
+    DataType type;
+    Order    order;
+    int      rows;
+    int      cols;
+    int      ld;
 };
 
 struct Workspace {

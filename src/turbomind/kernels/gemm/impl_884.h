@@ -78,10 +78,10 @@ struct Impl<MMA_884, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, WAR
     static constexpr int G_CTA    = ceil_div(G, CTA_K);
     static constexpr int kPackedN = 1;
 
-    static constexpr auto LayoutA = LayoutType::kRowMajor;  // (m, k)
-    static constexpr auto LayoutB = LayoutType::kColMajor;  // (n, k)
-    static constexpr auto LayoutQ = LayoutType::kRowMajor;
-    static constexpr auto LayoutC = LayoutType::kRowMajor;  // (m, n)
+    static constexpr auto LayoutA = Order::kRowMajor;  // (m, k)
+    static constexpr auto LayoutB = Order::kColMajor;  // (n, k)
+    static constexpr auto LayoutQ = Order::kRowMajor;
+    static constexpr auto LayoutC = Order::kRowMajor;  // (m, n)
 
     struct SharedStorage {
         __align__(16) T A[Stages_ * SmemLayoutA::kSize];

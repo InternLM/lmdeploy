@@ -41,4 +41,10 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+int Convert(const void*         S,  //
+            const MatrixLayout& Sdesc,
+            void*               D,
+            const MatrixLayout& Ddesc,
+            cudaStream_t        stream);
+
 }  // namespace turbomind::gemm

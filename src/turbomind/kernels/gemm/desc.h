@@ -9,17 +9,17 @@ namespace turbomind::gemm {
 
 // aggregate that uniquely identifies a GEMM problem
 struct GemmDesc {
-    DataType   type_a;
-    DataType   type_b;
-    DataType   type_c;
-    LayoutType order_a;
-    LayoutType order_b;
-    LayoutType order_c;
-    QuantDesc  quant_b;
-    Epilogue   epilogue;
-    int        m;
-    int        n;
-    int        k;
+    DataType  type_a;
+    DataType  type_b;
+    DataType  type_c;
+    Order     order_a;
+    Order     order_b;
+    Order     order_c;
+    QuantDesc quant_b;
+    Epilogue  epilogue;
+    int       m;
+    int       n;
+    int       k;
 };
 
 enum class OpClass {
@@ -31,20 +31,20 @@ enum class OpClass {
 
 // aggregate that uniquely identifies a kernel
 struct KernelDesc {
-    DataType   type_a;
-    DataType   type_b;
-    DataType   type_c;
-    LayoutType order_a;
-    LayoutType order_b;
-    LayoutType order_c;
-    QuantDesc  quant_b;
-    int3       cta_tile;
-    int3       warp_tile;
-    int        stages;
-    bool       split_k;
-    bool       align_m;
-    bool       align_n;
-    int        arch;
+    DataType  type_a;
+    DataType  type_b;
+    DataType  type_c;
+    Order     order_a;
+    Order     order_b;
+    Order     order_c;
+    QuantDesc quant_b;
+    int3      cta_tile;
+    int3      warp_tile;
+    int       stages;
+    bool      split_k;
+    bool      align_m;
+    bool      align_n;
+    int       arch;
 };
 
 class Kernel;
