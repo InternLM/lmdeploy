@@ -5,9 +5,11 @@ from typing import Dict, List, Tuple, Union
 import PIL
 
 from lmdeploy.model import BaseModel
-from lmdeploy.utils import get_hf_config_content
+from lmdeploy.utils import get_hf_config_content, get_logger
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64, load_image
+
+logger = get_logger('lmdeploy')
 
 VLPromptType = Union[str, Tuple[str, PIL.Image.Image],
                      Tuple[str, List[PIL.Image.Image]]]
@@ -97,10 +99,11 @@ class VLChatTemplateWrapper:
                     num_images += 1
                 elif item['type'] == 'text':
                     prompt = item['text']
-            new_item = {
-                'role': 'user',
-                'content': self.append_image_token(prompt, num_images)
-            }
+            # if IMAGE_TOKEN in user prompt, use user custom prompt instead
+            # of adding IMAGE_TOKEN to user prompt
+            if IMAGE_TOKEN not in prompt and num_images > 0:
+                prompt = self.append_image_token(prompt, num_images)
+            new_item = {'role': 'user', 'content': prompt}
             new_messages.append(new_item)
         return new_messages
 
@@ -136,6 +139,10 @@ class DeepSeekVLChatTemplateWrapper(VLChatTemplateWrapper):
 
     def append_image_token(self, prompt, num_images: int):
         """append image tokens to user prompt."""
+        logger.error(
+            f'for deepseek-vl model, the user should insert the {IMAGE_TOKEN} '
+            'to user prompt manually, please read https://lmdeploy.readthedocs'
+            '.io/en/latest/inference/vl_pipeline.html for more details.')
         if num_images == 1:
             return f'{IMAGE_TOKEN}{prompt}'
         res = ''
