@@ -5,6 +5,7 @@ import time
 from queue import Queue
 from threading import Thread
 from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 
 import fire
 import numpy as np
@@ -18,6 +19,7 @@ def sample_requests(
     dataset_path: str,
     num_requests: int,
     tokenizer: Tokenizer,
+    role: str,
 ) -> List[Tuple[str, int, int]]:
     # Load the dataset.
     with open(dataset_path) as f:
@@ -39,7 +41,10 @@ def sample_requests(
     tokenized_dataset = []
     for i in range(len(dataset)):
         output_len = len(completion_token_ids[i])
-        tokenized_dataset.append((prompts[i], prompt_token_ids[i], output_len))
+        tokenized_dataset.append(([{
+            'role': role,
+            'content': prompts[i]
+        }], prompt_token_ids[i], output_len))
 
     # Filter out too long sequences.
     filtered_dataset: List[Tuple[str, int, int]] = []
@@ -93,16 +98,32 @@ class Engine:
                 req_queue.get, [None, None, None]):
             timestamps = []
             timestamps.append(time.perf_counter())
-            for output in client.chat_completions_v1(
-                    model=self.model_name,
-                    messages=prompt,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    n=1,
-                    max_tokens=output_seqlen,
-                    stream=stream_output,
-                    session_id=session_id,
-                    ignore_eos=True):
+            full_output = ''
+            failed = 0
+            try:
+                for output in client.chat_completions_v1(
+                        model=self.model_name,
+                        messages=prompt,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        n=1,
+                        max_tokens=output_seqlen,
+                        stream=stream_output,
+                        session_id=None,
+                        repetition_penalty=None,
+                        ignore_eos=None,
+                        skip_special_tokens=None):
+                    # Here we ignore the index of the multiple outputs and
+                    # just put all of them together to compute tokens.
+                    for choice in output.get('choices', []):
+                        if stream_output:
+                            full_output += choice['delta'].get('content', '')
+                        else:
+                            full_output += choice['message']['content']
+                    timestamps.append(time.perf_counter())
+            except Exception as e:
+                print(f'inference failed: {e}')
+                failed = 1
                 timestamps.append(time.perf_counter())
 
             first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
@@ -110,10 +131,14 @@ class Engine:
             # assert output.pop('finish_reason') == 'length', \
             #     f'Error. session_id({session_id}) request {output_seqlen} ' \
             #     f'tokens, but `finish_reason` is not `length`'
-            total_tokens = input_seqlen + output_seqlen
+            tokenlizer_start = time.perf_counter()
+            real_output_seqlen = len(self.tokenizer(full_output).input_ids)
+            tokenlizer_finish = time.perf_counter()
+            tokenlizer_time = tokenlizer_finish - tokenlizer_start
+            total_tokens = input_seqlen + real_output_seqlen
             stats.append([
-                first_token_latency, output_seqlen, output_seqlen,
-                total_tokens, token_latency
+                first_token_latency, real_output_seqlen, output_seqlen,
+                total_tokens, token_latency, tokenlizer_time, failed
             ])
             self.pbar.update(1)
 
@@ -157,15 +182,20 @@ class Engine:
             #       f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
             stats.append(np.array(_stats))
 
-        stats = np.concatenate(stats).reshape(-1, 5)
+        stats = np.concatenate(stats).reshape(-1, 7)
+
+        tokenlizer_time = np.sum(stats[:, 5], axis=0) / concurrency
+        elapsed_time -= tokenlizer_time
 
         first_token_latency_min = np.min(stats[:, 0], axis=0)
         first_token_latency_max = np.max(stats[:, 0], axis=0)
         first_token_latency_ave = np.mean(stats[:, 0], axis=0)
+        failed_requests = np.sum(stats[:, 6], axis=0)
         completion_tokens = np.sum(stats[:, 1], axis=0)
         request_output_tokens = np.sum(stats[:, 2], axis=0)
         total_tokens = np.sum(stats[:, 3], axis=0)
         prompt_tokens = total_tokens - completion_tokens
+        local_tokenlizer_throughput = completion_tokens / tokenlizer_time
         completion_token_throughput = completion_tokens / elapsed_time
         total_token_throughput = total_tokens / elapsed_time
         rps = len(requests) / elapsed_time
@@ -183,9 +213,14 @@ class Engine:
                   f'{first_token_latency_min:.3f}s, '
                   f'{first_token_latency_max:.3f}s, '
                   f'{first_token_latency_ave:.3f}s\n')
+
+        if failed_requests > 0:
+            print(f'number of failed requests: {failed_requests:.0f}\n')
+
         print(
             f'number of prompt tokens: {prompt_tokens:.0f}\n'
             f'number of completion tokens: {completion_tokens:.0f}\n'
+            f'local tokenlizer throughput (completion token): {local_tokenlizer_throughput:.3f} token/s\n'  # noqa
             f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
             f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
             f'RPS (request per second): {rps:.3f} req/s\n'
@@ -222,7 +257,8 @@ def main(server_addr: str,
          temperature: float = 1.0,
          stream_output: bool = False,
          csv: str = './profile_api_server.csv',
-         seed: int = 0):
+         seed: int = 0,
+         role: str = 'user'):
     """Benchmark the request througput of api server.
 
     Args:
@@ -240,11 +276,14 @@ def main(server_addr: str,
         stream_output (bool, optional): Indicator for streaming output. Defaults to False.
         csv (str, optional): The path to save the result.
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
+        role (str, optional): The role of the messages author in prompts. Defaults to 'user'
     """    # noqa
-    if not server_addr.startswith('http://'):
+    addr_schem = urlparse(server_addr).scheme
+    if addr_schem not in ['http', 'https']:
         print(f'[WARNING] server_addr of the api_server should '
-              f'start with "http://", but got "{server_addr}"')
+              f'start with "http://" or "https://", but got "{server_addr}"')
         server_addr = 'http://' + server_addr.strip()
+    print(f'[INFO] using server_addr: {server_addr}')
 
     random.seed(seed)
 
@@ -256,7 +295,7 @@ def main(server_addr: str,
                     api_key=api_key,
                     model_name=model_name)
 
-    requests = sample_requests(dataset, num_prompts, engine.tokenizer)
+    requests = sample_requests(dataset, num_prompts, engine.tokenizer, role)
 
     engine.process_request(requests, concurrency, stream_output)
 
