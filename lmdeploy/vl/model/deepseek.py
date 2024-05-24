@@ -91,7 +91,9 @@ class DeepSeekVisionModel(VisonModel):
         outputs = [x.convert('RGB') for x in images]
         pixel_values = self.image_processor(outputs,
                                             return_tensors='pt').pixel_values
-        pixel_values = pixel_values.to(dtype=torch.float16)
+        pixel_values = pixel_values.to(device=next(
+            self.vision_model.parameters()).device,
+                                       dtype=torch.float16)
         # [b x n_images, T2, D]
         images_embeds = self.aligner(self.vision_model(pixel_values))
 

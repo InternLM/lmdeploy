@@ -77,7 +77,7 @@ class VLChatTemplateWrapper:
 
     def append_image_token(self, prompt, num_images: int):
         """append image token to user prompt."""
-        return IMAGE_TOKEN * num_images + '\n' + prompt
+        return (IMAGE_TOKEN + '\n') * num_images + prompt
 
     def convert_messages(self, messages, sequence_start=True):
         """convert GPT4V message format to GPT4 text format."""
@@ -86,6 +86,9 @@ class VLChatTemplateWrapper:
             role = message['role']
             content = message['content']
             if role != 'user' or isinstance(content, str):
+                if isinstance(content, list):
+                    text = content[0]['text']
+                    message = {'role': role, 'content': text}
                 new_messages.append(message)
                 continue
             num_images = 0

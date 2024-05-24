@@ -99,14 +99,13 @@ print(response)
 
 ### 设置对话模板
 
-推理时，LMDeploy 会根据模型路径匹配内置的对话模板，并把对话模板应用到输入的提示词上。但是，对于类似 [llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) 视觉-语言模型，它使用的对话模板是 vicuna，但是这个模板名无法从模型路径中获取，所以需要用户指定。具体方式如下：
+推理时，LMDeploy 会根据模型路径匹配内置的对话模板，并把对话模板应用到输入的提示词上。如果用户使用的是本地模型，并且模型文件夹名字与官方模型不一致时，需要手动指定对话模版。以 [llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) 为例，官方使用 ['llava-v1'](https://github.com/haotian-liu/LLaVA/blob/v1.2.2/llava/conversation.py#L325-L335) 对话模版，如果本地文件夹名字不是 `llava-v1.5-7b`，可以按照如下方式使用。
 
 ```python
 from lmdeploy import pipeline, ChatTemplateConfig
 from lmdeploy.vl import load_image
-pipe = pipeline('liuhaotian/llava-v1.5-7b',
-                chat_template_config=ChatTemplateConfig(model_name='vicuna'))
-
+pipe = pipeline('local_model_folder',
+                chat_template_config=ChatTemplateConfig(model_name='llava-v1'))
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))
 print(response)
