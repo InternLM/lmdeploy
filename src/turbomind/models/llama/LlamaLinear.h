@@ -35,9 +35,8 @@ public:
                  Type                       type      = kGemm,
                  int*                       lora_mask = nullptr)
     {
-        float           alpha     = 1.0f;
-        float           beta      = 0.0f;
-        GemmS4F16::Type gemm_type = type == kFusedSiluFfn ? GemmS4F16::kFusedSiluFfn : GemmS4F16::kGemm;
+        float alpha = 1.0f;
+        float beta  = 0.0f;
         if (lora_mask != nullptr && weight.lora.r > 0) {
             FT_CHECK(type == kGemm);
             // output = lora(x) * scale
@@ -71,17 +70,17 @@ public:
 
             invokeMask(output_data, lora_mask, batch_size, weight.output_dims, stream_);
 
-            beta      = 1.0f;
-            gemm_type = weight.type == WeightType::kINT4 ? GemmS4F16::kFusedAdd : gemm_type;
+            beta = 1.0f;
+            type = weight.type == WeightType::kINT4 ? kFusedAdd : type;
         }
         switch (weight.type) {
             case WeightType::kFP16:
             case WeightType::kFP32:
             case WeightType::kBF16:
-                forwardFp(output_data, input_data, batch_size, weight, gemm_type, alpha, beta);
+                forwardFp(output_data, input_data, batch_size, weight, type, alpha, beta);
                 break;
             case WeightType::kINT4:
-                forwardInt4(output_data, input_data, batch_size, weight, gemm_type);
+                forwardInt4(output_data, input_data, batch_size, weight, type);
                 break;
                 break;
             default:
@@ -94,10 +93,11 @@ private:
                    const T*                   input_data,
                    int                        batch_size,
                    const LlamaDenseWeight<T>& weight,
-                   GemmS4F16::Type            type,
+                   Type                       type,
                    float                      alpha,
                    float                      beta)
     {
+        FT_CHECK(type == kGemm);
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
                               CUBLAS_OP_N,
                               weight.output_dims,
@@ -114,9 +114,13 @@ private:
         sync_check_cuda_error();
     }
 
-    void forwardInt4(
-        T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, GemmS4F16::Type type)
+    void forwardInt4(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
     {
+        GemmS4F16::Type gemm_type = GemmS4F16::kGemm;
+        if (type == kFusedAdd)
+            gemm_type = GemmS4F16::kFusedAdd;
+        if (type == kFusedSiluFfn)
+            gemm_type = GemmS4F16::kFusedSiluFfn;
         if constexpr (std::is_same_v<T, half>) {
             gemm_s4_f16_.Run(output_data,
                              (const uint*)weight.kernel,
@@ -126,7 +130,7 @@ private:
                              batch_size,
                              weight.input_dims,
                              weight.group_size,
-                             type,
+                             gemm_type,
                              -1,
                              stream_);
             sync_check_cuda_error();
