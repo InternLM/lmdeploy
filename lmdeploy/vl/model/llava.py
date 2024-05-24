@@ -7,6 +7,7 @@ from typing import List, Union
 
 import torch
 from PIL.Image import Image
+from transformers import AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VisonModel
@@ -56,7 +57,8 @@ def init_llava_vision_tower(config):
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path, with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.build_model()
 
@@ -66,7 +68,7 @@ class LlavaVisionModel(VisonModel):
         check_llava_install()
 
         # currently, only support llava llama
-        from llava.model.language_model.llava_llama import (
+        from llava.model.language_model.llava_llama import (  # noqa
             LlavaConfig, LlavaLlamaForCausalLM)
         self.config = LlavaConfig.from_pretrained(self.model_path)
         assert self.config.model_type in ['llava', 'llava_llama'], \
@@ -77,11 +79,17 @@ class LlavaVisionModel(VisonModel):
         with init_empty_weights(), warnings.catch_warnings(), \
                 init_llava_vision_tower(self.config):
             warnings.simplefilter('ignore')
-            model = LlavaLlamaForCausalLM.from_pretrained(self.model_path)
-            del model.lm_head
-            del model.model.embed_tokens
-            del model.model.layers
-            del model.model.norm
+            self.config.quantization_config = {
+            }  # disable vision part quantization
+            model = AutoModelForCausalLM.from_config(self.config,
+                                                     trust_remote_code=True)
+            if not self.with_llm:
+                del model.lm_head
+                del model.model.embed_tokens
+                del model.model.layers
+                del model.model.norm
+            else:
+                self.vl_model = model
 
         # init empty vision_tower,
         with init_llava_vision_tower(self.config):
@@ -96,13 +104,13 @@ class LlavaVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map='auto',
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['CLIPEncoderLayer'],
                 dtype=torch.half)
 
         self.model = model.model
-        self.vision_tower = model.model.vision_tower
-        self.mm_projector = model.model.mm_projector
+        self.vision_tower = model.model.vision_tower.half()
+        self.mm_projector = model.model.mm_projector.half()
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """encode images."""

@@ -14,7 +14,8 @@ from lmdeploy.vl.model.utils import add_device_hook, disable_logging
 class CogVLMVisionModel(VisonModel):
     """CogVLM vision model."""
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str, with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.hf_config = AutoConfig.from_pretrained(model_path,
                                                     trust_remote_code=True)
@@ -34,9 +35,10 @@ class CogVLMVisionModel(VisonModel):
         with init_empty_weights(), warnings.catch_warnings():
             model = AutoModelForCausalLM.from_config(self.hf_config,
                                                      trust_remote_code=True)
-            del model.lm_head
-            for key in ['layers', 'norm', 'embed_tokens']:
-                setattr(model.model, key, None)
+            if not self.with_llm:
+                del model.lm_head
+                for key in ['layers', 'norm', 'embed_tokens']:
+                    setattr(model.model, key, None)
 
         no_split_module_classes = ['TransformerLayer']
         max_memory = get_balanced_memory(
@@ -61,7 +63,7 @@ class CogVLMVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=device_map,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=no_split_module_classes,
                 dtype=torch.half)
         self.model = model.model.vision

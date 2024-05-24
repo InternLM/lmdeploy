@@ -5,9 +5,9 @@ on:
     inputs:
       repo_org:
         required: false
-        description: 'Tested repository organization name. Default is InternLM'
+        description: 'Tested repository organization name. Default is InternLM/lmdeploy'
         type: string
-        default: InternLM
+        default: 'InternLM/lmdeploy'
       repo_ref:
         required: false
         description: 'Set branch or tag or commit id. Default is "main"'
@@ -28,10 +28,52 @@ on:
         description: 'CUDA_VISIBLE_DEVICES.'
         type: string
         default: '0,1,2,3,4,5,6,7'
+      dependency_pkgs:
+        required: true
+        description: 'Dependency packages, you can also set a specific version'
+        type: string
+        default: 'pynvml packaging protobuf transformers_stream_generator transformers==4.41.0'
 
 
 jobs:
+  linux-build:
+    if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
+    strategy:
+      matrix:
+        pyver: [py38]
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: ${{ matrix.pyver }}
+      PLAT_NAME: manylinux2014_x86_64
+      DOCKER_TAG: cuda11.8
+      OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Build
+        run: |
+          echo ${PYTHON_VERSION}
+          echo ${PLAT_NAME}
+          echo ${DOCKER_TAG}
+          echo ${OUTPUT_FOLDER}
+          echo ${GITHUB_RUN_ID}
+          # remove -it
+          sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
+          bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          path: builder/manywheel/${{ env.OUTPUT_FOLDER }}
+          retention-days: 1
+          name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
+
+
   evaluate:
+    needs: linux-build
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 4320 # 72hours
     container:
@@ -48,52 +90,41 @@ jobs:
     steps:
       - name: Setup systems
         run: |
-          rm /etc/apt/sources.list.d/cuda*.list
-          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
-              libgoogle-glog-dev
-          rm -rf /var/lib/apt/lists
           export TIME_STAMP="$(date +'%Y%m%d-%H%M%S')"
           echo "TIME_STAMP=$TIME_STAMP" >> $GITHUB_ENV
-      - name: Checkout repository
+      - name: Clone repository
         uses: actions/checkout@v3
         with:
-          repository: '${{ github.event.inputs.repo_org}}/lmdeploy'
-          ref: ${{github.event.inputs.repo_ref}}
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}-py38
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
-      - name: Build lmdeploy
+      - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install cmake
-          python3 -m pip install -r requirements/build.txt
-          mkdir build
-          cd build
-          cmake .. \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-              -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-              -DCMAKE_INSTALL_PREFIX=./install \
-              -DBUILD_PY_FFI=ON \
-              -DBUILD_MULTI_GPU=ON \
-              -DCMAKE_CUDA_FLAGS="-lineinfo" \
-              -DUSE_NVTX=ON \
-              -DSM=80 \
-              -DCMAKE_CUDA_ARCHITECTURES=80 \
-              -DBUILD_TEST=OFF
-          make -j$(nproc) && make install
-      - name: Install lmdeploy from source
-        run: |
-          python3 -m pip install pynvml packaging protobuf transformers_stream_generator
+          python3 -m pip install ${{inputs.dependency_pkgs }}
           # manually install flash attn
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install -r requirements.txt
-          python3 -m pip install .
+      - name: Install lmdeploy
+        run: |
+          python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
           python3 -m pip install --user -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
+      - name: Check env
+        run: |
+          python3 -m pip list
+          lmdeploy check_env
       - name: Setup paths for evaluation
         run: |
           ln -s /root/opencompass-data ./data
