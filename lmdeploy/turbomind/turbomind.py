@@ -524,10 +524,12 @@ class TurboMindInstance:
                                            logprob_indexes[offset:length],
                                            logprob_vals[offset:length],
                                            logprob_nums[offset:length]):
-            n = min(n.item(), logprobs)
-            tok_res = {idx[i].item(): val[i].item() for i in range(n)}
+            topn = min(n.item(), logprobs)
+            tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
             if token_id.item() not in tok_res:
-                tok_res[token_id.item()] = val[idx == token_id].item()
+                valid_n = n.item()
+                tok_res[token_id.item()] = \
+                    val[:valid_n][idx[:valid_n] == token_id].item()
             out_logprobs.append(tok_res)
         return out_logprobs
 
