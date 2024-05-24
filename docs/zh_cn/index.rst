@@ -68,7 +68,6 @@
    :caption: 进阶指南
 
    inference/turbomind.md
-   inference/turbomind_config.md
    inference/pytorch.md
    advance/pytorch_new_model.md
    advance/long_context.md
