@@ -9,7 +9,8 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_split_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
-from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
+from ..kernels import (apply_rotary_pos_emb, fill_kv_cache, fused_rotary_emb,
+                       paged_attention_fwd)
 
 LANGUAGE_TOKEN_TYPE = 0
 VISION_TOKEN_TYPE = 1
@@ -56,7 +57,13 @@ class PatchedVisionExpertAttention(nn.Module):
 
     def _distribute_qkv_linear(self, mod: nn.Module, device_mesh: DeviceMesh):
         """distribute qkv linear."""
-        sections = [self.num_heads * self.head_dim] * 3
+        num_heads = self.config.num_attention_heads
+        num_kv_heads = getattr(self.config, 'num_multi_query_heads', num_heads)
+        head_dim = self.config.hidden_size // num_heads
+        sections = [
+            self.config.hidden_size, num_kv_heads * head_dim,
+            num_kv_heads * head_dim
+        ]
         colwise_split_parallelize_linear_fn(mod, sections, device_mesh)
 
     def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
@@ -97,10 +104,11 @@ class PatchedVisionExpertAttention(nn.Module):
         kv_seq_length = context.kv_seq_length
         block_offsets = context.block_offsets
         max_q_seq_length = context.max_q_seq_length
-        max_kv_seq_length = context.max_kv_seq_length
-        num_heads = self.num_heads // world_size
-        num_kv_heads = self.num_heads // world_size
-        head_dim = self.head_dim
+        num_heads = self.config.num_attention_heads // world_size
+        num_kv_heads = getattr(self.config, 'num_multi_query_heads',
+                               self.config.num_attention_heads) // world_size
+
+        head_dim = self.config.hidden_size // self.config.num_attention_heads
         hidden_size = num_heads * head_dim
         # for embedding splitting
         if hasattr(context, 'vision_token_mask') and hasattr(
@@ -111,36 +119,46 @@ class PatchedVisionExpertAttention(nn.Module):
             vision_token_mask, language_token_mask = get_vision_expert_mask(
                 token_type_ids)
 
+        vision_token_mask = vision_token_mask.ravel()
+        language_token_mask = language_token_mask.ravel()
+
         def __qkv_proj(hidden_states):
             """qkv_proj."""
             shape = list(hidden_states.shape)
-            shape[-1] = shape[-1] * 3 // world_size
+            torch.cuda.synchronize()
+            shape[-1] = hidden_size + head_dim * num_kv_heads * 2
             mixed_raw_layer = torch.empty(shape,
                                           dtype=hidden_states.dtype,
                                           device=hidden_states.device)
 
-            mixed_raw_layer[
-                vision_token_mask] = self.vision_expert_query_key_value(
-                    hidden_states[vision_token_mask])
-            mixed_raw_layer[
-                language_token_mask] = self.language_expert_query_key_value(
-                    hidden_states[language_token_mask])
+            mixed_raw_layer[:,
+                            vision_token_mask, :] = self.vision_expert_query_key_value(
+                                hidden_states[:, vision_token_mask, :])
+            mixed_raw_layer[:,
+                            language_token_mask, :] = self.language_expert_query_key_value(
+                                hidden_states[:, language_token_mask, :])
             query_states, key_states, value_states = torch.split(
-                mixed_raw_layer, hidden_size, dim=-1)
+                mixed_raw_layer, [
+                    hidden_size, head_dim * num_kv_heads,
+                    head_dim * num_kv_heads
+                ],
+                dim=-1)
             return query_states, key_states, value_states
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-            cos, sin = self.rotary_emb(value_states, seq_len=max_kv_seq_length)
+            scaling_factor = getattr(self.rotary_emb, 'scaling_factor', 1.0)
+            inv_freq = self.rotary_emb.inv_freq
 
-            query_states, key_states = apply_rotary_pos_emb(
-                query_states,
-                key_states,
-                cos.squeeze(1),
-                sin.squeeze(1),
-                position_ids,
-                position_ids_1d=position_ids)
-            return query_states, key_states, value_states
+            query_states, key_states = fused_rotary_emb(
+                query_states[None],
+                key_states[None],
+                position_ids[None],
+                inv_freq=inv_freq,
+                scaling_factor=scaling_factor,
+                out_q=query_states[None],
+                out_k=key_states[None])
+            return query_states[0], key_states[0], value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
 
@@ -183,10 +201,11 @@ class PatchedVisionExpertAttention(nn.Module):
                                   dtype=hidden_states.dtype,
                                   device=hidden_states.device)
 
-        attn_output[vision_token_mask] = self.vision_expert_dense(
-            context_layer[vision_token_mask])
-        attn_output[language_token_mask] = self.language_expert_dense(
-            context_layer[language_token_mask])
+        attn_output[:, vision_token_mask, :] = self.vision_expert_dense(
+            context_layer[:, vision_token_mask, :])
+        attn_output[:, language_token_mask, :] = self.language_expert_dense(
+            context_layer[:, language_token_mask, :])
+
         return attn_output, None, past_key_value
 
     def forward(
@@ -226,6 +245,7 @@ class PatchedCogVLMModel(nn.Module):
         # get inputs from context
         vision_embeddings = context.input_embeddings
         vision_embedding_indexing = context.input_embedding_indexing
+
         inputs_embeds = self.embed_tokens(input_ids)
         position_ids = _get_cogvlm_position_ids(context)
 
@@ -303,14 +323,19 @@ def _get_cogvlm_position_ids(context):
             position_ids = torch.cat([
                 pids[s:e]
                 for (pids, s, e) in zip(position_ids_all, starts, ends)
-            ]).unsqueeze(0)
+            ])
             vision_token_mask_all, _ = get_vision_expert_mask(token_type_ids)
             vision_token_mask = torch.cat([
                 masks[s:e]
                 for (masks, s, e) in zip(vision_token_mask_all, starts, ends)
-            ]).unsqueeze(0)
-            context.vision_token_mask = vision_token_mask
-            context.language_token_mask = ~vision_token_mask
+            ])
+            mask_indexing = torch.arange(vision_token_mask.shape[-1],
+                                         device=vision_token_mask.device)
+            vision_token_mask_new = mask_indexing[vision_token_mask]
+            language_token_mask_new = mask_indexing[~vision_token_mask]
+
+            context.vision_token_mask = vision_token_mask_new
+            context.language_token_mask = language_token_mask_new
         else:
             position_ids = (context.attention_mask.long().cumsum(-1) -
                             1).squeeze(0)

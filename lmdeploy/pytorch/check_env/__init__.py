@@ -13,7 +13,7 @@ def _handle_exception(e: Exception,
     reset_color = '\033[0m'
     if message is None:
         message = 'Please ensure it has been installed correctly.'
-    logger.debug('Exception', exc_info=1)
+    logger.error(e, exc_info=True)
     logger.error(f'{type(e).__name__}: {e}')
     logger.error(f'{red_color}'
                  f'<{mod_name}> test failed!\n'
@@ -111,9 +111,11 @@ def check_transformers_version(model_path: str,
         """check model transformers version."""
         logger.debug('Checking <Model> required transformers version.')
         try:
-            model_trans_version = getattr(config, 'transformers_version')
-            model_trans_version = version.parse(model_trans_version)
-            assert trans_version >= model_trans_version, 'Version mismatch.'
+            model_trans_version = getattr(config, 'transformers_version', None)
+            if model_trans_version is not None:
+                model_trans_version = version.parse(model_trans_version)
+                assert trans_version >= model_trans_version, \
+                    'Version mismatch.'
         except Exception as e:
             message = (f'model `{model_path}` requires '
                        f'transformers version {model_trans_version} '
