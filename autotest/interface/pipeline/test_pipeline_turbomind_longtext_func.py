@@ -1,88 +1,162 @@
+import os
+from multiprocessing import Process
+
+import numpy as np
 import pytest
+from utils.config_utils import get_cuda_id_by_workerid
 from utils.get_run_config import get_tp_num
+from utils.pipeline_chat import (assert_pipeline_common_log,
+                                 save_pipeline_common_log)
 
-from lmdeploy import TurbomindEngineConfig, pipeline
+from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
+
+SESSION_LEN = 198000
+SESSION_LEN_PASSKEY = 168000
 
 
-@pytest.mark.order(8)
-@pytest.mark.pipeline_func
-@pytest.mark.timeout(600)
-class TestPipelineLongtextFunc:
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('model', [
+    'internlm/internlm2-chat-7b', 'internlm/internlm2-7b',
+    'internlm/internlm2-chat-1_8b', 'internlm/internlm2-1_8b'
+])
+def test_history_issue_tp1(config, model, worker_id):
+    log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+    p = Process(target=stream_infer_basic, args=(config, model, log_name))
+    p.start()
+    p.join()
 
-    def test_long_test_chat_7b(self, config):
-        model = 'internlm/internlm2-chat-7b'
-        tp_config = get_tp_num(config, model)
-        model_path = '/'.join([config.get('model_path'), model])
+    assert_pipeline_common_log(config, log_name)
 
-        backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
-                                               session_len=210000,
-                                               tp=tp_config)
-        pipe = pipeline(model_path, backend_config=backend_config)
-        prompt = '今 天 心 ' * int(200000 / 6)
 
-        # batch infer
-        pipe(prompt)
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('model', [
+    'internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits',
+    'internlm/internlm2-20b', 'internlm/internlm2-20b-inner-4bits'
+])
+def test_history_issue_tp2(config, model, worker_id):
+    log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
+                                                                     tp_num=2)
+    p = Process(target=stream_infer_basic, args=(config, model, log_name))
+    p.start()
+    p.join()
 
-        # stream infer
-        for outputs in pipe.stream_infer(prompt):
-            continue
+    assert_pipeline_common_log(config, log_name)
 
-        prompts = ['今 天 心 ' * int(200000 / 6)] * 2
-        # batch infer
-        pipe(prompts)
 
-        # stream infer
-        for outputs in pipe.stream_infer(prompts):
-            continue
+def stream_infer_basic(config, model, log_name):
+    tp_num = get_tp_num(config, model)
+    model_path = '/'.join([config.get('model_path'), model])
 
-    def test_long_test_chat_20b(self, config):
-        model = 'internlm/internlm2-chat-20b'
-        tp_config = get_tp_num(config, model)
-        model_path = '/'.join([config.get('model_path'), model])
+    backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
+                                           session_len=SESSION_LEN,
+                                           tp=tp_num)
+    pipe = pipeline(model_path, backend_config=backend_config)
+    prompt = '今 天 心 ' * int(SESSION_LEN / 6)
 
-        backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
-                                               session_len=210000,
-                                               tp=tp_config)
-        pipe = pipeline(model_path, backend_config=backend_config)
-        prompt = '今 天 心 ' * int(200000 / 6)
+    gen_config = GenerationConfig(top_k=40)
+    # stream infer
+    for outputs in pipe.stream_infer(prompt, gen_config=gen_config):
+        continue
 
-        # batch infer
-        pipe(prompt)
+    save_pipeline_common_log(config, log_name, True, str(outputs))
 
-        # stream infer
-        for outputs in pipe.stream_infer(prompt):
-            continue
+    prompts = ['今 天 心 ' * int(SESSION_LEN / 6)] * 2
+    # stream infer
+    for outputs in pipe.stream_infer(prompts, gen_config=gen_config):
+        continue
 
-        prompts = ['今 天 心 ' * int(200000 / 6)] * 2
-        # batch infer
-        pipe(prompts)
+    save_pipeline_common_log(config,
+                             log_name,
+                             True,
+                             str(outputs),
+                             write_type='a')
+    assert False
 
-        # stream infer
-        for outputs in pipe.stream_infer(prompts):
-            continue
 
-    def test_long_test_20b(self, config):
-        model = 'internlm/internlm2-20b'
-        tp_config = get_tp_num(config, model)
-        model_path = '/'.join([config.get('model_path'), model])
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize(
+    'model', ['internlm/internlm2-chat-7b', 'internlm/internlm2-chat-1_8b'])
+def test_long_test_passkey_tp1(config, model, worker_id):
+    log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+    p = Process(target=passkey_retrival, args=(config, model, log_name))
+    p.start()
+    p.join()
 
-        backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
-                                               session_len=210000,
-                                               tp=tp_config)
-        pipe = pipeline(model_path, backend_config=backend_config)
-        prompt = '今 天 心 ' * int(200000 / 6)
+    assert_pipeline_common_log(config, log_name)
 
-        # batch infer
-        pipe(prompt)
 
-        # stream infer
-        for outputs in pipe.stream_infer(prompt):
-            continue
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize(
+    'model',
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
+def test_long_test_passkey_tp2(config, model, worker_id):
+    log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
+                                                                     tp_num=2)
+    p = Process(target=passkey_retrival, args=(config, model, log_name))
+    p.start()
+    p.join()
 
-        prompts = ['今 天 心 ' * int(200000 / 6)] * 2
-        # batch infer
-        pipe(prompts)
+    assert_pipeline_common_log(config, log_name)
 
-        # stream infer
-        for outputs in pipe.stream_infer(prompts):
-            continue
+
+def passkey_retrival(config, model, log_name):
+    tp_num = get_tp_num(config, model)
+    model_path = '/'.join([config.get('model_path'), model])
+    backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
+                                           session_len=SESSION_LEN_PASSKEY,
+                                           use_logn_attn=True,
+                                           tp=tp_num)
+
+    pipe = pipeline(model_path, backend_config=backend_config)
+
+    gen_config = GenerationConfig(top_k=40)
+    # inference
+    pass_key, prompt = get_passkey_prompt(pipe, SESSION_LEN_PASSKEY)
+    response = pipe(prompt, gen_config=gen_config)
+    save_pipeline_common_log(config, log_name,
+                             str(pass_key) in response.text, str(response))
+
+    # inference
+    pass_key, prompt = get_passkey_prompt(pipe, SESSION_LEN_PASSKEY)
+    response = pipe([prompt] * 2, gen_config=gen_config)
+    save_pipeline_common_log(config,
+                             log_name,
+                             str(pass_key) in response[0].text
+                             and str(pass_key) in response[1].text,
+                             str(response),
+                             write_type='a')
+
+
+def get_passkey_prompt(pipe, session_len):
+    # create long context input
+    tok = pipe.tokenizer
+    task_description = 'There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there.'  # noqa: E501
+    garbage = 'The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again.'  # noqa: E501
+
+    n_times = (session_len - 1000) // len(tok.encode(garbage))
+    n_garbage_prefix = np.random.randint(0, n_times)
+    n_garbage_suffix = n_times - n_garbage_prefix
+    garbage_prefix = ' '.join([garbage] * n_garbage_prefix)
+    garbage_suffix = ' '.join([garbage] * n_garbage_suffix)
+    pass_key = np.random.randint(1, 50000)
+    information_line = f'The pass key is {pass_key}. Remember it. {pass_key} is the pass key.'  # noqa: E501
+    final_question = 'What is the pass key? The pass key is'
+    lines = [
+        task_description,
+        garbage_prefix,
+        information_line,
+        garbage_suffix,
+        final_question,
+    ]
+
+    # inference
+    prompt = ' '.join(lines)
+    return pass_key, prompt

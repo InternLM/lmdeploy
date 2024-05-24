@@ -94,6 +94,10 @@ def get_vl_model_list(tp_num: int = None):
 
     case_list = config.get('vl_model')
 
+    for key in config.get('quatization_case_config').get('w4a16'):
+        if key in case_list:
+            case_list.append(key + '-inner-4bits')
+
     if tp_num is not None:
         return [
             item for item in case_list if get_tp_num(config, item) == tp_num

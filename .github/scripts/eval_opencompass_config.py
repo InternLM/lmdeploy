@@ -495,26 +495,40 @@ pt_internlm2_chat_20b = dict(
 tb_qwen_chat_7b = dict(type=TurboMindModel,
                        abbr='qwen-7b-chat-turbomind',
                        path='Qwen/Qwen-7B-Chat',
-                       engine_config=tb_engine_config_template_max_bs_16,
+                       engine_config=tb_engine_config_template_max_bs_128,
                        gen_config=qwen_gen_config_template,
                        max_out_len=MAX_NEW_TOKENS,
                        max_seq_len=MAX_SESSION_LEN,
-                       batch_size=16,
-                       concurrency=16,
+                       batch_size=128,
+                       concurrency=128,
                        meta_template=qwen_meta_template,
                        run_cfg=run_cfg_tp1_template,
                        end_str='<|im_end|>')
+
+tb_qwen_chat_7b_w4a16 = dict(
+    type=TurboMindModel,
+    abbr='qwen-7b-chat-4bits-turbomind',
+    path='Qwen/Qwen-7B-Chat-inner-4bits',
+    engine_config=tb_awq_engine_config_template_max_bs_128,
+    gen_config=qwen_gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=128,
+    concurrency=128,
+    meta_template=qwen_meta_template,
+    run_cfg=run_cfg_tp1_template,
+    end_str='<|im_end|>')
 
 # config for qwen-chat-7b pytorch
 pt_qwen_chat_7b = dict(type=LmdeployPytorchModel,
                        abbr='qwen-7b-chat-pytorch',
                        path='Qwen/Qwen-7B-Chat',
-                       engine_config=pt_engine_config_template_max_bs_16,
+                       engine_config=pt_engine_config_template_max_bs_64,
                        gen_config=qwen_gen_config_template,
                        max_out_len=MAX_NEW_TOKENS,
                        max_seq_len=MAX_SESSION_LEN,
-                       batch_size=16,
-                       concurrency=16,
+                       batch_size=64,
+                       concurrency=64,
                        meta_template=qwen_meta_template,
                        run_cfg=run_cfg_tp1_template,
                        end_str='<|im_end|>')
@@ -551,6 +565,21 @@ tb_llama2_chat_7b = dict(type=TurboMindModel,
                          meta_template=llama2_meta_template,
                          run_cfg=run_cfg_tp1_template,
                          end_str='[INST]')
+
+# config for llama2-chat-7b-w4a16 turbomind
+tb_llama2_chat_7b_wa416 = dict(
+    type=TurboMindModel,
+    abbr='llama-2-7b-chat-4bits-turbomind',
+    path='meta-llama/Llama-2-7b-chat-hf-inner-4bits',
+    engine_config=tb_awq_engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=128,
+    concurrency=128,
+    meta_template=llama2_meta_template,
+    run_cfg=run_cfg_tp1_template,
+    end_str='[INST]')
 
 # config for llama2-chat-7b pytorch
 pt_llama2_chat_7b = dict(type=LmdeployPytorchModel,
@@ -854,3 +883,41 @@ pt_llama_3_8b_instruct = dict(
     meta_template=llama3_meta_template,
     run_cfg=run_cfg_tp1_template,
     end_str='[INST]')
+
+# config for code llama
+tb_codellama_7b_chat = dict(type=TurboMindModel,
+                            abbr='codellama-7b-chat-turbomind',
+                            path='codellama/CodeLlama-7b-Instruct-hf',
+                            engine_config=tb_engine_config_template_max_bs_128,
+                            gen_config=gen_config_template,
+                            max_out_len=MAX_NEW_TOKENS,
+                            max_seq_len=MAX_SESSION_LEN,
+                            batch_size=128,
+                            concurrency=128,
+                            run_cfg=dict(num_gpus=1, num_procs=1),
+                            end_str='</s>')
+
+tb_codellama_7b_chat_w4a16 = dict(
+    type=TurboMindModel,
+    abbr='codellama-7b-chat-4bits-turbomind',
+    path='codellama/CodeLlama-7b-Instruct-hf-inner-4bits',
+    engine_config=tb_awq_engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=128,
+    concurrency=128,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+    end_str='</s>')
+
+pt_codellama_7b_chat = dict(type=LmdeployPytorchModel,
+                            abbr='codellama-7b-chat-pytorch',
+                            path='codellama/CodeLlama-7b-Instruct-hf',
+                            engine_config=pt_engine_config_template_max_bs_128,
+                            gen_config=gen_config_template,
+                            max_out_len=MAX_NEW_TOKENS,
+                            max_seq_len=MAX_SESSION_LEN,
+                            batch_size=128,
+                            concurrency=128,
+                            run_cfg=dict(num_gpus=1, num_procs=1),
+                            end_str='</s>')
