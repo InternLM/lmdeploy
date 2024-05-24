@@ -23,6 +23,12 @@ def _load_block_offsets(offset_ptr, block_id, BLOCK: tl.constexpr):
     return tl.load(offset_ptr + block_id) * BLOCK + offs_n
 
 
+@triton.autotune(configs=[
+    triton.Config({}, num_stages=1, num_warps=16),
+    triton.Config({}, num_stages=1, num_warps=8),
+    triton.Config({}, num_stages=1, num_warps=4),
+],
+                 key=['BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
 @triton.jit
 def _fwd_split_kernel(
     Q,
@@ -171,6 +177,12 @@ def _fwd_split_kernel(
     tl.store(Acc_out + off_meta + 1 + tl.arange(0, 1), l_i)
 
 
+@triton.autotune(configs=[
+    triton.Config({}, num_stages=1, num_warps=16),
+    triton.Config({}, num_stages=1, num_warps=8),
+    triton.Config({}, num_stages=1, num_warps=4),
+],
+                 key=['BLOCK_H', 'BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
 @triton.jit
 def _fwd_grouped_split_kernel(
     Q,
@@ -393,6 +405,12 @@ def _get_convert_pv(nv_capability):
 _convert_pv = None
 
 
+@triton.autotune(configs=[
+    triton.Config({}, num_stages=1, num_warps=16),
+    triton.Config({}, num_stages=1, num_warps=8),
+    triton.Config({}, num_stages=1, num_warps=4),
+],
+                 key=['BLOCK_M', 'BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
 @triton.jit
 def _fwd_kernel(
     Q,
@@ -609,7 +627,6 @@ def paged_attention_fwd(
     kernel_meta = _kernel_meta()
     is_decoding = q.shape[-3] == q_seqlens.size(0)
     if not is_decoding:
-        num_warps = 4
         grid = (batch, head, triton.cdiv(max_seqlen, BLOCK_M))
         _fwd_kernel[grid](q,
                           k,
@@ -642,8 +659,6 @@ def paged_attention_fwd(
                           BLOCK_DMODEL=BLOCK_DMODEL,
                           BLOCK_DV=BLOCK_DV,
                           BLOCK_N=BLOCK,
-                          num_warps=num_warps,
-                          num_stages=1,
                           **kernel_meta)
     else:
         num_warps = max(4, BLOCK_DMODEL // 64)
@@ -682,8 +697,6 @@ def paged_attention_fwd(
                                     BLOCK_DMODEL=BLOCK_DMODEL,
                                     BLOCK_DV=BLOCK_DV,
                                     BLOCK_N=BLOCK,
-                                    num_warps=num_warps,
-                                    num_stages=1,
                                     **kernel_meta)
         else:
             BLOCK_H = max(16, min(BLOCK, kv_group_num))
@@ -720,8 +733,6 @@ def paged_attention_fwd(
                 BLOCK_DV=BLOCK_DV,
                 BLOCK_N=BLOCK,
                 BLOCK_H=BLOCK_H,
-                num_warps=num_warps,
-                num_stages=1,
                 **kernel_meta)
 
         grid = (batch, head)
