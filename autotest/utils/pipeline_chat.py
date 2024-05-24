@@ -65,18 +65,14 @@ def run_pipeline_chat_test(config,
             model_case.split('/')[1] + '.log'
         ]))
     file = open(config_log, 'w')
-    file.writelines('\n'.join([
+    log_string = '\n'.join([
         'reproduce config info:', 'engine_config = ' + str(backend_config),
         'gen_config = ' + str(gen_config),
         'pipe = pipeline("' + hf_path + '",  backend_config=engine_config)',
         'res = pipe("Hi, pls introduce shanghai", gen_config=gen_config)'
-    ]))
-    print('\n'.join([
-        'reproduce config info:', 'engine_config = ' + str(backend_config),
-        'gen_config = ' + str(gen_config),
-        'pipe = pipeline("' + hf_path + '",  backend_config=engine_config)',
-        'res = pipe("Hi, pls introduce shanghai", gen_config=gen_config)'
-    ]))
+    ])
+    file.writelines(log_string)
+    print(log_string)
     file.close
 
     for case in cases_info.keys():
