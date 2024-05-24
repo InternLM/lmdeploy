@@ -570,7 +570,7 @@ def paged_attention_fwd(
     max_seqlen: int,
     window_size: int = None,
     sm_scale: float = None,
-    shared_kv: int = False,
+    shared_kv: bool = False,
 ):
     """Paged Attention forward.
 
