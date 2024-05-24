@@ -35,8 +35,6 @@ public:
                  Type                       type      = kGemm,
                  int*                       lora_mask = nullptr)
     {
-        float alpha = 1.0f;
-        float beta  = 0.0f;
         if (lora_mask != nullptr && weight.lora.r > 0) {
             FT_CHECK(type == kGemm);
             // output = lora(x) * scale
@@ -69,15 +67,13 @@ public:
                                   0.0f);                                          // beta
 
             invokeMask(output_data, lora_mask, batch_size, weight.output_dims, stream_);
-
-            beta = 1.0f;
-            type = weight.type == WeightType::kINT4 ? kFusedAdd : type;
+            type = kFusedAdd;
         }
         switch (weight.type) {
             case WeightType::kFP16:
             case WeightType::kFP32:
             case WeightType::kBF16:
-                forwardFp(output_data, input_data, batch_size, weight, type, alpha, beta);
+                forwardFp(output_data, input_data, batch_size, weight, type);
                 break;
             case WeightType::kINT4:
                 forwardInt4(output_data, input_data, batch_size, weight, type);
@@ -89,15 +85,8 @@ public:
     }
 
 private:
-    void forwardFp(T*                         output_data,
-                   const T*                   input_data,
-                   int                        batch_size,
-                   const LlamaDenseWeight<T>& weight,
-                   Type                       type,
-                   float                      alpha,
-                   float                      beta)
+    void forwardFp(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
     {
-        FT_CHECK(type == kGemm);
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
                               CUBLAS_OP_N,
                               weight.output_dims,
@@ -109,8 +98,8 @@ private:
                               weight.input_dims,
                               output_data,
                               weight.output_dims,
-                              alpha,
-                              beta);
+                              1.0f,
+                              type == kFusedAdd ? 1.0f : 0.0f);
         sync_check_cuda_error();
     }
 
