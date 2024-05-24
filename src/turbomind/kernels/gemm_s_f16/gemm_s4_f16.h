@@ -23,7 +23,8 @@ public:
     enum Type
     {
         kGemm,
-        kFusedSiluFfn
+        kFusedSiluFfn,
+        kFusedAdd
     };
 
     void Measure(half*                C,

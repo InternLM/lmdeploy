@@ -77,7 +77,8 @@ def dynamic_preprocess(image,
 class InternVLVisionModel(VisonModel):
     """InternVL vision model."""
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path, with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.build_model()
 
@@ -90,7 +91,10 @@ class InternVLVisionModel(VisonModel):
             # transformers below 4.37.0 may raise error about flash_attn
             config.llm_config.attn_implementation = 'eager'
             model = AutoModel.from_config(config, trust_remote_code=True)
-            del model.language_model
+            if not self.with_llm:
+                del model.language_model
+            else:
+                self.vl_model = model
             model.half()
 
         from accelerate import load_checkpoint_and_dispatch
@@ -98,7 +102,7 @@ class InternVLVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map='auto',
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['InternVisionEncoderLayer'],
                 dtype=torch.half)
 
