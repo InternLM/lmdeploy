@@ -832,7 +832,6 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.tmp
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_backend_config_validate_turbomind(config, model, backend, worker_id):
@@ -873,7 +872,6 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.tmp
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
 @pytest.mark.parametrize('backend', [PytorchEngineConfig])
 def test_backend_config_validate_pytorch(config, model, backend, worker_id):
