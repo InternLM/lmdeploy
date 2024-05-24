@@ -2,11 +2,11 @@
 
 TurboMind is one of the inference engines of LMDeploy. When using it to do model inference, you need to convert the input model into a TurboMind model. In the TurboMind model folder, besides model weight files, the TurboMind model also includes some other files, among which the most important is the configuration file `triton_models/weights/config.ini` that is closely related to inference performance.
 
-If you are using LMDeploy version 0.0.x, please refer to the [turbomind 1.0 config](#turbomind-10-config) section to learn the relevant content in the configuration. Otherwise, please read [turbomind 2.0 config](#turbomind-20-config) to familiarize yourself with the configuration details.
+If you are using LMDeploy version 0.0.x, please refer to the [turbomind 1.0 config](#turbomind-10-config) section to learn the relevant content in the configuration. Otherwise, please read [turbomind 2.0 config](#turbomind-2x-config) to familiarize yourself with the configuration details.
 
 ## TurboMind 2.x config
 
-Take the `llama-2-7b-chat` model as an example. In TurboMind 2.0, its config.ini content is as follows:
+Take the `llama-2-7b-chat` model as an example. In TurboMind 2.x, its config.ini content is as follows:
 
 ```toml
 [llama]
@@ -33,6 +33,7 @@ step_length = 1
 cache_max_entry_count = 0.5
 cache_block_seq_len = 128
 cache_chunk_size = 1
+enable_prefix_caching = False
 quant_policy = 0
 max_position_embeddings = 2048
 rope_scaling_factor = 0.0
@@ -74,7 +75,7 @@ The maximum batch size is still set through `max_batch_size`. But its default va
 
 k/v cache memory is determined by `cache_block_seq_len` and `cache_max_entry_count`.
 
-TurboMind 2.0 has implemented Paged Attention, managing the k/v cache in blocks.
+TurboMind 2.x has implemented Paged Attention, managing the k/v cache in blocks.
 
 `cache_block_seq_len` represents the length of the token sequence in a k/v block with a default value 128. TurboMind calculates the memory size of the k/v block according to the following formula:
 
@@ -95,6 +96,14 @@ The `cache_chunk_size` indicates the size of the k/v cache chunk to be allocated
 - When it is an integer > 0, `cache_chunk_size` number of k/v cache blocks are allocated.
 - When the value is -1, `cache_max_entry_count` number of k/v cache blocks are allocated.
 - When the value is 0, `sqrt(cache_max_entry_count)` number of k/v cache blocks are allocated.
+
+### prefix caching switch
+
+Prefix caching feature can be controlled by setting the `enable_prefix_caching` parameter. When set to `True`, it indicates that the feature is enabled, and when set to `False`, it indicates that the feature is disabled. The default value is `False`.
+
+Prefix caching feature is mainly applicable to scenarios where multiple requests have the same prompt prefix (such as system prompt). The k/v blocks of this identical prefix part will be cached and reused by multiple requests, thereby saving the overhead of redundant computations and improving inference performance. The longer the identical prompt prefix, the greater the performance improvement.
+
+Since k/v block is the smallest granularity for reuse in prefix caching, if the identical prompt prefix is less than one block (prefix length \< cache_block_seq_len), there will be no improvement in inference performance.
 
 ### kv quantization and inference switch
 
