@@ -7,6 +7,10 @@ Currently, it supports the following models.
 - [Qwen-VL-Chat](https://huggingface.co/Qwen/Qwen-VL-Chat)
 - LLaVA series: [v1.5](https://huggingface.co/collections/liuhaotian/llava-15-653aac15d994e992e2677a7e), [v1.6](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2)
 - [Yi-VL](https://huggingface.co/01-ai/Yi-VL-6B)
+- [DeepSeek-VL](https://huggingface.co/deepseek-ai/deepseek-vl-7b-chat)
+- [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
+- [MGM](https://huggingface.co/YanweiLi/MGM-7B)
+- [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
 
 We genuinely invite the community to contribute new VLM support to LMDeploy. Your involvement is truly appreciated.
 
