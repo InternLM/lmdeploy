@@ -18,17 +18,21 @@ class PatchedDeepseekV2Attention(nn.Module):
     def _load_weights(self, loader, rank: int, world_size: int,
                       device: torch.device):
         """load weights."""
-        for mod_name in [
-                'q_a_proj', 'kv_a_proj_with_mqa', 'q_a_layernorm',
-                'kv_a_layernorm'
-        ]:
+
+        mod_name_list = ['kv_a_proj_with_mqa', 'kv_a_layernorm']
+        if self.q_lora_rank is not None:
+            mod_name_list += ['q_a_proj', 'q_a_layernorm']
+        for mod_name in mod_name_list:
             with loader.prefix_context(mod_name):
                 loader.load_model_weights(getattr(self, mod_name),
                                           rank=rank,
                                           world_size=world_size,
                                           device=device)
 
-        for mod_name in ['q_b_proj', 'kv_b_proj']:
+        mod_name_list = ['q_proj', 'kv_b_proj']
+        if self.q_lora_rank is not None:
+            mod_name_list = ['q_b_proj', 'kv_b_proj']
+        for mod_name in mod_name_list:
             colwise_parallelize_linear(getattr(self, mod_name),
                                        loader,
                                        rank=rank,
@@ -59,7 +63,10 @@ class PatchedDeepseekV2Attention(nn.Module):
             weight[:, pe_dim_offset:] = new_w_pe
 
         # prevent shuffle before apply rotary embedding
-        __update_pe(self.q_b_proj, self.q_head_dim, qk_nope_head_dim)
+        if self.q_lora_rank is None:
+            __update_pe(self.q_proj, self.q_head_dim, qk_nope_head_dim)
+        else:
+            __update_pe(self.q_b_proj, self.q_head_dim, qk_nope_head_dim)
         kv_dim = self.kv_lora_rank + self.qk_rope_head_dim
         __update_pe(self.kv_a_proj_with_mqa, kv_dim, self.kv_lora_rank)
 
@@ -103,7 +110,11 @@ class PatchedDeepseekV2Attention(nn.Module):
 
         def __qkv_proj(hidden_states):
             """qkv proj."""
-            q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
+            if self.q_lora_rank is None:
+                q = self.q_proj(hidden_states)
+            else:
+                q = self.q_b_proj(
+                    self.q_a_layernorm(self.q_a_proj(hidden_states)))
             q = q.view(q_len, num_heads, self.q_head_dim)
             # q_pe: (q_len, num_heads, qk_rope_head_dim)
             q_nope, q_pe = torch.split(
