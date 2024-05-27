@@ -57,9 +57,13 @@ def init_llava_vision_tower(config):
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
-        self.with_llm = with_llm
+    def __init__(self,
+                 model_path,
+                 arch='LlavaLlamaForCausalLM',
+                 with_llm: bool = False):
         self.model_path = model_path
+        self.arch = arch
+        self.with_llm = with_llm
         self.build_model()
 
     def build_model(self):
@@ -74,12 +78,10 @@ class LlavaVisionModel(VisonModel):
             assert self.config.model_type in ['llava', 'llava_llama'], \
                 f'expect model_type llava and llava_llama '\
                 f'but got {self.config.model_type}'
-
         elif self.arch == 'LlavaMistralForCausalLM':
             from llava.model.language_model.llava_mistral import \
                 LlavaMistralConfig
             self.config = LlavaMistralConfig.from_pretrained(self.model_path)
-
         else:
             assert 0, f'unsupported arch {self.arch}'
 

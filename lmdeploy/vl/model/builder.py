@@ -33,7 +33,7 @@ def load_vl_model(model_path: str, with_llm: bool = False):
         elif 'OpenGVLab' in mm_vision_tower:
             return InternVLLlavaVisionModel(model_path, with_llm)
         else:
-            return LlavaVisionModel(model_path, with_llm)
+            return LlavaVisionModel(model_path, with_llm=with_llm, arch=arch)
     if arch == 'MultiModalityCausalLM':
         return DeepSeekVisionModel(model_path, with_llm)
     if arch == 'InternLMXComposer2ForCausalLM':

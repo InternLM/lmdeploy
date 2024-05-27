@@ -23,6 +23,8 @@ SUPPORTED_ARCHS = dict(
     QWenLMHeadModel='qwen',
     # Qwen2
     Qwen2ForCausalLM='qwen2',
+    # mistral
+    MistralForCausalLM='llama',
     # llava
     LlavaLlamaForCausalLM='llama',
     LlavaMistralForCausalLM='llama',
@@ -34,9 +36,7 @@ SUPPORTED_ARCHS = dict(
     MultiModalityCausalLM='deepseekvl',
     # mini gemini
     MGMLlamaForCausalLM='llama',
-    MiniGeminiLlamaForCausalLM='llama',
-    # mistral
-    MistralForCausalLM='llama')
+    MiniGeminiLlamaForCausalLM='llama')
 
 
 def get_model_arch(model_path: str):
@@ -90,6 +90,7 @@ def is_supported(model_path: str):
         support_by_turbomind = True
     else:
         arch, cfg = get_model_arch(model_path)
+
         if arch in SUPPORTED_ARCHS.keys():
             support_by_turbomind = True
             # special cases
