@@ -292,7 +292,8 @@ class Llavav1(Vicuna):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'llava' in path and 'v1' in path and 'v1.6-34b' not in path and 'mistral' not in path:
+        if 'llava' in path and 'v1' in path and 'v1.6-34b' not in path \
+            and 'mistral' not in path:
             return 'llava-v1'
 
 
