@@ -10,6 +10,7 @@
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
 #include "src/turbomind/kernels/gemm/transform.h"
+#include "src/turbomind/kernels/gemm/operand.h"
 
 namespace turbomind::gemm {
 
@@ -35,25 +36,46 @@ struct Config {
     static constexpr int WARP_CNT = (CTA_M / WARP_M) * (CTA_N / WARP_N) * (CTA_K / WARP_K);
 
     struct OperandA {
-        using Dtype      = half;
-        using SmemLayout = SmemLayoutV2<CTA_M / 16, CTA_K * 16>;
-        using SmemCopy   = SmemCopy_Packed<half, WARP_M, 16, 1, 1>;
-        using GmemIter =
-            GmemIteratorSm80<Dtype, ThreadMap<CTA_K * 16, CTA_M / 16, 8, WARP_CNT>, SmemLayout, false, true, 0>;
-        static constexpr Order kOrder     = Order::kColMajor;
-        static constexpr bool  is_k_major = true;
+        using Dtype = half;
+
+        static constexpr Pack  kPack  = Pack::kHMMA_16816_A;
+        static constexpr Order kOrder = Order::kColMajor;
+
+        // mk -> cs -> packed cs
+        static constexpr int2 _PACK_CS = Packing<kPack>::apply(mk2cs<kOrder>(CTA_M, CTA_K));
+        static constexpr int  _PACK_C  = _PACK_CS.x;
+        static constexpr int  _PACK_S  = _PACK_CS.y;
+
+        using SmemLayout = SmemLayoutV2<_PACK_S, _PACK_C>;
+
+        using GmemIter = GmemIteratorSm80<Dtype, ThreadMap<_PACK_C, _PACK_S, 8, WARP_CNT>, SmemLayout, false, true, 0>;
+        using SmemCopy = SmemCopy_Packed<Dtype, WARP_M, 16, 1, 1>;
     };
 
     struct OperandB {
-        using Dtype      = half;
+        using Dtype = half;
+
+        static constexpr Order kOrder = Order::kColMajor;
+        static constexpr Pack  kPack  = Pack::kNone;
+
         using SmemLayout = SmemLayoutV2<CTA_N, CTA_K, std::min(16, CTA_N), 32, Swizzle<2, 3, 3>>;
-        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<half, false>, WARP_N, 16>;
+
         using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>, SmemLayout, AlignedN, true, 1>;
-        static constexpr Order kOrder     = Order::kColMajor;
-        static constexpr bool  is_k_major = true;
+        using SmemCopy = SmemCopy_<SmemCopy_MMA_16816_B<half, false>, WARP_N, 16>;
     };
 
-    using Mainloop = MainloopSm80_v2<CTA_M, CTA_N, CTA_K, TiledMma, OperandA, OperandB, OperandB, Transform, Stages>;
+
+
+    using Mainloop = MainloopSm80_v2<CTA_M,
+                                     CTA_N,
+                                     CTA_K,  //
+                                     TiledMma,
+                                     OperandA,
+                                     OperandB,
+                                     VoidOperand,
+                                     VoidOperand,
+                                     Transform,
+                                     Stages>;
 
     using Kernel = GemmUniversal<void, Mainloop, CtaMap, AlignedM, AlignedN, SplitK>;
 };

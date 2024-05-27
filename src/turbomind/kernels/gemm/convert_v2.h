@@ -5,6 +5,7 @@
 #include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/utils.h"
 #include <cuda_pipeline_primitives.h>
 
 namespace turbomind::gemm {
@@ -21,14 +22,12 @@ struct ConvertOperand {
 
     using Accessor = SmemAccessor<Ts, SmemLayout>;
 
-    static constexpr auto layout_S = Operand::Layout;
+    static constexpr auto kOrderS = Operand::kOrder;
 
     using PtrD = get_pointer_type<Td>;
 
-    static constexpr bool is_k_major = Operand::is_k_major;
-
-    static constexpr int COPY_K = is_k_major ? SmemCopy::C : SmemCopy::S;
-    static constexpr int COPY_M = SmemCopy::C * SmemCopy::S / COPY_K;
+    static constexpr int COPY_M = cs2mk<kOrderS>(SmemCopy::C, SmemCopy::S).x;
+    static constexpr int COPY_K = cs2mk<kOrderS>(SmemCopy::C, SmemCopy::S).y;
 
     static constexpr int ITER_K   = K / COPY_K;
     static constexpr int WARP_CNT = M / COPY_M;
@@ -43,12 +42,6 @@ struct ConvertOperand {
     };
 
     using SharedStorage = Array<Ts, SmemLayout::kSize>;
-
-    template<bool k_major>
-    static constexpr int2 mk2cs(int m, int k)
-    {
-        return k_major ? int2{k, m} : int2{m, k};
-    }
 
     template<class T, int N, int M>
     static constexpr int get_fragment_size(Array<T, N> (&)[M])
@@ -78,11 +71,13 @@ struct ConvertOperand {
 
         const int warp_offset_m = warp_id * COPY_M;
 
+        auto mk2idx_S = [&](int m, int k) { return cs2idx(mk2cs<kOrderS>(m, k), param.lds); };
+
         GmemIter gmem{
-            (Ts*)param.src + (is_k_major ? cta_offset_m * param.lds : cta_offset_m),
-            param.lds,
-            is_k_major ? K : K * param.lds,
-            mk2cs<is_k_major>(M, K),
+            (Ts*)param.src + mk2idx_S(cta_offset_m, 0),  // ptr
+            param.lds,                                   // stride s
+            mk2idx_S(0, K),                              // stride k
+            mk2cs<kOrderS>(M, K),
         };
 
         gmem.smem_data_ = smem;
@@ -111,7 +106,7 @@ struct ConvertOperand {
             for (int k = 0; k < ITER_K; ++k) {
 
                 // Load from smem as we are doing GEMMs
-                SmemCopy::copy(Accessor{smem}, data, mk2cs<is_k_major>(warp_offset_m, k * COPY_K));
+                SmemCopy::copy(Accessor{smem}, data, mk2cs<kOrderS>(warp_offset_m, k * COPY_K));
 
                 PRAGMA_UNROLL
                 for (int m = 0; m < kFragNum; m += Pack_M) {

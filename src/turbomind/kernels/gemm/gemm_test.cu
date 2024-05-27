@@ -4,7 +4,6 @@
 #include "src/turbomind/kernels/gemm/cache_utils.h"
 #include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
-#include <thrust/universal_vector.h>
 #include "src/turbomind/kernels/gemm/gpu_metric.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/quantization.h"
@@ -14,6 +13,7 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include <fstream>
 #include <limits>
+#include <thrust/universal_vector.h>
 
 #include <type_traits>
 
@@ -100,7 +100,6 @@ int main(int argc, char* argv[])
     // Test<half, uint4_t>(1, 1);
     // Test<half, uint4_t>(8, 1);
     Test<half, half>(16, 1);
-    return 0;
     // Test<half, uint4_t>(32, 1);
     // Test<half, uint4_t>(64, 1);
     // Test<half, uint4_t>(128, 1);
@@ -111,8 +110,10 @@ int main(int argc, char* argv[])
     // Test<half, uint4_t>(4096, 1);
     // Test<half, uint4_t>(8192, 1);
 
+    return 0;
+
     const int M = 32;
-    const int N = 128;
+    const int N = 64;
     const int K = 32;
 
     universal_vector<half> a(M * K);
@@ -120,15 +121,27 @@ int main(int argc, char* argv[])
 
     for (int i = 0; i < M; ++i) {
         for (int j = 0; j < K; ++j) {
-            a[i * K + j] = 1;//i * K + j;
+            a[i * K + j] = i * K + j;
         }
     }
 
-    Convert(a.data().get(),
-            MatrixLayout{DataType::F16, Order::kRowMajor, 32, 32, 32},
-            p.data().get(),
-            MatrixLayout{DataType::F16, Order::kFragment_16816_A, 32, 32, 32},
-            0);
+    MatrixLayout a_desc{
+        DataType::F16,
+        Order::kRowMajor,
+        32,
+        32,
+        32,
+    };
+    MatrixLayout p_desc{
+        DataType::F16,
+        Order::kRowMajor,
+        32,
+        32,
+        32,
+        Pack::kHMMA_16816_A,
+    };
+
+    Convert(a.data().get(), a_desc, p.data().get(), p_desc, 0);
 
     cudaDeviceSynchronize();
 
@@ -157,9 +170,9 @@ int main(int argc, char* argv[])
     gKernel().Launch({},
                      &alpha,
                      a.data().get(),
-                     MatrixLayout{DataType::F16, Order::kFragment_16816_A, M, K},
+                     MatrixLayout{DataType::F16, Order::kRowMajor, M, K, K, Pack::kHMMA_16816_A},
                      b.data().get(),
-                     MatrixLayout{DataType::F16, Order::kColMajor, N, K, K},
+                     MatrixLayout{DataType::F16, Order::kColMajor, K, N, K},
                      nullptr,
                      MatrixLayout{},
                      &beta,

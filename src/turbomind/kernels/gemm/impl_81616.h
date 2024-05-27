@@ -131,7 +131,8 @@ struct Impl<MMA_81616, T_, Tb_, Tq_, CTA_M_, CTA_N_, CTA_K_, WARP_M_, WARP_N_, W
     using ThreadMapQ = gemm::ThreadMap<CTA_N, CTA_G, kGmemAccessSizeQ, WARP_CNT>;
 
     static constexpr auto LayoutA = Order::kRowMajor;
-    static constexpr auto LayoutB = Order::kFragment_81616;
+    // static constexpr auto LayoutB = Order::kFragment_81616;
+    static constexpr auto LayoutB = Order::kRowMajor;
     static constexpr auto LayoutQ = Order::kRowMajor;
     static constexpr auto LayoutC = Order::kRowMajor;
 

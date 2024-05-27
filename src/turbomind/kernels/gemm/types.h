@@ -11,13 +11,14 @@
 namespace turbomind::gemm {
 
 enum class Order : int {
-    kColMajor         = 0,
-    kRowMajor         = 1,
-    kFragment_16816_A = 2,
-    kFragment_16816_B = 4,
-    kFragment_884,
-    kFragment_81616,
-    kFragment_16816,
+    kColMajor = 0,
+    kRowMajor = 1,
+};
+
+enum class Pack : int {
+    kNone         = 0,
+    kHMMA_16816_A = 1,
+    kHMMA_16816_B = 2,
 };
 
 enum class QuantType : int {
@@ -114,6 +115,7 @@ struct MatrixLayout {
     int      rows;
     int      cols;
     int      ld;
+    Pack     pack;
 };
 
 struct Workspace {

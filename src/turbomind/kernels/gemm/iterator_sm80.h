@@ -379,4 +379,17 @@ struct GmemIteratorSm80 {
     }
 };
 
+struct VoidIterator {
+    static constexpr int ITER_S = 0;
+    template<class P>
+    __device__ VoidIterator(P, int, int, int2)
+    {
+    }
+    __device__ void ClearSmem() {}
+    __device__ void Prefetch(int, int, bool) {}
+    __device__ void Prefetch(bool) {}
+    __device__ void Advance() {}
+    int* smem_data_;
+};
+
 }  // namespace turbomind::gemm

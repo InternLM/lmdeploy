@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include "src/turbomind/kernels/gemm/kernel_impl.h"
 #include "src/turbomind/kernels/gemm/mainloop_sm80_v2.h"
+#include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
@@ -40,6 +41,7 @@ struct Config {
         using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<half, true>, 16, WARP_M>;
         using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_M, CTA_K, 8, WARP_CNT>, SmemLayout, AlignedM, true, 0>;
         static constexpr Order kOrder = Order::kColMajor;
+        static constexpr Pack  kPack  = Pack::kNone;
     };
 
     struct OperandB {
@@ -48,9 +50,21 @@ struct Config {
         using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<half, false>, WARP_N, 16>;
         using GmemIter = GmemIteratorSm80<T, gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>, SmemLayout, AlignedN, true, 1>;
         static constexpr Order kOrder = Order::kColMajor;
+        static constexpr Pack  kPack  = Pack::kNone;
     };
 
-    using Mainloop = MainloopSm80_v2<CTA_M, CTA_N, CTA_K, TiledMma, OperandA, OperandB, OperandB, Transform, Stages>;
+    using Void = VoidOperand;
+
+    using Mainloop = MainloopSm80_v2<CTA_M,
+                                     CTA_N,
+                                     CTA_K,  //
+                                     TiledMma,
+                                     OperandA,
+                                     OperandB,
+                                     Void,
+                                     Void,
+                                     Transform,
+                                     Stages>;
 
     using Kernel = GemmUniversal<void, Mainloop, CtaMap, AlignedM, AlignedN, SplitK>;
 };

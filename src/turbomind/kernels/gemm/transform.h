@@ -10,8 +10,14 @@
 namespace turbomind::gemm {
 
 struct Transform {
-    template<class FragA, class FragB, class DataA, class DataB>
-    __device__ static void transform(FragA& frag_A, FragB& frag_B, int k, DataA& data_A, DataB& data_B)
+    template<class FragA, class FragB, class DataA, class DataB, class DataU, class DataV>
+    __device__ static void transform(FragA& frag_A,  //
+                                     FragB& frag_B,
+                                     int    k,
+                                     DataA& data_A,
+                                     DataB& data_B,
+                                     DataU&,
+                                     DataV&)
     {
         PRAGMA_UNROLL
         for (int i = 0; i < std::size(frag_A[k]); ++i) {

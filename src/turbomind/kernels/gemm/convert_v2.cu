@@ -37,8 +37,7 @@ struct Config {
         using SmemLayout = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
         using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_A<half, false>, WARP_M, MMA_K>;
         using GmemIter   = GmemIteratorSm80<Dtype, ThreadMap<CTA_K, CTA_M, 8, WARP_CNT>, SmemLayout, false, true, 0>;
-        static constexpr Order Layout     = Order::kColMajor;
-        static constexpr bool  is_k_major = true;
+        static constexpr Order kOrder = Order::kColMajor;
     };
 
     using Kernel = ConvertOperand<CTA_M, CTA_K, 1, OperandA, _Converter<half, half>, half, true>;

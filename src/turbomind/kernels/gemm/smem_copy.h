@@ -169,13 +169,26 @@ struct SmemCopy_Packed {
         for (int s = 0; s < Detail::ITER_S; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Detail::ITER_C; ++c) {
-                // const int ss = (offset_cs.y + s) / P_S / 16;
-                // const int cc = (offset_cs.x + c) * P_S * 16 + lane_id * kFragmentSize;
                 const int ss = (offset_cs.y + s) / P_S / 16;
                 const int cc = (offset_cs.x + c) * P_S * 16 + lane_id * kFragmentSize;
                 Lds(dst[s * Detail::ITER_C + c], &src(ss, cc));
             }
         }
+    }
+};
+
+template<int S_, int C_>
+struct VoidSmemCopy {
+    static constexpr int S = S_;
+    static constexpr int C = C_;
+
+    static constexpr int kFragmentSize = 1;
+
+    using Frag = Array<int, kFragmentSize>[1];
+
+    template<class Accessor>
+    __device__ static void copy(Accessor, Frag&, int2)
+    {
     }
 };
 

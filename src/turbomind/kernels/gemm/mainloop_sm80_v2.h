@@ -7,6 +7,7 @@
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/utils.h"
 #include <cuda_pipeline_primitives.h>
 
 namespace turbomind::gemm {
@@ -36,7 +37,8 @@ template<int M_,
          class TiledMma,
          class OperandA_,
          class OperandB_,
-         class OperandQ_,
+         class OperandU_,
+         class OperandV_,
          class Transform_,
          int Stages_>
 struct MainloopSm80_v2 {
@@ -59,27 +61,39 @@ struct MainloopSm80_v2 {
 
     using OperandA = OperandA_;
     using OperandB = OperandB_;
-    using OperandQ = OperandQ_;
+    using OperandU = OperandU_;
+    using OperandV = OperandV_;
 
     using Transform = Transform_;
 
     using Ta = typename OperandA::Dtype;
     using Tb = typename OperandB::Dtype;
-    using Tq = typename OperandQ::Dtype;
+    using Tu = typename OperandU::Dtype;
+    using Tv = typename OperandV::Dtype;
+
+    // primary  : AB
+    // qparam   : UV
+    // secondary: XY
 
     using SmemLayoutA = typename OperandA::SmemLayout;
     using SmemLayoutB = typename OperandB::SmemLayout;
-    // using SmemLayoutQ = typename OperandQ::SmemLayout;
+    using SmemLayoutU = typename OperandU::SmemLayout;
+    using SmemLayoutV = typename OperandV::SmemLayout;
 
     using SmemCopyA = typename OperandA::SmemCopy;
     using SmemCopyB = typename OperandB::SmemCopy;
+    using SmemCopyU = typename OperandU::SmemCopy;
+    using SmemCopyV = typename OperandV::SmemCopy;
 
     using SmemAccessorA = SmemAccessor<Ta, SmemLayoutA>;
     using SmemAccessorB = SmemAccessor<Tb, SmemLayoutB>;
+    using SmemAccessorU = SmemAccessor<Tu, SmemLayoutU>;
+    using SmemAccessorV = SmemAccessor<Tv, SmemLayoutV>;
 
     using GmemIterA = typename OperandA::GmemIter;
     using GmemIterB = typename OperandB::GmemIter;
-    using GmemIterQ = typename OperandQ::GmemIter;
+    using GmemIterU = typename OperandU::GmemIter;
+    using GmemIterV = typename OperandV::GmemIter;
 
     static constexpr int WARP_CNT_M = M_ / TiledMma::M;
     static constexpr int WARP_CNT_N = N_ / TiledMma::N;
@@ -91,17 +105,14 @@ struct MainloopSm80_v2 {
 
     static constexpr int kBatchA = ceil_div(GmemIterA::ITER_S, kMaxPrefetchIter);
     static constexpr int kBatchB = ceil_div(GmemIterB::ITER_S, kMaxPrefetchIter);
-    // static constexpr int kBatchQ = ceil_div(GmemIterQ::ITER_S, kMaxPrefetchIter);
-
-    template<bool k_major>
-    static constexpr int2 mk2cs(int m, int k)
-    {
-        return k_major ? int2{k, m} : int2{m, k};
-    }
+    static constexpr int kBatchU = ceil_div(GmemIterA::ITER_S, kMaxPrefetchIter);
+    static constexpr int kBatchV = ceil_div(GmemIterB::ITER_S, kMaxPrefetchIter);
 
     struct SharedStorage {
         __align__(16) Array<Ta, Stages * SmemLayoutA::kSize> A;
         __align__(16) Array<Tb, Stages * SmemLayoutB::kSize> B;
+        __align__(16) Array<Tu, Stages * SmemLayoutU::kSize> U;
+        __align__(16) Array<Tv, Stages * SmemLayoutV::kSize> V;
     };
 
     __device__ void Wait()
@@ -111,77 +122,135 @@ struct MainloopSm80_v2 {
     }
 
     template<class GmemIter, class SmemIter>
-    __device__ void AdvanceSmemStage(GmemIter& gmem_iter, SmemIter& smem_iter)
+    __device__ void _advance_smem(GmemIter& gmem_iter, SmemIter& smem_iter)
     {
         gmem_iter.smem_data_ = smem_iter.pointer;
         smem_iter.Advance();
     }
 
-    __device__ void operator()(
-        GmemIterA& gmem_A, GmemIterB& gmem_B, GmemIterQ& gmem_Q, FragC& frag_C, int tile_iter, SharedStorage& storage)
+    template<class A, class B, class U, class V>
+    struct Binding {
+        A&         a;
+        B&         b;
+        U&         u;
+        V&         v;
+        __device__ Binding(A& a, B& b, U& u, V& v): a{a}, b{b}, u{u}, v{v} {}  // CTAD
+    };
+
+    // zip with
+    template<class BindingG, class BindingS>
+    __device__ void AdvanceSmemStage(BindingG& g, BindingS& s)
+    {
+        _advance_smem(g.a, s.a);
+        _advance_smem(g.b, s.b);
+        _advance_smem(g.u, s.u);
+        _advance_smem(g.v, s.v);
+    }
+
+    template<class Binding>
+    __device__ void ClearSmem(Binding& g)
+    {
+        g.a.ClearSmem();
+        g.b.ClearSmem();
+        g.u.ClearSmem();
+        g.v.ClearSmem();
+    }
+
+    template<class Binding>
+    __device__ void Prefetch(Binding& g, bool mask)
+    {
+        g.a.Prefetch(mask);
+        g.b.Prefetch(mask);
+        g.u.Prefetch(mask);
+        g.v.Prefetch(mask);
+    }
+
+    template<class Binding>
+    __device__ void Prefetch(Binding& g, int k, bool mask)
+    {
+        int batch_A = min((k + 1) * kBatchA, GmemIterA::ITER_S) - k * kBatchA;
+        int batch_B = min((k + 1) * kBatchB, GmemIterB::ITER_S) - k * kBatchB;
+        int batch_U = min((k + 1) * kBatchU, GmemIterU::ITER_S) - k * kBatchU;
+        int batch_V = min((k + 1) * kBatchV, GmemIterV::ITER_S) - k * kBatchV;
+        g.a.Prefetch(k * kBatchA, batch_A, mask);
+        g.b.Prefetch(k * kBatchB, batch_B, mask);
+        g.u.Prefetch(k * kBatchU, batch_U, mask);
+        g.v.Prefetch(k * kBatchV, batch_V, mask);
+    }
+
+    template<class Binding>
+    __device__ void AdvanceGmemStage(Binding& g)
+    {
+        g.a.Advance();
+        g.b.Advance();
+        g.u.Advance();
+        g.v.Advance();
+    }
+
+    __device__ void operator()(GmemIterA&     gmem_A,
+                               GmemIterB&     gmem_B,
+                               GmemIterU&     gmem_U,
+                               GmemIterU&     gmem_V,
+                               FragC&         frag_C,
+                               int            tile_iter,
+                               SharedStorage& storage)
     {
         typename MMA_Atom::FragA frag_A[TiledMma::ITER_K][TiledMma::ITER_M];
         typename MMA_Atom::FragB frag_B[TiledMma::ITER_K][TiledMma::ITER_N];
 
         typename SmemCopyA::Frag data_A[TiledMma::ITER_K];
         typename SmemCopyB::Frag data_B[TiledMma::ITER_K];
+        typename SmemCopyU::Frag data_U[TiledMma::ITER_K];
+        typename SmemCopyV::Frag data_V[TiledMma::ITER_K];
 
         SmemIter<get_pointer_type<Ta>, SmemLayoutA::kSize, Stages> smem_A{storage.A.data()};
         SmemIter<get_pointer_type<Tb>, SmemLayoutB::kSize, Stages> smem_B{storage.B.data()};
+        SmemIter<get_pointer_type<Tu>, SmemLayoutU::kSize, Stages> smem_U{storage.U.data()};
+        SmemIter<get_pointer_type<Tv>, SmemLayoutV::kSize, Stages> smem_V{storage.V.data()};
 
         // a separate counter tends to generate better code
         int gmem_iter = tile_iter;
         int gmem_mask = true;
 
+        Binding gmem_iters{gmem_A, gmem_B, gmem_U, gmem_V};
+        Binding smem_iters{smem_A, smem_B, smem_U, smem_V};
+
         PRAGMA_UNROLL
         for (int i = 0; i < Stages; ++i) {
-            AdvanceSmemStage(gmem_A, smem_A);
-            AdvanceSmemStage(gmem_B, smem_B);
-            gmem_A.ClearSmem();
-            gmem_B.ClearSmem();
+            AdvanceSmemStage(gmem_iters, smem_iters);
+            ClearSmem(gmem_iters);
         }
+
         // r: 0, w:s-1
 
         __syncthreads();
 
-        PRAGMA_UNROLL
-        for (int stage = 0; stage < Stages - 1; ++stage) {
-            AdvanceSmemStage(gmem_A, smem_A);
-            AdvanceSmemStage(gmem_B, smem_B);
-            gmem_A.Prefetch(gmem_mask);
-            gmem_B.Prefetch(gmem_mask);
+        constexpr bool kFusePrefetch = true;
+
+        auto prefetch_stage = [&] {
+            AdvanceSmemStage(gmem_iters, smem_iters);
+            Prefetch(gmem_iters, gmem_mask);
             __pipeline_commit();
-            gmem_A.Advance();
-            gmem_B.Advance();
+            AdvanceGmemStage(gmem_iters);
             if (--gmem_iter == 0) {
                 gmem_mask = false;
             }
-        }
-        // r:-1, w:-2
+        };
 
-        constexpr bool kFusePrefetch = true;
-
-        auto prefetch = [&](int k) {
-            if constexpr (kFusePrefetch) {
-                int batch_A = min((k + 1) * kBatchA, GmemIterA::ITER_S) - k * kBatchA;
-                int batch_B = min((k + 1) * kBatchB, GmemIterB::ITER_S) - k * kBatchB;
-                gmem_A.Prefetch(k * kBatchA, batch_A, gmem_mask);
-                gmem_B.Prefetch(k * kBatchB, batch_B, gmem_mask);
-                if (k == TiledMma::ITER_K - 1) {
-                    __pipeline_commit();
-                    gmem_A.Advance();
-                    gmem_B.Advance();
-                    if (--gmem_iter == 0) {
-                        gmem_mask = false;
-                    }
+        auto prefetch_batch = [&](int k) {
+            Prefetch(gmem_iters, k, gmem_mask);
+            if (k == TiledMma::ITER_K - 1) {
+                __pipeline_commit();
+                AdvanceGmemStage(gmem_iters);
+                if (--gmem_iter == 0) {
+                    gmem_mask = false;
                 }
             }
         };
 
         auto advance_and_wait_smem_stage = [&] {
             Wait();
-            AdvanceSmemStage(gmem_A, smem_A);
-            AdvanceSmemStage(gmem_B, smem_B);
+            AdvanceSmemStage(gmem_iters, smem_iters);
         };
 
         const int warp_id  = threadIdx.x / WARP_SIZE;
@@ -189,35 +258,34 @@ struct MainloopSm80_v2 {
         const int offset_n = warp_id_n(warp_id) * TiledMma::N;
         const int offset_k = warp_id_k(warp_id) * TiledMma::K;
 
-        auto Load = [&](int k) {
-            const int      current_k = offset_k + k * MMA_Atom::K;
-            constexpr bool k_major_A = OperandA::kOrder == Order::kRowMajor;
-            constexpr bool k_major_B = OperandB::kOrder == Order::kColMajor;
-            SmemCopyA::copy(SmemAccessorA{smem_A.pointer}, data_A[k], mk2cs<k_major_A>(offset_m, current_k));
-            SmemCopyB::copy(SmemAccessorB{smem_B.pointer}, data_B[k], mk2cs<k_major_B>(offset_n, current_k));
+        auto preload = [&](int k) {
+            const int current_k = offset_k + k * MMA_Atom::K;
+            SmemCopyA::copy(SmemAccessorA{smem_A.pointer}, data_A[k], mk2cs<OperandA::kOrder>(offset_m, current_k));
+            SmemCopyU::copy(SmemAccessorU{smem_U.pointer}, data_U[k], mk2cs<OperandU::kOrder>(offset_m, current_k));
+            SmemCopyB::copy(SmemAccessorB{smem_B.pointer}, data_B[k], kn2cs<OperandB::kOrder>(current_k, offset_n));
+            SmemCopyV::copy(SmemAccessorV{smem_V.pointer}, data_V[k], kn2cs<OperandV::kOrder>(current_k, offset_n));
         };
+
+        PRAGMA_UNROLL
+        for (int stage = 0; stage < Stages - 1; ++stage) {
+            prefetch_stage();
+        }
+        // r:-1, w:-2
 
         advance_and_wait_smem_stage();
         // r: 0, w:-1
 
-        Load(0);
-        Transform::transform(frag_A, frag_B, 0, data_A, data_B);
+        preload(0);
+        Transform::transform(frag_A, frag_B, 0, data_A, data_B, data_U, data_V);
 
         if constexpr (kFusePrefetch) {
-            prefetch(0);
+            prefetch_batch(0);
         }
 
         PRAGMA_NO_UNROLL
         for (; tile_iter > 0; --tile_iter) {
             if constexpr (!kFusePrefetch) {
-                gmem_A.Prefetch(gmem_mask);
-                gmem_B.Prefetch(gmem_mask);
-                __pipeline_commit();
-                gmem_A.Advance();
-                gmem_B.Advance();
-                if (--gmem_iter == 0) {
-                    gmem_mask = false;
-                }
+                prefetch_stage();
             }
             constexpr int ITER_K = TiledMma::ITER_K;
             static_assert(ITER_K > 1);
@@ -225,7 +293,7 @@ struct MainloopSm80_v2 {
             PRAGMA_UNROLL
             for (int k = 0; k < ITER_K; ++k) {
                 // preload for next iter
-                Load((k + 1) % ITER_K);
+                preload((k + 1) % ITER_K);
                 PRAGMA_UNROLL
                 for (int n = 0; n < TiledMma::ITER_N; ++n) {
                     PRAGMA_UNROLL
@@ -233,11 +301,13 @@ struct MainloopSm80_v2 {
                         MMA_Atom::fma(frag_C[m][n], frag_A[k][m], frag_B[k][n], frag_C[m][n]);
                     }
                 }
-                prefetch((k + 1) % ITER_K);
+                if constexpr (kFusePrefetch) {
+                    prefetch_batch((k + 1) % ITER_K);
+                }
                 if (k + 1 == ITER_K - 1) {
                     advance_and_wait_smem_stage();
                 }
-                Transform::transform(frag_A, frag_B, (k + 1) % ITER_K, data_A, data_B);
+                Transform::transform(frag_A, frag_B, (k + 1) % ITER_K, data_A, data_B, data_U, data_V);
             }
         }
 

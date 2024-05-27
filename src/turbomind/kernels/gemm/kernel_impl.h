@@ -96,9 +96,10 @@ public:
         const auto grid  = Map::get_grid_shape(tiles, log_tile);
         const auto block = Gemm::Impl::WARP_CNT * WARP_SIZE;
 
-        using Ta = typename Gemm::T;
+        using Ta = typename Gemm::Ta;
         using Tb = typename Gemm::Tb;
-        using Tq = typename Gemm::Tq;
+        using Tu = typename Gemm::Tu;
+        using Tv = typename Gemm::Tv;
         using Tc = typename Gemm::T;
 
         if constexpr (0) {
@@ -123,7 +124,9 @@ public:
                                    Adesc.ld,
                                    _cast((Tb*)B),
                                    Bdesc.ld,
-                                   (Tq*)Q,
+                                   (Tu*)nullptr,
+                                   0,
+                                   (Tv*)Q,
                                    Qdesc.ld,
                                    (Tc*)C,
                                    Cdesc.ld,
