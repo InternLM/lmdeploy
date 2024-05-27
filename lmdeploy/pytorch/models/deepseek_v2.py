@@ -8,7 +8,8 @@ from torch import nn
 
 from lmdeploy.pytorch.kernels.fused_moe import fused_moe
 
-from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
+from ..kernels import (apply_rotary_pos_emb, fill_kv_cache,
+                       paged_attention_fwd, rms_norm)
 from ..weight_loader.dist_utils import (colwise_parallelize_linear,
                                         rowwise_parallelize_linear)
 
@@ -108,8 +109,11 @@ class PatchedDeepseekV2Attention(nn.Module):
         num_heads = self.num_heads // world_size
         q_len = hidden_states.size(1)
 
-        def __qkv_proj(hidden_states):
-            """qkv proj."""
+        def __q_proj(hidden_states, nope_size: int, pe_size: int):
+            """q proj."""
+            query_states = hidden_states.new_empty(q_len, num_heads,
+                                                   nope_size + pe_size)
+
             if self.q_lora_rank is None:
                 q = self.q_proj(hidden_states)
             else:
@@ -120,22 +124,36 @@ class PatchedDeepseekV2Attention(nn.Module):
             q_nope, q_pe = torch.split(
                 q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
             # q_nope: (q_len, num_heads, kv_lora_rank)
-            q_nope_out = q_nope.new_empty(q_len, num_heads, self.kv_lora_rank)
+            q_nope_out = query_states[..., :nope_size]
             torch.bmm(q_nope.transpose(0, 1),
                       self.w_kc,
                       out=q_nope_out.transpose(0, 1))
-            q_nope = q_nope_out
+            return query_states, q_pe
 
-            compressed_kv = self.kv_a_proj_with_mqa(hidden_states[0, :, None])
-            # compressed_kv: (q_len, 1, kv_lora_rank)
-            # k_pe: (q_len, 1, qk_rope_head_dim)
-            compressed_kv, k_pe = torch.split(
-                compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim],
-                dim=-1)
-            # kv_heads == 1
-            compressed_kv = self.kv_a_layernorm(compressed_kv.contiguous())
+        def __kv_proj(hidden_states, nope_size: int):
+            """kv proj."""
+            # (q_len, 1, nope_size + pe_size)
+            key_states = self.kv_a_proj_with_mqa(hidden_states[0, :, None])
+            # (q_len, 1, nope_size)
+            value_states = key_states[..., :nope_size]
+            # (q_len, 1, pe_size)
+            k_pe = key_states[..., nope_size:]
+            # inplace kv_a_layernorm
+            rms_norm(value_states,
+                     weight=self.kv_a_layernorm.weight,
+                     eps=self.kv_a_layernorm.variance_epsilon,
+                     out=value_states)
+            return key_states, value_states, k_pe
 
-            return q_nope, q_pe, k_pe, compressed_kv
+        def __qkv_proj(hidden_states):
+            """qkv proj."""
+            nope_size = self.kv_lora_rank
+            pe_size = self.qk_rope_head_dim
+            query_states, q_pe = __q_proj(hidden_states, nope_size, pe_size)
+            key_states, value_states, k_pe = __kv_proj(hidden_states,
+                                                       nope_size)
+
+            return query_states, key_states, value_states, q_pe, k_pe
 
         def __rotary_emb_fn(q_pe, k_pe, out_q_pe, out_k_pe):
             """rope."""
@@ -157,16 +175,9 @@ class PatchedDeepseekV2Attention(nn.Module):
                                  k_embed=out_k_pe)
             return out_q_pe, out_k_pe
 
-        q_nope, q_pe, k_pe, compressed_kv = __qkv_proj(hidden_states)
-
-        nope_size = q_nope.size(-1)
-        pe_size = q_pe.size(-1)
-        query_states = k_pe.new_empty(q_len, num_heads, nope_size + pe_size)
-        key_states = k_pe.new_empty(q_len, 1, nope_size + pe_size)
-        query_states[..., :nope_size] = q_nope
-        key_states[..., :nope_size] = compressed_kv
-        value_states = compressed_kv
-
+        query_states, key_states, value_states, q_pe, k_pe = __qkv_proj(
+            hidden_states)
+        nope_size = self.kv_lora_rank
         __rotary_emb_fn(q_pe, k_pe, query_states[..., nope_size:],
                         key_states[..., nope_size:])
 

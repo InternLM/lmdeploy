@@ -28,7 +28,10 @@ def rms_norm_kernel(input, weight, output, input_row_stride: tl.constexpr,
     tl.store(out_ptr + offsets, out, mask=offsets < N_COLS)
 
 
-def rms_norm(hidden_states: Tensor, weight: Tensor, eps: float = 1e-6):
+def rms_norm(hidden_states: Tensor,
+             weight: Tensor,
+             eps: float = 1e-6,
+             out: Tensor = None):
     """rms norm."""
 
     def _kernel_meta():
@@ -38,14 +41,14 @@ def rms_norm(hidden_states: Tensor, weight: Tensor, eps: float = 1e-6):
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
 
-    assert hidden_states.is_contiguous()
     feat_size = weight.shape[0]
     seq_len = hidden_states.numel() // hidden_states.size(-1)
     input_stride = hidden_states.stride(-2)
 
     BLOCK_N = triton.next_power_of_2(feat_size)
 
-    out = torch.empty_like(hidden_states)
+    if out is None:
+        out = torch.empty_like(hidden_states)
 
     kernel_meta = _kernel_meta()
     grid = (seq_len, )
