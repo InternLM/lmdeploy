@@ -277,9 +277,11 @@ class Engine:
             if eos_token_id is None:
                 return
             if sampling_param.ignore_eos:
-                sampling_param.bad_words.append(eos_token_id)
-            elif eos_token_id not in sampling_param.stop_words:
-                sampling_param.stop_words.append(eos_token_id)
+                sampling_param.bad_words += eos_token_id
+            else:
+                for eid in eos_token_id:
+                    if eid not in sampling_param.stop_words:
+                        sampling_param.stop_words.append(eid)
 
         def __update_max_new_tokens(msg):
             """update max new tokens."""

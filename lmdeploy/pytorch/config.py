@@ -75,7 +75,7 @@ class ModelConfig:
     num_attention_heads: int
     num_key_value_heads: int
     bos_token_id: int
-    eos_token_id: int
+    eos_token_id: List[int]
     head_dim: int
     sliding_window: int = -1
     dtype: torch.dtype = torch.float16
@@ -215,6 +215,8 @@ class ModelConfig:
 
         def __build_cogvlm():
             cfg = __build_default()
+            if getattr(hf_config, 'num_multi_query_heads', None):
+                cfg.num_key_value_heads = hf_config.num_multi_query_heads
             cfg.unused_modules = ['model.vision']
             return cfg
 
@@ -233,6 +235,11 @@ class ModelConfig:
             model_config = __build_qwen()
         elif model_arch == 'CogVLMForCausalLM':
             model_config = __build_cogvlm()
+            # update torch_dtype if not exists
+            torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
+            ) else 'float16'
+            if getattr(hf_config, 'torch_dtype', None) is None:
+                setattr(hf_config, 'torch_dtype', torch_dtype)
         else:
             model_config = __build_default()
 
@@ -243,4 +250,9 @@ class ModelConfig:
         model_config.model_arch = model_arch
         if check_vl_llm(json_config):
             model_config.task_type = 'vlm'
+
+        # update eos_token_id to list
+        if isinstance(model_config.eos_token_id, int):
+            model_config.eos_token_id = [model_config.eos_token_id]
+
         return model_config
