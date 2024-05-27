@@ -405,12 +405,13 @@ def _get_convert_pv(nv_capability):
 _convert_pv = None
 
 
-@triton.autotune(configs=[
-    triton.Config({}, num_stages=1, num_warps=16),
-    triton.Config({}, num_stages=1, num_warps=8),
-    triton.Config({}, num_stages=1, num_warps=4),
-],
-                 key=['BLOCK_M', 'BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
+# TODO: how to support inplace autotune?
+# @triton.autotune(configs=[
+#     triton.Config({}, num_stages=1, num_warps=16),
+#     triton.Config({}, num_stages=1, num_warps=8),
+#     triton.Config({}, num_stages=1, num_warps=4),
+# ],
+#                  key=['BLOCK_M', 'BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
 @triton.jit
 def _fwd_kernel(
     Q,
@@ -627,6 +628,8 @@ def paged_attention_fwd(
     kernel_meta = _kernel_meta()
     is_decoding = q.shape[-3] == q_seqlens.size(0)
     if not is_decoding:
+        num_warps = 4
+        num_stages = 1
         grid = (batch, head, triton.cdiv(max_seqlen, BLOCK_M))
         _fwd_kernel[grid](q,
                           k,
@@ -659,6 +662,8 @@ def paged_attention_fwd(
                           BLOCK_DMODEL=BLOCK_DMODEL,
                           BLOCK_DV=BLOCK_DV,
                           BLOCK_N=BLOCK,
+                          num_warps=num_warps,
+                          num_stages=num_stages,
                           **kernel_meta)
     else:
         num_warps = max(4, BLOCK_DMODEL // 64)
