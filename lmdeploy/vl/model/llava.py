@@ -67,8 +67,6 @@ class LlavaVisionModel(VisonModel):
         # check llava install
         check_llava_install()
 
-        from accelerate import init_empty_weights
-
         model = None
         if self.arch == 'LlavaLlamaForCausalLM':
             from llava.model.language_model.llava_llama import LlavaConfig
@@ -84,6 +82,8 @@ class LlavaVisionModel(VisonModel):
 
         else:
             assert 0, f'unsupported arch {self.arch}'
+
+        from accelerate import init_empty_weights
 
         # init empty model, skip layer initialization
         with init_empty_weights(), warnings.catch_warnings(), \
@@ -104,9 +104,6 @@ class LlavaVisionModel(VisonModel):
         else:
             self.vl_model = model
 
-        # move model to cpu
-        with torch.device('cpu'):
-            model.to_empty(device='cpu')
         # init empty vision_tower, the embedding layer in CLIPVisionModel
         # can't init right under init_empty_weights
         with init_llava_vision_tower(self.config):
