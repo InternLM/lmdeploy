@@ -66,9 +66,7 @@ class Xcomposer2VisionModel(VisonModel):
                 # internlm-xcomposer2-7b
                 self._forward_func = self._forward_7b
 
-                from accelerate.utils import (get_balanced_memory,
-                                              infer_auto_device_map)
-
+        from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
             model,
             dtype=torch.half,
