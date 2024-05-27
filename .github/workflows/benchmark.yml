@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'
+        default: 'packaging transformers_stream_generator transformers==4.41.0 datasets matplotlib jmespath'
       default_tp:
         required: true
         description: 'Default tp value'
@@ -52,7 +52,7 @@ on:
         required: true
         description: 'Set models run benchmark'
         type: string
-        default: "['internlm/internlm2-chat-20b','internlm/internlm2-chat-20b-inner-4bits','meta-llama/Llama-2-7b-chat-hf','meta-llama/Llama-2-7b-chat-hf-inner-4bits']"
+        default: "['internlm/internlm2-chat-20b','internlm/internlm2-chat-20b-inner-4bits','meta-llama/Llama-2-7b-chat-hf','meta-llama/Llama-2-7b-chat-hf-inner-4bits','meta-llama/Meta-Llama-3-8B-Instruct','Qwen/Qwen1.5-32B-Chat']"
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -61,7 +61,7 @@ env:
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
   DATASET_FILE: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
   TP_INFO: --tp 1
-  LOOP_NUM: 3
+  LOOP_NUM: 1
   TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
 
 
@@ -115,7 +115,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: 6,7
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -211,7 +211,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: 4,5
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -268,8 +268,8 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(128 256)
-          for batch in "${batches[@]}"
+          batches=($BATCHES)
+          for batch in ${batches[@]}
           do
             for ((i=1; i<=$LOOP_NUM; i++))
               do
@@ -283,8 +283,8 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(128 256)
-          for batch in "${batches[@]}"
+          batches=($BATCHES)
+          for batch in ${batches[@]}
           do
             for ((i=1; i<=$LOOP_NUM; i++))
               do
@@ -298,8 +298,8 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(128 256)
-          for batch in "${batches[@]}"
+          batches=($BATCHES)
+          for batch in ${batches[@]}
           do
             for ((i=1; i<=$LOOP_NUM; i++))
               do
@@ -313,8 +313,8 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(128 256)
-          for batch in "${batches[@]}"
+          batches=($BATCHES)
+          for batch in ${batches[@]}
           do
             for ((i=1; i<=$LOOP_NUM; i++))
               do
@@ -352,7 +352,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: 6,7
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -405,7 +405,7 @@ jobs:
       - name: Start restful api turbomind
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --log-level ${{inputs.log_level}} > turbomind_run.log 2>&1 &
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MAX_BATCH_SIZE $MODEL_FORMAT $TP_INFO --log-level ${{inputs.log_level}} > turbomind_run.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Run restful benchmark
@@ -415,8 +415,8 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(128 256)
-          for batch in "${batches[@]}"
+          batches=($BATCHES)
+          for batch in ${batches[@]}
           do
             for ((i=1; i<=$LOOP_NUM; i++))
               do
@@ -431,7 +431,7 @@ jobs:
       - name: Start restful api turbomind - kvint4
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
         run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level ${{inputs.log_level}} > turbomind_kvint4_run.log 2>&1 &
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MAX_BATCH_SIZE $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level ${{inputs.log_level}} > turbomind_kvint4_run.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Run restful benchmark -kvint4
@@ -441,7 +441,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(128 256)
+          batches=($BATCHES)
           for batch in "${batches[@]}"
           do
             for ((i=1; i<=$LOOP_NUM; i++))
@@ -456,7 +456,7 @@ jobs:
       - name: Start restful api turbomind - kvint8
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
         run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --quant-policy 8 --log-level ${{inputs.log_level}} > turbomind_kvint8_run.log 2>&1 &
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MAX_BATCH_SIZE $MODEL_FORMAT $TP_INFO --quant-policy 8 --log-level ${{inputs.log_level}} > turbomind_kvint8_run.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Run restful benchmark -kvint8
@@ -466,7 +466,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(128 256)
+          batches=($BATCHES)
           for batch in "${batches[@]}"
           do
             for ((i=1; i<=$LOOP_NUM; i++))
@@ -491,7 +491,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          batches=(128 256)
+          batches=($BATCHES)
           for batch in "${batches[@]}"
           do
             for ((i=1; i<=$LOOP_NUM; i++))
@@ -544,7 +544,11 @@ jobs:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Set params
-        if: (contains( matrix.model, 'internlm2-chat-20b'))
+        run: |
+          chmod +x .github/scripts/set_benchmark_param.sh
+          .github/scripts/set_benchmark_param.sh ${{matrix.model}}
+      - name: Set params - cuda allocate
+        if: contains( env.TP_INFO, '--tp 2')
         run: |
           echo 'DEVICE="device=4,5"' >> "$GITHUB_ENV"
       - name: Create test container
@@ -560,6 +564,7 @@ jobs:
             --name "lmdeploy-ci-triton-$GITHUB_RUN_ID-$date_today" \
             --workdir /__w/lmdeploy/lmdeploy \
             --env NCCL_LAUNCH_MODE=GROUP \
+            --pull never \
             -v $(pwd)/../../:/__w \
             -v ${MODEL_PATH}:${MODEL_PATH} \
             -v ${WORKDIR}:/root/workspace/workdir \
@@ -575,7 +580,6 @@ jobs:
       - name: Build lmdeploy from source
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
-          docker exec $CONTAINER_ID sed -i 's/https:\/\/github.com\/NVIDIA\/cutlass.git/https:\/\/521github.com\/extdomains\/github.com\/NVIDIA\/cutlass.git/g' CMakeLists.txt
           docker exec $CONTAINER_ID mkdir build
           docker exec --workdir /__w/lmdeploy/lmdeploy/build \
             --env http_proxy=${{secrets.PROXY}} \
@@ -664,7 +668,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir} -p
-          batches=(128 256)
+          batches=($BATCHES)
           for batch in "${batches[@]}"
           do
             for ((i=1; i<=$LOOP_NUM; i++))

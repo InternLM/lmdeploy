@@ -50,7 +50,6 @@ class SubCliServe:
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
-        ArgumentHelper.enable_prefix_caching(pt_group)
 
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
@@ -59,6 +58,7 @@ class SubCliServe:
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
+        prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -69,6 +69,7 @@ class SubCliServe:
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(cache_block_seq_len_act)
+        tb_group._group_actions.append(prefix_caching_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
@@ -138,7 +139,6 @@ class SubCliServe:
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
-        ArgumentHelper.enable_prefix_caching(pt_group)
 
         ArgumentHelper.adapters(pt_group)
         # common engine args
@@ -148,6 +148,7 @@ class SubCliServe:
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
+        prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -158,11 +159,16 @@ class SubCliServe:
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(cache_block_seq_len_act)
+        tb_group._group_actions.append(prefix_caching_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
+
+        # vlm args
+        vision_group = parser.add_argument_group('Vision model arguments')
+        ArgumentHelper.vision_max_batch_size(vision_group)
 
     @staticmethod
     def add_parser_api_client():
@@ -233,7 +239,9 @@ class SubCliServe:
                 quant_policy=args.quant_policy,
                 rope_scaling_factor=args.rope_scaling_factor,
                 cache_max_entry_count=args.cache_max_entry_count,
-                cache_block_seq_len=args.cache_block_seq_len)
+                cache_block_seq_len=args.cache_block_seq_len,
+                enable_prefix_caching=args.enable_prefix_caching,
+            )
         chat_template_config = ChatTemplateConfig(
             model_name=args.model_name,
             meta_instruction=args.meta_instruction,
@@ -283,16 +291,21 @@ class SubCliServe:
                 quant_policy=args.quant_policy,
                 rope_scaling_factor=args.rope_scaling_factor,
                 cache_max_entry_count=args.cache_max_entry_count,
-                cache_block_seq_len=args.cache_block_seq_len)
+                cache_block_seq_len=args.cache_block_seq_len,
+                enable_prefix_caching=args.enable_prefix_caching,
+            )
         chat_template_config = None
         if args.chat_template:
             chat_template_config = ChatTemplateConfig.from_json(
                 args.chat_template)
+        from lmdeploy.messages import VisonConfig
+        vision_config = VisonConfig(args.vision_max_batch_size)
         run_api_server(args.model_path,
                        model_name=args.model_name,
                        backend=backend,
                        backend_config=backend_config,
                        chat_template_config=chat_template_config,
+                       vision_config=vision_config,
                        server_name=args.server_name,
                        server_port=args.server_port,
                        allow_origins=args.allow_origins,

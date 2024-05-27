@@ -10,7 +10,7 @@ from torch import nn
 import lmdeploy
 from lmdeploy.lite.apis.calibrate import calibrate
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
-                                            smooth_layers)
+                                            awq_layers, smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
 
@@ -69,10 +69,22 @@ def smooth_quant(model: str,
                  calib_dataset: str = 'ptb',
                  calib_samples: int = 128,
                  calib_seqlen: int = 2048,
+                 search_scale: bool = False,
+                 batch_size: int = 1,
+                 w_bits: int = 8,
                  device: str = 'cuda'):
 
-    model, tokenizer, work_dir = calibrate(model, calib_dataset, calib_samples,
-                                           calib_seqlen, work_dir, device)
+    model_path = model
+    vl_model, model, tokenizer, work_dir = calibrate(model,
+                                                     calib_dataset,
+                                                     calib_samples,
+                                                     calib_seqlen,
+                                                     work_dir,
+                                                     device,
+                                                     w_bits=w_bits,
+                                                     w_group_size=-1,
+                                                     search_scale=search_scale,
+                                                     batch_size=batch_size)
 
     # calibrate function exports the calibration statistics
     # (inputs, outputs, keys and values) to `work_dir`.
@@ -106,7 +118,13 @@ def smooth_quant(model: str,
         name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
         fcs.update(name2fc)
 
-    smooth_layers(layers, fc2fcs, norm2fcs, act_scales, -1, device)
+    if search_scale:
+        awq_ratios = inp_stats['ratios']
+        act_scales = inp_stats['absmean']
+        awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios, -1,
+                   device)
+    else:
+        smooth_layers(layers, fc2fcs, norm2fcs, act_scales, -1, device)
 
     rmsnorms = collect_target_modules(model, norm_type)
 
@@ -131,9 +149,13 @@ def smooth_quant(model: str,
     else:
         model.config.auto_map = AUTO_MAP[type(model).__name__]
 
-    model.save_pretrained(work_dir,
-                          max_shard_size='2GB',
-                          safe_serialization=False)
+    if vl_model:
+        from .auto_awq import save_vl_model
+        save_vl_model(vl_model, model_path, work_dir)
+    else:
+        model.save_pretrained(work_dir,
+                              max_shard_size='2GB',
+                              safe_serialization=False)
     tokenizer.save_pretrained(work_dir)
 
     shutil.copy(MODEL_PATH_MAP[type(model).__name__], work_dir)

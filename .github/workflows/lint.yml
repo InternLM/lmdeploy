@@ -21,7 +21,7 @@ jobs:
         uses: DoozyX/clang-format-lint-action@v0.13
         with:
           source: src
-          extensions: h,c,cpp,hpp,cu,cuh
+          extensions: h,c,cpp,hpp,cu,cuh,cc
           clangFormatVersion: 11
           style: file
       - name: Check markdown link

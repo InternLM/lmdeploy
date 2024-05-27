@@ -4,16 +4,20 @@ from typing import Dict, List, Union
 import numpy as np
 
 from lmdeploy.serve.async_engine import AsyncEngine
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX, IMAGE_TOKEN
 from lmdeploy.vl.engine import ImageEncoder
 from lmdeploy.vl.templates import VLPromptType, get_vl_prompt_template
+
+logger = get_logger('lmdeploy')
 
 
 class VLAsyncEngine(AsyncEngine):
     """Visual Language Async inference engine."""
 
     def __init__(self, model_path: str, **kwargs) -> None:
-        self.vl_encoder = ImageEncoder(model_path)
+        vision_config = kwargs.pop('vision_config', None)
+        self.vl_encoder = ImageEncoder(model_path, vision_config)
         super().__init__(model_path, **kwargs)
         if self.model_name == 'base':
             raise RuntimeError(
@@ -56,8 +60,13 @@ class VLAsyncEngine(AsyncEngine):
             input_ids = []
             begins = []
             ends = []
+            if len(segs) != len(features) + 1:
+                logger.error(
+                    f'the number of {IMAGE_TOKEN} is not equal '
+                    f'to input images, {len(segs) - 1} vs {len(features)}')
+                features = features[:len(segs) - 1]
             for i, seg in enumerate(segs):
-                if i > 0:
+                if i > 0 and i <= len(features):
                     image_dim = features[i - 1].shape[0]
                     begins.append(len(input_ids))
                     ends.append(begins[-1] + image_dim)

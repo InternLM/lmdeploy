@@ -183,7 +183,6 @@ def _dist_model(model: torch.nn.Module,
                 else:
                     new_param = torch.empty_like(param, device=device)
                     model.register_buffer(name, new_param)
-        torch.cuda.synchronize()
 
     def _dist_params():
         """dist params."""
@@ -194,9 +193,9 @@ def _dist_model(model: torch.nn.Module,
                 func=model._distribute_partition_fn,
                 to_local=True,
             )
+            torch.cuda.empty_cache()
         else:
             replicate_module(model, device_mesh=device_mesh)
-        torch.cuda.empty_cache()
 
     def _register_hooks():
         """register hooks."""
@@ -247,6 +246,7 @@ class PatchedForward:
         return output
 
 
+@torch.inference_mode()
 def patch(
     model: torch.nn.Module,
     extra_args: Sequence[str] = None,
@@ -267,6 +267,8 @@ def patch(
     Returns:
         Module: The patched model.
     """
+    if rank == 0:
+        logger.info('Patching model.')
 
     if extra_args is None:
         extra_args = []

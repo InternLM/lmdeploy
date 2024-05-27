@@ -8,7 +8,8 @@ import torch
 import torch.nn as nn
 from safetensors.torch import load_file
 from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME,
-                                WEIGHTS_INDEX_NAME, is_safetensors_available)
+                                WEIGHTS_INDEX_NAME, WEIGHTS_NAME,
+                                is_safetensors_available)
 from transformers.utils.hub import get_checkpoint_shard_files
 
 
@@ -31,7 +32,9 @@ def get_used_weight_files(folder: str,
         index_file = _safe_index_file
     elif is_safetensors_available() and os.path.isfile(
             os.path.join(folder, SAFE_WEIGHTS_NAME)):  # Single safetensor file
-        return [os.path.join(folder, SAFE_WEIGHTS_NAME)]
+        return [SAFE_WEIGHTS_NAME]
+    elif os.path.isfile(os.path.join(folder, WEIGHTS_NAME)):
+        return [WEIGHTS_NAME]
     else:
         raise FileNotFoundError
     _, sharded_metadata = get_checkpoint_shard_files(folder, index_file)
@@ -70,6 +73,15 @@ def disable_transformers_logging():
     logging.set_verbosity(transformers.logging.ERROR)
     yield
     logging.set_verbosity(previous_level)
+
+
+@contextmanager
+def disable_logging():
+    import logging
+    previous_level = logging.root.manager.disable
+    logging.disable(logging.ERROR)
+    yield
+    logging.disable(previous_level)
 
 
 @contextmanager
@@ -151,3 +163,27 @@ def rewrite_ctx(origin_func_path: List[str], rewrite_func: List[Callable]):
                                                   rewrite_func,
                                                   origin_func_list):
         _set_func(func_path, origin_func, dst_func)
+
+
+def add_device_hook(module: torch.nn.Module,
+                    device: torch.device,
+                    fn: Callable = None):
+    """Add device hook."""
+    from accelerate.hooks import ModelHook, add_hook_to_module
+
+    class ToDevice(ModelHook):
+        """ToDevice hook."""
+
+        def __init__(self, device):
+            self.device = device
+
+        def post_forward(self, module, output):
+            if fn is not None:
+                output = fn(output)
+            else:
+                output = output.to(device=self.device)
+            return output
+
+    add_hook_to_module(module=module,
+                       hook=ToDevice(device=device),
+                       append=True)
