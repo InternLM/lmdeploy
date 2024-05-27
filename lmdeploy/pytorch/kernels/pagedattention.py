@@ -216,6 +216,7 @@ def _fwd_grouped_split_kernel(
     BLOCK_DV: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_H: tl.constexpr,
+    BLOCK_DMODEL1: tl.constexpr,
 ):
     """first step kernel of split k attention."""
     cur_batch = tl.program_id(0)
@@ -245,6 +246,17 @@ def _fwd_grouped_split_kernel(
 
     k_ptrs = K + off_k
     v_ptrs = V + off_v
+
+    if BLOCK_DMODEL1 != 0:
+        offs_d1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
+        mask_d1 = offs_d1 < head_size
+        off_q1 = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh +
+                  offs_d1[None, :] * stride_qd)
+        q1 = tl.load(Q + off_q1,
+                     mask=mask_h[:, None] & mask_d1[None, :],
+                     other=0)
+        off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd)
+        k1_ptrs = K + off_k1
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
 
@@ -278,6 +290,12 @@ def _fwd_grouped_split_kernel(
             mask=mask[None, :] & mask_d[:, None],
             other=0.0,
         )
+        if BLOCK_DMODEL1 != 0:
+            k1 = tl.load(
+                k1_ptrs + b_offset[None, :] * stride_kbs,
+                mask=mask[None, :] & mask_d1[:, None],
+                other=0.0,
+            )
 
         if shared_kv:
             v = tl.trans(k)
@@ -296,6 +314,8 @@ def _fwd_grouped_split_kernel(
 
         qk = tl.zeros([BLOCK_H, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
+        if BLOCK_DMODEL1 != 0:
+            qk += tl.dot(q1, k1)
         qk *= sm_scale
         # NOTE: inf - inf = nan, and nan will leads to error
         qk_mask = history_len >= (start_n + offs_n)
@@ -445,6 +465,7 @@ def _fwd_kernel(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_DV: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    BLOCK_DMODEL1: tl.constexpr,
 ):
     """paged attention kernel."""
     cur_batch = tl.program_id(0)
@@ -479,6 +500,15 @@ def _fwd_kernel(
     k_ptrs = K + off_k
     v_ptrs = V + off_v
 
+    if BLOCK_DMODEL1 != 0:
+        offs_d1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
+        mask_d1 = offs_d1 < head_size
+        off_q1 = ((q_start_loc + offs_m[:, None]) * stride_qbs +
+                  cur_head * stride_qh + offs_d1[None, :] * stride_qd)
+        q1 = tl.load(Q + off_q1, mask=(offs_m[:, None] < q_seqlen) & mask_d1)
+        off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd)
+        k1_ptrs = K + off_k1
+
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
 
     # initialize pointer to m and l
@@ -504,6 +534,14 @@ def _fwd_kernel(
             mask=(start_n + offs_n[None, :] < kv_seqlen) & mask_d[:, None],
             other=0.0,
         )
+        if BLOCK_DMODEL1 != 0:
+            k1 = tl.load(
+                k1_ptrs + b_offset[None, :] * stride_kbs,
+                mask=(start_n + offs_n[None, :] < kv_seqlen)
+                & mask_d1[:, None],
+                other=0.0,
+            )
+
         if shared_kv:
             v = tl.trans(k)
         else:
@@ -520,6 +558,8 @@ def _fwd_kernel(
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
+        if BLOCK_DMODEL1 != 0:
+            qk += tl.dot(q1, k1)
         qk *= sm_scale
         # NOTE: inf - inf = nan, and nan will leads to error
         qk_mask = (history_len + offs_m[:, None]) >= (start_n +
@@ -603,6 +643,19 @@ def paged_attention_fwd(
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
 
+    def _get_block_d(Lk):
+        """get block d."""
+        BLOCK_DMODEL = triton.next_power_of_2(Lk)
+        BLOCK_DMODEL1 = 0
+        if BLOCK_DMODEL != Lk and not shared_kv:
+            BLOCK_DMODEL = BLOCK_DMODEL // 2
+            BLOCK_DMODEL1 = max(16, triton.next_power_of_2(Lk - BLOCK_DMODEL))
+        if shared_kv:
+            BLOCK_DV = BLOCK_DMODEL
+        else:
+            BLOCK_DV = triton.next_power_of_2(Lv)
+        return BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV
+
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk, Lv == o.shape[-1]
@@ -614,12 +667,6 @@ def paged_attention_fwd(
 
     BLOCK = k.size(1)
     assert BLOCK >= 16
-    BLOCK_DMODEL = triton.next_power_of_2(Lk)
-    if shared_kv:
-        BLOCK_DV = BLOCK_DMODEL
-    else:
-        BLOCK_DV = triton.next_power_of_2(Lv)
-    BLOCK_M = max(16, min(BLOCK, 16384 // BLOCK_DMODEL))
     if Lk > 512 and BLOCK > 32:
         logger.warning(f'`head_dim={Lk}` and `block_size={BLOCK}` '
                        'might leads to bad performance. '
@@ -628,6 +675,8 @@ def paged_attention_fwd(
     kernel_meta = _kernel_meta()
     is_decoding = q.shape[-3] == q_seqlens.size(0)
     if not is_decoding:
+        BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lk)
+        BLOCK_M = max(16, min(BLOCK, 16384 // BLOCK_DMODEL))
         num_warps = 4
         num_stages = 1
         grid = (batch, head, triton.cdiv(max_seqlen, BLOCK_M))
@@ -662,15 +711,20 @@ def paged_attention_fwd(
                           BLOCK_DMODEL=BLOCK_DMODEL,
                           BLOCK_DV=BLOCK_DV,
                           BLOCK_N=BLOCK,
+                          BLOCK_DMODEL1=BLOCK_DMODEL1,
                           num_warps=num_warps,
                           num_stages=num_stages,
                           **kernel_meta)
     else:
-        num_warps = max(4, BLOCK_DMODEL // 64)
         SPLIT_K = 4
         block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
         acc = q.new_empty(batch, head, SPLIT_K, Lv + 2, dtype=torch.float32)
         if kv_group_num <= 2 or shared_kv:
+            BLOCK_DMODEL = triton.next_power_of_2(Lk)
+            if shared_kv:
+                BLOCK_DV = BLOCK_DMODEL
+            else:
+                BLOCK_DV = triton.next_power_of_2(Lv)
             grid = (batch, head, SPLIT_K)
             _fwd_split_kernel[grid](q,
                                     k,
@@ -704,6 +758,7 @@ def paged_attention_fwd(
                                     BLOCK_N=BLOCK,
                                     **kernel_meta)
         else:
+            BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lk)
             BLOCK_H = max(16, min(BLOCK, kv_group_num))
             grid = (batch, head // min(BLOCK_H, kv_group_num), SPLIT_K)
             _fwd_grouped_split_kernel[grid](
@@ -738,8 +793,10 @@ def paged_attention_fwd(
                 BLOCK_DV=BLOCK_DV,
                 BLOCK_N=BLOCK,
                 BLOCK_H=BLOCK_H,
+                BLOCK_DMODEL1=BLOCK_DMODEL1,
                 **kernel_meta)
 
+        num_warps = 4
         grid = (batch, head)
         _reduce_split_kernel[grid](acc,
                                    o,
