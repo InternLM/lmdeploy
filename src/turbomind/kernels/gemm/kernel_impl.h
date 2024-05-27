@@ -6,6 +6,8 @@
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
+#include "src/turbomind/kernels/gemm/operand.h"
+#include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
 
@@ -29,10 +31,15 @@ public:
         desc_.type_b = get_data_type_v<typename Gemm::Tb>;
         desc_.type_c = get_data_type_v<typename Gemm::T>;
 
+        desc_.quant_a = QuantDesc{};
         desc_.quant_b = QuantDesc{};
 
-        if (!std::is_same_v<typename Gemm::T, typename Gemm::Tb>) {
-            desc_.quant_b = QuantDesc{QuantType::kAsym_FMA, Impl::G};
+        if constexpr (!std::is_same_v<typename Gemm::OperandU, VoidOperand>) {
+            desc_.quant_a = QuantDesc{QuantType::kAsym_FMA, Gemm::OperandU::kGroupSize};
+        }
+
+        if constexpr (!std::is_same_v<typename Gemm::OperandV, VoidOperand>) {
+            desc_.quant_b = QuantDesc{QuantType::kAsym_FMA, Gemm::OperandV::kGroupSize};
         }
 
         desc_.cta_tile  = {Gemm::CTA_M, Gemm::CTA_N, Gemm::CTA_K};
@@ -63,10 +70,12 @@ public:
                const void*         alpha,
                const void*         A,
                const MatrixLayout& Adesc,
+               const void*         U,
+               const MatrixLayout& Udesc,
                const void*         B,
                const MatrixLayout& Bdesc,
-               const void*         Q,
-               const MatrixLayout& Qdesc,
+               const void*         V,
+               const MatrixLayout& Vdesc,
                const void*         beta,
                const void*         C,
                const MatrixLayout& Cdesc,
@@ -122,12 +131,12 @@ public:
                                    k,
                                    (Ta*)A,
                                    Adesc.ld,
+                                   (Tu*)U,
+                                   Udesc.ld,
                                    _cast((Tb*)B),
                                    Bdesc.ld,
-                                   (Tu*)nullptr,
-                                   0,
-                                   (Tv*)Q,
-                                   Qdesc.ld,
+                                   (Tv*)V,
+                                   Vdesc.ld,
                                    (Tc*)C,
                                    Cdesc.ld,
                                    log_tile,

@@ -104,9 +104,10 @@ enum class DispatchPolicy : int {
 };
 
 struct Operation {
-    QuantDesc      quant_desc;
-    Epilogue       epilogue;
     DispatchPolicy dispatch;
+    Epilogue       epilogue;
+    QuantDesc      quant_a;
+    QuantDesc      quant_b;
 };
 
 struct MatrixLayout {

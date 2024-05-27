@@ -77,10 +77,10 @@ struct GemmUniversal {
         int    k;
         PtrA   A;
         int    lda;
-        PtrB   B;
-        int    ldb;
         PtrU   U;
         int    ldu;
+        PtrB   B;
+        int    ldb;
         PtrV   V;
         int    ldv;
         T*     C;

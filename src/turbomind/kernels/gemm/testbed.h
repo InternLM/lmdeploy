@@ -120,16 +120,11 @@ public:
 
     void Run()
     {
-        // const Operation operation{
-        //     QuantDesc{QuantType::kAsym_FMA, g_},
-        //     Epilogue::kNone,
-        //     dispatch_policy_,
-        // };
-
         const Operation operation{
-            QuantDesc{QuantType::kNone, 0},
-            Epilogue::kNone,
             dispatch_policy_,
+            Epilogue::kNone,
+            QuantDesc{QuantType::kNone, 0},
+            QuantDesc{QuantType::kNone, 0},
         };
 
         const MatrixLayout c_desc{get_data_type_v<T>, Order::kRowMajor, m_, n_, n_};
@@ -139,30 +134,16 @@ public:
                                   partials_.data().get(),
                                   sizeof(float) * partials_.size()};
 
-        // auto status = gemm_.Run(operation,
-        //                         nullptr,
-        //                         a_.data().get(),
-        //                         MatrixLayout{get_data_type_v<T>, Order::kRowMajor, m_, k_, k_},
-        //                         b_pack_.data().get(),
-        //                         MatrixLayout{get_data_type_v<Tb>, Order::kFragment_81616, k_, n_, k_},
-        //                         q_pack_.data().get(),
-        //                         MatrixLayout{get_data_type_v<T>, Order::kColMajor, k_ / g_, n_, n_},
-        //                         nullptr,
-        //                         c_.data().get(),
-        //                         c_desc,
-        //                         c_.data().get(),
-        //                         c_desc,
-        //                         workspace,
-        //                         stream_);
-
         auto status = gemm_.Run(operation,
                                 nullptr,
                                 a_.data().get(),
                                 MatrixLayout{get_data_type_v<T>, Order::kColMajor, m_, k_, m_},
+                                nullptr,
+                                {},
                                 b_.data().get(),
                                 MatrixLayout{get_data_type_v<Tb>, Order::kColMajor, k_, n_, k_},
                                 nullptr,
-                                MatrixLayout{get_data_type_v<T>, Order::kRowMajor, 0, 0, 0},
+                                {},
                                 nullptr,
                                 c_.data().get(),
                                 c_desc,

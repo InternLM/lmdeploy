@@ -171,6 +171,8 @@ int main(int argc, char* argv[])
                      &alpha,
                      a.data().get(),
                      MatrixLayout{DataType::F16, Order::kRowMajor, M, K, K, Pack::kHMMA_16816_A},
+                     nullptr,
+                     MatrixLayout{},
                      b.data().get(),
                      MatrixLayout{DataType::F16, Order::kColMajor, K, N, K},
                      nullptr,

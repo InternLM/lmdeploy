@@ -8,8 +8,6 @@
 
 namespace turbomind::gemm {
 
-class DisptchCache {};
-
 class Gemm {
 public:
     Gemm();
@@ -20,10 +18,12 @@ public:
                           const void*         alpha,
                           const void*         A,
                           const MatrixLayout& Adesc,
+                          const void*         U,
+                          const MatrixLayout& Udesc,
                           const void*         B,
                           const MatrixLayout& Bdesc,
-                          const void*         Q,
-                          const MatrixLayout& Qdesc,
+                          const void*         V,
+                          const MatrixLayout& Vdesc,
                           const void*         beta,
                           const void*         C,
                           const MatrixLayout& Cdesc,
