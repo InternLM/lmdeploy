@@ -124,7 +124,6 @@ class PatchedVisionExpertAttention(nn.Module):
         def __qkv_proj(hidden_states):
             """qkv_proj."""
             shape = list(hidden_states.shape)
-            torch.cuda.synchronize()
             shape[-1] = hidden_size + head_dim * num_kv_heads * 2
             mixed_raw_layer = torch.empty(shape,
                                           dtype=hidden_states.dtype,
