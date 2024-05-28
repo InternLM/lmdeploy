@@ -5,31 +5,45 @@ from typing import Any, Dict, List, Literal
 import torch
 
 
-def _get_torch_dtype(config: Any, default: str = 'float16'):
-    """Get the torch dtype from the model config.
+def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
+    """Update the torch dtype from the model config.
 
     Args:
-        config: Config of the hf model.
+        config (ModelConfig): The input model config.
         default (str): default device type.
     """
+    from lmdeploy.utils import get_logger
+    logger = get_logger('lmdeploy')
 
     def __hack_qwen():
         """hack qwen."""
         torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
         ) else 'float16'
-        if config.bf16:
+        if config.hf_config.bf16:
             torch_dtype = 'bfloat16'
-        elif config.fp16:
+        elif config.hf_config.fp16:
             torch_dtype = 'float16'
-        setattr(config, 'torch_dtype', torch_dtype)
+        return torch_dtype
 
-    if config.model_type == 'qwen' and config.torch_dtype is None:
-        __hack_qwen()
+    def __hack_cogvlm():
+        """hack cogvlm."""
+        return 'bfloat16' if torch.cuda.is_bf16_supported() else 'float16'
 
-    torch_dtype = getattr(config, 'torch_dtype', default)
-    # torch_dtype in config could be none
-    torch_dtype = torch_dtype or default
-    return eval(f'torch.{torch_dtype}')
+    torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
+    if torch_dtype is None:
+        if config.hf_config.model_type == 'qwen':
+            torch_dtype = __hack_qwen()
+        elif config.model_arch == 'CogVLMForCausalLM':
+            torch_dtype = __hack_cogvlm()
+        else:
+            logger.warning('Model config does not have `torch_dtype`,'
+                           f' use default: {default}')
+            torch_dtype = default
+        # update hf_config as well
+        setattr(config.hf_config, 'torch_dtype', torch_dtype)
+
+    config.dtype = eval(f'torch.{torch_dtype}')
+    return config
 
 
 @dataclass
@@ -220,8 +234,7 @@ class ModelConfig:
             cfg.unused_modules = ['model.vision']
             return cfg
 
-        json_config = hf_config.to_dict()
-        model_arch = json_config.get('architectures', [None])[0]
+        model_arch = getattr(hf_config, 'architectures', [None])[0]
 
         if hf_config.model_type == 'falcon':
             model_config = __build_falcon()
@@ -235,20 +248,17 @@ class ModelConfig:
             model_config = __build_qwen()
         elif model_arch == 'CogVLMForCausalLM':
             model_config = __build_cogvlm()
-            # update torch_dtype if not exists
-            torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
-            ) else 'float16'
-            if getattr(hf_config, 'torch_dtype', None) is None:
-                setattr(hf_config, 'torch_dtype', torch_dtype)
         else:
             model_config = __build_default()
 
-        model_config.dtype = _get_torch_dtype(hf_config)
-
         model_config.hf_config = hf_config
-        model_config.json_config = json_config
         model_config.model_arch = model_arch
-        if check_vl_llm(json_config):
+
+        # should after setting `hf_config` and `model_arch` attributes
+        model_config = _update_torch_dtype(model_config)
+        model_config.json_config = model_config.hf_config.to_dict()
+
+        if check_vl_llm(model_config.json_config):
             model_config.task_type = 'vlm'
 
         # update eos_token_id to list
