@@ -18,6 +18,7 @@
 #include <type_traits>
 
 using namespace turbomind;
+using namespace gemm;
 using thrust::universal_vector;
 
 cublasHandle_t cublas_handle{};
@@ -35,19 +36,19 @@ void ComputeRefCpu(half* C, const half* A, const half* B, int m, int n, int k)
     }
 }
 
-template<class T, class Tb>
-gemm::Testbed<T, Tb>& gTestbed()
+template<class T>
+T& gTestbed()
 {
-    static gemm::Testbed<T, Tb> inst{turbomind::gemm::DispatchPolicy::kDefault, "tmp"};
+    static T inst{turbomind::gemm::DispatchPolicy::kDefault, "tmp"};
     return inst;
 }
 
 template<class T, class Tb>
 void Run(int m, int n, int k, int g = 128)
 {
-    auto& test = gTestbed<T, Tb>();
+    auto& test = gTestbed<gemm::Testbed<half, half, half, Order::kColMajor, Order::kColMajor>>();
 
-    test.Initialize(m, n, k, g, true, 0);
+    test.Initialize(m, n, k, g, 0);
     for (int i = 0; i < 10; ++i) {
         test.Run();
     }
@@ -82,7 +83,9 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(16, 16, 64);
 
-    Run<T, Tb>(16384, 16384, 16384);
+    // Run<T, Tb>(16384, 16384, 16384);
+
+    Run<T, Tb>(1024, 1024, 1024);
 }
 
 namespace turbomind::gemm {
@@ -90,8 +93,6 @@ namespace turbomind::gemm {
 Kernel& gKernel();
 
 }
-
-using namespace gemm;
 
 int main(int argc, char* argv[])
 {

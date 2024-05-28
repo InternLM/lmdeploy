@@ -35,5 +35,5 @@ target_link_libraries(gemm_bench PRIVATE gemm2 nvbench::nvbench cublas)
 target_compile_options(gemm2 PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info>)
 
-add_executable(gemm_test gemm_test.cu test_utils.cu cache_utils.cu)
+add_executable(gemm_test gemm_test.cu test_utils.cu cache_utils.cu reference.cu)
 target_link_libraries(gemm_test PRIVATE gemm2 cublas)
