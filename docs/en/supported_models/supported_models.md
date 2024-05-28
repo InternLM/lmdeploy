@@ -13,6 +13,7 @@
 | InternLM-XComposer2 | 7B, 4khd-7B |    Yes    |    -    |    -    |  Yes  |
 |        QWen         | 1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       QWen1.5       | 1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Mistral       |     7B      |    Yes    |   Yes   |   Yes   |  No   |
 |       QWen-VL       |     7B      |    Yes    |    -    |    -    |  Yes  |
 |     DeepSeek-VL     |     7B      |    Yes    |    -    |    -    |  Yes  |
 |      Baichuan       |     7B      |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -26,7 +27,7 @@
 "-" means not verified yet.
 
 ```{note}
-The TurboMind engine doesn't support window attention. Therefore, for models that have applied window attention and have the corresponding switch "use_sliding_window" enabled, please choose the PyTorch engine for inference.
+The TurboMind engine doesn't support window attention. Therefore, for models that have applied window attention and have the corresponding switch "use_sliding_window" enabled, such as Mistral, QWen1.5 and etc., please choose the PyTorch engine for inference.
 ```
 
 ## Models supported by PyTorch
@@ -53,3 +54,4 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |  StarCoder2  |   3B-15B   |    Yes    |   No    |  No  |
 |  Phi-3-mini  |    3.8B    |    Yes    |   No    |  No  |
 | CogVLM-Chat  |    17B     |    Yes    |   No    |  No  |
+| CogVLM2-Chat |    19B     |    Yes    |   No    |  No  |

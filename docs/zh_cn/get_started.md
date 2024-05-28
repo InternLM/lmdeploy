@@ -22,7 +22,7 @@ pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_V
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
+pipe = lmdeploy.pipeline("internlm/internlm2-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
@@ -50,7 +50,7 @@ LMDeploy CLI 提供了如下便捷的工具，方便用户快速体验模型对�
 ### 控制台交互式对话
 
 ```shell
-lmdeploy chat internlm/internlm-chat-7b
+lmdeploy chat internlm/internlm2-chat-7b
 ```
 
 ### WebUI 交互式对话
@@ -61,7 +61,7 @@ LMDeploy 使用 gradio 开发了在线对话 demo。
 # 安装依赖
 pip install lmdeploy[serve]
 # 启动
-lmdeploy serve gradio internlm/internlm-chat-7b
+lmdeploy serve gradio internlm/internlm2-chat-7b
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)

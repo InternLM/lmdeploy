@@ -328,7 +328,8 @@ class Llavav1(Vicuna):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'llava' in path and 'v1' in path and 'v1.6-34b' not in path:
+        if 'llava' in path and 'v1' in path and 'v1.6-34b' not in path \
+            and 'mistral' not in path:
             return 'llava-v1'
 
 
@@ -1078,10 +1079,11 @@ class MistralChat(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'instruct' in model_path.lower():
-            if 'mistral' in model_path.lower():
+        model_path = model_path.lower()
+        if 'instruct' in model_path or 'llava' in model_path:
+            if 'mistral' in model_path:
                 return 'mistral'
-            if 'mixtral' in model_path.lower():
+            if 'mixtral' in model_path:
                 return 'mixtral'
 
 

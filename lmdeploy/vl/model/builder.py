@@ -26,7 +26,7 @@ def load_vl_model(model_path: str, with_llm: bool = False):
                 arch = 'InternLMXComposer2ForCausalLM'
     if arch == 'QWenLMHeadModel':
         return QwenVisionModel(model_path, with_llm)
-    elif arch == 'LlavaLlamaForCausalLM':
+    elif arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
         projector_type = config.get('mm_projector_type', 'linear')
         mm_vision_tower = config.get('mm_vision_tower', '')
         if '_Norm' in projector_type:
@@ -34,7 +34,7 @@ def load_vl_model(model_path: str, with_llm: bool = False):
         elif 'OpenGVLab' in mm_vision_tower:
             return InternVLLlavaVisionModel(model_path, with_llm)
         else:
-            return LlavaVisionModel(model_path, with_llm)
+            return LlavaVisionModel(model_path, with_llm=with_llm, arch=arch)
     if arch == 'MultiModalityCausalLM':
         return DeepSeekVisionModel(model_path, with_llm)
     elif arch == 'CogVLMForCausalLM':
