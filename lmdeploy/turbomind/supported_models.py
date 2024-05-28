@@ -23,8 +23,11 @@ SUPPORTED_ARCHS = dict(
     QWenLMHeadModel='qwen',
     # Qwen2
     Qwen2ForCausalLM='qwen2',
+    # mistral
+    MistralForCausalLM='llama',
     # llava
     LlavaLlamaForCausalLM='llama',
+    LlavaMistralForCausalLM='llama',
     # xcomposer2
     InternLMXComposer2ForCausalLM='xcomposer2',
     # internvl
