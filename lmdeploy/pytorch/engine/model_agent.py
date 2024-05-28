@@ -340,7 +340,6 @@ class StepContext:
             world_size (int): The distribution world size.
             device (str): The device of the tensors.
         """
-
         q_seq_length = inputs.seq_length
         max_q_seq_length = inputs.max_q_seq_length
         history_lengths = inputs.history_lengths
@@ -445,12 +444,14 @@ def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict,
             event.wait()
 
 
-def model_forward(patched_model: torch.nn.Module,
-                  inputs: ModelInputs,
-                  cache_engine: CacheEngine,
-                  json_config: dict = None,
-                  world_size: int = 1,
-                  stream: torch.cuda.Stream = None):
+def model_forward(
+    patched_model: torch.nn.Module,
+    inputs: ModelInputs,
+    cache_engine: CacheEngine,
+    json_config: dict = None,
+    world_size: int = 1,
+    stream: torch.cuda.Stream = None,
+):
     """perform model forward."""
     stream = stream or torch.cuda.current_stream()
     with torch.inference_mode(), torch.cuda.stream(stream):
@@ -472,7 +473,8 @@ def model_forward(patched_model: torch.nn.Module,
             output_attentions=False,
             output_hidden_states=False,
             use_origin=False,
-            context=context)
+            context=context,
+        )
     return dict(logits=output['logits'], custom_outputs=context._outputs)
 
 
@@ -686,12 +688,14 @@ class BaseModelAgent(AutoModelAgent):
         cache_swapping(self.cache_engine,
                        swap_in_map=swap_in_map,
                        swap_out_map=swap_out_map)
-        output = model_forward(self.patched_model,
-                               inputs,
-                               self.cache_engine,
-                               self.model_config.json_config,
-                               world_size=1,
-                               stream=self.stream)
+        output = model_forward(
+            self.patched_model,
+            inputs,
+            self.cache_engine,
+            self.model_config.json_config,
+            world_size=1,
+            stream=self.stream,
+        )
         return output
 
     def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
@@ -976,12 +980,14 @@ def _tp_model_loop(
                        swap_in_map=swap_in_map,
                        swap_out_map=swap_out_map)
 
-        model_forward(patched_model,
-                      inputs,
-                      cache_engine,
-                      model_config.json_config,
-                      world_size=world_size,
-                      stream=stream)
+        model_forward(
+            patched_model,
+            inputs,
+            cache_engine,
+            model_config.json_config,
+            world_size=world_size,
+            stream=stream,
+        )
 
 
 def _start_tp_process(proc_id: int,
@@ -1197,12 +1203,14 @@ class TPModelAgent(AutoModelAgent):
         cache_swapping(self.cache_engine,
                        swap_in_map=swap_in_map,
                        swap_out_map=swap_out_map)
-        output = model_forward(self.patched_model,
-                               inputs,
-                               self.cache_engine,
-                               self.model_config.json_config,
-                               world_size=1,
-                               stream=self.stream)
+        output = model_forward(
+            self.patched_model,
+            inputs,
+            self.cache_engine,
+            self.model_config.json_config,
+            world_size=1,
+            stream=self.stream,
+        )
         return output
 
     def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,

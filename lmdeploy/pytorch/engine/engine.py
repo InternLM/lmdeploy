@@ -366,7 +366,6 @@ class Engine:
             seq_length = torch.tensor(seq_length, dtype=torch.long)
         else:
             seq_length = self._seq_length_buf[:batch_size]
-
         max_q_seq_length = seq_length.max().item()
         max_history_length = history_lengths.max().item()
 
