@@ -9,15 +9,15 @@ from typing import List, Optional, Tuple
 import fire
 import numpy as np
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from lmdeploy.serve.openai.api_client import APIClient
-from lmdeploy.tokenizer import Tokenizer
 
 
 def sample_requests(
     dataset_path: str,
     num_requests: int,
-    tokenizer: Tokenizer,
+    tokenizer: AutoTokenizer,
 ) -> List[Tuple[str, int, int]]:
     # Load the dataset.
     with open(dataset_path) as f:
@@ -69,7 +69,8 @@ class Engine:
                  api_key: Optional[str] = None,
                  model_name: Optional[str] = None,
                  **kwargs):
-        self.tokenizer = Tokenizer(tokenzier_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenzier_path,
+                                                       trust_remote_code=True)
         self.server_addr = server_addr
         self.temperature = temperature
         self.top_p = top_p

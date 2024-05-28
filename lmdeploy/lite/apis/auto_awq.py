@@ -1,4 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os.path as osp
+import shutil
+
 import torch
 from torch import nn
 
@@ -19,6 +22,9 @@ LAYER_TYPE_MAP = {
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
+    'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
+    'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
+    'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
@@ -28,7 +34,28 @@ NORM_TYPE_MAP = {
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
+    'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
+    'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
+    'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
 }
+
+
+def save_vl_model(vl_model, model_path, dst_path):
+    safe_serialization = type(vl_model).__name__ == 'MGMLlamaForCausalLM'
+    vl_model.save_pretrained(dst_path,
+                             max_shard_size='2GB',
+                             safe_serialization=safe_serialization)
+    candidate = [
+        'preprocessor_config.json', 'processor_config.json', 'vit',
+        'generation_config.json'
+    ]
+    for name in candidate:
+        tmp_path = osp.join(model_path, name)
+        if osp.exists(tmp_path):
+            if osp.isfile(tmp_path):
+                shutil.copy(tmp_path, osp.join(dst_path, name))
+            elif osp.isdir(tmp_path):
+                shutil.copytree(tmp_path, osp.join(dst_path, name))
 
 
 def auto_awq(model: str,
@@ -60,16 +87,22 @@ def auto_awq(model: str,
             which means only smooth quant with 0.5 ratio will be applied.
         device (str): Device type of running.
     """
-    model, tokenizer, work_dir = calibrate(model,
-                                           calib_dataset,
-                                           calib_samples,
-                                           calib_seqlen,
-                                           work_dir,
-                                           device,
-                                           w_bits=w_bits,
-                                           w_group_size=w_group_size,
-                                           search_scale=search_scale,
-                                           batch_size=batch_size)
+    if not osp.exists(model):
+        print(f'can\'t find model from local_path {model}, '
+              'try to download from remote')
+        from lmdeploy.utils import get_model
+        model = get_model(model)
+    model_path = model
+    vl_model, model, tokenizer, work_dir = calibrate(model,
+                                                     calib_dataset,
+                                                     calib_samples,
+                                                     calib_seqlen,
+                                                     work_dir,
+                                                     device,
+                                                     w_bits=w_bits,
+                                                     w_group_size=w_group_size,
+                                                     search_scale=search_scale,
+                                                     batch_size=batch_size)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]
@@ -90,7 +123,13 @@ def auto_awq(model: str,
         act_scales = input_stats['absmax']
         smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size,
                       device)
-    quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)
+    quant_weights(model,
+                  fcs,
+                  w_bits,
+                  w_sym,
+                  w_group_size,
+                  device,
+                  skip_if_contains='Plora')  # TODO quant lora weight
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,
@@ -98,9 +137,12 @@ def auto_awq(model: str,
                                zero_point=not w_sym)
     model.config.update(dict(quantization_config=quantization_config))
 
-    model.save_pretrained(work_dir,
-                          max_shard_size='2GB',
-                          safe_serialization=False)
+    if vl_model:
+        save_vl_model(vl_model, model_path, work_dir)
+    else:
+        model.save_pretrained(work_dir,
+                              max_shard_size='2GB',
+                              safe_serialization=False)
     tokenizer.save_pretrained(work_dir)
 
 

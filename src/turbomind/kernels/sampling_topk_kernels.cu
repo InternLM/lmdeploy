@@ -283,6 +283,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
         __syncthreads();
     }
 
+    int selected_i;
     if (tid == 0) {
         rand_num = (float)curand_uniform(curandstate + blockIdx.x) * prob_threshold * s_sum;
         for (int i = 0; i < k; i++) {
@@ -305,6 +306,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                         output_log_probs[batch_id] = log_prob - logf(s_sum);
                     }
                 }
+                selected_i = i;
                 break;
             }
         }
@@ -324,7 +326,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
             cum_probs        = s_sum;
             for (int i = 0; i < k; i++) {
                 _cum_probs += s_val2[i] / s_sum;
-                if (_cum_probs > prob_threshold) {
+                if (_cum_probs > prob_threshold && i >= selected_i) {
                     cum_probs = _cum_probs * s_sum;
                     sampled_n = i + 1;
                     break;

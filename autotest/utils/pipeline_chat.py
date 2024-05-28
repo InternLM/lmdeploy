@@ -1,4 +1,6 @@
 import os
+import subprocess
+from subprocess import PIPE
 
 import allure
 import torch
@@ -16,6 +18,7 @@ def run_pipeline_chat_test(config,
                            cases_info,
                            model_case,
                            type,
+                           worker_id: str = '',
                            extra: object = None,
                            use_local_model: bool = True):
     log_path = config.get('log_path')
@@ -57,19 +60,19 @@ def run_pipeline_chat_test(config,
     gen_config = GenerationConfig(top_k=1)
 
     config_log = os.path.join(
-        log_path,
-        'pipeline_config_' + type + model_case.split('/')[1] + '.log')
+        log_path, '_'.join([
+            'pipeline', 'config', type, worker_id,
+            model_case.split('/')[1] + '.log'
+        ]))
     file = open(config_log, 'w')
-    file.writelines(' '.join([
-        'reproduce config info:', hf_path,
-        str(backend_config),
-        str(gen_config)
-    ]))
-    print(' '.join([
-        'reproduce config info:', hf_path,
-        str(backend_config),
-        str(gen_config)
-    ]))
+    log_string = '\n'.join([
+        'reproduce config info:', 'engine_config = ' + str(backend_config),
+        'gen_config = ' + str(gen_config),
+        'pipe = pipeline("' + hf_path + '",  backend_config=engine_config)',
+        'res = pipe("Hi, pls introduce shanghai", gen_config=gen_config)'
+    ])
+    file.writelines(log_string)
+    print(log_string)
     file.close
 
     for case in cases_info.keys():
@@ -78,8 +81,10 @@ def run_pipeline_chat_test(config,
             continue
         case_info = cases_info.get(case)
         pipeline_chat_log = os.path.join(
-            log_path, 'pipeline_chat_' + type + model_case.split('/')[1] +
-            '_' + case + '.log')
+            log_path, '_'.join([
+                'pipeline', 'chat', type, worker_id,
+                model_case.split('/')[1], case + '.log'
+            ]))
 
         file = open(pipeline_chat_log, 'w')
 
@@ -104,12 +109,19 @@ def run_pipeline_chat_test(config,
     torch.cuda.empty_cache()
 
 
-def assert_pipeline_chat_log(config, cases_info, model_case, type):
+def assert_pipeline_chat_log(config,
+                             cases_info,
+                             model_case,
+                             type,
+                             worker_id: str = ''):
     log_path = config.get('log_path')
 
     config_log = os.path.join(
-        log_path,
-        'pipeline_config_' + type + model_case.split('/')[1] + '.log')
+        log_path, '_'.join([
+            'pipeline', 'config', type, worker_id,
+            model_case.split('/')[1] + '.log'
+        ]))
+
     allure.attach.file(config_log, attachment_type=allure.attachment_type.TEXT)
 
     for case in cases_info.keys():
@@ -120,8 +132,10 @@ def assert_pipeline_chat_log(config, cases_info, model_case, type):
         result = False
         with allure.step('case - ' + case):
             pipeline_chat_log = os.path.join(
-                log_path, 'pipeline_chat_' + type + model_case.split('/')[1] +
-                '_' + case + '.log')
+                log_path, '_'.join([
+                    'pipeline', 'chat', type, worker_id,
+                    model_case.split('/')[1], case + '.log'
+                ]))
 
             allure.attach.file(pipeline_chat_log,
                                attachment_type=allure.attachment_type.TEXT)
@@ -142,12 +156,18 @@ def assert_pipeline_chat_log(config, cases_info, model_case, type):
                 assert result, msg
 
 
-def save_pipeline_common_log(config, log_name, content, write_type: str = 'w'):
+def save_pipeline_common_log(config,
+                             log_name,
+                             result,
+                             content,
+                             msg: str = '',
+                             write_type: str = 'w'):
     log_path = config.get('log_path')
 
     config_log = os.path.join(log_path, log_name)
     file = open(config_log, write_type)
-    file.write(content)
+    file.writelines(f'result:{result}, reason: {msg}, content: {content}')
+    file.close()
 
 
 def assert_pipeline_common_log(config, log_name):
@@ -169,8 +189,75 @@ def assert_pipeline_common_log(config, log_name):
             if 'result:True, reason:' in line and result is False:
                 result = True
                 msg = ''
+    subprocess.run([' '.join(['rm -rf', config_log])],
+                   stdout=PIPE,
+                   stderr=PIPE,
+                   shell=True,
+                   text=True,
+                   encoding='utf-8')
 
     assert result, msg
+
+
+def assert_pipeline_single_return(output):
+    result = assert_pipeline_single_element(output, is_last=True)
+    if not result:
+        return result, 'single_stream_element is wrong'
+    return result & (len(output.token_ids) == output.generate_token_len
+                     or len(output.token_ids) == output.generate_token_len -
+                     1), 'token_is len is not correct'
+
+
+def assert_pipeline_batch_return(output, size: int = 1):
+    if len(output) != size:
+        return False, 'length is not correct'
+    for single_output in output:
+        result, msg = assert_pipeline_single_return(single_output)
+        if result is False:
+            return result, msg
+    return True, ''
+
+
+def assert_pipeline_single_stream_return(output):
+    print(output)
+    for i in range(0, len(output) - 1):
+        if assert_pipeline_single_element(output[i], is_stream=True) is False:
+            return False, f'single_stream_element is false, index is {i}'
+    if assert_pipeline_single_element(output[-1], is_stream=True,
+                                      is_last=True) is False:
+        return False, 'last single_stream_element is false'
+    return True, ''
+
+
+def assert_pipeline_batch_stream_return(output, size: int = 1):
+    for i in range(size):
+        output_list = [item for item in output if item.session_id == i]
+        result, msg = assert_pipeline_single_stream_return(output_list)
+        if result is False:
+            return result, msg
+    return True, ''
+
+
+def assert_pipeline_single_element(output,
+                                   is_stream: bool = False,
+                                   is_last: bool = False):
+    result = True
+    result &= output.generate_token_len > 0
+    result &= output.input_token_len > 0
+    result &= output.session_id >= 0
+    if is_last:
+        result &= len(output.text) >= 0
+        result &= output.finish_reason in ['stop', 'length']
+        if is_stream:
+            result &= output.token_ids is None
+        else:
+            result &= len(output.token_ids) > 0
+    else:
+        result &= len(output.text) > 0
+        result &= output.finish_reason is None
+        result &= len(output.token_ids) > 0
+    result &= output.logprobs is None
+    return result
 
 
 PIC1 = 'https://raw.githubusercontent.com/' + \
@@ -235,8 +322,10 @@ def run_pipeline_vl_chat_test(config, model_case):
     prompts = [('describe this image', load_image(img_url))
                for img_url in image_urls]
     response = pipe(prompts)
-    result = 'ski' in response[0].text.lower() and (
-        'tiger' in response[1].text.lower() or '虎' in response[1].text.lower())
+    result = ('ski' in response[0].text.lower()
+              or '滑雪' in response[0].text.lower()) and (
+                  'tiger' in response[1].text.lower()
+                  or '虎' in response[1].text.lower())
     file.writelines('result:' + str(result) +
                     ', reason: Batch example: ski or tiger not in ' +
                     str(response) + '\n')
