@@ -267,28 +267,14 @@ class CogVLM(BaseChatTemplate):
 
 
 @MODELS.register_module(name='cogvlm2')
-class CogVLM2(BaseChatTemplate):
+class CogVLM2(CogVLM):
     """Chat template of CogVLM2 model."""
 
     def __init__(self,
-                 meta_instruction='',
-                 eosys='',
-                 user='Question: ',
-                 separator='\n',
-                 eoh=' ',
-                 assistant='Answer:',
                  eoa='<|end_of_text|>',
                  stop_words=['<|end_of_text|>'],
                  **kwargs):
-        super().__init__(meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         separator=separator,
-                         assistant=assistant,
-                         eoa=eoa,
-                         stop_words=stop_words,
-                         **kwargs)
+        super().__init__(eoa=eoa, stop_words=stop_words, **kwargs)
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
