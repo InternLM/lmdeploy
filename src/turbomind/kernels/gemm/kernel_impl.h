@@ -31,6 +31,9 @@ public:
         desc_.type_b = get_data_type_v<typename Gemm::Tb>;
         desc_.type_c = get_data_type_v<typename Gemm::T>;
 
+        desc_.pack_a = Impl::OperandA::kPack;
+        desc_.pack_b = Impl::OperandB::kPack;
+
         desc_.quant_a = QuantDesc{};
         desc_.quant_b = QuantDesc{};
 
@@ -111,12 +114,13 @@ public:
         using Tv = typename Gemm::Tv;
         using Tc = typename Gemm::T;
 
-        if constexpr (0) {
+        if constexpr (1) {
             [[maybe_unused]] static const int _ = [] {
                 std::cout << "A:\n";
-                Print(typename Impl::ThreadMapA{});
+                Print(typename Gemm::OperandA::GmemIter::ThreadMap{});
+                std::cout << Gemm::OperandA::SmemLayout::S << " " << Gemm::OperandA::SmemLayout::C << "\n";
                 std::cout << "\nB:\n";
-                Print(typename Impl::ThreadMapB{});
+                Print(typename Gemm::OperandB::GmemIter::ThreadMap{});
                 // std::cout << "\nQ:\n";
                 // Print(typename Impl::ThreadMapQ{});
                 printf("warp count: %d\n", Impl::WARP_CNT);
@@ -124,13 +128,15 @@ public:
             }();
         }
 
-        std::cout << "lda=" << Adesc.ld << ", ldb=" << Bdesc.ld << ", ldc=" << Cdesc.ld << "\n";
+        const int lda = (int)Gemm::kPackA ? Packing<Gemm::kPackA>::apply(mk2cs<Gemm::kOrderA>(m, k)).x : Adesc.ld;
+
+        std::cout << "lda=" << lda << ", ldb=" << Bdesc.ld << ", ldc=" << Cdesc.ld << "\n";
 
         typename Gemm::Param param{m,
                                    n,
                                    k,
                                    (Ta*)A,
-                                   Adesc.ld,
+                                   lda,
                                    (Tu*)U,
                                    Udesc.ld,
                                    _cast((Tb*)B),

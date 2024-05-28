@@ -115,6 +115,14 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
 
     // printf("B\n");
 
+    if (std::tie(desc.pack_a, desc.pack_b) != std::tie(desc_.pack_a, desc_.pack_b)) {
+        return false;
+    }
+
+    if (desc.quant_a.type != desc_.quant_a.type || desc.quant_a.group_size != desc_.quant_a.group_size) {
+        return false;
+    }
+
     if (desc.quant_b.type != desc_.quant_b.type || desc.quant_b.group_size != desc_.quant_b.group_size) {
         return false;
     }

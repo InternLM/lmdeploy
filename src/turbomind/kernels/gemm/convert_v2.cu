@@ -3,6 +3,7 @@
 #include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/kernels/gemm/codegen/sm80_s16816gemm_f16_f16_nn.h"
 #include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/thread_map.h"
@@ -23,26 +24,6 @@ struct _Converter {
     ConvertKvCache<Ti, To> impl_;
 };
 
-struct Config {
-    static constexpr int CTA_M = 32;
-    static constexpr int CTA_K = 32;
-
-    static constexpr int WARP_M = 32;
-    static constexpr int MMA_K  = 16;
-
-    static constexpr int WARP_CNT = CTA_M / WARP_M;
-
-    struct OperandA {
-        using Dtype      = half;
-        using SmemLayout = SmemLayoutV2<CTA_M, CTA_K, 16, 32, Swizzle<2, 3, 3>>;
-        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_A<half, false>, WARP_M, MMA_K>;
-        using GmemIter   = GmemIteratorSm80<Dtype, ThreadMap<CTA_K, CTA_M, 8, WARP_CNT>, SmemLayout, false, true, 0>;
-        static constexpr Order kOrder = Order::kColMajor;
-    };
-
-    using Kernel = ConvertOperand<CTA_M, CTA_K, 1, OperandA, _Converter<half, half>, half, true>;
-};
-
 }  // namespace
 
 int Convert(const void*         S,  //
@@ -51,7 +32,13 @@ int Convert(const void*         S,  //
             const MatrixLayout& Ddesc,
             cudaStream_t        stream)
 {
-    using Kernel = typename Config::Kernel;
+    using T             = half;
+    constexpr int CTA_M = 32;
+    constexpr int CTA_K = 32;
+
+    using Operand = sm80_s16816gemm_f16_f16_nn::OperandA<T, CTA_M, CTA_K, CTA_M, 1, false>;
+    // using Operand = sm80_s16816gemm_f16_f16_nn::OperandB<T, CTA_M, CTA_K, CTA_M, 1, false>;
+    using Kernel = ConvertOperand<CTA_M, CTA_K, 1, Operand, T, _Converter<T, T>>;
 
     static constexpr int kSmemSize = sizeof(typename Kernel::SharedStorage);
 
@@ -62,14 +49,14 @@ int Convert(const void*         S,  //
     typename Kernel::Param param{
         Sdesc.rows,
         Sdesc.cols,
-        (const half*)S,
+        (const T*)S,
         Sdesc.ld,
-        (half*)D,
+        (T*)D,
         Ddesc.ld,
     };
 
     constexpr int threads = Kernel::WARP_CNT * WARP_SIZE;
-    const int     blocks  = ceil_div(Sdesc.rows, Config::CTA_M);
+    const int     blocks  = ceil_div(Sdesc.rows, CTA_M);
 
     convert_kernel<Kernel><<<blocks, threads, kSmemSize, stream>>>(param);
 

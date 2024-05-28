@@ -164,16 +164,33 @@ struct SmemCopy_Packed {
     template<class Accessor>
     __device__ static void copy(Accessor src, Frag& dst, int2 offset_cs)
     {
-        const int lane_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
         for (int s = 0; s < Detail::ITER_S; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Detail::ITER_C; ++c) {
-                const int ss = (offset_cs.y + s) / P_S / 16;
-                const int cc = (offset_cs.x + c) * P_S * 16 + lane_id * kFragmentSize;
+                const int ss = (offset_cs.y + s * 16) / P_S / 16;
+                const int cc = (offset_cs.x + c * 16) * P_S * 16 + lane_id * kFragmentSize;
                 Lds(dst[s * Detail::ITER_C + c], &src(ss, cc));
+                // // printf("%d %d %d\n", offset_cs.y, ss, cc);
+                // if (s == 0 && c == 0 && offset_cs.x == 0 && offset_cs.y == 0 && threadIdx.x == 0) {
+                // if (threadIdx.x == 16) {
+                //     printf("%d %d %d\n", offset_cs.y, ss, cc);
+                //     for (int i = 0; i < kFragmentSize; ++i) {
+                //         int index = (int)dst[c][i];
+                //         printf("t%02d,v%d = (%d,%d)\n", threadIdx.x, i, index % 32, index / 32);
+                //     }
+                // }
             }
         }
+
+        // if (threadIdx.x == 0) {
+        //     for (int s = 0; s < 2; ++s) {
+        //         for (int c = 0; c < 512; ++c) {
+        //             printf("s=%d, c=%d, v=%d\n", s, c, (int)src(s, c));
+        //         }
+        //     }
+        // }
     }
 };
 

@@ -106,7 +106,20 @@ public:
         b_pack_desc_ = b_desc_;
 
         /// TODO: Revise packing condition
-        // Convert(a_.data().get(), a_desc_, a_pack_.data().get(), a_pack_desc_, stream_);
+        if constexpr (1) {
+            a_pack_desc_.pack = Pack::kHMMA_16816_A;
+            Convert(a_.data().get(), a_desc_, a_pack_.data().get(), a_pack_desc_, stream_);
+        }
+        else {
+            cudaMemcpyAsync(
+                (Ta*)a_pack_.data().get(), a_.data().get(), sizeof(Ta) * a_.size(), cudaMemcpyDefault, stream);
+        }
+
+        if constexpr (0) {}
+        else {
+            cudaMemcpyAsync(
+                (Tb*)b_pack_.data().get(), b_.data().get(), sizeof(Ta) * b_.size(), cudaMemcpyDefault, stream);
+        }
     }
 
     void Run()
@@ -125,7 +138,7 @@ public:
 
         auto status = gemm_.Run(operation,
                                 nullptr,
-                                a_.data().get(),
+                                a_pack_.data().get(),
                                 a_pack_desc_,
                                 u_.data().get(),
                                 u_pack_desc_,
@@ -183,7 +196,7 @@ public:
 
         // Compare(c_.data().get(), c_f_.data().get(), n_, n_, m_, 0);
 
-        Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
+        Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 1);
     }
 
 private:

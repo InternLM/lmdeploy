@@ -69,14 +69,7 @@ struct Predicate<S, C, true, true> {
     }
 };
 
-template<class T,
-         class Map,
-         class SmemLayout,
-         bool AlignedC,
-         bool AlignedS,
-         int  Idx,
-         int  G_CTA   = 1,
-         bool Disable = false>
+template<class T, class Map, class SmemLayout, bool AlignedC, bool AlignedS, int Idx, int G_CTA = 1>
 struct GmemIteratorSm80 {
 
     using AccessType = Array<T, Map::kAccessC>;
@@ -119,10 +112,6 @@ struct GmemIteratorSm80 {
 
     __device__ GmemIteratorSm80(Pointer data, int stride_s, int stride_k, int2 max_cs): smem_data_{Pointer{nullptr}}
     {
-        if constexpr (Disable) {
-            return;
-        }
-
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
 
@@ -163,9 +152,6 @@ struct GmemIteratorSm80 {
 
     __device__ void ClearSmem(int pipe_iter = 0)
     {
-        if constexpr (Disable) {
-            return;
-        }
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
@@ -182,9 +168,6 @@ struct GmemIteratorSm80 {
 
     __device__ void Prefetch(int begin, int count, bool tile_mask)
     {
-        if constexpr (Disable) {
-            return;
-        }
         // if constexpr (SmemLayout::kIsTrivial) {
         //     if (begin == 0) {
         //         smem_data_.ptr_ += dst_offset_;
@@ -265,9 +248,6 @@ struct GmemIteratorSm80 {
 
     __device__ void Advance()
     {
-        if constexpr (Disable) {
-            return;
-        }
         // src_ptr_ += stride_k_;
         // src_data_ = src_ptr_ + src_offset_;
 
@@ -389,7 +369,7 @@ struct VoidIterator {
     __device__ void Prefetch(int, int, bool) {}
     __device__ void Prefetch(bool) {}
     __device__ void Advance() {}
-    int* smem_data_;
+    int*            smem_data_;
 };
 
 }  // namespace turbomind::gemm

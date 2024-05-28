@@ -85,7 +85,9 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(16384, 16384, 16384);
 
-    Run<T, Tb>(1024, 1024, 1024);
+    // Run<T, Tb>(1024, 1024, 1024);
+
+    Run<T, Tb>(32, 32, 32);
 }
 
 namespace turbomind::gemm {
@@ -101,6 +103,7 @@ int main(int argc, char* argv[])
     // Test<half, uint4_t>(1, 1);
     // Test<half, uint4_t>(8, 1);
     Test<half, half>(16, 1);
+    return 0;
     // Test<half, uint4_t>(32, 1);
     // Test<half, uint4_t>(64, 1);
     // Test<half, uint4_t>(128, 1);
@@ -111,10 +114,8 @@ int main(int argc, char* argv[])
     // Test<half, uint4_t>(4096, 1);
     // Test<half, uint4_t>(8192, 1);
 
-    return 0;
-
     const int M = 32;
-    const int N = 64;
+    const int N = 32;
     const int K = 32;
 
     universal_vector<half> a(M * K);
@@ -122,23 +123,23 @@ int main(int argc, char* argv[])
 
     for (int i = 0; i < M; ++i) {
         for (int j = 0; j < K; ++j) {
-            a[i * K + j] = i * K + j;
+            a[i + j * M] = i + j * M;
         }
     }
 
     MatrixLayout a_desc{
         DataType::F16,
-        Order::kRowMajor,
-        32,
-        32,
-        32,
+        Order::kColMajor,
+        M,
+        K,
+        M,
     };
     MatrixLayout p_desc{
         DataType::F16,
-        Order::kRowMajor,
-        32,
-        32,
-        32,
+        Order::kColMajor,
+        M,
+        K,
+        0,
         Pack::kHMMA_16816_A,
     };
 
@@ -148,9 +149,9 @@ int main(int argc, char* argv[])
 
     for (int i = 0; i < M; ++i) {
         for (int j = 0; j < K; ++j) {
-            int index = (int)p[i * K + j];
-            int row   = index / K;
-            int col   = index % K;
+            int index = (int)p[i + j * M];
+            int row   = index % M;
+            int col   = index / M;
             printf("(%2d,%2d) ", row, col);
         }
         printf("\n");
@@ -168,10 +169,10 @@ int main(int argc, char* argv[])
 
     const MatrixLayout c_desc{DataType::F16, Order::kRowMajor, M, N, N};
 
-    gKernel().Launch({},
+    (void)Gemm{}.Run({},
                      &alpha,
-                     a.data().get(),
-                     MatrixLayout{DataType::F16, Order::kRowMajor, M, K, K, Pack::kHMMA_16816_A},
+                     p.data().get(),
+                     p_desc,
                      nullptr,
                      MatrixLayout{},
                      b.data().get(),
@@ -183,19 +184,17 @@ int main(int argc, char* argv[])
                      c_desc,
                      c.data().get(),
                      c_desc,
-                     0,
-                     1,
                      workspace,
                      0);
 
     cudaDeviceSynchronize();
 
-    for (int i = 0; i < M; ++i) {
-        for (int j = 0; j < N; ++j) {
-            printf("%2.0f ", (float)c[i * N + j]);
-        }
-        printf("\n");
-    }
+    // for (int i = 0; i < M; ++i) {
+    //     for (int j = 0; j < N; ++j) {
+    //         printf("%2.0f ", (float)c[i * N + j]);
+    //     }
+    //     printf("\n");
+    // }
 
     return 0;
 }

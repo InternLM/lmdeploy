@@ -10,7 +10,7 @@
 
 namespace turbomind::gemm {
 
-template<int M_, int K_, int Pack_M, class Operand, class Converter, class Td, bool k_major_D>
+template<int M_, int K_, int Pack_M, class Operand, class Td, class Converter>
 struct ConvertOperand {
     using Ts         = typename Operand::Dtype;
     using SmemLayout = typename Operand::SmemLayout;
@@ -55,6 +55,11 @@ struct ConvertOperand {
         return M;
     }
 
+    __device__ constexpr int2 _mk2cs(int m, int k)
+    {
+        return mk2cs<kOrderS>(m, k);
+    }
+
     __device__ void operator()(const Param& param, char* smem_buf)
     {
         Ts* smem = (Ts*)smem_buf;
@@ -71,16 +76,14 @@ struct ConvertOperand {
 
         const int warp_offset_m = warp_id * COPY_M;
 
-        auto mk2idx_S = [&](int m, int k) { return cs2idx(mk2cs<kOrderS>(m, k), param.lds); };
+        auto mk2idx_S = [&](int m, int k) { return cs2idx(_mk2cs(m, k), param.lds); };
 
-        GmemIter gmem{
-            (Ts*)param.src + mk2idx_S(cta_offset_m, 0),  // ptr
-            param.lds,                                   // stride s
-            mk2idx_S(0, K),                              // stride k
-            mk2cs<kOrderS>(M, K),
-        };
+        GmemIter gmem{(Ts*)param.src + mk2idx_S(cta_offset_m, 0), param.lds, mk2idx_S(0, K), _mk2cs(M, K)};
 
         gmem.smem_data_ = smem;
+
+        gmem.ClearSmem();
+        __syncthreads();
 
         Converter converter{};
 
@@ -106,7 +109,7 @@ struct ConvertOperand {
             for (int k = 0; k < ITER_K; ++k) {
 
                 // Load from smem as we are doing GEMMs
-                SmemCopy::copy(Accessor{smem}, data, mk2cs<kOrderS>(warp_offset_m, k * COPY_K));
+                SmemCopy::copy(Accessor{smem}, data, _mk2cs(warp_offset_m, k * COPY_K));
 
                 PRAGMA_UNROLL
                 for (int m = 0; m < kFragNum; m += Pack_M) {
@@ -118,8 +121,8 @@ struct ConvertOperand {
                     const int pack_idx_m = ((cta_idx_m * WARP_CNT + warp_id) * kFragNum + m) / Pack_M;
 
                     // Linear pack index
-                    const int pack_index =
-                        k_major_D ? pack_idx_m * pack_cnt_k + pack_idx_k : pack_idx_k * pack_cnt_m + pack_idx_m;
+                    const int pack_index = cs2idx(_mk2cs(pack_idx_m, pack_idx_k),  //
+                                                  _mk2cs(pack_cnt_m, pack_cnt_k).x);
 
                     // Store in [pack_id, lane_id]
                     Store(param.dst + (pack_index * WARP_SIZE + lane_id) * kPackSize, packed);

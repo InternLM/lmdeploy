@@ -105,8 +105,8 @@ struct MainloopSm80_v2 {
 
     static constexpr int kBatchA = ceil_div(GmemIterA::ITER_S, kMaxPrefetchIter);
     static constexpr int kBatchB = ceil_div(GmemIterB::ITER_S, kMaxPrefetchIter);
-    static constexpr int kBatchU = ceil_div(GmemIterA::ITER_S, kMaxPrefetchIter);
-    static constexpr int kBatchV = ceil_div(GmemIterB::ITER_S, kMaxPrefetchIter);
+    static constexpr int kBatchU = ceil_div(GmemIterU::ITER_S, kMaxPrefetchIter);
+    static constexpr int kBatchV = ceil_div(GmemIterV::ITER_S, kMaxPrefetchIter);
 
     struct SharedStorage {
         __align__(16) Array<Ta, Stages * SmemLayoutA::kSize> A;
@@ -228,7 +228,6 @@ struct MainloopSm80_v2 {
         constexpr bool kFusePrefetch = true;
 
         auto prefetch_stage = [&] {
-            AdvanceSmemStage(gmem_iters, smem_iters);
             Prefetch(gmem_iters, gmem_mask);
             __pipeline_commit();
             AdvanceGmemStage(gmem_iters);
@@ -268,6 +267,7 @@ struct MainloopSm80_v2 {
 
         PRAGMA_UNROLL
         for (int stage = 0; stage < Stages - 1; ++stage) {
+            AdvanceSmemStage(gmem_iters, smem_iters);
             prefetch_stage();
         }
         // r:-1, w:-2

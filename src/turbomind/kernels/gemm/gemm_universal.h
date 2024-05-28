@@ -126,8 +126,11 @@ struct GemmUniversal {
         auto mk2idx_U = [&](int m, int k) { return cs2idx(mk2cs<kOrderU>(m, k), param.ldu); };
         auto kn2idx_V = [&](int k, int n) { return cs2idx(kn2cs<kOrderV>(k, n), param.ldv); };
 
-        typename OperandA::GmemIter gmem_A{
-            param.A + mk2idx_A(offset_m, offset_k), param.lda, mk2idx_A(0, CTA_K), mk2cs<kOrderA>(end_m, CTA_K)};
+        /// TODO: move the computation of packing coords into `GmemIter`
+        typename OperandA::GmemIter gmem_A{param.A + mk2idx_A(offset_m, offset_k),
+                                           param.lda,
+                                           mk2idx_A(0, CTA_K),
+                                           Packing<kPackA>::apply(mk2cs<kOrderA>(end_m, CTA_K))};
         typename OperandB::GmemIter gmem_B{
             param.B + kn2idx_B(offset_k, offset_n), param.ldb, kn2idx_B(CTA_K, 0), kn2cs<kOrderB>(CTA_K, end_n)};
         typename OperandU::GmemIter gmem_U{

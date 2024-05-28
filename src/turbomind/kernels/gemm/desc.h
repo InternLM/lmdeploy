@@ -15,6 +15,8 @@ struct GemmDesc {
     Order     order_a;
     Order     order_b;
     Order     order_c;
+    Pack      pack_a;
+    Pack      pack_b;
     QuantDesc quant_a;
     QuantDesc quant_b;
     Epilogue  epilogue;
@@ -38,6 +40,8 @@ struct KernelDesc {
     Order     order_a;
     Order     order_b;
     Order     order_c;
+    Pack      pack_a;
+    Pack      pack_b;
     QuantDesc quant_a;
     QuantDesc quant_b;
     int3      cta_tile;

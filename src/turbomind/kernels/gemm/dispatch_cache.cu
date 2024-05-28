@@ -71,6 +71,8 @@ void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc,
                     g.order_a,
                     g.order_b,
                     g.order_c,
+                    g.pack_a,
+                    g.pack_b,
                     g.quant_a.type,
                     g.quant_a.group_size,
                     g.quant_b.type,
@@ -113,6 +115,8 @@ void ImportDispatchCache(std::istream&                                 is,
                     g.order_a,
                     g.order_b,
                     g.order_c,
+                    g.pack_a,
+                    g.pack_b,
                     g.quant_a.type,
                     g.quant_a.group_size,
                     g.quant_b.type,
@@ -125,6 +129,8 @@ void ImportDispatchCache(std::istream&                                 is,
         k.type_a  = g.type_a;
         k.type_b  = g.type_b;
         k.type_c  = g.type_c;
+        k.pack_a  = g.pack_a;
+        k.pack_b  = g.pack_b;
         k.order_a = g.order_a;
         k.order_b = g.order_b;
         k.order_c = g.order_c;
