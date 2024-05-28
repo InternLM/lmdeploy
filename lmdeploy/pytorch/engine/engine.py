@@ -388,6 +388,32 @@ class Engine:
         num_ignored_history = [msg.num_ignored_history for msg in messages]
         num_ignored_history = torch.tensor(num_ignored_history)
 
+        def __get_cogvlm_image_info():
+            """Get cogvlm history image info for position ids."""
+            history_image_nums = torch.LongTensor(
+                [msg.history_image_num for msg in messages])
+            history_image_token_lengths = torch.LongTensor(
+                [msg.history_image_token_len for msg in messages])
+            history_lengths_for_vlm = history_lengths
+            output = (history_image_nums, history_image_token_lengths,
+                      history_lengths_for_vlm)
+            return output
+
+        def __get_vlm_embeddings():
+            """get vlm input embeddings and indexings."""
+            input_embeddings = [[None] * max_q_seq_length] * len(messages)
+            input_embedding_indexing = torch.zeros(
+                (batch_size, max_q_seq_length), dtype=torch.bool)
+            for msg_id, msg in enumerate(messages):
+                for emb in msg.input_embeddings:
+                    # make slice index relative to embeddings
+                    emb_start = emb.start - msg.history_len
+                    emb_end = emb.end - msg.history_len
+                    input_embeddings[msg_id][emb_start:emb_end] = list(
+                        torch.from_numpy(emb.embeddings).split(1, dim=0))
+                    input_embedding_indexing[msg_id][emb_start:emb_end] = True
+            return input_embeddings, input_embedding_indexing
+
         # for vlm
         vision_embedding_inputs = None
         if self.model_config.task_type == 'vlm':
@@ -396,28 +422,16 @@ class Engine:
             history_lengths_for_vlm = None
             # only for cogvlm
             if self.model_config.model_arch == 'CogVLMForCausalLM':
-                history_image_nums = torch.LongTensor(
-                    [msg.history_image_num for msg in messages])
-                history_image_token_lengths = torch.LongTensor(
-                    [msg.history_image_token_len for msg in messages])
-                history_lengths_for_vlm = history_lengths
+                (history_image_nums, history_image_token_lengths,
+                 history_lengths_for_vlm) = __get_cogvlm_image_info()
+
             input_embeddings = None
             input_embedding_indexing = None
             has_embedding = any(
                 [len(msg.input_embeddings) > 0 for msg in messages])
             if has_embedding:
-                input_embeddings = [[None] * max_q_seq_length] * len(messages)
-                input_embedding_indexing = torch.zeros(
-                    (batch_size, max_q_seq_length), dtype=torch.bool)
-                for msg_id, msg in enumerate(messages):
-                    for emb in msg.input_embeddings:
-                        # make slice index relative to embeddings
-                        emb_start = emb.start - msg.history_len
-                        emb_end = emb.end - msg.history_len
-                        input_embeddings[msg_id][emb_start:emb_end] = list(
-                            torch.from_numpy(emb.embeddings).split(1, dim=0))
-                        input_embedding_indexing[msg_id][
-                            emb_start:emb_end] = True
+                (input_embeddings,
+                 input_embedding_indexing) = __get_vlm_embeddings()
 
             vision_embedding_inputs = VisionModelInputs(
                 history_lengths=history_lengths_for_vlm,

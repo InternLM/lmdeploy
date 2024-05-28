@@ -13,7 +13,7 @@ def _handle_exception(e: Exception,
     reset_color = '\033[0m'
     if message is None:
         message = 'Please ensure it has been installed correctly.'
-    logger.error(e, exc_info=True)
+    logger.debug('Exception', exc_info=1)
     logger.error(f'{type(e).__name__}: {e}')
     logger.error(f'{red_color}'
                  f'<{mod_name}> test failed!\n'

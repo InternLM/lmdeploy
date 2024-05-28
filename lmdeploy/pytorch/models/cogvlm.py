@@ -32,23 +32,27 @@ class PatchedVisionExpertMLP(nn.Module):
 
     def forward(self, hidden_states: 'torch.Tensor(B, L, D)',
                 token_type_ids: 'torch.LongTensor(B, L)'):
-        output = torch.empty(hidden_states.shape,
-                             dtype=hidden_states.dtype,
-                             device=hidden_states.device)
-        # for embedding splitting
         context = self.context.context
-        if hasattr(context, 'vision_token_mask') and hasattr(
-                context, 'language_token_mask'):
-            vision_token_mask = context.vision_token_mask
-            language_token_mask = context.language_token_mask
-        else:
-            vision_token_mask, language_token_mask = get_vision_expert_mask(
-                token_type_ids)
+        only_has_language = context.is_decoding
+        if not context.is_decoding:
+            # for embedding splitting
+            if hasattr(context, 'vision_token_mask') and hasattr(
+                    context, 'language_token_mask'):
+                vision_token_mask = context.vision_token_mask
+                language_token_mask = context.language_token_mask
+            else:
+                vision_token_mask, language_token_mask = get_vision_expert_mask(
+                    token_type_ids)
+            only_has_language = vision_token_mask.numel() == 0
 
-        output[vision_token_mask] = self.vision_mlp(
-            hidden_states[vision_token_mask])
-        output[language_token_mask] = self.language_mlp(
-            hidden_states[language_token_mask])
+        if only_has_language:
+            output = self.language_mlp(hidden_states)
+        else:
+            output = torch.empty_like(hidden_states)
+            output[:, vision_token_mask, :] = self.vision_mlp(
+                hidden_states[:, vision_token_mask, :])
+            output[:, language_token_mask, :] = self.language_mlp(
+                hidden_states[:, language_token_mask, :])
         return output
 
 
@@ -109,32 +113,36 @@ class PatchedVisionExpertAttention(nn.Module):
 
         head_dim = self.config.hidden_size // self.config.num_attention_heads
         hidden_size = num_heads * head_dim
-        # for embedding splitting
-        if hasattr(context, 'vision_token_mask') and hasattr(
-                context, 'language_token_mask'):
-            vision_token_mask = context.vision_token_mask
-            language_token_mask = context.language_token_mask
-        else:
-            vision_token_mask, language_token_mask = get_vision_expert_mask(
-                token_type_ids)
-
-        vision_token_mask = vision_token_mask.ravel()
-        language_token_mask = language_token_mask.ravel()
+        only_has_language = context.is_decoding
+        if not context.is_decoding:
+            # for embedding splitting
+            if hasattr(context, 'vision_token_mask') and hasattr(
+                    context, 'language_token_mask'):
+                vision_token_mask = context.vision_token_mask
+                language_token_mask = context.language_token_mask
+            else:
+                vision_token_mask, language_token_mask = get_vision_expert_mask(
+                    token_type_ids)
+            only_has_language = vision_token_mask.numel() == 0
 
         def __qkv_proj(hidden_states):
             """qkv_proj."""
-            shape = list(hidden_states.shape)
-            shape[-1] = hidden_size + head_dim * num_kv_heads * 2
-            mixed_raw_layer = torch.empty(shape,
-                                          dtype=hidden_states.dtype,
-                                          device=hidden_states.device)
+            if only_has_language:
+                mixed_raw_layer = self.language_expert_query_key_value(
+                    hidden_states)
+            else:
+                shape = list(hidden_states.shape)
+                shape[-1] = hidden_size + head_dim * num_kv_heads * 2
+                mixed_raw_layer = torch.empty(shape,
+                                              dtype=hidden_states.dtype,
+                                              device=hidden_states.device)
 
-            mixed_raw_layer[:,
-                            vision_token_mask, :] = self.vision_expert_query_key_value(
-                                hidden_states[:, vision_token_mask, :])
-            mixed_raw_layer[:,
-                            language_token_mask, :] = self.language_expert_query_key_value(
-                                hidden_states[:, language_token_mask, :])
+                mixed_raw_layer[:,
+                                vision_token_mask, :] = self.vision_expert_query_key_value(
+                                    hidden_states[:, vision_token_mask, :])
+                mixed_raw_layer[:,
+                                language_token_mask, :] = self.language_expert_query_key_value(
+                                    hidden_states[:, language_token_mask, :])
             query_states, key_states, value_states = torch.split(
                 mixed_raw_layer, [
                     hidden_size, head_dim * num_kv_heads,
@@ -192,17 +200,21 @@ class PatchedVisionExpertAttention(nn.Module):
             max_seqlen=max_q_seq_length,
         )
         context_layer = context_layer.reshape(*hidden_states.shape[:-1], -1)
-        ctx_shape = list(context_layer.shape)
-        ctx_shape[-1] *= world_size
 
-        attn_output = torch.empty(ctx_shape,
-                                  dtype=hidden_states.dtype,
-                                  device=hidden_states.device)
+        if only_has_language:
+            attn_output = self.language_expert_dense(context_layer)
+        else:
+            ctx_shape = list(context_layer.shape)
+            ctx_shape[-1] *= world_size
+            attn_output = torch.empty(ctx_shape,
+                                      dtype=hidden_states.dtype,
+                                      device=hidden_states.device)
 
-        attn_output[:, vision_token_mask, :] = self.vision_expert_dense(
-            context_layer[:, vision_token_mask, :])
-        attn_output[:, language_token_mask, :] = self.language_expert_dense(
-            context_layer[:, language_token_mask, :])
+            attn_output[:, vision_token_mask, :] = self.vision_expert_dense(
+                context_layer[:, vision_token_mask, :])
+            attn_output[:,
+                        language_token_mask, :] = self.language_expert_dense(
+                            context_layer[:, language_token_mask, :])
 
         return attn_output, None, past_key_value
 
