@@ -839,6 +839,8 @@ class Engine:
     def decode(self,
                input_ids,
                steps: List[int] = None,
+               input_embeddings=None,
+               input_embedding_ranges=None,
                sequence_start: bool = True,
                sequence_end: bool = True,
                adapter_names: List[str] = None):
@@ -847,6 +849,10 @@ class Engine:
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
             steps (List[int]): the offset of the k/v cache
+            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
+                embeddings features
+            input_embedding_ranges: (List[List[Tuple[int, int]]]):
+                the begin/end offsets of input_embeddings to input_ids
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             adapter_names (List[str]): The name of the adapters.

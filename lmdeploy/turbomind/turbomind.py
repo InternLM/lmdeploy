@@ -580,6 +580,44 @@ class TurboMindInstance:
         self.cancel(session_id)
         await asyncio.sleep(0.002)
 
+    def prepare_embeddings(self,
+                           input_embeddings=None,
+                           input_embedding_ranges=None):
+        """Convert embeddings."""
+        if input_embeddings is None:
+            return None, None
+
+        assert len(input_embeddings) == len(input_embedding_ranges)
+        if not isinstance(input_embeddings[0], list):
+            input_embeddings = [input_embeddings]
+            input_embedding_ranges = [input_embedding_ranges]
+
+        # construct input_embeddings
+        for i in range(len(input_embeddings)):
+            item = input_embeddings[i] or []
+            # convert to torch.Tensor if input is np.ndarray
+            if item and isinstance(item[0], np.ndarray):
+                item = [torch.from_numpy(x).squeeze() for x in item]
+            # convert to lookup table type
+            _MAP = dict(fp32=torch.float, bf16=torch.bfloat16)
+            dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
+            item = [x.to(dtype=dtype) for x in item]
+            input_embeddings[i] = item
+        input_embeddings = [torch.cat(x) for x in input_embeddings]
+        input_embeddings = pad_sequence(input_embeddings, batch_first=True)
+        input_embeddings = input_embeddings.reshape(input_embeddings.shape[0],
+                                                    -1).view(torch.int8)
+        # construct input_embedding_ranges
+        for i in range(len(input_embedding_ranges)):
+            item = input_embedding_ranges[i] or []
+            item = torch.IntTensor(item).reshape(-1, 2)
+            input_embedding_ranges[i] = item
+        input_embedding_ranges = pad_sequence(input_embedding_ranges,
+                                              batch_first=True,
+                                              padding_value=-1)
+
+        return input_embeddings, input_embedding_ranges
+
     def prepare_inputs(self,
                        session_id,
                        input_ids,
@@ -636,41 +674,9 @@ class TurboMindInstance:
             CORRID=np.array(session_id, dtype=np.uint64),
             STOP=_broadcast_np((1 if stop else 0), np.int32))
 
+        input_embeddings, input_embedding_ranges = self.prepare_embeddings(
+            input_embeddings, input_embedding_ranges)
         if input_embeddings is not None:
-            assert len(input_embeddings) == len(input_embedding_ranges)
-            if isinstance(input_embeddings[0], np.ndarray):
-                input_embeddings = [input_embeddings]
-                input_embedding_ranges = [input_embedding_ranges]
-            # convert to lookup table type
-            if self.tm_model.config.weight_type == 'fp32':
-                input_embeddings = [[x.astype(np.float32) for x in y]
-                                    for y in input_embeddings]
-            elif self.tm_model.config.weight_type == 'bf16':
-                input_embeddings = [[
-                    torch.from_numpy(x).bfloat16().view(torch.half).numpy()
-                    for x in y
-                ] for y in input_embeddings]
-            else:
-                input_embeddings = [[x.astype(np.float16) for x in y]
-                                    for y in input_embeddings]
-
-            input_embeddings = [[torch.from_numpy(x).squeeze() for x in y]
-                                for y in input_embeddings]
-            input_embeddings = [torch.cat(x) for x in input_embeddings]
-            input_embeddings = pad_sequence(input_embeddings, batch_first=True)
-            input_embeddings = input_embeddings.reshape(
-                input_embeddings.shape[0], -1).view(torch.int8)
-
-            _input_embedding_ranges = []
-            for x in input_embedding_ranges:
-                if x is not None and len(x) != 0:
-                    _input_embedding_ranges.append(torch.IntTensor(x))
-                else:
-                    _input_embedding_ranges.append(torch.IntTensor(size=(0,
-                                                                         2)))
-            input_embedding_ranges = pad_sequence(_input_embedding_ranges,
-                                                  batch_first=True,
-                                                  padding_value=-1)
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
 
@@ -937,6 +943,8 @@ class TurboMindInstance:
     def decode(self,
                input_ids,
                steps: List[int] = None,
+               input_embeddings=None,
+               input_embedding_ranges=None,
                sequence_start: bool = True,
                sequence_end: bool = True):
         """Perform context decode on input tokens.
@@ -944,6 +952,10 @@ class TurboMindInstance:
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
             steps (List[int]): the offset of the k/v cache
+            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
+                embeddings features
+            input_embedding_ranges: (List[List[Tuple[int, int]]]):
+                the begin/end offsets of input_embeddings to input_ids
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
         """
@@ -985,6 +997,12 @@ class TurboMindInstance:
                                           np.int32),
                       END=_broadcast_np((1 if sequence_end else 0), np.int32),
                       step=steps)
+
+        input_embeddings, input_embedding_ranges = self.prepare_embeddings(
+            input_embeddings, input_embedding_ranges)
+        if input_embeddings is not None:
+            inputs['input_embeddings'] = input_embeddings
+            inputs['input_embedding_ranges'] = input_embedding_ranges
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
 
