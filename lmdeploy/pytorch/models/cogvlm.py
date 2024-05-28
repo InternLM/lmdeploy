@@ -40,10 +40,9 @@ class PatchedVisionExpertMLP(nn.Module):
                     context, 'language_token_mask'):
                 vision_token_mask = context.vision_token_mask
                 language_token_mask = context.language_token_mask
+                only_has_language = vision_token_mask.numel() == 0
             else:
-                vision_token_mask, language_token_mask = get_vision_expert_mask(
-                    token_type_ids)
-            only_has_language = vision_token_mask.numel() == 0
+                only_has_language = True
 
         if only_has_language:
             output = self.language_mlp(hidden_states)
@@ -120,10 +119,9 @@ class PatchedVisionExpertAttention(nn.Module):
                     context, 'language_token_mask'):
                 vision_token_mask = context.vision_token_mask
                 language_token_mask = context.language_token_mask
+                only_has_language = vision_token_mask.numel() == 0
             else:
-                vision_token_mask, language_token_mask = get_vision_expert_mask(
-                    token_type_ids)
-            only_has_language = vision_token_mask.numel() == 0
+                only_has_language = True
 
         def __qkv_proj(hidden_states):
             """qkv_proj."""
@@ -221,7 +219,6 @@ class PatchedVisionExpertAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        token_type_ids: torch.LongTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         **kwargs,
@@ -233,7 +230,6 @@ class PatchedVisionExpertAttention(nn.Module):
             world_size = dist.get_world_size()
         return self._contiguous_batching_forward_impl(
             hidden_states,
-            token_type_ids=token_type_ids,
             position_ids=position_ids,
             past_key_value=past_key_value,
             world_size=world_size,
@@ -245,7 +241,6 @@ class PatchedCogVLMModel(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         **kwargs,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
@@ -260,7 +255,6 @@ class PatchedCogVLMModel(nn.Module):
         position_ids = _get_cogvlm_position_ids(context)
 
         if vision_embeddings is not None and len(vision_embeddings) > 0:
-            token_type_ids = vision_embedding_indexing.int().unsqueeze(0)
             vision_embedding_indexing = torch.arange(
                 vision_embedding_indexing.numel(),
                 device=vision_embedding_indexing.device
@@ -269,17 +263,13 @@ class PatchedCogVLMModel(nn.Module):
             inputs_embeds[:,
                           vision_embedding_indexing, :] = vision_embeddings.to(
                               inputs_embeds)
-        else:
-            token_type_ids = torch.ones_like(
-                input_ids, dtype=torch.int,
-                device=input_ids.device) * LANGUAGE_TOKEN_TYPE
         hidden_states = inputs_embeds
 
         for idx, decoder_layer in enumerate(self.layers):
             past_key_value = past_key_values[idx]
             layer_outputs = decoder_layer(
                 hidden_states,
-                token_type_ids=token_type_ids,
+                token_type_ids=None,
                 position_ids=position_ids,
                 past_key_value=past_key_value,
             )
