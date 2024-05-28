@@ -61,7 +61,8 @@ class Xcomposer2VisionModel(VisonModel):
 
         # additional components.
         with add_sys_path(self.model_path):
-            if config.architectures[0] == 'InternLM2ForCausalLM':
+            if config.architectures[0] in ('InternLM2ForCausalLM',
+                                           'InternLMXComposer2ForCausalLM'):
                 # internlm-xcomposer2-4khd-7b
                 from ixc_utils import HD_transform
                 self.HD_transform = HD_transform
