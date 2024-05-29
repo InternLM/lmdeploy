@@ -115,17 +115,21 @@ struct GmemIteratorSm80 {
         return Packing<kPack>::apply(cs);
     }
 
-    // static_assert(!Map::kPartialC);
-    __device__ GmemIteratorSm80(Pointer data, int stride_s, int2 offset_cs, int2 delta_cs, int2 extent_cs):
+    __device__ static constexpr int2 to_cs(int2 mk)
+    {
+        return mk2cs<kOrder>(mk.x, mk.y);
+    }
+
+    __device__ GmemIteratorSm80(Pointer data, int stride_s, int2 offset, int2 delta, int2 extent):
         smem_data_{Pointer{nullptr}}
     {
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
 
-        data += cs2idx(pack(offset_cs), stride_s);
+        data += cs2idx(pack(to_cs(offset)), stride_s);
+        extent = pack(to_cs(extent));
 
-        const int stride_k = cs2idx(pack(delta_cs), stride_s);
-        extent_cs          = pack(extent_cs);
+        int stride_k = cs2idx(pack(to_cs(delta)), stride_s);
 
         int2 offsets = Map::get_offset(warp_id, lane_id);
         src_offset_  = offsets.x + offsets.y * stride_s;
@@ -142,7 +146,7 @@ struct GmemIteratorSm80 {
                 for (int c = 0; c < Map::kIterC; ++c) {
                     int ss = offset_s_ + s * Map::kDeltaS;
                     int cc = offset_c_ + c * Map::kDeltaC;
-                    if (ss < extent_cs.y && cc < extent_cs.x) {
+                    if (ss < extent.y && cc < extent.x) {
                         pred_.set(s, c);
                     }
                 }
