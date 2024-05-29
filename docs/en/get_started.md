@@ -22,7 +22,7 @@ pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_V
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
+pipe = lmdeploy.pipeline("internlm/internlm2-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
@@ -52,7 +52,7 @@ LMDeploy CLI offers the following utilities, helping users experience LLM featur
 ### Inference with Command line Interface
 
 ```shell
-lmdeploy chat internlm/internlm-chat-7b
+lmdeploy chat internlm/internlm2-chat-7b
 ```
 
 ### Serving with Web UI
@@ -63,7 +63,7 @@ LMDeploy adopts gradio to develop the online demo.
 # install dependencies
 pip install lmdeploy[serve]
 # launch gradio server
-lmdeploy serve gradio internlm/internlm-chat-7b
+lmdeploy serve gradio internlm/internlm2-chat-7b
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)

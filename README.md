@@ -26,6 +26,8 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
+- \[2024/05\] Support 4-bits weight-only quantization and inference on VMLs, such as InternVL v1.5, LLaVa, InternLMXComposer2
 - \[2024/04\] Support Llama3 and more VLMs, such as InternVL v1.1, v1.2, MiniGemini, InternLMXComposer2.
 - \[2024/04\] TurboMind adds online int8/int4 KV cache quantization and inference for all supported devices. Refer [here](docs/en/quantization/kv_quant.md) for detailed guide
 - \[2024/04\] TurboMind latest upgrade boosts GQA, rocketing the [internlm2-20b](https://huggingface.co/internlm/internlm2-20b) model inference to 16+ RPS, about 1.8x faster than vLLM.
@@ -121,18 +123,17 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Gemma (2B - 7B)</li>
   <li>Dbrx (132B)</li>
   <li>Phi-3-mini (3.8B)</li>
+  <li>StarCoder2 (3B - 15B)</li>
 </ul>
 </td>
 <td>
 <ul>
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
-  <li>InternLM-XComposer (7B)</li>
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>QWen-VL (7B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>MiniGeminiLlama (7B)</li>
-  <li>StarCoder2 (3B - 15B)</li>
 </ul>
 </td>
 </tr>
@@ -165,7 +166,7 @@ pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_V
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
+pipe = lmdeploy.pipeline("internlm/internlm2-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```

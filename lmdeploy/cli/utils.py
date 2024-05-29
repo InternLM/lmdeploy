@@ -295,6 +295,30 @@ class ArgumentHelper:
                                    help='The sequence length for calibration')
 
     @staticmethod
+    def calib_batchsize(parser):
+        """Add argument batch_size to parser."""
+
+        return parser.add_argument(
+            '--batch-size',
+            type=int,
+            default=1,
+            help=\
+            'The batch size for running the calib samples. Low GPU mem requires small batch_size. Large batch_size reduces the calibration time while costs more VRAM'  # noqa
+        )
+
+    @staticmethod
+    def calib_search_scale(parser):
+        """Add argument batch_size to parser."""
+
+        return parser.add_argument(
+            '--search-scale',
+            type=bool,
+            default=False,
+            help=\
+            'Whether search scale ratio. Default to False, which means only smooth quant with 0.5 ratio will be applied'  # noqa
+        )
+
+    @staticmethod
     def device(parser):
         """Add argument device to parser."""
 
@@ -410,3 +434,10 @@ class ArgumentHelper:
             type=int,
             default=1,
             help='the max number of forward passes in prefill stage')
+
+    @staticmethod
+    def vision_max_batch_size(parser):
+        return parser.add_argument('--vision-max-batch-size',
+                                   type=int,
+                                   default=1,
+                                   help='the vision model batch size')

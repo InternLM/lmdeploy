@@ -4,7 +4,6 @@ import copy
 import os.path as osp
 import sys
 from configparser import ConfigParser
-from contextlib import contextmanager
 from queue import LifoQueue, Queue
 from threading import Thread
 from typing import Dict, Iterable, List, Optional, Union
@@ -93,14 +92,6 @@ def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
         if v is not None and k in dst_dict:
             dst_dict[k] = v
     return TurbomindModelConfig.from_dict(dst_dict)
-
-
-@contextmanager
-def cuda_ctx(device_id):
-    old_device = torch.cuda.current_device()
-    torch.cuda.set_device(device_id)
-    yield
-    torch.cuda.set_device(old_device)
 
 
 class TurboMind:
@@ -194,9 +185,8 @@ class TurboMind:
 
         # create weight
         def _create_weight_func(device_id):
-            with cuda_ctx(device_id):
-                rank = self.node_id * self.gpu_count + device_id
-                model_comm.create_shared_weights(device_id, rank)
+            rank = self.node_id * self.gpu_count + device_id
+            model_comm.create_shared_weights(device_id, rank)
 
         threads = []
         for device_id in range(self.gpu_count):
@@ -210,10 +200,9 @@ class TurboMind:
         """Get turbomind model params when loading from hf."""
 
         def _get_params(device_id, que):
-            with cuda_ctx(device_id):
-                rank = self.node_id * self.gpu_count + device_id
-                out = model_comm.get_params(device_id, rank)
-                que.put(out)
+            rank = self.node_id * self.gpu_count + device_id
+            out = model_comm.get_params(device_id, rank)
+            que.put(out)
 
         que = Queue()
         threads = []
@@ -264,14 +253,16 @@ class TurboMind:
             output_format = 'w4'
             data_type = 'int4'
             cfg.group_size = 128
+            if inferred_model_format == 'xcomposer2-awq':
+                output_format = 'plora-w4'
         else:
             output_format = update_output_format(cfg.model_name,
                                                  inferred_model_format,
                                                  model_path, output_format)
             data_type = output_format
             update_config_weight_type(output_format, cfg)
-        if inferred_model_format == 'xcomposer2':
-            output_format = 'plora'
+            if inferred_model_format == 'xcomposer2':
+                output_format = 'plora'
 
         input_model = INPUT_MODELS.get(inferred_model_format)(
             model_path=model_path, tokenizer_path=model_path, ckpt_path=None)
@@ -450,11 +441,10 @@ class TurboMindInstance:
         self.threads = [None] * self.gpu_count
 
     def _create_model_instance(self, device_id, model_insts):
-        with cuda_ctx(device_id):
-            rank = self.node_id * self.gpu_count + device_id
-            model_inst = self.tm_model.model_comm.create_model_instance(
-                device_id, rank, self.cuda_stream_id, self.nccl_params)
-            model_insts[device_id] = model_inst
+        rank = self.node_id * self.gpu_count + device_id
+        model_inst = self.tm_model.model_comm.create_model_instance(
+            device_id, rank, self.cuda_stream_id, self.nccl_params)
+        model_insts[device_id] = model_inst
 
     def _forward_callback(self, result, ctx):
         self.que.put((False, result))
@@ -464,11 +454,9 @@ class TurboMindInstance:
             self.gpu_count)
 
         def _func(device_id, enque_output):
-            with cuda_ctx(device_id):
-                output = self.model_insts[device_id].forward(
-                    inputs, instance_comm)
-                if enque_output:
-                    self.que.put((True, output))
+            output = self.model_insts[device_id].forward(inputs, instance_comm)
+            if enque_output:
+                self.que.put((True, output))
 
         for device_id in range(self.gpu_count):
             t = Thread(target=_func,
@@ -485,11 +473,9 @@ class TurboMindInstance:
             self.gpu_count)
 
         def _func(device_id, enque_output):
-            with cuda_ctx(device_id):
-                output = self.model_insts[device_id].forward(
-                    inputs, instance_comm)
-                if enque_output:
-                    que.put((True, output))
+            output = self.model_insts[device_id].forward(inputs, instance_comm)
+            if enque_output:
+                que.put((True, output))
 
         for device_id in range(self.gpu_count):
             t = Thread(target=_func,
@@ -540,10 +526,12 @@ class TurboMindInstance:
                                            logprob_indexes[offset:length],
                                            logprob_vals[offset:length],
                                            logprob_nums[offset:length]):
-            n = min(n.item(), logprobs)
-            tok_res = {idx[i].item(): val[i].item() for i in range(n)}
+            topn = min(n.item(), logprobs)
+            tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
             if token_id.item() not in tok_res:
-                tok_res[token_id.item()] = val[idx == token_id].item()
+                valid_n = n.item()
+                tok_res[token_id.item()] = \
+                    val[:valid_n][idx[:valid_n] == token_id].item()
             out_logprobs.append(tok_res)
         return out_logprobs
 

@@ -83,10 +83,8 @@ def init_yi_model():
 class YiVisionModel(LlavaVisionModel):
     """Yi visual model."""
 
-    def __init__(self, model_path, device='cuda:0'):
-        self.model_path = model_path
-        self.device = device
-        self.build_model()
+    def __init__(self, model_path, with_llm: bool = False):
+        super().__init__(model_path=model_path, with_llm=with_llm)
 
     def build_model(self):
         """build model & load weights."""
