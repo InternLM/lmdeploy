@@ -153,7 +153,6 @@ class Engine:
         start = time.time()
 
         if img_hw is not None:
-            import numpy as np
             import PIL
 
             from lmdeploy.vl.utils import encode_image_base64
