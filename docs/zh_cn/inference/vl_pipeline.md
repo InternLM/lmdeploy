@@ -147,6 +147,22 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
+### 计算 logits
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+from lmdeploy.vl import load_image
+pipe = pipeline('internlm/internlm-xcomposer2-7b', backend_config=TurbomindEngineConfig(cache_max_entry_count=0.5))
+
+# logits
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+inputs = pipe.prepare_inputs(('describe this image', image))
+input_ids = inputs['input_ids']
+embeddings = inputs['input_embeddings']
+embedding_ranges = inputs['input_embedding_ranges']
+logits = pipe.get_logits(input_ids, embeddings, embedding_ranges)
+```
+
 ## 多图推理
 
 对于多图的场景，在推理时，只要把它们放在一个列表中即可。不过，多图意味着输入 token 数更多，所以通常需要[增大推理的上下文长度](#设置上下文长度)

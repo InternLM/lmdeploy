@@ -147,6 +147,22 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
+### Calculate logits
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+from lmdeploy.vl import load_image
+pipe = pipeline('internlm/internlm-xcomposer2-7b', backend_config=TurbomindEngineConfig(cache_max_entry_count=0.5))
+
+# logits
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+inputs = pipe.prepare_inputs(('describe this image', image))
+input_ids = inputs['input_ids']
+embeddings = inputs['input_embeddings']
+embedding_ranges = inputs['input_embedding_ranges']
+logits = pipe.get_logits(input_ids, embeddings, embedding_ranges)
+```
+
 ## Multi-images inference
 
 When dealing with multiple images, you can put them all in one list. Keep in mind that multiple images will lead to a higher number of input tokens, and as a result, the size of the [context window](#set-context-window-size) typically needs to be increased.

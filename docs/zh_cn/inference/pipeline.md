@@ -116,6 +116,23 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
     print(item)
 ```
 
+- **计算 logits & ppl:**
+
+```python
+from lmdeploy import pipeline
+pipe = pipeline('internlm/internlm2-chat-7b')
+
+# logits
+inputs = pipe.prepare_inputs(['Hi, pls intro yourself', 'Shanghai is'])
+input_ids = inputs['input_ids']
+logits = pipe.get_logits(input_ids)
+logits1 = logits[0, :len(input_ids[0])]
+logits2 = logits[1, :len(input_ids[1])]
+
+# ppl
+ppl = pipe.get_ppl(input_ids)
+```
+
 - **使用 pytorch 后端**
 
 需要先安装 triton
