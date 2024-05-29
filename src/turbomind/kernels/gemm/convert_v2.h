@@ -76,9 +76,7 @@ struct ConvertOperand {
 
         const int warp_offset_m = warp_id * COPY_M;
 
-        auto mk2idx_S = [&](int m, int k) { return cs2idx(_mk2cs(m, k), param.lds); };
-
-        GmemIter gmem{(Ts*)param.src + mk2idx_S(cta_offset_m, 0), param.lds, mk2idx_S(0, K), _mk2cs(M, K)};
+        GmemIter gmem{(Ts*)param.src, param.lds, _mk2cs(cta_offset_m, 0), _mk2cs(0, K), _mk2cs(M, K)};
 
         gmem.smem_data_ = smem;
 

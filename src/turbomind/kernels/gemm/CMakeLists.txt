@@ -14,13 +14,13 @@ FetchContent_MakeAvailable(repo-nvbench)
 add_library(gemm2 
         gemm.cu 
         kernel.cu 
-        transcript.cu 
+        # transcript.cu 
         dispatch_cache.cu 
         gpu_metric.cu 
         convert_v2.cu
         codegen/sm80_s16816gemm_f16_f16_v2.cu
         codegen/sm80_s16816gemm_f16_f16_nn_packed.cu
-        tmp.cu
+        # tmp.cu
         )
 
         # codegen/gemm_sm80_f16_u4_f16_asym_g128_basic.cu

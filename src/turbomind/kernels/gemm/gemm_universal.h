@@ -121,22 +121,20 @@ struct GemmUniversal {
 
         int tile_iter = (gemm_k_size + CTA_K - 1) / CTA_K;
 
-        auto mk2idx_A = [&](int m, int k) { return cs2idx(Packing<kPackA>::apply(mk2cs<kOrderA>(m, k)), param.lda); };
-        auto kn2idx_B = [&](int k, int n) { return cs2idx(Packing<kPackB>::apply(kn2cs<kOrderB>(k, n)), param.ldb); };
-        auto mk2idx_U = [&](int m, int k) { return cs2idx(mk2cs<kOrderU>(m, k), param.ldu); };
-        auto kn2idx_V = [&](int k, int n) { return cs2idx(kn2cs<kOrderV>(k, n), param.ldv); };
+        auto mk2cs_A = [&](int m, int k) { return mk2cs<kOrderA>(m, k); };
+        auto kn2cs_B = [&](int k, int n) { return kn2cs<kOrderB>(k, n); };
+        auto mk2cs_U = [&](int m, int k) { return mk2cs<kOrderU>(m, k); };
+        auto kn2cs_V = [&](int k, int n) { return kn2cs<kOrderV>(k, n); };
 
         /// TODO: move the computation of packing coords into `GmemIter`
-        typename OperandA::GmemIter gmem_A{param.A + mk2idx_A(offset_m, offset_k),
-                                           param.lda,
-                                           mk2idx_A(0, CTA_K),
-                                           Packing<kPackA>::apply(mk2cs<kOrderA>(end_m, CTA_K))};
+        typename OperandA::GmemIter gmem_A{
+            param.A, param.lda, mk2cs_A(offset_m, offset_k), mk2cs_A(0, CTA_K), mk2cs_A(end_m, CTA_K)};
         typename OperandB::GmemIter gmem_B{
-            param.B + kn2idx_B(offset_k, offset_n), param.ldb, kn2idx_B(CTA_K, 0), kn2cs<kOrderB>(CTA_K, end_n)};
+            param.B, param.ldb, kn2cs_B(offset_k, offset_n), kn2cs_B(CTA_K, 0), kn2cs_B(CTA_K, end_n)};
         typename OperandU::GmemIter gmem_U{
-            param.U + mk2idx_U(offset_m, offset_k), param.ldu, mk2idx_U(0, CTA_K), mk2cs<kOrderU>(end_m, CTA_K)};
+            param.U, param.ldu, mk2cs_U(offset_m, offset_k), mk2cs_U(0, CTA_K), mk2cs_U(end_m, CTA_K)};
         typename OperandV::GmemIter gmem_V{
-            param.V + kn2idx_V(offset_k, offset_n), param.ldv, kn2idx_V(CTA_G, 0), kn2cs<kOrderV>(CTA_G, end_n)};
+            param.V, param.ldv, kn2cs_V(offset_k, offset_n), kn2cs_V(CTA_G, 0), kn2cs_V(CTA_G, end_n)};
 
         Mainloop mainloop{};
 

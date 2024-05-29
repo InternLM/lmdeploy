@@ -36,31 +36,42 @@ int Convert(const void*         S,  //
     constexpr int CTA_M = 32;
     constexpr int CTA_K = 32;
 
-    using Operand = sm80_s16816gemm_f16_f16_nn::OperandA<T, CTA_M, CTA_K, CTA_M, 1, false>;
-    // using Operand = sm80_s16816gemm_f16_f16_nn::OperandB<T, CTA_M, CTA_K, CTA_M, 1, false>;
-    using Kernel = ConvertOperand<CTA_M, CTA_K, 1, Operand, T, _Converter<T, T>>;
+    auto invoke = [&](auto operand) {
+        using Operand = decltype(operand);
+        using Kernel  = ConvertOperand<CTA_M, CTA_K, 1, Operand, T, _Converter<T, T>>;
 
-    static constexpr int kSmemSize = sizeof(typename Kernel::SharedStorage);
+        static constexpr int kSmemSize = sizeof(typename Kernel::SharedStorage);
 
-    if (kSmemSize > (48 << 10)) {
-        cudaFuncSetAttribute(convert_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
-    }
+        if (kSmemSize > (48 << 10)) {
+            cudaFuncSetAttribute(convert_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
+        }
 
-    typename Kernel::Param param{
-        Sdesc.rows,
-        Sdesc.cols,
-        (const T*)S,
-        Sdesc.ld,
-        (T*)D,
-        Ddesc.ld,
+        typename Kernel::Param param{
+            Sdesc.rows,
+            Sdesc.cols,
+            (const T*)S,
+            Sdesc.ld,
+            (T*)D,
+            Ddesc.ld,
+        };
+
+        constexpr int threads = Kernel::WARP_CNT * WARP_SIZE;
+        const int     blocks  = ceil_div(Sdesc.rows, CTA_M);
+
+        convert_kernel<Kernel><<<blocks, threads, kSmemSize, stream>>>(param);
+        return 0;
     };
 
-    constexpr int threads = Kernel::WARP_CNT * WARP_SIZE;
-    const int     blocks  = ceil_div(Sdesc.rows, CTA_M);
+    switch (Ddesc.pack) {
+        case Pack::kHMMA_16816_A:
+            return invoke(sm80_s16816gemm_f16_f16_nn::OperandA<T, CTA_M, CTA_K, CTA_M, 1, false>{});
+        case Pack::kHMMA_16816_B:
+            return invoke(sm80_s16816gemm_f16_f16_nn::OperandB<T, CTA_M, CTA_K, CTA_M, 1, false>{});
+        default:
+            fprintf(stderr, "Not implemented.\n");
+    }
 
-    convert_kernel<Kernel><<<blocks, threads, kSmemSize, stream>>>(param);
-
-    return 0;
+    return -1;
 }
 
 }  // namespace turbomind::gemm

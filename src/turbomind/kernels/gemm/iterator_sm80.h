@@ -7,6 +7,8 @@
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/smem.h"
+#include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/utils.h"
 #include <cassert>
 #include <type_traits>
 
@@ -69,13 +71,13 @@ struct Predicate<S, C, true, true> {
     }
 };
 
-template<class T, class Map, class SmemLayout, bool AlignedC, bool AlignedS, int Idx, int G_CTA = 1>
+template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS>
 struct GmemIteratorSm80 {
+
+    using ThreadMap = Map;
 
     using AccessType = Array<T, Map::kAccessC>;
     using Pointer    = get_pointer_type<T>;
-
-    using ThreadMap = Map;
 
     static constexpr int ITER_S = Map::kIterS;
     static constexpr int ITER_C = Map::kIterC;
@@ -108,12 +110,22 @@ struct GmemIteratorSm80 {
 
     SmemAccessor<T, SmemLayout> smem_data_;
 
-    // static_assert(!Map::kPartialC);
+    __device__ static constexpr int2 pack(int2 cs)
+    {
+        return Packing<kPack>::apply(cs);
+    }
 
-    __device__ GmemIteratorSm80(Pointer data, int stride_s, int stride_k, int2 max_cs): smem_data_{Pointer{nullptr}}
+    // static_assert(!Map::kPartialC);
+    __device__ GmemIteratorSm80(Pointer data, int stride_s, int2 offset_cs, int2 delta_cs, int2 extent_cs):
+        smem_data_{Pointer{nullptr}}
     {
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
+
+        data += cs2idx(pack(offset_cs), stride_s);
+
+        const int stride_k = cs2idx(pack(delta_cs), stride_s);
+        extent_cs          = pack(extent_cs);
 
         int2 offsets = Map::get_offset(warp_id, lane_id);
         src_offset_  = offsets.x + offsets.y * stride_s;
@@ -130,7 +142,7 @@ struct GmemIteratorSm80 {
                 for (int c = 0; c < Map::kIterC; ++c) {
                     int ss = offset_s_ + s * Map::kDeltaS;
                     int cc = offset_c_ + c * Map::kDeltaC;
-                    if (ss < max_cs.y && cc < max_cs.x) {
+                    if (ss < extent_cs.y && cc < extent_cs.x) {
                         pred_.set(s, c);
                     }
                 }
@@ -185,10 +197,10 @@ struct GmemIteratorSm80 {
         //     return;
         // }
 
-        int mask = tile_mask;
-        if constexpr (G_CTA > 1) {
-            mask = mask & g_mask_;
-        }
+        // int mask = tile_mask;
+        // if constexpr (G_CTA > 1) {
+        //     mask = mask & g_mask_;
+        // }
 
         PRAGMA_UNROLL
         for (int s = begin; s < begin + count && s < Map::kIterS; ++s) {
@@ -203,9 +215,9 @@ struct GmemIteratorSm80 {
                 // CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, g_mask_ && tile_mask && pred_(s, c));
 
                 bool mask = tile_mask && pred_(s, c);
-                if constexpr (G_CTA > 1) {
-                    mask = mask & g_mask_;
-                }
+                // if constexpr (G_CTA > 1) {
+                //     mask = mask & g_mask_;
+                // }
                 CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, mask);
 
                 // if (g_mask_ && tile_mask) {
@@ -260,10 +272,10 @@ struct GmemIteratorSm80 {
             src_ptr_ += stride_k_;
         }
 
-        if constexpr (G_CTA != 1) {
-            ++g_counter_;
-            g_mask_ = g_counter_ % G_CTA == 0;
-        }
+        // if constexpr (G_CTA != 1) {
+        //     ++g_counter_;
+        //     g_mask_ = g_counter_ % G_CTA == 0;
+        // }
 
         // ++g_counter_;
         // if constexpr (Idx == 2) {
@@ -362,7 +374,7 @@ struct GmemIteratorSm80 {
 struct VoidIterator {
     static constexpr int ITER_S = 0;
     template<class P>
-    __device__ VoidIterator(P, int, int, int2)
+    __device__ VoidIterator(P, int, int2, int2, int2)
     {
     }
     __device__ void ClearSmem() {}

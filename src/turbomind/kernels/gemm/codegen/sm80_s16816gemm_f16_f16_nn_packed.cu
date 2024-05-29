@@ -20,9 +20,28 @@ struct OperandA {
     //                                    S     C
     using SmemCopy   = SmemCopy_Packed<T, 16, WARP_M, 1, 1>;
     using SmemLayout = SmemLayoutV2<_PACK_S, _PACK_C>;
-    using GmemIter   = GmemIteratorSm80<T, ThreadMap<_PACK_C, _PACK_S, 8, WARP_CNT>, SmemLayout, Align_M, true, 0>;
 
-    static_assert(_PACK_S == 2 && _PACK_C == 512);
+    using _ThreadMap = ThreadMap<_PACK_C, _PACK_S, 8, WARP_CNT>;
+    using GmemIter   = GmemIteratorSm80<T, _ThreadMap, SmemLayout, kPack, kOrder, Align_M, true>;
+};
+
+template<class T, int CTA_N, int CTA_K, int WARP_N, int WARP_CNT, bool Align_N>
+struct OperandB {
+    using Dtype = T;
+
+    static constexpr Pack  kPack  = Pack::kHMMA_16816_B;
+    static constexpr Order kOrder = Order::kColMajor;
+
+    static constexpr int2 _PACK_CS = Packing<kPack>::apply(kn2cs<kOrder>(CTA_K, CTA_N));
+    static constexpr int  _PACK_C  = _PACK_CS.x;
+    static constexpr int  _PACK_S  = _PACK_CS.y;
+
+    //                                      S     C
+    using SmemCopy   = SmemCopy_Packed<T, WARP_N, 16, 1, 1>;
+    using SmemLayout = SmemLayoutV2<_PACK_S, _PACK_C>;
+
+    using _ThreadMap = gemm::ThreadMap<_PACK_C, _PACK_S, 8, WARP_CNT>;
+    using GmemIter   = GmemIteratorSm80<T, _ThreadMap, SmemLayout, kPack, kOrder, true, Align_N>;
 };
 
 template<class T,
@@ -67,8 +86,8 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
 {
     using sm80_s16816gemm_f16_f16_nn_packed::Config;
 
-    // Add(std::make_unique<KernelImpl<typename Config<half, 128, 128, 32, 64, 64, 32, 3, false, 0, 0>::Kernel>>());
-    Add(std::make_unique<KernelImpl<typename Config<half, 32, 32, 32, 32, 32, 32, 3, false, 0, 0>::Kernel>>());
+    Add(std::make_unique<KernelImpl<typename Config<half, 256, 128, 32, 64, 64, 32, 3, false, 0, 0>::Kernel>>());
+    // Add(std::make_unique<KernelImpl<typename Config<half, 32, 32, 32, 32, 32, 32, 3, false, 0, 0>::Kernel>>());
 }
 
 }  // namespace turbomind::gemm

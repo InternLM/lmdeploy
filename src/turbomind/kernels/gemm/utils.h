@@ -75,4 +75,7 @@ struct Packing<Pack::kHMMA_16816_A> {
     }
 };
 
+template<>
+struct Packing<Pack::kHMMA_16816_B>: Packing<Pack::kHMMA_16816_A> {};
+
 }  // namespace turbomind::gemm
