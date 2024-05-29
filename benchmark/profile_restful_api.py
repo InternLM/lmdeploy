@@ -153,11 +153,17 @@ class Engine:
         start = time.time()
 
         if img_hw is not None:
+            import numpy as np
             import PIL
 
             from lmdeploy.vl.utils import encode_image_base64
-            h, w = [int(s) for s in img_hw.split('*')]
-            img = PIL.Image.new(mode='RGB', size=(w, h))
+            h, w = [int(s) for s in img_hw.split('x')]
+            data = np.random.randint(low=0,
+                                     high=255,
+                                     size=h * w * 3,
+                                     dtype=np.uint8)
+            data = data.reshape(h, w, 3)
+            img = PIL.Image.fromarray(data, 'RGB')
             encoded = encode_image_base64(img)
             image_url = f'data:image/jpeg;base64,{encoded}'
         else:
@@ -267,7 +273,7 @@ def main(server_addr: str,
         stream_output (bool, optional): Indicator for streaming output. Defaults to False.
         csv (str, optional): The path to save the result.
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
-        img_hw (str, optional): The image size to benchmark vl serving, such as '512*512'.
+        img_hw (str, optional): The image size to benchmark vl serving, such as '512x512'.
             Default to None, which means to benchmark language model only.
     """    # noqa
     if not server_addr.startswith('http://'):
