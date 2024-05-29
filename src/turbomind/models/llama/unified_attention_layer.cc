@@ -272,7 +272,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         if constexpr (sizeof(T) == 2) {
             invokeProcessKV_v2_(params);
             /// TODO: skip flattening for `sm_80`
-            invokeFlattenKV_v2_(params, sum_k_len);
+            if constexpr (!(std::is_same_v<T, half> || std::is_same_v<T, nv_bfloat16>)) {
+                invokeFlattenKV_v2_(params, sum_k_len);
+            }
             dispatchAttention(params);
         }
     }
