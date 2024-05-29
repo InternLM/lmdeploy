@@ -1,17 +1,69 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Tuple, Union
+import asyncio
+from typing import Dict, List, Tuple, Union
 
 import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
+
 InputIdsType = List[int]
 InputEmbsType = Union[None, List[Union[torch.Tensor, np.ndarray]]]
 InputEmbRngsType = Union[None, List[Tuple[int, int]]]
+PromptType = Union[str, List[Dict]]
+
+
+def _get_event_loop():
+    """get event loop."""
+    try:
+        event_loop = asyncio.get_event_loop()
+    except Exception:
+        logger.warning('Can not found event loop in current thread.'
+                       ' Create a new event loop.')
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
+    return event_loop
 
 
 class LogitsMixin:
     """Helper class to calculate logits and ppl."""
+
+    def prepare_inputs(self,
+                       prompts: Union[PromptType, List[PromptType]],
+                       do_preprocess: bool = True):
+        if hasattr(self, '_convert_prompts'):
+            prompts = self._convert_prompts(prompts)
+        need_list_wrap = isinstance(prompts, str) or isinstance(
+            prompts[0], Dict)
+        prompts = [prompts] if need_list_wrap else prompts
+
+        decorated = []
+        input_ids = []
+        input_embeddings = []
+        input_embedding_ranges = []
+        for prompt in prompts:
+            out = _get_event_loop().run_until_complete(
+                self._get_prompt_input(prompt,
+                                       do_preprocess=do_preprocess,
+                                       sequence_start=True,
+                                       adapter_name=None))
+            decorated.append(out['prompt'])
+            input_ids.append(out['input_ids'])
+            input_embeddings.append(out.get('input_embeddings', None))
+            input_embedding_ranges.append(
+                out.get('input_embedding_ranges', None))
+
+        outputs = dict(prompts=decorated, input_ids=input_ids)
+        if not any(input_embeddings):
+            input_embeddings = None
+            input_embedding_ranges = None
+        outputs['input_embeddings'] = input_embeddings
+        outputs['input_embedding_ranges'] = input_embedding_ranges
+
+        return outputs
 
     def get_logits(
         self,
