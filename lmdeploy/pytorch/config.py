@@ -17,9 +17,9 @@ def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
 
     def __hack_qwen():
         """hack qwen."""
-        torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
-        ) else 'float16'
-        if config.hf_config.bf16:
+        is_bf16_supported = torch.cuda.is_bf16_supported()
+        torch_dtype = 'bfloat16' if is_bf16_supported else 'float16'
+        if config.hf_config.bf16 and is_bf16_supported:
             torch_dtype = 'bfloat16'
         elif config.hf_config.fp16:
             torch_dtype = 'float16'
