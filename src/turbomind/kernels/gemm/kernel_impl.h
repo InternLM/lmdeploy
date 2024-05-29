@@ -8,6 +8,7 @@
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/utils.h"
 
 namespace turbomind::gemm {
 
@@ -24,7 +25,7 @@ public:
     KernelImpl()
     {
         desc_.order_a = Impl::OperandA::kOrder;
-        desc_.order_b = Impl::OperandB::kOrder;
+        desc_.order_b = transpose(Impl::OperandB::kOrder);
         desc_.order_c = Gemm::kOrderC;
 
         desc_.type_a = get_data_type_v<typename Gemm::T>;
@@ -76,7 +77,7 @@ public:
                const void*         U,
                const MatrixLayout& Udesc,
                const void*         B,
-               const MatrixLayout& Bdesc,
+               const MatrixLayout& _Bdesc,
                const void*         V,
                const MatrixLayout& Vdesc,
                const void*         beta,
@@ -94,6 +95,14 @@ public:
         const int m = Ddesc.rows;
         const int n = Ddesc.cols;
         const int k = Adesc.cols;
+
+        auto transpose = [](MatrixLayout x) {
+            std::swap(x.rows, x.cols);
+            x.order = gemm::transpose(x.order);
+            return x;
+        };
+
+        const MatrixLayout Bdesc = transpose(_Bdesc);
 
         const auto tiles = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, splits);
 
@@ -128,9 +137,17 @@ public:
             }();
         }
 
-        const int lda = (int)Gemm::kPackA ? Packing<Gemm::kPackA>::apply(mk2cs<Gemm::kOrderA>(m, k)).x : Adesc.ld;
+        int lda = Adesc.ld;
+        int ldb = Bdesc.ld;
 
-        std::cout << "lda=" << lda << ", ldb=" << Bdesc.ld << ", ldc=" << Cdesc.ld << "\n";
+        if (Gemm::kPackA != Pack::kNone) {
+            lda = Packing<Gemm::kPackA>::apply(mk2cs<Gemm::kOrderA>(m, k)).x;
+        }
+        if (Gemm::kPackB != Pack::kNone) {
+            ldb = Packing<Gemm::kPackB>::apply(mk2cs<Gemm::kOrderB>(n, k)).x;
+        }
+
+        std::cout << "lda=" << lda << ", ldb=" << ldb << ", ldc=" << Cdesc.ld << "\n";
 
         typename Gemm::Param param{m,
                                    n,
@@ -140,7 +157,7 @@ public:
                                    (Tu*)U,
                                    Udesc.ld,
                                    _cast((Tb*)B),
-                                   Bdesc.ld,
+                                   ldb,
                                    (Tv*)V,
                                    Vdesc.ld,
                                    (Tc*)C,

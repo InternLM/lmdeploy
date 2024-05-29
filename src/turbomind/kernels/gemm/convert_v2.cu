@@ -27,14 +27,17 @@ struct _Converter {
 }  // namespace
 
 int Convert(const void*         S,  //
-            const MatrixLayout& Sdesc,
+            const MatrixLayout& _Sdesc,
             void*               D,
-            const MatrixLayout& Ddesc,
+            const MatrixLayout& _Ddesc,
             cudaStream_t        stream)
 {
     using T             = half;
     constexpr int CTA_M = 32;
     constexpr int CTA_K = 32;
+
+    auto Sdesc = _Sdesc;
+    auto Ddesc = _Ddesc;
 
     auto invoke = [&](auto operand) {
         using Operand = decltype(operand);
@@ -65,7 +68,9 @@ int Convert(const void*         S,  //
     switch (Ddesc.pack) {
         case Pack::kHMMA_16816_A:
             return invoke(sm80_s16816gemm_f16_f16_nn::OperandA<T, CTA_M, CTA_K, CTA_M, 1, false>{});
-        case Pack::kHMMA_16816_B:
+        case Pack::kHMMA_16816_B: 
+            Sdesc = transpose(Sdesc); // (k, n) -> (n, k)
+            Ddesc = transpose(Ddesc);
             return invoke(sm80_s16816gemm_f16_f16_nn::OperandB<T, CTA_M, CTA_K, CTA_M, 1, false>{});
         default:
             fprintf(stderr, "Not implemented.\n");

@@ -6,6 +6,20 @@
 
 namespace turbomind::gemm {
 
+__host__ __device__ constexpr Order transpose(Order order)
+{
+    return order == Order::kColMajor ? Order::kRowMajor : Order::kColMajor;
+}
+
+__host__ __device__ constexpr MatrixLayout transpose(MatrixLayout x)
+{
+    auto tmp = x.cols;  // `std::swap` is not constexpr
+    x.cols   = x.rows;
+    x.rows   = tmp;
+    x.order  = transpose(x.order);
+    return x;
+}
+
 template<Order order>
 __host__ __device__ constexpr int2 mk2cs(int m, int k)
 {
@@ -29,24 +43,13 @@ __host__ __device__ constexpr int2 cs2mk(int c, int s)
 }
 
 template<Order order>
-__host__ __device__ constexpr int2 kn2cs(int k, int n)
+__host__ __device__ constexpr int2 _kn2cs(int k, int n)
 {
     if constexpr (order == Order::kColMajor) {
         return {k, n};
     }
     else {
         return {n, k};
-    }
-}
-
-template<Order order>
-__host__ __device__ constexpr int2 cs2kn(int c, int s)
-{
-    if constexpr (order == Order::kColMajor) {
-        return {c, s};
-    }
-    else {
-        return {s, c};
     }
 }
 

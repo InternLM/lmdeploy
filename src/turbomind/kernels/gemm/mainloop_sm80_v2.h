@@ -261,8 +261,8 @@ struct MainloopSm80_v2 {
             const int current_k = offset_k + k * MMA_Atom::K;
             SmemCopyA::copy(SmemAccessorA{smem_A.pointer}, data_A[k], mk2cs<OperandA::kOrder>(offset_m, current_k));
             SmemCopyU::copy(SmemAccessorU{smem_U.pointer}, data_U[k], mk2cs<OperandU::kOrder>(offset_m, current_k));
-            SmemCopyB::copy(SmemAccessorB{smem_B.pointer}, data_B[k], kn2cs<OperandB::kOrder>(current_k, offset_n));
-            SmemCopyV::copy(SmemAccessorV{smem_V.pointer}, data_V[k], kn2cs<OperandV::kOrder>(current_k, offset_n));
+            SmemCopyB::copy(SmemAccessorB{smem_B.pointer}, data_B[k], mk2cs<OperandB::kOrder>(offset_n, current_k));
+            SmemCopyV::copy(SmemAccessorV{smem_V.pointer}, data_V[k], mk2cs<OperandV::kOrder>(offset_n, current_k));
         };
 
         PRAGMA_UNROLL

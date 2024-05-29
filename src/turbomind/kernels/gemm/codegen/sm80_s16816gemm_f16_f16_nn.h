@@ -17,6 +17,7 @@ namespace turbomind::gemm {
 
 namespace sm80_s16816gemm_f16_f16_nn {
 
+// (m, k)
 template<class T, int CTA_M, int CTA_K, int WARP_M, int WARP_CNT, bool Align_M>
 struct OperandA {
     using Dtype = T;
@@ -33,12 +34,13 @@ struct OperandA {
     using GmemIter   = GmemIteratorSm80<T, _ThreadMap, SmemLayout, kPack, kOrder, Align_M, true>;
 };
 
+// (n, k)
 template<class T, int CTA_N, int CTA_K, int WARP_N, int WARP_CNT, bool Align_N>
 struct OperandB {
     using Dtype = T;
 
     static constexpr Pack  kPack  = Pack::kNone;
-    static constexpr Order kOrder = Order::kColMajor;
+    static constexpr Order kOrder = Order::kRowMajor;
 
     using SmemLayout = std::conditional_t<CTA_K >= 64,
                                           SmemLayoutV2<CTA_N, CTA_K, std::min(16, CTA_N), 64, Swizzle<3, 3, 3>>,

@@ -30,9 +30,9 @@ struct OperandB {
     using Dtype = T;
 
     static constexpr Pack  kPack  = Pack::kHMMA_16816_B;
-    static constexpr Order kOrder = Order::kColMajor;
+    static constexpr Order kOrder = Order::kRowMajor;
 
-    static constexpr int2 _PACK_CS = Packing<kPack>::apply(kn2cs<kOrder>(CTA_K, CTA_N));
+    static constexpr int2 _PACK_CS = Packing<kPack>::apply(mk2cs<kOrder>(CTA_N, CTA_K));
     static constexpr int  _PACK_C  = _PACK_CS.x;
     static constexpr int  _PACK_S  = _PACK_CS.y;
 
@@ -62,7 +62,8 @@ struct Config {
     static constexpr int WARP_CNT = (CTA_M / WARP_M) * (CTA_N / WARP_N) * (CTA_K / WARP_K);
 
     using OperandA = OperandA<T, CTA_M, CTA_K, WARP_M, WARP_CNT, AlignedM>;
-    using OperandB = sm80_s16816gemm_f16_f16_nn::OperandB<T, CTA_N, CTA_K, WARP_N, WARP_CNT, AlignedN>;
+    using OperandB = OperandB<T, CTA_N, CTA_K, WARP_N, WARP_CNT, AlignedN>;
+    // using OperandB = sm80_s16816gemm_f16_f16_nn::OperandB<T, CTA_N, CTA_K, WARP_N, WARP_CNT, AlignedN>;
 
     using Void = VoidOperand;
 
@@ -86,7 +87,7 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
 {
     using sm80_s16816gemm_f16_f16_nn_packed::Config;
 
-    Add(std::make_unique<KernelImpl<typename Config<half, 256, 128, 32, 64, 64, 32, 3, false, 0, 0>::Kernel>>());
+    Add(std::make_unique<KernelImpl<typename Config<half, 256, 128, 64, 64, 64, 64, 3, false, 0, 0>::Kernel>>());
     // Add(std::make_unique<KernelImpl<typename Config<half, 32, 32, 32, 32, 32, 32, 3, false, 0, 0>::Kernel>>());
 }
 

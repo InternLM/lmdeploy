@@ -74,7 +74,7 @@ public:
         c_.resize(m * n);
 
         a_desc_ = MatrixLayout{get_data_type_v<Ta>, order_a, m, k, mk2cs<order_a>(m, k).x};
-        b_desc_ = MatrixLayout{get_data_type_v<Tb>, order_b, k, n, kn2cs<order_a>(k, n).x};
+        b_desc_ = MatrixLayout{get_data_type_v<Tb>, order_b, k, n, _kn2cs<order_a>(k, n).x};
         c_desc_ = MatrixLayout{get_data_type_v<Tc>, order_c_, m, n, mk2cs<order_c_>(m, n).x};
 
         c_f_.resize(c_.size());
@@ -115,8 +115,9 @@ public:
                 (Ta*)a_pack_.data().get(), a_.data().get(), sizeof(Ta) * a_.size(), cudaMemcpyDefault, stream);
         }
 
-        if constexpr (0) {
+        if constexpr (1) {
             b_pack_desc_.pack = Pack::kHMMA_16816_B;
+            Convert(b_.data().get(), b_desc_, b_pack_.data().get(), b_pack_desc_, stream_);
         }
         else {
             cudaMemcpyAsync(
@@ -198,7 +199,7 @@ public:
 
         // Compare(c_.data().get(), c_f_.data().get(), n_, n_, m_, 0);
 
-        Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 1);
+        Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
     }
 
 private:
