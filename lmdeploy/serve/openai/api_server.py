@@ -9,7 +9,7 @@ from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 
 from lmdeploy.archs import get_task
@@ -228,6 +228,12 @@ def _create_chat_completion_logprobs(tokenizer: Tokenizer,
                     TopLogprob(token=token, bytes=_bytes, logprob=prob))
         content.append(item)
     return ChoiceLogprobs(content=content)
+
+
+@app.get('/health')
+async def health() -> Response:
+    """Health check."""
+    return Response(status_code=200)
 
 
 @app.post('/v1/chat/completions_qos')
