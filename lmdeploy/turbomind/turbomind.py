@@ -588,9 +588,19 @@ class TurboMindInstance:
             return None, None
 
         assert len(input_embeddings) == len(input_embedding_ranges)
-        if not isinstance(input_embeddings[0], list):
+        if not isinstance(input_embeddings[0], (list, type(None))):
             input_embeddings = [input_embeddings]
             input_embedding_ranges = [input_embedding_ranges]
+
+        if all([isinstance(x, type(None)) for x in input_embeddings]):
+            return None, None
+
+        hidden_dim = None
+        for embeddings in input_embeddings:
+            if embeddings is not None:
+                hidden_dim = embeddings[0].squeeze().shape[-1]
+                break
+        assert hidden_dim is not None
 
         # construct input_embeddings
         for i in range(len(input_embeddings)):
@@ -602,6 +612,7 @@ class TurboMindInstance:
             _MAP = dict(fp32=torch.float, bf16=torch.bfloat16)
             dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
             item = [x.to(dtype=dtype) for x in item]
+            item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]
             input_embeddings[i] = item
         input_embeddings = [torch.cat(x) for x in input_embeddings]
         input_embeddings = pad_sequence(input_embeddings, batch_first=True)
@@ -970,6 +981,7 @@ class TurboMindInstance:
 
         # append an extra token since input_len-1 tokens will be
         # decoded by context decoder
+        input_ids = [x[:] for x in input_ids]
         for inputs in input_ids:
             inputs.append(0)
 
