@@ -284,7 +284,7 @@ class EngineOutput:
 
 
 @dataclass
-class VisonConfig:
+class VisionConfig:
     """Vison model configs.
 
     Args:

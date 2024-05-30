@@ -135,12 +135,12 @@ For more information about customizing a chat template, please refer to [this](.
 
 ### Setting vision model parameters
 
-The default parameters of the visual model can be modified by setting `VisonConfig`.
+The default parameters of the visual model can be modified by setting `VisionConfig`.
 
 ```python
-from lmdeploy import pipeline, VisonConfig
+from lmdeploy import pipeline, VisionConfig
 from lmdeploy.vl import load_image
-vision_config=VisonConfig(max_batch_size=16)
+vision_config=VisionConfig(max_batch_size=16)
 pipe = pipeline('liuhaotian/llava-v1.5-7b', vision_config=vision_config)
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))
