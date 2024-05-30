@@ -401,8 +401,14 @@ class Engine:
         def __get_vlm_embeddings():
             """get vlm input embeddings and indexings."""
             input_embeddings = [[
-                emb.to_device('cpu') for emb in msg.input_embeddings
+                torch.from_numpy(emb.embeddings)
+                for emb in msg.input_embeddings
             ] for msg in messages]
+            input_embedding_ranges = [
+                torch.tensor([[emb.start, emb.end]
+                              for emb in msg.input_embeddings])
+                for msg in messages
+            ]
             input_embedding_indexing = torch.zeros(
                 (batch_size, max_q_seq_length), dtype=torch.bool)
             for msg_id, msg in enumerate(messages):
@@ -411,7 +417,8 @@ class Engine:
                     emb_start = emb.start - msg.history_len
                     emb_end = emb.end - msg.history_len
                     input_embedding_indexing[msg_id][emb_start:emb_end] = True
-            return input_embeddings, input_embedding_indexing
+            return (input_embeddings, input_embedding_indexing,
+                    input_embedding_ranges)
 
         # for vlm
         vision_embedding_inputs = None
@@ -426,18 +433,20 @@ class Engine:
 
             input_embeddings = None
             input_embedding_indexing = None
+            input_embedding_ranges = None
             has_embedding = any(
                 [len(msg.input_embeddings) > 0 for msg in messages])
             if has_embedding:
-                (input_embeddings,
-                 input_embedding_indexing) = __get_vlm_embeddings()
+                (input_embeddings, input_embedding_indexing,
+                 input_embedding_ranges) = __get_vlm_embeddings()
 
             vision_embedding_inputs = VisionModelInputs(
                 history_lengths=history_lengths_for_vlm,
                 history_image_nums=history_image_nums,
                 history_image_token_lengths=history_image_token_lengths,
                 input_embeddings=input_embeddings,
-                input_embedding_indexing=input_embedding_indexing)
+                input_embedding_indexing=input_embedding_indexing,
+                input_embedding_ranges=input_embedding_ranges)
 
         return ModelInputs(input_ids=input_ids,
                            seq_length=seq_length,

@@ -2,10 +2,9 @@
 import enum
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List
 
 import numpy as np
-import torch
 from torch import Tensor
 
 from lmdeploy.messages import EngineGenerationConfig
@@ -23,7 +22,7 @@ InputEmbeddingRangeType = List[List[int]]
 @dataclass
 class InputEmbeddings:
     """InputEmbeddings."""
-    embeddings: Union[np.ndarray, Tensor]
+    embeddings: np.ndarray
     start: int
     end: int
 
@@ -32,13 +31,6 @@ class InputEmbeddings:
             self.start += offset
             self.end += offset
         return self
-
-    def to_device(self, device: str):
-        emb = self.embeddings
-        if isinstance(emb, np.ndarray):
-            emb = torch.from_numpy(emb)
-        emb = emb.to(device)
-        return InputEmbeddings(embeddings=emb, start=self.start, end=self.end)
 
 
 @dataclass

@@ -17,7 +17,6 @@ from ..adapter.adapter import (AdapterWeightMap, SchedulerAdapter,
                                get_indexed_lora_linears, get_loralinear_info,
                                update_lora_linears)
 from ..config import CacheConfig, ModelConfig
-from ..messages import InputEmbeddings
 from ..models import patch
 from ..utils import get_gpu_memory
 from .cache_engine import CacheEngine
@@ -168,7 +167,8 @@ class VisionModelInputs:
     history_lengths: torch.LongTensor = None
     history_image_nums: torch.LongTensor = None
     history_image_token_lengths: torch.LongTensor = None
-    input_embeddings: List[List[InputEmbeddings]] = None
+    input_embeddings: List[List[torch.Tensor]] = None
+    input_embedding_ranges: List[torch.LongTensor] = None
     input_embedding_indexing: torch.BoolTensor = None
 
     def to_device(self, device: str):
@@ -179,8 +179,10 @@ class VisionModelInputs:
             v = getattr(self, k)
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
+            elif k == 'input_embedding_ranges' and v is not None:
+                v = [e.to(device) for e in v]
             elif k == 'input_embeddings' and v is not None:
-                v = [[e.to_device(device) for e in li] for li in v]
+                v = [[e.to(device) for e in li] for li in v]
             out_dict[k] = v
 
         return VisionModelInputs(**out_dict)
@@ -193,14 +195,15 @@ class VisionModelInputs:
         if self.input_embeddings is not None and len(
                 self.input_embeddings) > 0:
             input_embedding_li = []
-            for (his_len, seq_len, embeddings) in zip(history_lengths,
-                                                      seq_lengths,
-                                                      self.input_embeddings):
-                for emb in embeddings:
-                    start = max(emb.start, his_len) - emb.start
-                    end = min(emb.end, his_len + seq_len) - emb.start
+            for (his_len, seq_len, embeddings,
+                 emb_ranges) in zip(history_lengths, seq_lengths,
+                                    self.input_embeddings,
+                                    self.input_embedding_ranges):
+                for emb, (emb_start, emb_end) in zip(embeddings, emb_ranges):
+                    start = max(emb_start, his_len) - emb_start
+                    end = min(emb_end, his_len + seq_len) - emb_start
                     if 0 <= start < end:
-                        input_embedding_li.append(emb.embeddings[start:end])
+                        input_embedding_li.append(emb[start:end])
             # has embeddings
             if len(input_embedding_li) > 0:
                 input_embeddings = torch.cat(input_embedding_li, dim=0)
