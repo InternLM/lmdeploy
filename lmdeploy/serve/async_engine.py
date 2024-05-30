@@ -54,10 +54,7 @@ def deduce_a_name(
         model_name = get_model_name_from_workspace_model(model_path)
     # may get a model name from model_path
     if model_name is None:
-        if os.path.exists(model_path):
-            model_name = os.path.basename(model_path)
-        else:
-            model_name = model_path
+        model_name = model_path
     return model_name
 
 
