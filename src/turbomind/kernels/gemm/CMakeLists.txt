@@ -19,7 +19,7 @@ add_library(gemm2
         gpu_metric.cu 
         convert_v2.cu
         codegen/sm80_s16816gemm_f16_f16_nn.cu
-        codegen/sm80_s16816gemm_f16_f16_nn_packed.cu
+        codegen/sm80_s16816gemm_f16_f16_nn_pack.cu
         # tmp.cu
         )
 

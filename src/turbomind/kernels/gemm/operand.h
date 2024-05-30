@@ -20,8 +20,13 @@ struct VoidOperand {
     using GmemIter   = VoidIterator;
 };
 
+struct VoidOperandConst {
+    template<class, int, int, int, int, bool>
+    using type = VoidOperand;
+};
+
 // CPO for getting specific operand templates
-template<MMA_Tag mma, Op_Tag op, Order order>
+template<MMA_Tag mma, Op_Tag optag, Order order, bool is_pack>
 struct GetOperand: std::false_type {};
 
 }  // namespace turbomind::gemm

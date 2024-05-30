@@ -16,7 +16,7 @@
 
 namespace turbomind::gemm {
 
-namespace sm80_s16816gemm_f16_f16_nn {
+namespace sm80_hmma_16816 {
 
 // (m, k)
 struct Operand_A_N {
@@ -56,57 +56,50 @@ struct Operand_B_T {
     };
 };
 
-template<class T,
-         int  CTA_M,
-         int  CTA_N,
-         int  CTA_K,
-         int  WARP_M,
-         int  WARP_N,
-         int  WARP_K,
-         int  Stages,
-         bool SplitK,
-         bool AlignedM,
-         bool AlignedN>
-struct Config {
+template<class T, class A_, class B_, class U_ = VoidOperandConst, class V_ = VoidOperandConst>
+struct SM80_HMMA_16816 {
+    template<int  CTA_M,
+             int  CTA_N,
+             int  CTA_K,
+             int  WARP_M,
+             int  WARP_N,
+             int  WARP_K,
+             int  Stages,
+             bool SplitK,
+             bool AlignedM,
+             bool AlignedN>
+    struct Type {
+        using TiledMma = TiledMMA<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, WARP_M, WARP_N, WARP_K>;
 
-    using TiledMma = TiledMMA<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, WARP_M, WARP_N, WARP_K>;
+        static constexpr int WARP_CNT = (CTA_M / WARP_M) * (CTA_N / WARP_N) * (CTA_K / WARP_K);
 
-    static constexpr int WARP_CNT = (CTA_M / WARP_M) * (CTA_N / WARP_N) * (CTA_K / WARP_K);
+        using A = typename A_::template type<T, CTA_M, CTA_K, WARP_M, WARP_CNT, AlignedM>;
+        using B = typename B_::template type<T, CTA_N, CTA_K, WARP_N, WARP_CNT, AlignedN>;
 
-    using OperandA = Operand_A_N::type<T, CTA_M, CTA_K, WARP_M, WARP_CNT, AlignedM>;
-    using OperandB = Operand_B_T::type<T, CTA_N, CTA_K, WARP_N, WARP_CNT, AlignedN>;
-    using Void     = VoidOperand;
+        using U = typename U_::template type<T, CTA_M, CTA_K, WARP_M, WARP_CNT, AlignedM>;
+        using V = typename V_::template type<T, CTA_N, CTA_K, WARP_N, WARP_CNT, AlignedN>;
 
-    using Mainloop = MainloopSm80_v2<CTA_M,
-                                     CTA_N,
-                                     CTA_K,  //
-                                     TiledMma,
-                                     OperandA,
-                                     OperandB,
-                                     Void,
-                                     Void,
-                                     Transform,
-                                     Stages>;
+        using Void = VoidOperand;
 
-    using Kernel = GemmUniversal<void, Mainloop, CtaMap, AlignedM, AlignedN, SplitK>;
+        using Mainloop = MainloopSm80_v2<CTA_M, CTA_N, CTA_K, TiledMma, A, B, U, V, Transform, Stages>;
+        using Kernel   = GemmUniversal<void, Mainloop, CtaMap, AlignedM, AlignedN, SplitK>;
+    };
 };
 
-}  // namespace sm80_s16816gemm_f16_f16_nn
+}  // namespace sm80_hmma_16816
 
 template<>
-struct GetOperand<HMMA_16816, OPERAND_A, Order::kColMajor>: std::true_type {
-    using Operand = sm80_s16816gemm_f16_f16_nn::Operand_A_N;
+struct GetOperand<HMMA_16816, OPERAND_A, Order::kColMajor, false>: std::true_type {
+    using Operand = sm80_hmma_16816::Operand_A_N;
 };
 
 template<>
-struct GetOperand<HMMA_16816, OPERAND_B, Order::kRowMajor>: std::true_type {
-    using Operand = sm80_s16816gemm_f16_f16_nn::Operand_B_T;
+struct GetOperand<HMMA_16816, OPERAND_B, Order::kRowMajor, false>: std::true_type {
+    using Operand = sm80_hmma_16816::Operand_B_T;
 };
 
-template<class T, class = void>
-struct HasOperand: std::false_type {};
+namespace sm80_hmma_16816 {
 
-template<class T>
-struct HasOperand<T, std::void_t<typename T::Operand>>: std::true_type {};
+}  // namespace sm80_hmma_16816
 
 }  // namespace turbomind::gemm

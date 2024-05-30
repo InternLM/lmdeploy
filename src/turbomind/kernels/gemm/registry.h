@@ -1,3 +1,7 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#pragma once
+
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include <iostream>
 
@@ -47,7 +51,6 @@ private:
 
     void reigster_sm80_s16816gemm_f16_f16();
     void register_sm70_s884gemm_f16_f16();
-
 
     void reigster_sm80_s16816gemm_f16_f16_v2();
     void reigster_sm80_s16816gemm_f16_f16_nt();

@@ -3,13 +3,11 @@
 #include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
-#include "src/turbomind/kernels/gemm/codegen/sm80_s16816gemm_f16_f16_nn.h"
+#include "src/turbomind/kernels/gemm/config/sm80_hmma_16816.h"
 #include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/operand.h"
-#include "src/turbomind/kernels/gemm/thread_map.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include <type_traits>
 
 namespace turbomind::gemm {
 
@@ -58,7 +56,8 @@ struct Config {
 
     static constexpr int BLOCK_SIZE = 32;
 
-    using Operand = typename GetOperand<MMA, Op, Ord>::Operand::template type<half, CTA_M, CTA_K, CTA_M, 1, false>;
+    using Operand =
+        typename GetOperand<MMA, Op, Ord, false>::Operand::template type<half, CTA_M, CTA_K, CTA_M, 1, false>;
 
     using Stype = typename Operand::Dtype;
     using Dtype = Dtype_;
@@ -113,7 +112,7 @@ int Convert(const void*         S,  //
         using Config = Config<mma_tag, op_tag, order_tag, Dtype, pack_num_tag>;
 
         Convert_v2_Impl<Config>(S, Sdesc, D, Ddesc, stream);
-        
+
         return true;
     };
 
@@ -131,7 +130,7 @@ int Convert(const void*         S,  //
     };
 
     auto dispatch_3 = [&](auto mma, auto operand, auto order) -> bool {
-        if constexpr (GetOperand<mma, operand, order>::value) {  // is operand exist?
+        if constexpr (GetOperand<mma, operand, order, false>::value) {  // is operand exist?
             /// TODO: add U8, U4
             switch (Ddesc.type) {
                 case DataType::F16:

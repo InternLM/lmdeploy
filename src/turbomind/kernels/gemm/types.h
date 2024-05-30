@@ -15,6 +15,9 @@ enum class Order : int {
     kRowMajor = 1,
 };
 
+inline constexpr Order kColMajor = Order::kColMajor;
+inline constexpr Order kRowMajor = Order::kRowMajor;
+
 using Pack = uint32_t;
 
 typedef enum MMA_Tag {
