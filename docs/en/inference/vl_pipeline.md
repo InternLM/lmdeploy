@@ -11,6 +11,7 @@ Currently, it supports the following models.
 - [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
 - [MGM](https://huggingface.co/YanweiLi/MGM-7B)
 - [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
+- [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/en/multi_modal/cogvlm.md)
 
 We genuinely invite the community to contribute new VLM support to LMDeploy. Your involvement is truly appreciated.
 
