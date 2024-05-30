@@ -17,6 +17,7 @@ from ..adapter.adapter import (AdapterWeightMap, SchedulerAdapter,
                                get_indexed_lora_linears, get_loralinear_info,
                                update_lora_linears)
 from ..config import CacheConfig, ModelConfig
+from ..messages import InputEmbeddings
 from ..models import patch
 from ..utils import get_gpu_memory
 from .cache_engine import CacheEngine
@@ -167,7 +168,7 @@ class VisionModelInputs:
     history_lengths: torch.LongTensor = None
     history_image_nums: torch.LongTensor = None
     history_image_token_lengths: torch.LongTensor = None
-    input_embeddings: List[List[torch.Tensor]] = None
+    input_embeddings: List[List[InputEmbeddings]] = None
     input_embedding_indexing: torch.BoolTensor = None
 
     def to_device(self, device: str):
@@ -179,8 +180,7 @@ class VisionModelInputs:
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
             elif k == 'input_embeddings' and v is not None:
-                v = [[e if e is None else e.to(device) for e in li]
-                     for li in v]
+                v = [[e.to_device(device) for e in li] for li in v]
             out_dict[k] = v
 
         return VisionModelInputs(**out_dict)
@@ -192,19 +192,30 @@ class VisionModelInputs:
         input_embedding_indexing = None
         if self.input_embeddings is not None and len(
                 self.input_embeddings) > 0:
-            starts = history_lengths - self.history_lengths
-            ends = starts + seq_lengths
-            input_embedding_li = sum(
-                [[emb for emb in embeddings[s:e] if emb is not None]
-                 for (embeddings, s,
-                      e) in zip(self.input_embeddings, starts, ends)], [])
+            input_embedding_li = []
+            for (his_len, seq_len, embeddings) in zip(history_lengths,
+                                                      seq_lengths,
+                                                      self.input_embeddings):
+                for emb in embeddings:
+                    start = max(emb.start, his_len) - emb.start
+                    end = min(emb.end, his_len + seq_len) - emb.start
+                    if 0 <= start < end:
+                        input_embedding_li.append(emb.embeddings[start:end])
+            # has embeddings
             if len(input_embedding_li) > 0:
+                input_embeddings = torch.cat(input_embedding_li, dim=0)
+                device = input_embeddings.device
+                starts = history_lengths - self.history_lengths
+                ends = starts + seq_lengths
                 input_embedding_indexing = torch.cat([
                     indexing[s:e] for indexing, s, e in zip(
                         self.input_embedding_indexing, starts, ends)
                 ],
                                                      dim=0)
-                input_embeddings = torch.cat(input_embedding_li, dim=0)
+                index_ranges = torch.arange(input_embedding_indexing.numel(),
+                                            device=device)
+                input_embedding_indexing = index_ranges[
+                    input_embedding_indexing]
         return input_embeddings, input_embedding_indexing
 
 
@@ -319,7 +330,7 @@ class StepContext:
     local_adapter_ids: torch.LongTensor = None
     adapter_params: Dict[str, AdapterInfo] = None
     input_embeddings: torch.Tensor = None
-    input_embedding_indexing: torch.BoolTensor = None
+    input_embedding_indexing: torch.Tensor = None
 
     _outputs: Dict = field(default_factory=dict)
 

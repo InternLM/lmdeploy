@@ -255,10 +255,6 @@ class PatchedCogVLMModel(nn.Module):
         position_ids = _get_cogvlm_position_ids(context)
 
         if vision_embeddings is not None and len(vision_embeddings) > 0:
-            vision_embedding_indexing = torch.arange(
-                vision_embedding_indexing.numel(),
-                device=vision_embedding_indexing.device
-            )[vision_embedding_indexing]
             # multi-modality
             inputs_embeds[:,
                           vision_embedding_indexing, :] = vision_embeddings.to(

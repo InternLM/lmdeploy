@@ -400,7 +400,9 @@ class Engine:
 
         def __get_vlm_embeddings():
             """get vlm input embeddings and indexings."""
-            input_embeddings = [[None] * max_q_seq_length] * len(messages)
+            input_embeddings = [[
+                emb.to_device('cpu') for emb in msg.input_embeddings
+            ] for msg in messages]
             input_embedding_indexing = torch.zeros(
                 (batch_size, max_q_seq_length), dtype=torch.bool)
             for msg_id, msg in enumerate(messages):
@@ -408,8 +410,6 @@ class Engine:
                     # make slice index relative to embeddings
                     emb_start = emb.start - msg.history_len
                     emb_end = emb.end - msg.history_len
-                    input_embeddings[msg_id][emb_start:emb_end] = list(
-                        torch.from_numpy(emb.embeddings).split(1, dim=0))
                     input_embedding_indexing[msg_id][emb_start:emb_end] = True
             return input_embeddings, input_embedding_indexing
 
