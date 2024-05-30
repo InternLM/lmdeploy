@@ -127,21 +127,8 @@ int main(int argc, char* argv[])
         }
     }
 
-    MatrixLayout a_desc{
-        DataType::F16,
-        Order::kColMajor,
-        M,
-        K,
-        M,
-    };
-    MatrixLayout p_desc{
-        DataType::F16,
-        Order::kColMajor,
-        M,
-        K,
-        0,
-        Pack::kHMMA_16816_A,
-    };
+    MatrixLayout a_desc{DataType::F16, Order::kColMajor, M, K, M};
+    MatrixLayout p_desc{DataType::F16, Order::kColMajor, M, K, 0, HMMA_16816 | OPERAND_A | 1};
 
     Convert(a.data().get(), a_desc, p.data().get(), p_desc, 0);
 

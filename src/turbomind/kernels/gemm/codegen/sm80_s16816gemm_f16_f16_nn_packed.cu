@@ -11,7 +11,7 @@ template<class T, int CTA_M, int CTA_K, int WARP_M, int WARP_CNT, bool Align_M>
 struct OperandA {
     using Dtype = T;
 
-    static constexpr Pack  kPack  = Pack::kHMMA_16816_A;
+    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | 1;
     static constexpr Order kOrder = Order::kColMajor;
 
     static constexpr int2 _PACK_CS = Packing<kPack>::apply(mk2cs<kOrder>(CTA_M, CTA_K));
@@ -29,7 +29,7 @@ template<class T, int CTA_N, int CTA_K, int WARP_N, int WARP_CNT, bool Align_N>
 struct OperandB {
     using Dtype = T;
 
-    static constexpr Pack  kPack  = Pack::kHMMA_16816_B;
+    static constexpr Pack  kPack  =  HMMA_16816 | OPERAND_B | 1;
     static constexpr Order kOrder = Order::kRowMajor;
 
     static constexpr int2 _PACK_CS = Packing<kPack>::apply(mk2cs<kOrder>(CTA_N, CTA_K));

@@ -140,10 +140,10 @@ public:
         int lda = Adesc.ld;
         int ldb = Bdesc.ld;
 
-        if (Gemm::kPackA != Pack::kNone) {
+        if (Gemm::kPackA) {
             lda = Packing<Gemm::kPackA>::apply(mk2cs<Gemm::kOrderA>(m, k)).x;
         }
-        if (Gemm::kPackB != Pack::kNone) {
+        if (Gemm::kPackB) {
             ldb = Packing<Gemm::kPackB>::apply(mk2cs<Gemm::kOrderB>(n, k)).x;
         }
 

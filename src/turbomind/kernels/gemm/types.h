@@ -15,11 +15,35 @@ enum class Order : int {
     kRowMajor = 1,
 };
 
-enum class Pack : int {
-    kNone         = 0,
-    kHMMA_16816_A = 1,
-    kHMMA_16816_B = 2,
-};
+using Pack = uint32_t;
+
+typedef enum MMA_Tag {
+    HMMA_16816 = 0x100,
+    HMMA_1688  = 0x200,
+    HMMA_884   = 0x300,
+} MMA_Tag;
+
+typedef enum Op_Tag {
+    OPERAND_A = 0x010,
+    OPERAND_B = 0x020,
+    OPERAND_U = 0x030,
+    OPERAND_V = 0x040,
+} Op_Tag;
+
+constexpr MMA_Tag get_mma_tag(Pack pack)
+{
+    return static_cast<MMA_Tag>(pack & 0xf00);
+}
+
+constexpr Op_Tag get_operand_tag(Pack pack)
+{
+    return static_cast<Op_Tag>(pack & 0x0f0);
+}
+
+constexpr int get_pack_num(Pack pack)
+{
+    return pack & 0x00f;
+}
 
 enum class QuantType : int {
     kNone,
@@ -91,6 +115,14 @@ struct get_data_type<uint8_t> {
 
 template<class T>
 inline constexpr auto get_data_type_v = get_data_type<T>::value;
+
+template<DataType dtype>
+struct get_dtype {};
+
+template<>
+struct get_dtype<DataType::F16> {
+    using type = half;
+};
 
 struct QuantDesc {
     QuantType type;

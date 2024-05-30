@@ -12,43 +12,48 @@
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
 #include "src/turbomind/kernels/gemm/transform.h"
+#include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
 
 namespace sm80_s16816gemm_f16_f16_nn {
 
 // (m, k)
-template<class T, int CTA_M, int CTA_K, int WARP_M, int WARP_CNT, bool Align_M>
-struct OperandA {
-    using Dtype = T;
+struct Operand_A_N {
+    template<class T, int CTA_M, int CTA_K, int WARP_M, int WARP_CNT, bool Align_M>
+    struct type {
+        using Dtype = T;
 
-    static constexpr Pack  kPack  = Pack::kNone;
-    static constexpr Order kOrder = Order::kColMajor;
+        static constexpr Pack  kPack  = 0;
+        static constexpr Order kOrder = Order::kColMajor;
 
-    using SmemLayout = std::conditional_t<CTA_M >= 64,
-                                          SmemLayoutV2<CTA_K, CTA_M, 16, 64, Swizzle<3, 3, 3>>,
-                                          SmemLayoutV2<CTA_K, CTA_M, 16, 32, Swizzle<2, 3, 3>>>;
-    using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<T, true>, 16, WARP_M>;
+        using SmemLayout = std::conditional_t<CTA_M >= 64,
+                                              SmemLayoutV2<CTA_K, CTA_M, 16, 64, Swizzle<3, 3, 3>>,
+                                              SmemLayoutV2<CTA_K, CTA_M, 16, 32, Swizzle<2, 3, 3>>>;
+        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<T, true>, 16, WARP_M>;
 
-    using _ThreadMap = gemm::ThreadMap<CTA_M, CTA_K, 8, WARP_CNT>;
-    using GmemIter   = GmemIteratorSm80<T, _ThreadMap, SmemLayout, kPack, kOrder, Align_M, true>;
+        using _ThreadMap = gemm::ThreadMap<CTA_M, CTA_K, 8, WARP_CNT>;
+        using GmemIter   = GmemIteratorSm80<T, _ThreadMap, SmemLayout, kPack, kOrder, Align_M, true>;
+    };
 };
 
 // (n, k)
-template<class T, int CTA_N, int CTA_K, int WARP_N, int WARP_CNT, bool Align_N>
-struct OperandB {
-    using Dtype = T;
+struct Operand_B_T {
+    template<class T, int CTA_N, int CTA_K, int WARP_N, int WARP_CNT, bool Align_N>
+    struct type {
+        using Dtype = T;
 
-    static constexpr Pack  kPack  = Pack::kNone;
-    static constexpr Order kOrder = Order::kRowMajor;
+        static constexpr Pack  kPack  = 0;
+        static constexpr Order kOrder = Order::kRowMajor;
 
-    using SmemLayout = std::conditional_t<CTA_K >= 64,
-                                          SmemLayoutV2<CTA_N, CTA_K, std::min(16, CTA_N), 64, Swizzle<3, 3, 3>>,
-                                          SmemLayoutV2<CTA_N, CTA_K, std::min(16, CTA_N), 32, Swizzle<2, 3, 3>>>;
-    using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<T, false>, WARP_N, 16>;
+        using SmemLayout = std::conditional_t<CTA_K >= 64,
+                                              SmemLayoutV2<CTA_N, CTA_K, std::min(16, CTA_N), 64, Swizzle<3, 3, 3>>,
+                                              SmemLayoutV2<CTA_N, CTA_K, std::min(16, CTA_N), 32, Swizzle<2, 3, 3>>>;
+        using SmemCopy   = SmemCopy_<SmemCopy_MMA_16816_B<T, false>, WARP_N, 16>;
 
-    using _ThreadMap = gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>;
-    using GmemIter   = GmemIteratorSm80<T, _ThreadMap, SmemLayout, kPack, kOrder, true, Align_N>;
+        using _ThreadMap = gemm::ThreadMap<CTA_K, CTA_N, 8, WARP_CNT>;
+        using GmemIter   = GmemIteratorSm80<T, _ThreadMap, SmemLayout, kPack, kOrder, true, Align_N>;
+    };
 };
 
 template<class T,
@@ -68,8 +73,8 @@ struct Config {
 
     static constexpr int WARP_CNT = (CTA_M / WARP_M) * (CTA_N / WARP_N) * (CTA_K / WARP_K);
 
-    using OperandA = OperandA<T, CTA_M, CTA_K, WARP_M, WARP_CNT, AlignedM>;
-    using OperandB = OperandB<T, CTA_N, CTA_K, WARP_N, WARP_CNT, AlignedN>;
+    using OperandA = Operand_A_N::type<T, CTA_M, CTA_K, WARP_M, WARP_CNT, AlignedM>;
+    using OperandB = Operand_B_T::type<T, CTA_N, CTA_K, WARP_N, WARP_CNT, AlignedN>;
     using Void     = VoidOperand;
 
     using Mainloop = MainloopSm80_v2<CTA_M,
@@ -87,5 +92,21 @@ struct Config {
 };
 
 }  // namespace sm80_s16816gemm_f16_f16_nn
+
+template<>
+struct GetOperand<HMMA_16816, OPERAND_A, Order::kColMajor>: std::true_type {
+    using Operand = sm80_s16816gemm_f16_f16_nn::Operand_A_N;
+};
+
+template<>
+struct GetOperand<HMMA_16816, OPERAND_B, Order::kRowMajor>: std::true_type {
+    using Operand = sm80_s16816gemm_f16_f16_nn::Operand_B_T;
+};
+
+template<class T, class = void>
+struct HasOperand: std::false_type {};
+
+template<class T>
+struct HasOperand<T, std::void_t<typename T::Operand>>: std::true_type {};
 
 }  // namespace turbomind::gemm

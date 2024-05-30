@@ -63,7 +63,7 @@ template<Pack pack>
 struct Packing {};
 
 template<>
-struct Packing<Pack::kNone> {
+struct Packing<0> {
     __host__ __device__ static constexpr int2 apply(int2 cs)
     {
         return cs;
@@ -71,7 +71,7 @@ struct Packing<Pack::kNone> {
 };
 
 template<>
-struct Packing<Pack::kHMMA_16816_A> {
+struct Packing<HMMA_16816 | OPERAND_A | 1> {
     __host__ __device__ static constexpr int2 apply(int2 cs)
     {
         return {cs.x * 16, cs.y / 16};
@@ -79,6 +79,6 @@ struct Packing<Pack::kHMMA_16816_A> {
 };
 
 template<>
-struct Packing<Pack::kHMMA_16816_B>: Packing<Pack::kHMMA_16816_A> {};
+struct Packing<HMMA_16816 | OPERAND_B | 1>: Packing<HMMA_16816 | OPERAND_A | 1> {};
 
 }  // namespace turbomind::gemm

@@ -107,7 +107,7 @@ public:
 
         /// TODO: Revise packing condition
         if constexpr (1) {
-            a_pack_desc_.pack = Pack::kHMMA_16816_A;
+            a_pack_desc_.pack = HMMA_16816 | OPERAND_A | 1;
             Convert(a_.data().get(), a_desc_, a_pack_.data().get(), a_pack_desc_, stream_);
         }
         else {
@@ -116,7 +116,7 @@ public:
         }
 
         if constexpr (1) {
-            b_pack_desc_.pack = Pack::kHMMA_16816_B;
+            b_pack_desc_.pack = HMMA_16816 | OPERAND_B | 1;
             Convert(b_.data().get(), b_desc_, b_pack_.data().get(), b_pack_desc_, stream_);
         }
         else {
