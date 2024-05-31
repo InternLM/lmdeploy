@@ -6,13 +6,19 @@ CogVLM is a powerful open-source visual language model (VLM). LMDeploy supports 
 
 ## Quick Start
 
+### Install lmdeploy
+
+Install LMDeploy with pip (Python 3.8+). Refer to [Installation](https://lmdeploy.readthedocs.io/en/latest/get_started.html#installation) for more.
+
+```shell
+pip install lmdeploy
+```
+
 ### Prepare model
 
 Download CogVLM models using huggingface-cli.
 
 ```shell
-# install huggingface-cli
-pip install -U "huggingface_hub[cli]"
 # download model
 huggingface-cli download THUDM/cogvlm-chat-hf --local-dir ./cogvlm-chat-hf --local-dir-use-symlinks False
 # cogvlm-chat-hf uses the tokenizer from lmsys/vicuna-7b-v1.5, we should download the files into the model directory. Skip this step for CogVLM2.

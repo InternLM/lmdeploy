@@ -6,13 +6,19 @@ CogVLM 是一个强大的开源视觉语言模型（VLM）. LMDeploy 已在PyTor
 
 ## 快速开始
 
+### 安装 lmdeploy
+
+使用 pip(Python 3.8+)安装LMDeploy，更多安装方式参考 [安装](https://lmdeploy.readthedocs.io/zh-cn/latest/get_started.html#id2)。
+
+```shell
+pip install lmdeploy
+```
+
 ### 准备模型
 
 使用`huggingface-cli`下载 CogVLM 模型
 
 ```shell
-# 安装 huggingface-cli
-pip install -U "huggingface_hub[cli]"
 # 下载模型
 huggingface-cli download THUDM/cogvlm-chat-hf --local-dir ./cogvlm-chat-hf --local-dir-use-symlinks False
 # cogvlm-chat-hf 使用lmsys/vicuna-7b-v1.5的分词器，需要先将相关文件下载到模型目录中。但对于CogVLM2模型，可跳过此步骤
