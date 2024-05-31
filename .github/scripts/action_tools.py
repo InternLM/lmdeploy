@@ -156,7 +156,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
 
         with open(config_path_new, 'a') as f:
             f.write(f'\ndatasets = {datasets}\n')
-            if engine_type == hf':
+            if engine_type == 'hf':
                 f.write(f'\nmodels = [ *{target_model} ]\n')
             else:
                 f.write(f'\nmodels = [ {target_model} ]\n')
