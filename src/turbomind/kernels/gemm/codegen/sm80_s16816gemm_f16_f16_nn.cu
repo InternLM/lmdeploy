@@ -8,10 +8,9 @@ namespace turbomind::gemm {
 
 void Registry::reigster_sm80_s16816gemm_f16_f16_v2()
 {
-    using Config =
-        sm80_hmma_16816::SM80_HMMA_16816<half,
-                                         typename GetOperand<HMMA_16816, OPERAND_A, kColMajor, false>::Operand,
-                                         typename GetOperand<HMMA_16816, OPERAND_B, kRowMajor, false>::Operand>;
+    using Config = sm80_hmma_16816::SM80_HMMA_16816_F32<
+        typename GetOperand<HMMA_16816, OPERAND_A, half, kColMajor, false>::Operand,
+        typename GetOperand<HMMA_16816, OPERAND_B, half, kRowMajor, false>::Operand>;
 
     // clang-format off
     // Add(std::make_unique<KernelImpl<typename Config<128, 128, 32, 128, 16, 32, 3,  false, 1, 1>::Kernel>>());

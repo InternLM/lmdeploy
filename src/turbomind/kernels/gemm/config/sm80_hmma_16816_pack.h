@@ -50,7 +50,7 @@ struct Operand_B_T {
     };
 };
 
-}  // namespace m80_hmma_16816_pack
+}  // namespace sm80_hmma_16816_pack
 
 template<>
 struct GetOperand<HMMA_16816, OPERAND_A, Order::kColMajor, true>: std::true_type {

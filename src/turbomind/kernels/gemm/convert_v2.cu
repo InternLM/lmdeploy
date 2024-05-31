@@ -26,23 +26,6 @@ struct _Converter {
 
 }  // namespace
 
-template<auto v>
-struct constant {
-    using type       = constant;
-    using value_type = decltype(v);
-
-    static constexpr value_type value = v;
-
-    constexpr value_type operator()() const noexcept
-    {
-        return v;
-    }
-    constexpr operator value_type() const noexcept
-    {
-        return v;
-    }
-};
-
 // MMA     : H_16816, H_1688, H_884, H_SIMT
 // Operand : A, B, U, V
 // Order   : row, col

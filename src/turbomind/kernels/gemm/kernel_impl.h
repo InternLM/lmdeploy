@@ -38,11 +38,11 @@ public:
         desc_.quant_a = QuantDesc{};
         desc_.quant_b = QuantDesc{};
 
-        if constexpr (!std::is_same_v<typename Gemm::OperandU, VoidOperand>) {
+        if constexpr (Gemm::OperandU::SmemLayout::kSize > 1) {
             desc_.quant_a = QuantDesc{QuantType::kAsym_FMA, Gemm::OperandU::kGroupSize};
         }
 
-        if constexpr (!std::is_same_v<typename Gemm::OperandV, VoidOperand>) {
+        if constexpr (Gemm::OperandV::SmemLayout::kSize > 1) {
             desc_.quant_b = QuantDesc{QuantType::kAsym_FMA, Gemm::OperandV::kGroupSize};
         }
 

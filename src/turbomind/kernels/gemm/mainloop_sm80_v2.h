@@ -6,6 +6,9 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/meta.h"
+#include "src/turbomind/kernels/gemm/iterator_sm80.h"
+#include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 #include <cuda_pipeline_primitives.h>
@@ -57,12 +60,16 @@ struct MainloopSm80_v2 {
     static constexpr int WARP_N = TiledMma::N;
     static constexpr int WARP_K = TiledMma::K;
 
+    static constexpr int WARPS = (CTA_M / WARP_M) * (CTA_N / WARP_N) * (CTA_K / WARP_K);
+
+    /// TODO: remove this thing
     static constexpr int G = 128;
 
-    using OperandA = OperandA_;
-    using OperandB = OperandB_;
-    using OperandU = OperandU_;
-    using OperandV = OperandV_;
+    using OperandA = MakeOperand<OperandA_, IteratorSm80, CTA_M, CTA_K, WARP_M, WARP_K, WARPS>;
+    using OperandU = MakeOperand<OperandU_, IteratorSm80, CTA_M, CTA_K, WARP_M, WARP_K, WARPS>;
+
+    using OperandB = MakeOperand<OperandB_, IteratorSm80, CTA_N, CTA_K, WARP_N, WARP_K, WARPS>;
+    using OperandV = MakeOperand<OperandV_, IteratorSm80, CTA_N, CTA_K, WARP_N, WARP_K, WARPS>;
 
     using Transform = Transform_;
 

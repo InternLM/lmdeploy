@@ -106,7 +106,7 @@ public:
         b_pack_desc_ = b_desc_;
 
         /// TODO: Revise packing condition
-        if constexpr (1) {
+        if constexpr (0) {
             a_pack_desc_.pack = HMMA_16816 | OPERAND_A | 1;
             Convert(a_.data().get(), a_desc_, a_pack_.data().get(), a_pack_desc_, stream_);
         }
@@ -115,7 +115,7 @@ public:
                 (Ta*)a_pack_.data().get(), a_.data().get(), sizeof(Ta) * a_.size(), cudaMemcpyDefault, stream);
         }
 
-        if constexpr (1) {
+        if constexpr (0) {
             b_pack_desc_.pack = HMMA_16816 | OPERAND_B | 1;
             Convert(b_.data().get(), b_desc_, b_pack_.data().get(), b_pack_desc_, stream_);
         }

@@ -375,17 +375,9 @@ struct GmemIteratorSm80 {
     }
 };
 
-struct VoidIterator {
-    static constexpr int ITER_S = 0;
-    template<class P>
-    __device__ VoidIterator(P, int, int2, int2, int2)
-    {
-    }
-    __device__ void ClearSmem() {}
-    __device__ void Prefetch(int, int, bool) {}
-    __device__ void Prefetch(bool) {}
-    __device__ void Advance() {}
-    int*            smem_data_;
+struct IteratorSm80 {
+    template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS>
+    using Type = GmemIteratorSm80<T, Map, SmemLayout, kPack, kOrder, AlignedC, AlignedS>;
 };
 
 }  // namespace turbomind::gemm
