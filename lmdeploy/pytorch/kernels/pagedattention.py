@@ -30,6 +30,7 @@ def _load_block_offsets(offset_ptr, block_id, BLOCK: tl.constexpr):
     triton.Config({}, num_stages=1, num_warps=4),
 ],
                  key=['BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
+@wrap_jit_func
 @triton.jit
 def _fwd_split_kernel(
     Q,
@@ -184,6 +185,7 @@ def _fwd_split_kernel(
     triton.Config({}, num_stages=1, num_warps=4),
 ],
                  key=['BLOCK_H', 'BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
+@wrap_jit_func
 @triton.jit
 def _fwd_grouped_split_kernel(
     Q,

@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-from .triton_utils import get_kernel_meta
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
 def get_cuda_autotune_config():
@@ -81,6 +81,7 @@ def get_cuda_autotune_config():
     configs=get_cuda_autotune_config(),
     key=['N', 'K'],
 )
+@wrap_jit_func
 @triton.jit
 def fused_moe_kernel(
     A,

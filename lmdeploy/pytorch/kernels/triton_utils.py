@@ -38,6 +38,7 @@ class JitFunction220Wrapper:
         """jit func."""
         self.jit_func = jit_func
         self.run = self._make_launcher(jit_func)
+        self.arg_names = jit_func.arg_names
 
         self.__doc__ = jit_func.__doc__
         self.__name__ = jit_func.__name__
@@ -131,7 +132,7 @@ class JitFunction220Wrapper:
                                        for k, v in cuda_opt_fields.items())
         cuda_opt_args = ', '.join(f'{k}={k}' for k in cuda_opt_fields)
         src = f"""
-def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, **kwargs):
+def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, warmup=False, **kwargs):
     debug=jit_func.debug
     device_backend = None
 
@@ -225,6 +226,7 @@ class JitFunction230Wrapper:
         """jit func."""
         self.jit_func = jit_func
         self.run = self._make_launcher(jit_func)
+        self.arg_names = jit_func.arg_names
 
         self.__doc__ = jit_func.__doc__
         self.__name__ = jit_func.__name__
@@ -313,7 +315,7 @@ class JitFunction230Wrapper:
         cuda_opt_args = ', '.join(f'{k}={k}' for k in cuda_opt_fields)
 
         src = f"""
-def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, **kwargs):
+def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, warmup=False, **kwargs):
     device = get_current_device()
     stream = get_current_stream(device)
     target = get_current_target()
