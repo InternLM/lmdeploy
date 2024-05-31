@@ -8,7 +8,7 @@ from torchvision import transforms
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import add_device_hook, disable_logging
+from lmdeploy.vl.model.utils import disable_logging
 
 
 class CogVLMVisionModel(VisonModel):
@@ -39,6 +39,8 @@ class CogVLMVisionModel(VisonModel):
                 del model.lm_head
                 for key in ['layers', 'norm', 'embed_tokens']:
                     setattr(model.model, key, None)
+            else:
+                self.vl_model = model
 
         no_split_module_classes = ['TransformerLayer']
         max_memory = get_balanced_memory(
@@ -68,7 +70,6 @@ class CogVLMVisionModel(VisonModel):
                 dtype=torch.half)
         self.model = model.model.vision
         self.model.eval()
-        add_device_hook(self.model, next(iter(device_map.values())))
 
     @torch.no_grad()
     def forward(self, images: List[Image]) -> List[torch.Tensor]:

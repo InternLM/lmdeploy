@@ -14,7 +14,7 @@ CogVLM 是一个强大的开源视觉语言模型（VLM）. LMDeploy 已在PyTor
 pip install lmdeploy
 ```
 
-### 准备模型
+### 准备
 
 使用`huggingface-cli`下载 CogVLM 模型
 
@@ -25,6 +25,17 @@ huggingface-cli download THUDM/cogvlm-chat-hf --local-dir ./cogvlm-chat-hf --loc
 huggingface-cli download lmsys/vicuna-7b-v1.5 special_tokens_map.json tokenizer.model tokenizer_config.json --local-dir ./cogvlm-chat-hf --local-dir-use-symlinks False
 ```
 
+使用pip安装CogVLM依赖xformers，更多方式可参考[xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers)。
+注意，xformers依赖torch，因而需要根据现有torch版本选择合适版本进行安装。如对于`torch==2.2.0`，可按如下方式安装。
+
+```shell
+# for torch==2.2.0
+# cuda 11.8 version
+pip3 install -U 'xformers<=0.0.24' --index-url https://download.pytorch.org/whl/cu118
+# cuda 12.1 version
+pip3 install -U 'xformers<=0.0.24' --index-url https://download.pytorch.org/whl/cu121
+```
+
 ### 离线推理 pipeline
 
 以下是使用pipeline进行离线推理的示例，更多用法参考[VLM离线推理 pipeline](https://lmdeploy.readthedocs.io/zh-cn/latest/inference/vl_pipeline.html#vlm-pipeline)
@@ -33,7 +44,7 @@ huggingface-cli download lmsys/vicuna-7b-v1.5 special_tokens_map.json tokenizer.
 from lmdeploy import pipeline, PytorchEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('cogvlm-chat-hf', model_name='cogvlm', backend_config=PytorchEngineConfig(tp=1, max_prefill_token_num=4096, cache_max_entry_count=0.8))
+pipe = pipeline('cogvlm-chat-hf', backend_config=PytorchEngineConfig(tp=1, max_prefill_token_num=4096, cache_max_entry_count=0.8))
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))
