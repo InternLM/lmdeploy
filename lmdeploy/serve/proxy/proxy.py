@@ -182,7 +182,7 @@ class NodeManager:
             for index, speed in enumerate(all_the_speeds):
                 latency = self.nodes[
                     all_matched_urls[index]].unfinished / speed
-                if min_latency < latency:
+                if min_latency > latency:
                     min_latency = latency
                     min_index = index
             url = all_matched_urls[min_index]
