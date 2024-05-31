@@ -152,11 +152,14 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
             logging.info(
                 f'Start evaluating {target_model} ...\\nn{model_cfg}\n\n')
         else:
-            hf_model_path = '*' + target_model
+            hf_model_path = target_model
 
         with open(config_path_new, 'a') as f:
             f.write(f'\ndatasets = {datasets}\n')
-            f.write(f'\nmodels = [ {target_model} ]\n')
+            if engine_type == hf':
+                f.write(f'\nmodels = [ *{target_model} ]\n')
+            else:
+                f.write(f'\nmodels = [ {target_model} ]\n')
 
         work_dir = os.path.join(workspace, target_model)
         cmd_eval = [
