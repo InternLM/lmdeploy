@@ -143,19 +143,24 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
             logging.error(
                 f'Model {target_model} not found in configuration file')
             continue
-        model_cfg = cfg[target_model]
-        hf_model_path = model_cfg['path']
-        if not os.path.exists(hf_model_path):
-            logging.error(f'Model path not exists: {hf_model_path}')
-            continue
-        logging.info(f'Start evaluating {target_model} ...\\nn{model_cfg}\n\n')
+        if engine_type != 'hf':
+            model_cfg = cfg[target_model]
+            hf_model_path = model_cfg['path']
+            if not os.path.exists(hf_model_path):
+                logging.error(f'Model path not exists: {hf_model_path}')
+                continue
+            logging.info(
+                f'Start evaluating {target_model} ...\\nn{model_cfg}\n\n')
+        else:
+            hf_model_path = target_model
+
         with open(config_path_new, 'a') as f:
             f.write(f'\ndatasets = {datasets}\n')
             f.write(f'\nmodels = [ {target_model} ]\n')
 
         work_dir = os.path.join(workspace, target_model)
         cmd_eval = [
-            f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir}'
+            f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --max-num-workers 8'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
         ret = run_cmd(cmd_eval, log_path=eval_log, cwd=lmdeploy_dir)

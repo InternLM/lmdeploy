@@ -324,6 +324,7 @@ def parse_args():
                         type=int,
                         help='number of warmup rounds',
                         default=1)
+
     # other args
     ArgumentHelper.top_p(parser)
     ArgumentHelper.temperature(parser)
@@ -337,6 +338,7 @@ def parse_args():
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     session_len_act = ArgumentHelper.session_len(pt_group, default=2048)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+    rope_scaling_factor_act = ArgumentHelper.rope_scaling_factor(pt_group)
 
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
@@ -345,6 +347,7 @@ def parse_args():
     tb_group._group_actions.append(cache_count_act)
     tb_group._group_actions.append(cache_block_seq_len_act)
     tb_group._group_actions.append(prefix_caching_act)
+    tb_group._group_actions.append(rope_scaling_factor_act)
     ArgumentHelper.model_format(tb_group, default='hf')
     args = parser.parse_args()
     return args
@@ -401,6 +404,7 @@ def main():
                     cache_block_seq_len=args.cache_block_seq_len,
                     model_format=args.model_format,
                     session_len=session_len,
+                    rope_scaling_factor=args.rope_scaling_factor,
                     tp=args.tp,
                     enable_prefix_caching=args.enable_prefix_caching,
                 )

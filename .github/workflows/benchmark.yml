@@ -172,6 +172,14 @@ jobs:
           rm -rf ${result_dir}
           mkdir ${result_dir}
           python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
+      - name: Run generation benchmark - longtext
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(env.LONGTEXT_BENCHMARK, 'true')
+        env:
+          result_dir: benchmark-generation-longtext-turbomind
+        run: |
+          rm -rf ${result_dir}
+          mkdir ${result_dir}
+          python3 benchmark/profile_generation.py $MODEL_PATH $MODEL_FORMAT $TP_INFO --rope-scaling-factor 1.0 -c 1 --session-len 200000 -ct 1024 -pt 198000 --csv ${result_dir}/generation_longtext.csv > ${result_dir}/generation_longtext.log
       - name: Run generation benchmark - pytorch
         if: (!contains(env.MODEL_FORMAT, 'awq') && contains(fromJSON(github.event.inputs.backend), 'pytorch'))
         env:
@@ -180,6 +188,14 @@ jobs:
           rm -rf ${result_dir}
           mkdir ${result_dir}
           python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
+      - name: Run generation benchmark - longtext
+        if: contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(env.LONGTEXT_BENCHMARK, 'true')
+        env:
+          result_dir: benchmark-generation-longtext-pytorch
+        run: |
+          rm -rf ${result_dir}
+          mkdir ${result_dir}
+          python3 benchmark/profile_generation.py $MODEL_PATH $MODEL_FORMAT $TP_INFO --backend pytorch -c 1 --session-len 200000 -ct 1024 -pt 198000 --csv ${result_dir}/generation_longtext.csv > ${result_dir}/generation_longtext.log
       - name: Save reports
         if: always()
         run: |
@@ -276,21 +292,6 @@ jobs:
                 python3 benchmark/profile_throughput.py $DATASET_FILE $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --concurrency "$batch" --num-prompts 3000 --csv ${result_dir}/throughput_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/throughput_batch_"${batch}"_"${i}"th.log
               done
           done
-      - name: Run throughput benchmark - kvint4
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
-        env:
-          result_dir: benchmark-throughput-turbomind-kvint4
-        run: |
-          rm -rf ${result_dir}
-          mkdir ${result_dir}
-          batches=($BATCHES)
-          for batch in ${batches[@]}
-          do
-            for ((i=1; i<=$LOOP_NUM; i++))
-              do
-                python3 benchmark/profile_throughput.py $DATASET_FILE $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --concurrency "$batch" --num-prompts 3000 --quant-policy 4 --csv ${result_dir}/throughput_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/throughput_batch_"${batch}"_"${i}"th.log
-              done
-          done
       - name: Run throughput benchmark - kvint8
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
         env:
@@ -304,6 +305,21 @@ jobs:
             for ((i=1; i<=$LOOP_NUM; i++))
               do
                 python3 benchmark/profile_throughput.py $DATASET_FILE $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --concurrency "$batch" --num-prompts 3000 --quant-policy 8 --csv ${result_dir}/throughput_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/throughput_batch_"${batch}"_"${i}"th.log
+              done
+          done
+      - name: Run throughput benchmark - kvint4
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
+        env:
+          result_dir: benchmark-throughput-turbomind-kvint4
+        run: |
+          rm -rf ${result_dir}
+          mkdir ${result_dir}
+          batches=($BATCHES)
+          for batch in ${batches[@]}
+          do
+            for ((i=1; i<=$LOOP_NUM; i++))
+              do
+                python3 benchmark/profile_throughput.py $DATASET_FILE $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO --concurrency "$batch" --num-prompts 3000 --quant-policy 4 --csv ${result_dir}/throughput_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/throughput_batch_"${batch}"_"${i}"th.log
               done
           done
       - name: Run throughput benchmark - pytorch
