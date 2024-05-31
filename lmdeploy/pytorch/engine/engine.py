@@ -393,10 +393,7 @@ class Engine:
                 [msg.history_image_num for msg in messages])
             history_image_token_lengths = torch.LongTensor(
                 [msg.history_image_token_len for msg in messages])
-            history_lengths_for_vlm = history_lengths
-            output = (history_image_nums, history_image_token_lengths,
-                      history_lengths_for_vlm)
-            return output
+            return history_image_nums, history_image_token_lengths
 
         def __get_vlm_embeddings():
             """get vlm input embeddings and indexings."""
@@ -425,11 +422,10 @@ class Engine:
         if self.model_config.task_type == 'vlm':
             history_image_nums = None
             history_image_token_lengths = None
-            history_lengths_for_vlm = None
             # only for cogvlm
             if self.model_config.model_arch == 'CogVLMForCausalLM':
-                (history_image_nums, history_image_token_lengths,
-                 history_lengths_for_vlm) = __get_cogvlm_image_info()
+                (history_image_nums,
+                 history_image_token_lengths) = __get_cogvlm_image_info()
 
             input_embeddings = None
             input_embedding_indexing = None
@@ -441,7 +437,7 @@ class Engine:
                  input_embedding_ranges) = __get_vlm_embeddings()
 
             vision_embedding_inputs = VisionModelInputs(
-                history_lengths=history_lengths_for_vlm,
+                history_lengths=history_lengths,
                 history_image_nums=history_image_nums,
                 history_image_token_lengths=history_image_token_lengths,
                 input_embeddings=input_embeddings,
