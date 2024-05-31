@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers==4.41.0 datasets matplotlib jmespath'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'
       default_tp:
         required: true
         description: 'Default tp value'

@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'pynvml packaging protobuf transformers_stream_generator transformers==4.41.0'
+        default: 'pynvml packaging protobuf transformers_stream_generator transformers'
 
 
 jobs:

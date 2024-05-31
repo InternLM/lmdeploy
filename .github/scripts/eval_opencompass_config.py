@@ -125,7 +125,7 @@ gemma_meta_template = dict(round=[
                            eos_token_id=1)
 
 MAX_SESSION_LEN = 2048
-MAX_NEW_TOKENS = 100
+MAX_NEW_TOKENS = 1024
 
 tb_engine_config_template_max_bs_8 = dict(session_len=MAX_SESSION_LEN,
                                           max_batch_size=8,
