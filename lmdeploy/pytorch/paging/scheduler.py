@@ -6,21 +6,17 @@ from typing import Dict, List, Set, Union
 
 from lmdeploy.utils import get_logger, logging_timer
 
-from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
+from ..adapter.adapter import AdapterManager, SchedulerAdapter
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import (MessageStatus, SchedulerSequence, SchedulerSession,
                         SequenceManager)
-from .block_manager import DefaultBlockManager as BlockManager
 from .block_manager import build_block_manager
+from .block_trie import BlockTrie
 
 logger = get_logger('lmdeploy')
 
 SeqList = List[SchedulerSequence]
 AdapterList = List[SchedulerAdapter]
-
-
-def _find_seq_with_session_id(group: SeqList, session_id: int):
-    return [seq for seq in group if seq.session_id == session_id]
 
 
 @dataclass
@@ -42,18 +38,25 @@ class Scheduler:
         cache_config (CacheConfig): The config of cache info.
     """
 
-    def __init__(self, scheduler_config: SchedulerConfig,
-                 cache_config: CacheConfig) -> None:
+    def __init__(self,
+                 scheduler_config: SchedulerConfig,
+                 cache_config: CacheConfig,
+                 adapter_manager: AdapterManager = None) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
 
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
         self.actived_adapters: Set[str] = set()
 
-        self.block_manager = build_block_manager(cache_config)
+        if adapter_manager is None:
+            adapter_manager = AdapterManager(dict(), 0)
+        self.adapter_manager = adapter_manager
+
+        self.block_manager = build_block_manager(cache_config, adapter_manager)
+        self.block_trie = BlockTrie(self.cache_config, self.block_manager)
 
         self.eviction_helper = self.build_eviction_helper(
-            self.scheduler_config.eviction_type, self.block_manager)
+            self.scheduler_config.eviction_type)
 
         self.seq_manager = SequenceManager()
 
@@ -75,14 +78,14 @@ class Scheduler:
         seq_map = self.seq_manager.get_sequences(MessageStatus.STOPPED)
         return list(seq_map.values())
 
-    def build_eviction_helper(ctx, eviction_type: str,
-                              block_manager: BlockManager):
+    def build_eviction_helper(self, eviction_type: str):
         if eviction_type == 'copy':
-            from .eviction_helper import CopyEvictionHelper
-            return CopyEvictionHelper(block_manager)
-        elif eviction_type == 'recompute':
+            logger.warning('`copy` eviction has been deprecated, '
+                           'use `recompute` instead.')
+            eviction_type = 'recompute'
+        if eviction_type == 'recompute':
             from .eviction_helper import RecomputeEvictionHelper
-            return RecomputeEvictionHelper(block_manager)
+            return RecomputeEvictionHelper(self)
         else:
             raise TypeError(f'Unknown eviction type: {eviction_type}')
 
@@ -121,19 +124,18 @@ class Scheduler:
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
 
-    def add_adapter(self, adapter_path: str, adapter_name: str):
+    def add_adapter(self, adapter_name: str):
         """Add adapter.
 
         Args:
-            adapter_path (str): The path of adapter.
             adapter_name (str): The name of the adapter.
         """
-        adapter = ADAPTER_MANAGER.add_adapter_from_pretrained(
-            adapter_path, adapter_name=adapter_name)
+        adapter = self.adapter_manager.add_adapter(adapter_name)
         self.block_manager.allocate_adapter(adapter)
         block_table = self.block_manager.get_block_table(
             adapter) - self.block_manager.num_gpu_blocks
-        return adapter.build_weight_map(block_table)
+        adapter.update_rank_offset(block_table)
+        return adapter.build_weight_map()
 
     @logging_timer('SchedulePrefilling', logger)
     def _schedule_prefill(self):
@@ -141,7 +143,6 @@ class Scheduler:
 
         current_running = self.running
         max_batches = self.scheduler_config.max_batches - len(current_running)
-        block_manager = self.block_manager
         eviction_helper = self.eviction_helper
         swap_out_map: Dict[int, int] = dict()
         swap_in_map: Dict[int, int] = dict()
@@ -159,14 +160,13 @@ class Scheduler:
             nonlocal token_count
             token_count += seq.num_token_ids
 
-        def _evict_until_can_append(seq: SchedulerSequence, waiting):
+        def __evict_for_seq(seq: SchedulerSequence, waiting):
             """evict until can append."""
-            while eviction_helper.try_swap_out_unused(self.hanging,
-                                                      waiting[1:],
-                                                      swap_out_map):
-                if block_manager.can_append_slot(seq):
-                    return True
-            return False
+            from itertools import chain
+            hanging = reversed(self.hanging)
+            waiting = reversed(waiting)
+            evictable = list(chain(hanging, waiting))
+            return eviction_helper.evict_for_seq(seq, evictable, 0)
 
         def _reorder_waiting():
             """reorder waiting."""
@@ -174,26 +174,23 @@ class Scheduler:
 
         def _active_adapter(adapter_name):
             """active adapter of a seq."""
-            if adapter_name is None:
-                required_adapters.add(adapter_name)
-                return
             if adapter_name not in required_adapters:
-                adapter = ADAPTER_MANAGER.get_adapter(adapter_name)
+                adapter = self.adapter_manager.get_adapter(adapter_name)
                 if not adapter.is_actived():
-                    success, tmp_map = self.block_manager.try_swap_in(adapter)
-                    assert success
+                    _, tmp_map = self.block_manager.try_swap_in(adapter)
                     swap_in_map.update(tmp_map)
+                    block_table = self.block_manager.get_block_table(adapter)
+                    adapter.update_rank_offset(block_table)
+                    adapter.active(True)
             required_adapters.add(adapter_name)
 
         def _deactive_adapter(adapter_name):
             """deactive_adapter."""
-            if adapter_name is None:
-                return
-            adapter = ADAPTER_MANAGER.get_adapter(adapter_name)
+            adapter = self.adapter_manager.get_adapter(adapter_name)
             if adapter.is_actived():
-                success, tmp_map = self.block_manager.try_swap_out(adapter)
-                assert success
+                _, tmp_map = self.block_manager.try_swap_out(adapter)
                 swap_out_map.update(tmp_map)
+                adapter.active(False)
 
         num_waiting = self.seq_manager.num_sequences(MessageStatus.WAITING)
         if (len(running) >= max_batches or num_waiting == 0):
@@ -201,7 +198,7 @@ class Scheduler:
 
         waiting = _reorder_waiting()
         while len(waiting) > 0 and len(running) < max_batches:
-            seq = waiting[0]
+            seq = waiting.pop(0)
 
             if (len(running) > 0 and token_count + seq.num_token_ids >
                     self.cache_config.max_prefill_token_num):
@@ -212,17 +209,14 @@ class Scheduler:
                 if seq.adapter_name not in required_adapters:
                     break
 
-            if not block_manager.can_allocate(seq):
-                if not _evict_until_can_append(seq, waiting):
-                    break
+            self.block_trie.match(seq)
 
-            if eviction_helper.need_swap_in(seq):
-                if not eviction_helper.try_swap_in(seq, swap_in_map):
-                    break
+            if not __evict_for_seq(seq, waiting):
+                break
+
             # allocate session memory
-            block_manager.allocate(seq)
+            self.block_manager.allocate(seq)
             _active_adapter(seq.adapter_name)
-            waiting.pop(0)
             _to_running(seq)
 
         deactive_adapters = self.actived_adapters.difference(required_adapters)
@@ -240,29 +234,18 @@ class Scheduler:
         running = self.running
         assert len(running) != 0
 
-        block_manager = self.block_manager
         eviction_helper = self.eviction_helper
         swap_out_map: Dict[int, int] = dict()
         swap_in_map: Dict[int, int] = dict()
         copy_map: Dict[int, int] = dict()
-        hanging = self.hanging
 
-        def _try_append_slot(seq):
-            """try append slot."""
-            if self.block_manager.num_required_blocks(seq, prealloc_size) == 0:
-                return True
-            if block_manager.can_append_slot(seq, prealloc_size):
-                block_manager.append_slot(seq, prealloc_size)
-                return True
-            return False
-
-        def _evict_until_can_append(seq: SchedulerSequence):
+        def __evict_for_seq(seq: SchedulerSequence):
             """evict until can append."""
-            while eviction_helper.try_swap_out_unused(hanging, self.waiting,
-                                                      swap_out_map):
-                if block_manager.can_append_slot(seq, prealloc_size):
-                    return True
-            return False
+            from itertools import chain
+            hanging = reversed(self.hanging)
+            waiting = reversed(self.waiting)
+            evictable = list(chain(hanging, waiting))
+            return eviction_helper.evict_for_seq(seq, evictable, prealloc_size)
 
         # 1. running
         for seq in running:
@@ -275,21 +258,21 @@ class Scheduler:
                                'reach max gpu size.')
                 self._set_message_status(seq, MessageStatus.ABORTED)
                 self.block_manager.free(seq)
+                seq.set_step(0)
+                continue
 
-            if not _try_append_slot(seq):
-                # try free unused cache from waiting
-                if _evict_until_can_append(seq):
-                    _try_append_slot(seq)
-                else:
-                    # move to waiting
-                    self._set_message_status(seq, MessageStatus.WAITING)
+            if not __evict_for_seq(seq):
+                self._set_message_status(seq, MessageStatus.WAITING)
+                continue
+
+            self.block_manager.allocate(seq, prealloc_size)
+            self.block_trie.allocate(seq)
 
         return self.running, swap_in_map, swap_out_map, copy_map
 
-    @classmethod
-    def _get_adapter_list(cls, adapter_names: List[str]):
+    def _get_adapter_list(self, adapter_names: List[str]):
         adapters = [
-            ADAPTER_MANAGER.get_adapter(name) for name in adapter_names
+            self.adapter_manager.get_adapter(name) for name in adapter_names
         ]
         return adapters
 
@@ -337,6 +320,7 @@ class Scheduler:
             seq (SchedulerSequence): sequence to remove
         """
         self.block_manager.free(seq)
+        seq.set_step(0)
         seq.session.remove_sequence(seq)
 
     def end_session(self, session_id: int):

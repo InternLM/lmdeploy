@@ -2,19 +2,16 @@
 import torch
 import triton
 import triton.language as tl
-from torch import Tensor
 
 from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
 @wrap_jit_func
 @triton.jit
-def _multinomial_sampling_kernel(Scores: 'Tensor', Seeds: 'Tensor',
-                                 Offsets: 'Tensor', Indices: 'Tensor',
-                                 Outputs: 'Tensor', stride_sb: int,
-                                 stride_st: int, stride_ib: int,
-                                 stride_it: int, num_batchs: int, num_tokens,
-                                 BLOCK: tl.constexpr, BLOCK_N: tl.constexpr):
+def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
+                                 stride_sb, stride_st, stride_ib, stride_it,
+                                 num_batchs, num_tokens, BLOCK: tl.constexpr,
+                                 BLOCK_N: tl.constexpr):
     """Kernel."""
     batch_block_id = tl.program_id(0)
 

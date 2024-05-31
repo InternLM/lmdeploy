@@ -43,10 +43,16 @@ def hf_command_line_test(config,
                          case_info,
                          model_case,
                          type,
-                         cuda_prefix: str = None):
-    model_path = config.get('model_path') + '/' + model_case
+                         cuda_prefix: str = None,
+                         extra: str = '',
+                         use_local_model: bool = True):
+    if use_local_model is True:
+        model_path = config.get('model_path') + '/' + model_case
+    else:
+        model_path = model_case
 
-    cmd = get_command_with_extra(' '.join(['lmdeploy chat', type, model_path]),
+    cmd = get_command_with_extra(' '.join(
+        ['lmdeploy chat', type, model_path, extra]),
                                  config,
                                  model_case,
                                  need_tp=True,
@@ -138,6 +144,7 @@ def command_test(config,
                 if case_result is False:
                     msg = reason
                 result = result & case_result
+            file.writelines('\n\n\n' + 'full log:' + outputs + '\n')
 
         file.close()
         return result, chat_log, msg

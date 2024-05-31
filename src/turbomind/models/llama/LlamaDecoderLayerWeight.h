@@ -66,6 +66,7 @@ private:
     size_t     tensor_para_size_;
     size_t     tensor_para_rank_;
     bool       is_maintain_buffer_ = false;
+    bool       fused_up_and_gate_;
 
     void mallocWeights();
 };

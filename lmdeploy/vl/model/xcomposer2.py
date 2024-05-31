@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import warnings
+from contextlib import contextmanager
 from typing import List
 
 import torch
@@ -8,38 +9,58 @@ from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import add_sys_path
+from lmdeploy.vl.model.utils import (add_device_hook, add_sys_path,
+                                     disable_logging, rewrite_ctx)
+
+
+def _CLIPVisionModel_from_pretrained(vision_tower_name):
+    from transformers import CLIPVisionConfig, CLIPVisionModel
+    config = CLIPVisionConfig.from_pretrained(vision_tower_name)
+    model = CLIPVisionModel._from_config(config)
+    return model
+
+
+@contextmanager
+def init_empty_vit():
+    """skip download vision model."""
+    origin_func_path = [
+        'transformers.CLIPVisionModel.from_pretrained',
+    ]
+    rewrite_func = [
+        _CLIPVisionModel_from_pretrained,
+    ]
+    with rewrite_ctx(origin_func_path, rewrite_func):
+        yield
 
 
 class Xcomposer2VisionModel(VisonModel):
     """InternLM-Xcomposer2 vision model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self, model_path, with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
-        self.device = device
         self.build_model()
 
     def build_model(self):
-        from accelerate import init_empty_weights, load_checkpoint_in_model
-        with init_empty_weights(), warnings.catch_warnings():
+        from accelerate import init_empty_weights
+        with init_empty_weights(), warnings.catch_warnings(), init_empty_vit():
             warnings.simplefilter('ignore')
             config = AutoConfig.from_pretrained(self.model_path,
                                                 trust_remote_code=True)
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)
-            model = model.half()
-            del model.model
-            del model.output
-
-        model.to_empty(device='cpu')
+            model.vit.load_model()
+            model.vit.resize_pos()
+            model.vit.vision_tower.vision_model.post_layernorm.to_empty(
+                device='cpu').half()
+            if not self.with_llm:
+                del model.model
+                del model.output
+            else:
+                self.vl_model = model
 
         # additional components.
         with add_sys_path(self.model_path):
-            # CLIPVisionModel embedding layer won't init right
-            # with init_empty_weights
-            from build_mlp import build_vision_tower
-            model.vit = build_vision_tower()
-
             if config.architectures[0] == 'InternLM2ForCausalLM':
                 # internlm-xcomposer2-4khd-7b
                 from ixc_utils import HD_transform
@@ -49,8 +70,36 @@ class Xcomposer2VisionModel(VisonModel):
                 # internlm-xcomposer2-7b
                 self._forward_func = self._forward_7b
 
-        load_checkpoint_in_model(model, self.model_path)
-        self.model = model.to(self.device).eval()
+        from accelerate.utils import get_balanced_memory, infer_auto_device_map
+        max_memory = get_balanced_memory(
+            model,
+            dtype=torch.half,
+            no_split_module_classes=['CLIPEncoderLayer'])
+        device_map = infer_auto_device_map(
+            model,
+            no_split_module_classes=['CLIPEncoderLayer'],
+            max_memory=max_memory,
+            dtype=torch.half)
+        # make all tensor on same device for postprocess
+        if 'plora_glb_GN' in device_map:
+            device_map['plora_sub_GN'] = device_map['plora_glb_GN']
+
+        from accelerate import load_checkpoint_and_dispatch
+        with disable_logging():
+            load_checkpoint_and_dispatch(
+                model=model,
+                checkpoint=self.model_path,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
+                no_split_module_classes=['CLIPEncoderLayer'],
+                dtype=torch.half)
+
+        if 'plora_glb_GN' in device_map:
+            add_device_hook(
+                model.vit.vision_tower.vision_model.encoder.layers[-1],
+                device_map['plora_glb_GN'], lambda x:
+                (x[0].to(device=device_map['plora_glb_GN']), ))
+
+        self.model = model
 
     def _forward_7b(self, images: List[Image]) -> List[torch.Tensor]:
         """internlm-xcomposer2-7b vit forward."""
@@ -68,24 +117,16 @@ class Xcomposer2VisionModel(VisonModel):
     def _forward_4khd_7b(self, images: List[Image]) -> List[torch.Tensor]:
         """internlm-xcomposer2-4khd-7b vit forward."""
         outputs = [x.convert('RGB') for x in images]
-        outputs = [self.HD_transform(x, hd_num=25) for x in images]
+        outputs = [self.HD_transform(x, hd_num=25) for x in outputs]
         outputs = [
             self.model.vis_processor(x).unsqueeze(0).to(dtype=torch.half)
             for x in outputs
         ]
-        # Too much memory used here. Currently, since we cannot set batch size,
-        # we inference images one by one.
-        embeds = []
-        for x in outputs:
-            embed, _ = self.model.vit([x], self.model.plora_glb_GN,
-                                      self.model.plora_sub_GN)
-            embed = self.model.vision_proj(embed).squeeze()
-            embeds.append(embed)
-        # embeds, split = self.model.vit(outputs, self.model.plora_glb_GN,
-        #                                self.model.plora_sub_GN)
-        # embeds = self.model.vision_proj(embeds)
-        # embeds = torch.split(embeds, split, dim=1)
-        # embeds = [x.squeeze() for x in embeds]
+        embeds, split = self.model.vit(outputs, self.model.plora_glb_GN,
+                                       self.model.plora_sub_GN)
+        embeds = self.model.vision_proj(embeds)
+        embeds = torch.split(embeds, split, dim=1)
+        embeds = [x.squeeze() for x in embeds]
         return embeds
 
     @torch.no_grad()

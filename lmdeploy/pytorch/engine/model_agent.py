@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import timedelta
 from typing import Any, Callable, Dict, List
 
@@ -13,8 +13,9 @@ from transformers import AutoModelForCausalLM
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.utils import get_logger
 
-from ..adapter.adapter import (AdapterWeightMap, get_indexed_lora_linears,
-                               get_max_lora_weight_size, update_lora_linears)
+from ..adapter.adapter import (AdapterWeightMap, SchedulerAdapter,
+                               get_indexed_lora_linears, get_loralinear_info,
+                               update_lora_linears)
 from ..config import CacheConfig, ModelConfig
 from ..models import patch
 from ..utils import get_gpu_memory
@@ -23,23 +24,6 @@ from .cache_engine import CacheEngine
 logger = get_logger('lmdeploy')
 
 _PATCH_ARG_NAMES = ['context', 'use_origin']
-
-
-def _infer_block_size(model: torch.nn.Module,
-                      model_config: ModelConfig,
-                      cache_config: CacheConfig,
-                      world_size: int = 1):
-    """infer block size."""
-    max_weight_dim = get_max_lora_weight_size(model)
-    if max_weight_dim == 0:
-        return cache_config.block_size
-
-    per_token_size = model_config.get_head_size(
-    ) * model_config.num_key_value_heads // world_size
-    block_size = 1
-    while block_size * per_token_size < max_weight_dim:
-        block_size *= 2
-    return block_size * world_size
 
 
 def _update_cache_config(model_config: ModelConfig,
@@ -111,6 +95,73 @@ def _update_cache_config(model_config: ModelConfig,
 
 
 @dataclass
+class AdapterInfo:
+    ranks: torch.LongTensor
+    scalings: torch.Tensor
+    rank_offsets: torch.LongTensor
+    target_modules: List[str]
+    max_rank_per_target: List[int]
+    max_rank: int
+
+    @classmethod
+    def from_adapters(cls, adapters: List[SchedulerAdapter]):
+        """from adapters."""
+        if len(adapters) == 0:
+            return None
+        target_modules = adapters[0].target_modules
+        max_rank = adapters[0].max_rank
+        ranks = [ada.rank for ada in adapters]
+        scalings = [ada.scaling for ada in adapters]
+        rank_offsets = [torch.from_numpy(ada.rank_offset) for ada in adapters]
+        ranks = torch.tensor(ranks)
+        scalings = torch.tensor(scalings)
+        rank_offsets = torch.stack(rank_offsets)
+        max_rank_per_target = ranks.max(0)[0].tolist()
+
+        return cls(
+            ranks=ranks,
+            scalings=scalings,
+            rank_offsets=rank_offsets,
+            target_modules=target_modules,
+            max_rank=max_rank,
+            max_rank_per_target=max_rank_per_target,
+        )
+
+    def split_by_targets(self):
+        """split by targets."""
+        ret = dict()
+        max_rank = self.max_rank
+        for idx, target in enumerate(self.target_modules):
+            r = self.ranks[:, idx]
+            scaling = self.scalings[:, idx]
+            r_off_start = idx * max_rank
+            r_off_end = r_off_start + max_rank
+            rank_offset = self.rank_offsets[:, r_off_start:r_off_end]
+            max_rank_per_target = [self.max_rank_per_target[idx]]
+            ret[target] = AdapterInfo(
+                r,
+                scaling,
+                rank_offset,
+                target_modules=[target],
+                max_rank=max_rank_per_target[0],
+                max_rank_per_target=max_rank_per_target,
+            )
+        return ret
+
+    def to_device(self, device: str):
+        """to device."""
+        out_dict = dict()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if isinstance(v, torch.Tensor):
+                v = v.to(device)
+            out_dict[k] = v
+
+        return AdapterInfo(**out_dict)
+
+
+@dataclass
 class ModelInputs:
     """Input of the model."""
     input_ids: torch.LongTensor
@@ -122,9 +173,7 @@ class ModelInputs:
     is_decoding: bool
     num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
-    global_adapter_ids: torch.LongTensor = None
-    adapter_offsets: torch.LongTensor = None
-    max_rank: int = 0
+    adapter_info: AdapterInfo = None
     meta: Any = None
 
     def update(self, input_ids: torch.LongTensor):
@@ -160,24 +209,18 @@ class ModelInputs:
             if overlap:
                 block_end += 1
 
-            local_adapter_ids = self.local_adapter_ids
-            if local_adapter_ids is not None:
-                local_adapter_ids = local_adapter_ids[:, start:end]
-
             block_offsets = self.block_offsets[:, :block_end]
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
                 block_offsets=block_offsets,
                 history_lengths=self.history_lengths + start,
-                max_q_seq_length=input_ids.new_tensor(end - start),
+                max_q_seq_length=end - start,
                 max_history_length=self.max_history_length + start,
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
-                local_adapter_ids=local_adapter_ids,
-                global_adapter_ids=self.global_adapter_ids,
-                adapter_offsets=self.adapter_offsets,
-                max_rank=self.max_rank,
+                local_adapter_ids=self.local_adapter_ids,
+                adapter_info=self.adapter_info,
                 meta=self.meta,
             )
             ret.append(inp)
@@ -187,11 +230,14 @@ class ModelInputs:
 
     def to_device(self, device: str):
         """to device."""
-        input_dict = asdict(self)
         out_dict = dict()
-        for k, v in input_dict.items():
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
+            elif isinstance(v, AdapterInfo):
+                v = v.to_device(device)
             out_dict[k] = v
 
         return ModelInputs(**out_dict)
@@ -220,9 +266,7 @@ class StepContext:
     world_size: int = 1
     json_config: Dict = None
     local_adapter_ids: torch.LongTensor = None
-    global_adapter_ids: torch.LongTensor = None
-    adapter_offsets: torch.LongTensor = None
-    max_rank: int = 0
+    adapter_params: Dict[str, AdapterInfo] = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -273,6 +317,10 @@ class StepContext:
         if window_size > 0:
             kv_seq_length -= inputs.num_ignored_history
 
+        adapter_params = None
+        if inputs.adapter_info is not None:
+            adapter_params = inputs.adapter_info.split_by_targets()
+
         ret = StepContext(inputs=inputs,
                           block_offsets=inputs.block_offsets,
                           position_ids=position_ids,
@@ -289,9 +337,7 @@ class StepContext:
                           world_size=world_size,
                           json_config=json_config,
                           local_adapter_ids=inputs.local_adapter_ids,
-                          global_adapter_ids=inputs.global_adapter_ids,
-                          adapter_offsets=inputs.adapter_offsets,
-                          max_rank=inputs.max_rank)
+                          adapter_params=adapter_params)
         return ret
 
     @classmethod
@@ -425,6 +471,14 @@ class AutoModelAgent:
         self.model_config = model_config
         self.cache_config = cache_config
 
+    def get_loralinear_info(self):
+        """get lora linear info."""
+        raise NotImplementedError('Not implemented')
+
+    def get_block_numel(self):
+        """get block nelement."""
+        raise NotImplementedError('Not implemented')
+
     def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """paging adapter."""
         raise NotImplementedError('Not implemented.')
@@ -493,11 +547,6 @@ class BaseModelAgent(AutoModelAgent):
             adapters=adapters,
             trust_remote_code=trust_remote_code)
 
-        block_size = _infer_block_size(self.patched_model, model_config,
-                                       cache_config)
-        if block_size != cache_config.block_size:
-            cache_config.block_size = block_size
-            logger.warning(f'infered block size: {block_size}')
         _update_cache_config(model_config, cache_config)
 
         self.cache_engine = CacheEngine(cache_config, model_config)
@@ -509,11 +558,13 @@ class BaseModelAgent(AutoModelAgent):
                      adapters: Dict[str, str] = None,
                      trust_remote_code: bool = True):
         """build patched model."""
+        device = 'cuda'
         with LoadNoInit():
             hf_model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code,
+                device_map=device,
                 **self.model_config.init_kwargs)
             hf_model.eval()
             hf_model.config.use_cache = True
@@ -526,8 +577,16 @@ class BaseModelAgent(AutoModelAgent):
         if adapters:
             _unparam_lora_weight(patched_model)
 
-        patched_model = patched_model.cuda()
         return patched_model
+
+    def get_loralinear_info(self):
+        """get lora linear info."""
+        return get_loralinear_info(self.patched_model)
+
+    def get_block_numel(self):
+        """get block nelement."""
+        k_cache = self.cache_engine.local_gpu_cache[0][0]
+        return k_cache[0].numel()
 
     def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """paging adapter."""
@@ -726,12 +785,6 @@ def _tp_build_model(
             world_size=world_size,
         )
 
-        block_size = _infer_block_size(patched_model, model_config,
-                                       cache_config, world_size)
-        if block_size != cache_config.block_size:
-            cache_config.block_size = block_size
-            if rank == 0:
-                logger.warning(f'infered block size: {block_size}')
         _update_cache_config(model_config,
                              cache_config,
                              gpu_id=rank,
@@ -1036,6 +1089,15 @@ class TPModelAgent(AutoModelAgent):
         )
 
         return model, cache_engine, cache_config
+
+    def get_loralinear_info(self):
+        """get lora linear info."""
+        return get_loralinear_info(self.patched_model)
+
+    def get_block_numel(self):
+        """get block nelement."""
+        k_cache = self.cache_engine.local_gpu_cache[0][0]
+        return k_cache[0].numel()
 
     def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """load adapter."""

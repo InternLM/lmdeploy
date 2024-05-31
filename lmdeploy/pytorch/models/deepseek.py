@@ -6,6 +6,8 @@ import torch.distributed as dist
 from torch import nn
 from torch.distributed._tensor import DeviceMesh
 
+from lmdeploy.pytorch.kernels.fused_moe import fused_moe
+
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
@@ -69,11 +71,23 @@ class PatchedDeepseekAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             if hasattr(self, 'rotary_emb'):
-                cos, sin = self.rotary_emb(value_states,
-                                           seq_len=max_kv_seq_length)
+                if not hasattr(context, '_cos'):
+                    cos, sin = self.rotary_emb(value_states,
+                                               seq_len=max_kv_seq_length)
+                    context._cos = cos
+                    context._sin = sin
+                else:
+                    cos = context._cos
+                    sin = context._sin
                 query_states, key_states = apply_rotary_pos_emb(
-                    query_states, key_states, cos, sin, position_ids,
-                    context.position_ids_1d)
+                    query_states,
+                    key_states,
+                    cos,
+                    sin,
+                    position_ids,
+                    context.position_ids_1d,
+                    q_embed=query_states,
+                    k_embed=key_states)
             return query_states, key_states, value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
@@ -137,3 +151,67 @@ class PatchedDeepseekAttention(nn.Module):
             output_attentions,
             world_size=world_size,
         )
+
+
+class PatchedDeepseekMoE(nn.Module):
+
+    def _update_model_fn(self):
+        """update model."""
+        num_experts = len(self.experts)
+
+        def __get_meta():
+            exp = self.experts[0]
+            ffn_dim = exp.gate_proj.weight.size(0)
+            hidden_dim = exp.down_proj.weight.size(0)
+            dtype = exp.gate_proj.weight.dtype
+            device = exp.gate_proj.weight.device
+            return ffn_dim, hidden_dim, dtype, device
+
+        def __copy_assign_param(param, weight):
+            """copy assign."""
+            weight.copy_(param.data)
+            param.data = weight
+
+        ffn_dim, hidden_dim, dtype, device = __get_meta()
+
+        gate_up_weights = torch.empty(num_experts,
+                                      ffn_dim * 2,
+                                      hidden_dim,
+                                      device=device,
+                                      dtype=dtype)
+        down_weights = torch.empty(num_experts,
+                                   hidden_dim,
+                                   ffn_dim,
+                                   device=device,
+                                   dtype=dtype)
+
+        for exp_id, exp in enumerate(self.experts):
+            __copy_assign_param(exp.gate_proj.weight,
+                                gate_up_weights[exp_id, :ffn_dim])
+            __copy_assign_param(exp.up_proj.weight, gate_up_weights[exp_id,
+                                                                    ffn_dim:])
+            __copy_assign_param(exp.down_proj.weight, down_weights[exp_id])
+
+        torch.cuda.empty_cache()
+
+        self.register_buffer('gate_up_weights', gate_up_weights)
+        self.register_buffer('down_weights', down_weights)
+
+    def forward(self, hidden_states):
+        identity = hidden_states
+        orig_shape = hidden_states.shape
+        topk_idx, topk_weight, _ = self.gate(hidden_states)
+        hidden_states = hidden_states.flatten(0, 1)
+        flat_topk_idx = topk_idx.flatten()
+        y = fused_moe(hidden_states,
+                      self.gate_up_weights,
+                      self.down_weights,
+                      topk_weight,
+                      flat_topk_idx,
+                      topk=self.num_experts_per_tok,
+                      renormalize=False).view(*orig_shape)
+        if self.config.n_shared_experts is not None:
+            y = y + self.shared_experts.forward(identity)
+        if dist.is_initialized():
+            dist.all_reduce(y)
+        return y

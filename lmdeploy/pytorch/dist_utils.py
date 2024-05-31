@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Callable, Union
+from typing import Callable, List, Union
 
 import torch
 from torch import Tensor, nn
@@ -217,6 +217,21 @@ def colwise_parallelize_linear_fn(module: nn.Module,
                                               to_local=to_local)
     else:
         raise TypeError(f'Unsupported module: {type(module)}')
+
+
+def colwise_split_parallelize_linear_fn(module: nn.Module, sections: List[int],
+                                        device_mesh: DeviceMesh) -> None:
+    """colwise with split."""
+    for name, param in module.named_parameters():
+        splited_param = param.split(sections, dim=0)
+        updated_param = []
+        for p in splited_param:
+            dist_tensor = distribute_tensor(p, device_mesh, [Shard(0)])
+            dist_tensor = try_to_local(dist_tensor)
+            updated_param.append(dist_tensor)
+        param = torch.cat(updated_param)
+        dist_param = torch.nn.Parameter(param)
+        module.register_parameter(name, dist_param)
 
 
 def _partition_module(

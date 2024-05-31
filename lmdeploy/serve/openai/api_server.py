@@ -9,7 +9,7 @@ from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 
 from lmdeploy.archs import get_task
@@ -111,11 +111,29 @@ def create_error_response(status: HTTPStatus, message: str):
 
 async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
-    if request.model in get_model_list():
-        return
-    ret = create_error_response(
-        HTTPStatus.NOT_FOUND, f'The model `{request.model}` does not exist.')
-    return ret
+    if hasattr(request, 'model') and request.model not in get_model_list():
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The model `{request.model}` does not exist.')
+    if hasattr(request, 'n') and request.n <= 0:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The n `{request.n}` must be a positive int.')
+    if hasattr(request,
+               'top_p') and not (request.top_p > 0 and request.top_p <= 1):
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The top_p `{request.top_p}` must be in (0, 1].')
+    if hasattr(request, 'top_k') and request.top_k < 0:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The top_k `{request.top_k}` cannot be a negative integer.')
+    if hasattr(request, 'temperature') and not (request.temperature <= 1
+                                                and request.temperature >= 0):
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The temperature `{request.temperature}` must be in [0, 1]')
+    return
 
 
 def _create_completion_logprobs(tokenizer: Tokenizer,
@@ -212,6 +230,12 @@ def _create_chat_completion_logprobs(tokenizer: Tokenizer,
     return ChoiceLogprobs(content=content)
 
 
+@app.get('/health')
+async def health() -> Response:
+    """Health check."""
+    return Response(status_code=200)
+
+
 @app.post('/v1/chat/completions_qos')
 async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
                                   raw_request: Request = None):
@@ -287,19 +311,6 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
-        # First chunk with role
-        for i in range(request.n):
-            choice_data = ChatCompletionResponseStreamChoice(
-                index=i,
-                delta=DeltaMessage(role='assistant'),
-                finish_reason=None,
-            )
-            chunk = ChatCompletionStreamResponse(id=request_id,
-                                                 choices=[choice_data],
-                                                 model=model_name)
-            data = chunk.model_dump_json(exclude_unset=True)
-            yield f'data: {data}\n\n'
-
         async for res in result_generator:
             response_json = create_stream_response_json(
                 index=0,
@@ -456,19 +467,6 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
-        # First chunk with role
-        for i in range(request.n):
-            choice_data = ChatCompletionResponseStreamChoice(
-                index=i,
-                delta=DeltaMessage(role='assistant'),
-                finish_reason=None,
-            )
-            chunk = ChatCompletionStreamResponse(id=request_id,
-                                                 choices=[choice_data],
-                                                 model=model_name)
-            data = chunk.model_dump_json(exclude_unset=True)
-            yield f'data: {data}\n\n'
-
         async for res in result_generator:
             logprobs = None
             if gen_logprobs and res.logprobs:
@@ -621,18 +619,6 @@ async def completions_v1_qos(request: CompletionRequestQos,
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
         for generator in generators:
-            for i in range(request.n):
-                choice_data = CompletionResponseStreamChoice(
-                    index=i,
-                    text='',
-                    finish_reason=None,
-                )
-                chunk = CompletionStreamResponse(id=request_id,
-                                                 choices=[choice_data],
-                                                 model=model_name)
-                data = chunk.model_dump_json(exclude_unset=True)
-                yield f'data: {data}\n\n'
-
             async for res in generator:
                 response_json = create_stream_response_json(
                     index=0,
@@ -792,18 +778,6 @@ async def completions_v1(request: CompletionRequest,
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
         for generator in generators:
-            for i in range(request.n):
-                choice_data = CompletionResponseStreamChoice(
-                    index=i,
-                    text='',
-                    finish_reason=None,
-                )
-                chunk = CompletionStreamResponse(id=request_id,
-                                                 choices=[choice_data],
-                                                 model=model_name)
-                data = chunk.model_dump_json(exclude_unset=True)
-                yield f'data: {data}\n\n'
-
             offset = 0
             all_token_ids = []
             state = DetokenizeState()
@@ -957,6 +931,9 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
     - ignore_eos (bool): indicator for ignoring eos
     - user_id (str): for qos; if not specified, will set to "default"
     """
+    error_check_ret = await check_request(request)
+    if error_check_ret is not None:
+        return error_check_ret
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -1053,6 +1030,9 @@ async def chat_interactive_v1(request: GenerateRequest,
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
                 'please set a session_id to cancel a request')
+    error_check_ret = await check_request(request)
+    if error_check_ret is not None:
+        return error_check_ret
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id

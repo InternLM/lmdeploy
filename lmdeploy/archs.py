@@ -118,7 +118,7 @@ def check_vl_llm(config: dict) -> bool:
             if 'InternLMXComposer2ForCausalLM' in v:
                 return True
     arch = config['architectures'][0]
-    if arch == 'LlavaLlamaForCausalLM':
+    if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
         return True
     elif arch == 'QWenLMHeadModel' and 'visual' in config:
         return True
@@ -128,7 +128,7 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch == 'InternVLChatModel':
         return True
-    elif arch == 'MiniGeminiLlamaForCausalLM':
+    elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return True
     return False
 

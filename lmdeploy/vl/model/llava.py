@@ -1,16 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Modified from
 # https://github.com/haotian-liu/LLaVA.git
-
 import warnings
+from contextlib import contextmanager
 from typing import List, Union
 
 import torch
 from PIL.Image import Image
+from transformers import AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VisonModel
-from lmdeploy.vl.model.utils import load_model_from_weight_files
+from lmdeploy.vl.model.utils import disable_logging, rewrite_ctx
 
 logger = get_logger('lmdeploy')
 
@@ -26,12 +27,43 @@ def check_llava_install():
         )
 
 
+def _clip_vision_tower_load_model(self, **kwargs):
+    logger.info(f'CLIPVisionTower.load_model: {self.vision_tower_name}')
+    from transformers import (CLIPImageProcessor, CLIPVisionConfig,
+                              CLIPVisionModel)
+    self.image_processor = CLIPImageProcessor.from_pretrained(
+        self.vision_tower_name)
+    config = CLIPVisionConfig.from_pretrained(self.vision_tower_name,
+                                              trust_remote_code=True)
+    self.vision_tower = CLIPVisionModel._from_config(config=config)
+    self.vision_tower.requires_grad_(False)
+    self.is_loaded = True
+
+
+@contextmanager
+def init_llava_vision_tower(config):
+    """skip download vision model if possible."""
+    if getattr(config, 'unfreeze_mm_vision_tower', False):
+        origin_func_path = [
+            'llava.model.multimodal_encoder.clip_encoder.CLIPVisionTower.load_model'  # noqa: E501
+        ]
+        rewrite_func = [_clip_vision_tower_load_model]
+        with rewrite_ctx(origin_func_path, rewrite_func):
+            yield
+    else:
+        yield
+
+
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path, device='cuda:0'):
+    def __init__(self,
+                 model_path,
+                 arch='LlavaLlamaForCausalLM',
+                 with_llm: bool = False):
         self.model_path = model_path
-        self.device = device
+        self.arch = arch
+        self.with_llm = with_llm
         self.build_model()
 
     def build_model(self):
@@ -39,34 +71,62 @@ class LlavaVisionModel(VisonModel):
         # check llava install
         check_llava_install()
 
-        # currently, only support llava llama
-        from llava.model.language_model.llava_llama import (
-            LlavaConfig, LlavaLlamaForCausalLM)
-        self.config = LlavaConfig.from_pretrained(self.model_path)
-        assert self.config.model_type in ['llava', 'llava_llama'], \
-            'currently, only support llava llama'
+        model = None
+        if self.arch == 'LlavaLlamaForCausalLM':
+            from llava.model.language_model.llava_llama import LlavaConfig
+            self.config = LlavaConfig.from_pretrained(self.model_path)
+            assert self.config.model_type in ['llava', 'llava_llama'], \
+                f'expect model_type llava and llava_llama '\
+                f'but got {self.config.model_type}'
+        elif self.arch == 'LlavaMistralForCausalLM':
+            from llava.model.language_model.llava_mistral import \
+                LlavaMistralConfig
+            self.config = LlavaMistralConfig.from_pretrained(self.model_path)
+        else:
+            assert 0, f'unsupported arch {self.arch}'
 
-        # empty init
-        with torch.device('meta'), warnings.catch_warnings():
+        from accelerate import init_empty_weights
+
+        # init empty model, skip layer initialization
+        with init_empty_weights(), warnings.catch_warnings(), \
+                init_llava_vision_tower(self.config):
             warnings.simplefilter('ignore')
-            model = LlavaLlamaForCausalLM.from_pretrained(self.model_path)
+            self.config.quantization_config = {
+            }  # disable vision part quantization
+            model = AutoModelForCausalLM.from_config(self.config,
+                                                     trust_remote_code=True)
+
+        if not self.with_llm:
+            # remove the LLM part from llava model.
+            # Instead, Load the LLM part to turbomind engine
             del model.lm_head
             del model.model.embed_tokens
             del model.model.layers
             del model.model.norm
+        else:
+            self.vl_model = model
 
-        # # load weight
-        with torch.device('cpu'):
-            model.to_empty(device='cpu')
+        # init empty vision_tower, the embedding layer in CLIPVisionModel
+        # can't init right under init_empty_weights
+        with init_llava_vision_tower(self.config):
             vision_tower = model.get_vision_tower()
             vision_tower.is_loaded = False
             vision_tower.load_model()
-        load_model_from_weight_files(model, self.model_path)
-        model.to(self.device).eval().half()
+            # for llava-v1.5, the vit is not in llm ckpt
+            vision_tower.to(dtype=torch.half)
+
+        from accelerate import load_checkpoint_and_dispatch
+        with disable_logging():
+            load_checkpoint_and_dispatch(
+                model=model,
+                checkpoint=self.model_path,
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
+                no_split_module_classes=['CLIPEncoderLayer'],
+                dtype=torch.half)
 
         self.model = model.model
-        self.vision_tower = model.model.vision_tower
-        self.mm_projector = model.model.mm_projector
+        self.vision_tower = model.model.vision_tower.half()
+        self.mm_projector = model.model.mm_projector.half()
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """encode images."""
@@ -93,9 +153,13 @@ class LlavaVisionModel(VisonModel):
         image_sizes = [x.size for x in images]
         images = self.preprocess(images)
         if isinstance(images, list):
-            images = [x.to(self.device, dtype=torch.float16) for x in images]
+            images = [
+                x.to(device=self.vision_tower.device, dtype=torch.float16)
+                for x in images
+            ]
         else:
-            images = images.to(self.device, dtype=torch.float16)
+            images = images.to(device=self.vision_tower.device,
+                               dtype=torch.float16)
         if type(images) is list or images.ndim == 5:
             if type(images) is list:
                 images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]

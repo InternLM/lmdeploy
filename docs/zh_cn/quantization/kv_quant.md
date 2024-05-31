@@ -1,6 +1,6 @@
 # Key-Value(KV) Cache 量化
 
-LMDeploy 最新 main 分支支持**在线** kv cache int4/int8 量化，量化方式为 per-head per-token 的非对称量化。原来的 kv 离线量化方式移除。
+自 v0.4.0 起，LMDeploy 支持**在线** kv cache int4/int8 量化，量化方式为 per-head per-token 的非对称量化。原来的 kv 离线量化方式移除。
 
 直观上看，量化 kv 利于降低内存占用量。和 fp16 相比，int4/int8 kv 的内存可以分别减到 1/4 和 1/2。这意味着，在相同的内存条件下，kv 量化后，系统能支撑的并发数可以大幅提升，从而最终提高吞吐量。
 
@@ -21,7 +21,11 @@ LMDeploy kv 4/8 bit 量化和推理支持如下 NVIDIA 显卡型号：
 3. kv int8 量化精度几乎无损，kv int4 量化精度在可接受范围之内
 4. 推理高效，在 llama2-7b 上加入 int8/int4 kv 量化，RPS 相较于 fp16 分别提升近 30% 和 40%
 
-接下来，我们以 internlm2-chat-7b 模型为例，介绍 kv 量化和推理的若干应用。而在此之前，请首先参考[文档](https://lmdeploy.readthedocs.io/en/latest/build.html)，源码安装 lmdeploy，因为 kv cache 4bit/8bit 在线量化尚未发版。
+接下来，我们以 internlm2-chat-7b 模型为例，介绍 kv 量化和推理的若干应用。而在此之前，请安装 lmdeploy
+
+```shell
+pip install lmdeploy
+```
 
 ## 应用示例
 

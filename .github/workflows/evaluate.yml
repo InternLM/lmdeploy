@@ -5,9 +5,9 @@ on:
     inputs:
       repo_org:
         required: false
-        description: 'Tested repository organization name. Default is InternLM'
+        description: 'Tested repository organization name. Default is InternLM/lmdeploy'
         type: string
-        default: InternLM
+        default: 'InternLM/lmdeploy'
       repo_ref:
         required: false
         description: 'Set branch or tag or commit id. Default is "main"'
@@ -17,78 +17,114 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[internlm2_chat_7b,internlm2_chat_20b,internlm2_chat_20b_w4a16,llama2_chat_7b,qwen_chat_7b]'
+        default: '[tb_internlm2_chat_7b,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_llama2_chat_7b,tb_qwen1_5_chat_7b,tb_llama_3_8b_instruct,pt_internlm2_chat_7b,pt_internlm2_chat_20b,pt_llama2_chat_7b,pt_qwen1_5_chat_7b,pt_qwen1_5_moe_2_7b_chat,pt_llama_3_8b_instruct,tb_internlm2_chat_7b_kvint4,tb_internlm2_chat_20b_kvint4,tb_qwen1_5_chat_7b_kvint4,tb_llama_3_8b_instruct_kvint4]'
+      datasets:
+        required: true
+        description: 'Tested datasets list. eg. [*mmlu_datasets, *ceval_datasets, *WiC_datasets, *WSC_datasets, *triviaqa_datasets, *gsm8k_datasets, *race_datasets, *crowspairs_datasets]'
+        type: string
+        default: '[*mmlu_datasets, *gsm8k_datasets]'
       devices:
         required: true
         description: 'CUDA_VISIBLE_DEVICES.'
         type: string
         default: '0,1,2,3,4,5,6,7'
+      dependency_pkgs:
+        required: true
+        description: 'Dependency packages, you can also set a specific version'
+        type: string
+        default: 'pynvml packaging protobuf transformers_stream_generator transformers==4.41.0'
+
 
 jobs:
+  linux-build:
+    if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
+    strategy:
+      matrix:
+        pyver: [py38]
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: ${{ matrix.pyver }}
+      PLAT_NAME: manylinux2014_x86_64
+      DOCKER_TAG: cuda11.8
+      OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Build
+        run: |
+          echo ${PYTHON_VERSION}
+          echo ${PLAT_NAME}
+          echo ${DOCKER_TAG}
+          echo ${OUTPUT_FOLDER}
+          echo ${GITHUB_RUN_ID}
+          # remove -it
+          sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
+          bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          path: builder/manywheel/${{ env.OUTPUT_FOLDER }}
+          retention-days: 1
+          name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
+
+
   evaluate:
+    needs: linux-build
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 4320 # 72hours
-    environment: 'prod'
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/resources:/root/resources
-        - /nvme/github-actions/evaluation-reports:/root/evaluation-reports
         - /nvme/github-actions/opencompass-data:/root/opencompass-data
+        - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/root/models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
         run: |
-          rm /etc/apt/sources.list.d/cuda*.list
-          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
-              libgoogle-glog-dev
-          rm -rf /var/lib/apt/lists
           export TIME_STAMP="$(date +'%Y%m%d-%H%M%S')"
           echo "TIME_STAMP=$TIME_STAMP" >> $GITHUB_ENV
-      - name: Checkout repository
+      - name: Clone repository
         uses: actions/checkout@v3
         with:
-          repository: '${{ github.event.inputs.repo_org}}/lmdeploy'
-          ref: ${{github.event.inputs.repo_ref}}
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}-py38
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
-      - name: Build lmdeploy
+      - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install cmake
-          python3 -m pip install -r requirements/build.txt
-          mkdir build
-          cd build
-          cmake .. \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-              -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-              -DCMAKE_INSTALL_PREFIX=./install \
-              -DBUILD_PY_FFI=ON \
-              -DBUILD_MULTI_GPU=ON \
-              -DCMAKE_CUDA_FLAGS="-lineinfo" \
-              -DUSE_NVTX=ON \
-              -DSM=80 \
-              -DCMAKE_CUDA_ARCHITECTURES=80 \
-              -DBUILD_TEST=OFF
-          make -j$(nproc) && make install
-      - name: Install lmdeploy from source
-        run: |
-          python3 -m pip install pynvml packaging protobuf transformers_stream_generator
+          python3 -m pip install ${{inputs.dependency_pkgs }}
           # manually install flash attn
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install -r requirements.txt
-          python3 -m pip install .
+      - name: Install lmdeploy
+        run: |
+          python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
           python3 -m pip install --user -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
+      - name: Check env
+        run: |
+          python3 -m pip list
+          lmdeploy check_env
       - name: Setup paths for evaluation
         run: |
           ln -s /root/opencompass-data ./data
@@ -102,6 +138,7 @@ jobs:
 
           python3 .github/scripts/action_tools.py evaluate \
             --models "${{github.event.inputs.models}}" \
+            --datasets "${{github.event.inputs.datasets}}" \
             --workspace /root/evaluation-reports/$TIME_STAMP
       - name: Clear workspace
         if: always()

@@ -41,6 +41,16 @@ struct SiluActivation {
     }
 };
 
+struct Add {
+    static __inline__ __device__ void apply(uint data, int m, int n, half* C, int M, int N)
+    {
+        if (n < N) {
+            C[n * M + m] += ((half2&)data).x;
+            C[n * M + m + 1] += ((half2&)data).y;
+        }
+    }
+};
+
 }  // namespace ops
 
 template<typename... Ts>
@@ -238,7 +248,7 @@ struct GemmS4F16::Impl {
         cudaEventCreate(&ev_start_);
         cudaEventCreate(&ev_end_);
 
-        using Ops = OutputOps<ops::Identity, ops::SiluActivation>;
+        using Ops = OutputOps<ops::Identity, ops::SiluActivation, ops::Add>;
 
         /// TODO: add more group sizes
         Generate<128, Ops>(kernels_);

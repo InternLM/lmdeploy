@@ -18,6 +18,7 @@ SequenceManager::SequenceManager(size_t             layer_num,
                                  const BlockConfig& block_config,
                                  double             block_count,
                                  int                chunk_size,
+                                 bool               enable_prefix_caching,
                                  int                rank,
                                  IAllocator*        allocator,
                                  GetFreeMemSize     get_free_size):
@@ -28,7 +29,8 @@ SequenceManager::SequenceManager(size_t             layer_num,
 
     size_t block_size = layout.block_size(layer_num);
 
-    block_manager_ = std::make_unique<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
+    block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
+    block_trie_    = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_, enable_prefix_caching);
 }
 
 const Sequence* SequenceManager::Create(uint64_t id)
@@ -68,7 +70,10 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
     else {
         UpdateAndSetUnlock(seq);
     }
-    freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
+    // if prefix cache enabled, blocks will be shared by sequences, cannot be freed immediately
+    if (!block_trie_->enabled()) {
+        freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
+    }
     it = sequences_.erase(it);
 }
 
@@ -79,6 +84,21 @@ bool SequenceManager::Erase(uint64_t id)
         return true;
     }
     return false;
+}
+
+void SequenceManager::CacheIfEnabled(const Sequences& sequences, int active_size)
+{
+    if (block_trie_->enabled()) {
+        block_trie_->verify();
+        for (int i = 0; i < active_size; ++i) {
+            auto& seq = *sequences[i];
+            // only cache prompt blocks
+            if (!seq.prompt.empty()) {
+                block_trie_->cache(seq);
+                seq.prompt.clear();
+            }
+        }
+    }
 }
 
 void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
@@ -207,6 +227,8 @@ struct Transaction {
 
     const Sequences& sequences_;
     Schedule&        schedule_;
+
+    std::shared_ptr<BlockTrie> block_trie_;
 
     explicit Transaction(const Sequences& sequences, int index, int block_count, int input_count, Schedule& sched):
         sequences_(sequences), schedule_(sched), index_(index), block_count_(block_count), input_count_(input_count)
@@ -376,6 +398,20 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // Verify and lock cache sequences to avoid their blocks being evicted unnoticed
     // the blocks can still be preempted later
     VerifyAndLockCached(sequences);
+
+    if (block_trie_->enabled()) {
+        // verify blocks in trie cache
+        block_trie_->verify();
+
+        // match prefix cache
+        for (int i = 0; i < sequences.size(); i++) {
+            if (!sequences[i]->prompt.empty() && sequences[i]->blocks.empty()) {
+                auto& seq = const_cast<Sequence&>(*sequences[i]);
+                block_trie_->match(seq);
+                seq.cache_len = seq.blocks.size() * block_seq_len_;
+            }
+        }
+    }
 
     auto [input_count1, input_count2] = adjust(sequences, context_lengths);
 
