@@ -252,7 +252,7 @@ class NodeManager:
             for chunk in response.iter_lines(decode_unicode=False,
                                              delimiter=b'\n'):
                 if chunk:
-                    yield chunk + b'\n'
+                    yield chunk + b'\n\n'
         except requests.exceptions.RequestException as e:  # noqa
             yield self.handle_api_timeout(node_url)
 
