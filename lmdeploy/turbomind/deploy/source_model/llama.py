@@ -119,7 +119,7 @@ class LlamaReader(BaseReader):
             f'{self.attn_layer_prefix}.{i}.post_attention_layernorm.weight']
 
 
-@INPUT_MODELS.register_module(name='hf')
+@INPUT_MODELS.register_module(name='llama')
 class LlamaModel(BaseInputModel):
     """Llama model in hf format."""
 

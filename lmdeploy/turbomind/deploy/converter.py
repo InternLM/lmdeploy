@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import copy
 import os
 import os.path as osp
 import re
@@ -11,20 +12,12 @@ import torch
 from lmdeploy.model import MODELS
 from lmdeploy.utils import get_model
 
+from ...utils import _get_and_verify_max_len
+from ..supported_models import SUPPORTED_ARCHS, get_model_arch, is_supported
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 
-supported_formats = ['llama', 'hf', 'awq', None]
-special_input_model_map = {
-    'qwen': 'qwen',
-    'qwen2': 'qwen2',
-    'baichuan': 'baichuan',
-    'baichuan2': 'baichuan2',
-    'internlm2': 'internlm2',
-    'xcomposer2': 'xcomposer2',
-    'deepseekvl': 'deepseekvl',
-    'internvl': 'internvl'
-}
+SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', None]
 
 
 def get_package_root_path():
@@ -33,21 +26,20 @@ def get_package_root_path():
     return Path(lmdeploy.__file__).parent
 
 
-def get_model_format(model_name: str, model_format: str):
-    """Get model format if not given or equal awq."""
-    # get model name prefix
-    if model_name.find('-') != -1:
-        model_name = model_name[:model_name.find('-')]
-    # rules:
-    # 1) llama -> match special -> hf (if not matched)
-    # 2) append awq (if model_format is awq)
-    inferred_model_format = model_format
-    if model_format in [None, 'hf']:
-        inferred_model_format = special_input_model_map.get(model_name, 'hf')
-    elif model_format == 'awq':
-        inferred_model_format = special_input_model_map.get(model_name,
-                                                            'hf') + '-awq'
-    return inferred_model_format
+def get_input_model_registered_name(model_path: str, model_format: str):
+    """Get the registered name of a model. The name will be used to access the
+    INPUT_MODELS registry.
+
+    Args:
+        model_path (str): the path of the input model
+        model_format (str): the format of the model, which can be one of
+            ['meta_llama',  'hf', 'awq']
+    """
+    arch = get_model_arch(model_path)[0]
+    register_name = SUPPORTED_ARCHS[arch]
+    if model_format == 'awq':
+        register_name = arch + '-awq'
+    return register_name
 
 
 def create_workspace(_path: str):
@@ -124,58 +116,59 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
                     osp.join(triton_models_path, 'tokenizer'))
 
 
-def update_output_format(model_name: str, model_format: str, model_path: str,
-                         output_format: str):
-    """Update output format according to model info."""
-    TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16'}
-    MODEL_NAME_MAP = {'qwen': 'bf16', 'llama': 'half'}
-    model_name = model_name.split('-')[0]
+def get_output_model_registered_name_and_config(model_path: str,
+                                                model_format: str,
+                                                config: TurbomindModelConfig):
+    """Get the registered name of the turbomind model and its configuration
+    according to the input model path, format and user-input config. The name
+    will be used to access the OUTPUT_MODELS registry.
 
-    def _fix_device_support(output_format):
-        """fix device support."""
-        if output_format == 'bf16':
-            if not torch.cuda.is_bf16_supported():
-                # device does not support bf16
-                print('Device does not support bf16.')
-                output_format = 'fp16'
-        return output_format
+    Args:
+        model_path (str): the path of the input model
+        model_format (str): the format of the model, which can be one of
+            ['meta_llama',  'hf', 'awq']
+        config: the user-input turbomind model's configuration
+    """
+    assert config, 'turbomind config should not be None'
+    register_name = 'fp16'
+    turbomind_model_arch = 'llama'
+    session_len = 2048
+    weight_type = 'fp16'
+    _config = copy.deepcopy(config)
 
-    def _infer_output_format(config):
-        """_infer_output_format."""
-        torch_dtype = getattr(config, 'torch_dtype', None)
-        if torch_dtype:
-            updated_output_format = TORCH_DTYPE_MAP.get(
-                torch_dtype, output_format)
+    if model_format == 'meta_llama':
+        pass
+    else:  # hf_llama, awq, None
+        register_name = 'fp16'
+        model_arch, model_config = get_model_arch(model_path)
+        print(model_config)
+        turbomind_model_arch = SUPPORTED_ARCHS[model_arch]
+        session_len = _get_and_verify_max_len(model_config, session_len)
+
+        if model_format == 'awq':
+            weight_type = 'int4'
+            register_name = 'w4-plora' \
+                if turbomind_model_arch == 'xcomposer2' else 'w4'
         else:
-            # get model name prefix
-            updated_output_format = MODEL_NAME_MAP.get(model_name,
-                                                       output_format)
-        return _fix_device_support(updated_output_format)
+            torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
+            # Qwen-1 didn't set torch_dtype. It used bf16 as default
+            if model_arch == 'QWenLMHeadModel':
+                torch_dtype = 'bfloat16'
+            if not torch.cuda.is_bf16_supported():
+                print(
+                    'Device does not support bfloat16. Set float16 forcefully')
+                torch_dtype = 'float16'
 
-    if model_format in MODEL_NAME_MAP:
-        updated_output_format = MODEL_NAME_MAP.get(model_name, output_format)
-        return _fix_device_support(updated_output_format)
-    else:
-        from transformers import AutoConfig
-        try:
-            config = AutoConfig.from_pretrained(model_path,
-                                                trust_remote_code=True)
-        except Exception as e:  # noqa
-            from transformers import PretrainedConfig
-            config = PretrainedConfig.get_config_dict(model_path)[0]
-        return _infer_output_format(config)
+            weight_type = 'bf16' if torch_dtype == 'bfloat16' else 'fp16'
+            register_name = weight_type
+            if turbomind_model_arch == 'xcomposer2':
+                register_name = 'plora'
 
+    _config.model_arch = turbomind_model_arch
+    _config.session_len = session_len + 8
+    _config.weight_type = weight_type
 
-def update_config_weight_type(output_format: str,
-                              config: TurbomindModelConfig):
-    WEIGHT_TYPE_MAP = {
-        'fp32': 'fp32',
-        'fp16': 'fp16',
-        'bf16': 'bf16',
-        'w4': 'int4',
-        'w8': 'int8'
-    }
-    config.weight_type = WEIGHT_TYPE_MAP[output_format]
+    return register_name, _config
 
 
 def pack_model_repository(workspace_path: str):
@@ -220,7 +213,7 @@ def main(model_name: str,
             llama-7b, llama-13b, vicuna-7b and etc
         model_path (str): the directory path of the model
         model_format (str): the format of the model, should choose from
-            ['llama', 'hf', 'awq', None]. 'llama' stands for META's llama
+            ['meta_llama', 'hf', 'awq', None]. 'llama' stands for META's llama
             format, 'hf' means huggingface llama format, and 'awq' means
             llama(hf) model quantized by lmdeploy/lite/quantization/awq.py.
             the default value is None, which means the model_format will be
@@ -240,39 +233,43 @@ def main(model_name: str,
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
 
-    from lmdeploy.turbomind.supported_models import (SUPPORTED_ARCHS,
-                                                     get_model_arch,
-                                                     is_supported)
     assert is_supported(model_path), (
         f'turbomind does not support {model_path}. '
         'Plz try pytorch engine instead.')
 
-    arch, _ = get_model_arch(model_path)
-
     assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
 
-    output_format = 'fp16'
-
-    # get input model format
-    assert model_format in supported_formats, 'the model format ' \
-        f'should be in {supported_formats}'
-
-    inferred_model_format = get_model_format(SUPPORTED_ARCHS[arch],
-                                             model_format)
-    if inferred_model_format not in INPUT_MODELS.module_dict.keys():
-        supported_keys = list(INPUT_MODELS.module_dict.keys())
-        print(f'with model name {model_name} and model formst {model_format}, '
-              f'the inferred model format is {inferred_model_format}, '
-              f'which is not in supported list {supported_keys}')
-        exit(-1)
+    assert model_format in SUPPORTED_FORMATS, 'the model format ' \
+        f'should be in {SUPPORTED_FORMATS}'
 
     if not os.path.exists(model_path):
-        print(f'can\'t find model from local_path {model_path}, '
+        print(f"can't find model from local_path {model_path}, "
               'try to download from huggingface')
         model_path = get_model(model_path)
         print(f'load model from {model_path}')
 
-    # create workspace
+    input_model_name = get_input_model_registered_name(model_path,
+                                                       model_format)
+    print(f'input_model_name: {input_model_name}')
+    register_names = list(INPUT_MODELS.module_dict.keys())
+    if input_model_name not in register_names:
+        print(
+            f'Failed to find the entry in INPUT_MODELS registry with name'
+            f'"{input_model_name}". The registered names are {register_names}')
+        exit(-1)
+
+    cfg = TurbomindModelConfig.from_dict({}, allow_none=True)
+    cfg.model_name = model_name
+    cfg.tensor_para_size = tp
+    cfg.group_size = group_size
+    output_model_name, cfg = get_output_model_registered_name_and_config(
+        model_path, model_format, cfg)
+    print(f'output_model_name: {output_model_name}')
+    register_names = list(OUTPUT_MODELS.module_dict.keys())
+    if output_model_name not in register_names:
+        exit(-1)
+    print(f'turbomind model config: {cfg}')
+
     create_workspace(dst_path)
 
     triton_models_path = copy_triton_model_templates(dst_path)
@@ -280,39 +277,14 @@ def main(model_name: str,
     copy_tokenizer(model_path, tokenizer_path, triton_models_path,
                    trust_remote_code)
 
-    # turbomind config
-    cfg = TurbomindModelConfig.from_dict({}, allow_none=True)
-    cfg.model_name = model_name
-    cfg.tensor_para_size = tp
-    cfg.rotary_embedding = cfg.size_per_head
-    cfg.group_size = group_size
-    if inferred_model_format.find('awq') != -1:
-        cfg.weight_type = 'int4'
-        output_format = 'w4'
-        if 'xcomposer2' in inferred_model_format:
-            output_format = 'plora-w4'
-        assert group_size > 0, f'group_size: {group_size} should > 0'
-    else:
-        output_format = update_output_format(model_name, inferred_model_format,
-                                             model_path, output_format)
-        update_config_weight_type(output_format, cfg)
-
-    # convert
-    print('model_name            ', model_name)
-    print('model_format          ', model_format)
-    print('inferred_model_format ', inferred_model_format)
-    print('model_path            ', model_path)
-    print('tokenizer_path        ', tokenizer_path)
-    print('output_format         ', output_format)
     weight_path = osp.join(triton_models_path, 'weights')
-    input_model = INPUT_MODELS.get(inferred_model_format)(
+    input_model = INPUT_MODELS.get(input_model_name)(
         model_path=model_path,
         tokenizer_path=tokenizer_path,
         ckpt_path=quant_path)
-    output_model = OUTPUT_MODELS.get(output_format)(input_model=input_model,
-                                                    cfg=cfg,
-                                                    to_file=True,
-                                                    out_dir=weight_path)
+    output_model = OUTPUT_MODELS.get(output_model_name)(
+        input_model=input_model, cfg=cfg, to_file=True, out_dir=weight_path)
+
     output_model.export()
 
     # update `tensor_para_size` in `triton_models/interactive/config.pbtxt`
