@@ -126,6 +126,7 @@ def get_output_model_registered_name_and_config(model_path: str,
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
             ['meta_llama',  'hf', 'awq']
+        group_size (int): the size of group used by awq model
     """
     register_name = 'fp16'
     turbomind_model_arch = 'llama'
