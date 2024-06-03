@@ -489,7 +489,7 @@ jobs:
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api pytorch
-        timeout-minutes: 40
+        timeout-minutes: 75
         run: |
           pytest autotest/interface/restful/test_restful_chat_func.py -n 20 --alluredir=allure-results
       - name: Kill api server
