@@ -1015,7 +1015,7 @@ class TestRestfulInterfaceChatInteractive:
     def test_longtext_input(self):
         api_client = APIClient(BASE_URL)
         for output in api_client.chat_interactive_v1(
-                prompt='Hi, pls intro yourself' * 10000, temperature=0.01):
+                prompt='Hi, pls intro yourself' * 100000, temperature=0.01):
             continue
         assert output.get('finish_reason') == 'length'
         assert output.get('text') == ''
@@ -1024,7 +1024,7 @@ class TestRestfulInterfaceChatInteractive:
         api_client = APIClient(BASE_URL)
         outputList = []
         for output in api_client.chat_interactive_v1(
-                prompt='Hi, pls intro yourself' * 10000,
+                prompt='Hi, pls intro yourself' * 100000,
                 stream=True,
                 temperature=0.01):
             outputList.append(output)
