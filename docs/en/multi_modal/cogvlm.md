@@ -6,23 +6,12 @@ CogVLM is a powerful open-source visual language model (VLM). LMDeploy supports 
 
 ## Quick Start
 
-### Install lmdeploy
+### Install
 
 Install LMDeploy with pip (Python 3.8+). Refer to [Installation](https://lmdeploy.readthedocs.io/en/latest/get_started.html#installation) for more.
 
 ```shell
 pip install lmdeploy
-```
-
-### Prepare
-
-Download CogVLM models using huggingface-cli.
-
-```shell
-# download model
-huggingface-cli download THUDM/cogvlm-chat-hf --local-dir ./cogvlm-chat-hf --local-dir-use-symlinks False
-# cogvlm-chat-hf uses the tokenizer from lmsys/vicuna-7b-v1.5, we should download the files into the model directory. Skip this step for CogVLM2.
-huggingface-cli download lmsys/vicuna-7b-v1.5 special_tokens_map.json tokenizer.model tokenizer_config.json --local-dir ./cogvlm-chat-hf --local-dir-use-symlinks False
 ```
 
 Install xformers for cogvlm with pip. Refer to [installing-xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers) for more.
@@ -36,17 +25,31 @@ pip3 install -U 'xformers<=0.0.24' --index-url https://download.pytorch.org/whl/
 pip3 install -U 'xformers<=0.0.24' --index-url https://download.pytorch.org/whl/cu121
 ```
 
+### Prepare
+
+When deploying the **CogVLM** model using LMDeploy, it is necessary to download the model first, as the **CogVLM** model repository does not include the tokenizer model.
+However, this step is not required for **CogVLM2**.
+
+Taking one **CogVLM** model `cogvlm-chat-hf` as an example, you can prepare it as follows:
+
+```shell
+huggingface-cli download THUDM/cogvlm-chat-hf --local-dir ./cogvlm-chat-hf --local-dir-use-symlinks False
+huggingface-cli download lmsys/vicuna-7b-v1.5 special_tokens_map.json tokenizer.model tokenizer_config.json --local-dir ./cogvlm-chat-hf --local-dir-use-symlinks False
+```
+
 ### Offline inference pipeline
 
 The following sample code shows the basic usage of VLM pipeline. For more examples, please refer to [VLM Offline Inference Pipeline](https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#vlm-offline-inference-pipeline)
 
 ```python
-from lmdeploy import pipeline, PytorchEngineConfig
+from lmdeploy import pipeline
 from lmdeploy.vl import load_image
 
-pipe = pipeline('cogvlm-chat-hf', backend_config=PytorchEngineConfig(tp=1, max_prefill_token_num=4096, cache_max_entry_count=0.8))
 
-image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-response = pipe(('describe this image', image))
-print(response)
+if __name__ == "__main__":
+    pipe = pipeline('cogvlm-chat-hf')
+
+    image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+    response = pipe(('describe this image', image))
+    print(response)
 ```
