@@ -67,11 +67,14 @@ struct SmemCopy {
 
     using Pack = Packing<Operand::kPack>;
 
-    template<class Accessor>
-    __device__ static void copy(Accessor src, Frag& dst, int2 offset_mk, bool mask = true)
+    template<class Pointer>
+    __device__ static void copy(Pointer src_ptr, Frag& dst, int2 offset_mk, bool mask = true)
     {
+        typename Operand::SmemAccessor smem{src_ptr};
+
         const int2 thr    = Atom::get_offset(threadIdx.x);
         const int2 offset = mk2cs<Operand::kOrder>(offset_mk.x, offset_mk.y);
+
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
             PRAGMA_UNROLL
@@ -79,7 +82,7 @@ struct SmemCopy {
                 const int  cc = (offset.x + c * kDelta.x) / 1;  // kRepeat.x;
                 const int  ss = (offset.y + s * kDelta.y) / 1;  // kRepeat.y;
                 const int2 cs = Pack::apply(int2{cc, ss});
-                Atom::copy(&src(cs.y + thr.y, cs.x + thr.x), dst[s * ITER_C + c].data(), mask);
+                Atom::copy(&smem(cs.y + thr.y, cs.x + thr.x), dst[s * ITER_C + c].data(), mask);
             }
         }
     }

@@ -113,7 +113,7 @@ struct ConvertOperand {
             for (int k = 0; k < ITER_K; ++k) {
 
                 // Load from smem as we are doing GEMMs
-                SmemCopy::copy(Accessor{smem}, data, int2{warp_offset_m, k * COPY_K});
+                SmemCopy::copy(smem, data, int2{warp_offset_m, k * COPY_K});
 
                 PRAGMA_UNROLL
                 for (int m = 0; m < kFragNum; m += Pack_M) {

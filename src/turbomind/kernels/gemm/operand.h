@@ -39,19 +39,19 @@ struct VoidOperand {
 template<class Operand, class Iterator, int M, int K, int WARPS>
 struct MakeOperand {
 
+    using Dtype = typename Operand::Dtype;
+
     static constexpr Pack  kPack  = Operand::kPack;
     static constexpr Order kOrder = Operand::kOrder;
 
-    /// TODO: handle group size
     static constexpr int kGroupSize = 1;
 
     static constexpr int2 CS = Packing<kPack>::apply(mk2cs<kOrder>(M, K));
 
     static constexpr pair<CS.x, CS.y> kShapeCS{};
 
-    using Dtype = typename Operand::Dtype;
-
-    using SmemLayout = decltype(Operand::GetSmemLayout::apply(kShapeCS));
+    using SmemLayout   = decltype(Operand::GetSmemLayout::apply(kShapeCS));
+    using SmemAccessor = SmemAccessor<Dtype, SmemLayout>;
 
     using GmemIter = typename decltype(Operand::GetGmemIter::apply(
         type_c<Operand>, type_c<Iterator>, type_c<SmemLayout>, kShapeCS, constant<WARPS>{}))::type;
