@@ -132,19 +132,16 @@ def get_output_model_registered_name_and_config(model_path: str,
     assert config, 'turbomind config should not be None'
     register_name = 'fp16'
     turbomind_model_arch = 'llama'
-    session_len = 2048
     weight_type = 'fp16'
     _config = copy.deepcopy(config)
 
     if model_format == 'meta_llama':
-        pass
+        session_len = 2048
     else:  # hf_llama, awq, None
         register_name = 'fp16'
         model_arch, model_config = get_model_arch(model_path)
-        print(model_config)
         turbomind_model_arch = SUPPORTED_ARCHS[model_arch]
-        session_len = _get_and_verify_max_len(model_config, session_len)
-
+        session_len = _get_and_verify_max_len(model_config, None)
         if model_format == 'awq':
             weight_type = 'int4'
             register_name = 'w4-plora' \

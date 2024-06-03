@@ -41,24 +41,24 @@ SUPPORTED_ARCHS = dict(
 
 def get_model_arch(model_path: str):
     try:
-        cfg = AutoConfig.from_pretrained(model_path,
-                                         trust_remote_code=True).to_dict()
+        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     except Exception as e:  # noqa
         from transformers import PretrainedConfig
-        cfg = PretrainedConfig.get_config_dict(model_path)[0]
+        cfg = PretrainedConfig.from_pretrained(model_path)
 
-    if cfg.get('architectures', None):
-        arch = cfg['architectures'][0]
-        if cfg.get('auto_map'):
-            for _, v in cfg['auto_map'].items():
+    _cfg = cfg.to_dict()
+    if _cfg.get('architectures', None):
+        arch = _cfg['architectures'][0]
+        if _cfg.get('auto_map'):
+            for _, v in _cfg['auto_map'].items():
                 if 'InternLMXComposer2ForCausalLM' in v:
                     arch = 'InternLMXComposer2ForCausalLM'
-    elif cfg.get('auto_map',
-                 None) and 'AutoModelForCausalLM' in cfg['auto_map']:
-        arch = cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
+    elif _cfg.get('auto_map',
+                  None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
+        arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
     else:
         raise RuntimeError(
-            f'Could not find model architecture from config: {cfg}')
+            f'Could not find model architecture from config: {_cfg}')
     return arch, cfg
 
 
@@ -95,13 +95,13 @@ def is_supported(model_path: str):
             support_by_turbomind = True
             # special cases
             if arch == 'BaichuanForCausalLM':
-                num_attn_head = cfg['num_attention_heads']
+                num_attn_head = cfg.num_attention_heads
                 if num_attn_head == 40:
                     # baichuan-13B, baichuan2-13B not supported by turbomind
                     support_by_turbomind = False
             elif arch == 'Qwen2ForCausalLM':
-                num_attn_head = cfg['num_attention_heads']
-                hidden_size = cfg['hidden_size']
+                num_attn_head = cfg.num_attention_heads
+                hidden_size = cfg.hidden_size
                 # qwen2 0.5b size_per_head is 64, which hasn't been supported
                 # by turbomind yet
                 if hidden_size // num_attn_head != 128:
