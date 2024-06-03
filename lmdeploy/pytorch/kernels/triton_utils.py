@@ -277,6 +277,12 @@ class JitFunction230Wrapper:
         self.__module__ = jit_func.__module__
 
     @staticmethod
+    @functools.lru_cache
+    def build_cuda_options(*args, **kwargs):
+        from triton.compiler.backends.cuda import CUDAOptions
+        return CUDAOptions(*args, **kwargs)
+
+    @staticmethod
     def _specialization_key(value):
         if hasattr(value, 'data_ptr'):
             return (value.data_ptr() % TRITON_DIVIIBILITY == 0, )
@@ -371,10 +377,9 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
     device = get_current_device()
     stream = get_current_stream(device)
     target = get_current_target()
-    if target[1] >= 89:
-        allow_fp8e4nv = True
+    allow_fp8e4nv = target[1] >= 89
     max_num_imprecise_acc_default = {mni_acc_default}
-    options = CUDAOptions({cuda_opt_args}, )
+    options = build_cuda_options({cuda_opt_args}, )
     sig_key = ({sig_key_str}, )
     spec_key = ({spec_key_str}, )
     constexpr_key = ({constexpr_key_str}, )
@@ -391,15 +396,16 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
-    if kernel.metadata["tensormaps_info"] is not None:
+    tensormaps_info = kernel.metadata["tensormaps_info"]
+    if len(tensormaps_info) > 0:
         kernel.run(grid_0, grid_1, grid_2, kernel.num_warps, kernel.num_ctas,
-                kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],
+                *kernel.cluster_dims,
                 kernel.shared, stream, kernel.function, launch_enter_hook,
                 launch_exit_hook, kernel,
                 *assemble_tensormap_to_arg(kernel.metadata["tensormaps_info"], args))
     else:
         kernel.run(grid_0, grid_1, grid_2, kernel.num_warps, kernel.num_ctas,
-                kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],
+                *kernel.cluster_dims,
                 kernel.shared, stream, kernel.function, launch_enter_hook,
                 launch_exit_hook, kernel,
                 {sig_name_str})
@@ -414,7 +420,7 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
             _specialization_key=self._specialization_key,
             get_cuda_version_key=get_cuda_version_key,
             CUDABackend=CUDABackend,
-            CUDAOptions=CUDAOptions,
+            build_cuda_options=self.build_cuda_options,
             jit_func=jit_func,
             _key_of=JITFunction._key_of,
             kernel_cache=jit_func.cache,
