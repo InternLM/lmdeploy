@@ -167,6 +167,12 @@ class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
 class CogVLMChatTemplateWrapper(VLChatTemplateWrapper):
     """cogvlm chat template wrapper."""
 
+    def __init__(self, chat_template: BaseModel):
+        from lmdeploy.model import Vicuna
+        self.chat_template = chat_template
+        self.llm_chat_template = Vicuna(eoa=chat_template.eoa,
+                                        stop_words=chat_template.stop_words)
+
     def convert_messages(self, messages, sequence_start=True):
         """convert GPT4V message format to GPT4 text format."""
         new_messages = []
@@ -199,6 +205,11 @@ class CogVLMChatTemplateWrapper(VLChatTemplateWrapper):
         prompt = ''
         for i, msg in enumerate(new_messages):
             num_images = msg.pop('num_images', 0)
+            if i == 0 and num_images == 0 and sequence_start:
+                role = msg['role']
+                msg = self.llm_chat_template.messages2prompt([msg],
+                                                             sequence_start)
+                msg = dict(role=role, content=msg)
             prompt_i = self.chat_template.messages2prompt([msg],
                                                           sequence_start)
             if num_images > 0:
