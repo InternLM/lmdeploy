@@ -17,7 +17,8 @@ def export_turbomind_config(model_name: str,
     """Export hf lmdeploy model and config.json."""
     import lmdeploy
     from lmdeploy.model import MODELS
-    from lmdeploy.turbomind.deploy.converter import get_model_format
+    from lmdeploy.turbomind.deploy.converter import \
+        get_input_model_registered_name
     from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
     from lmdeploy.turbomind.deploy.target_model.base import (
         OUTPUT_MODELS, TurbomindModelConfig)
@@ -43,15 +44,15 @@ def export_turbomind_config(model_name: str,
     cfg.rotary_embedding = cfg.size_per_head
     cfg.group_size = group_size
     cfg.weight_type = 'int4'
-    output_format = 'w4'
 
-    inferred_model_format = get_model_format(model_name, model_format)
-    input_model = INPUT_MODELS.get(inferred_model_format)(
-        model_path=model_path, tokenizer_path=work_dir, ckpt_path=work_dir)
-    output_model = OUTPUT_MODELS.get(output_format)(input_model=input_model,
-                                                    cfg=cfg,
-                                                    to_file=False,
-                                                    out_dir='')
+    inpu_model_name = get_input_model_registered_name(model_name, model_format)
+    input_model = INPUT_MODELS.get(inpu_model_name)(model_path=model_path,
+                                                    tokenizer_path=work_dir,
+                                                    ckpt_path=work_dir)
+    output_model = OUTPUT_MODELS.get('w4')(input_model=input_model,
+                                           cfg=cfg,
+                                           to_file=False,
+                                           out_dir='')
 
     old_data = get_hf_config_content(model_path)
     config = output_model.cfg.__dict__

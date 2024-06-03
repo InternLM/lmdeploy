@@ -134,7 +134,7 @@ def get_output_model_registered_name_and_config(model_path: str,
 
     if model_format == 'meta_llama':
         session_len = 2048
-    else:  # hf_llama, awq, None
+    else:  # hf, awq, None
         register_name = 'fp16'
         model_arch, model_config = get_model_arch(model_path)
         turbomind_model_arch = SUPPORTED_ARCHS[model_arch]
@@ -207,11 +207,10 @@ def main(model_name: str,
             llama-7b, llama-13b, vicuna-7b and etc
         model_path (str): the directory path of the model
         model_format (str): the format of the model, should choose from
-            ['meta_llama', 'hf', 'awq', None]. 'llama' stands for META's llama
-            format, 'hf' means huggingface llama format, and 'awq' means
+            ['meta_llama', 'hf', 'awq', None]. 'meta_llama' stands for META's
+            llama format, 'hf' means huggingface llama format, and 'awq' means
             llama(hf) model quantized by lmdeploy/lite/quantization/awq.py.
-            the default value is None, which means the model_format will be
-            inferred based on model_name
+            the default value is None
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism, should be 2^n
