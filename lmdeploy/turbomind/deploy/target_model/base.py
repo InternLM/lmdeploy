@@ -34,7 +34,7 @@ def tprint(*args, **kwargs):
 @dataclass
 class TurbomindModelConfig:
     """Config for turbomind model."""
-    model_name: str = None
+    model_name: str = ''
     model_arch: str = None
     tensor_para_size: int = None
     head_num: int = None
@@ -125,6 +125,22 @@ class TurbomindModelConfig:
             if v is None:
                 return False
         return True
+
+    def update(self, other: 'TurbomindModelConfig') -> None:
+        """Update the attributes of this instance with the attributes from
+        another instance, but only if the attributes in this instance are None.
+
+        Args:
+            other (TurbomindModelConfig): The instance from which to copy
+                attributes.
+        """
+        # Iterate over the fields of 'self'
+        for field_name, _ in self.__dataclass_fields__.items():
+            # If the field value in 'other' is not None,
+            # update the corresponding field in 'self'
+            if getattr(self, field_name) is None and getattr(
+                    other, field_name) is not None:
+                setattr(self, field_name, getattr(other, field_name))
 
 
 def _weight_dtype_map(weight_type: str, default=None):

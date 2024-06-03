@@ -20,11 +20,12 @@ from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import _stop_words, get_logger, get_model
 
-from .deploy.converter import (get_model_format, supported_formats,
-                               update_config_weight_type, update_output_format)
+from .deploy.converter import (SUPPORTED_FORMATS,
+                               get_input_model_registered_name,
+                               get_output_model_registered_name_and_config)
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
-from .supported_models import SUPPORTED_ARCHS, get_model_arch, is_supported
+from .supported_models import is_supported
 from .utils import ModelSource, get_model_source
 
 # TODO: find another way import _turbomind
@@ -32,7 +33,7 @@ lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 
-logger = get_logger('lmdeploy')
+logger = get_logger('lmdeploy:turbomind')
 
 MAX_LOGPROBS = 1024
 
@@ -225,8 +226,8 @@ class TurboMind:
         """Load model which is in hf format."""
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
-        assert engine_config.model_format in supported_formats, \
-            f'The model format should be in {supported_formats}'
+        assert engine_config.model_format in SUPPORTED_FORMATS, \
+            f'The model format should be in {SUPPORTED_FORMATS}'
 
         # update model_format if not supplied and outputs_stats.pth exists
         if osp.exists(osp.join(model_path, 'outputs_stats.pth')) and \
@@ -238,53 +239,34 @@ class TurboMind:
             'Plz try pytorch engine instead.')
 
         # convert transformers model into turbomind model format
-        model_arch, _ = get_model_arch(model_path)
-        data_type = 'fp16'
-        output_format = 'fp16'
-        inferred_model_format = get_model_format(SUPPORTED_ARCHS[model_arch],
-                                                 engine_config.model_format)
-        cfg = TurbomindModelConfig.from_engine_config(engine_config)
         match_name = best_match_model(model_path)
-        # for session len
-        cfg.model_name = match_name \
-            if match_name is not None else 'base'
-        if inferred_model_format.find('awq') != -1:
-            cfg.weight_type = 'int4'
-            output_format = 'w4'
-            data_type = 'int4'
-            cfg.group_size = 128
-            if inferred_model_format == 'xcomposer2-awq':
-                output_format = 'plora-w4'
-        else:
-            output_format = update_output_format(cfg.model_name,
-                                                 inferred_model_format,
-                                                 model_path, output_format)
-            data_type = output_format
-            update_config_weight_type(output_format, cfg)
-            if inferred_model_format == 'xcomposer2':
-                output_format = 'plora'
-
-        input_model = INPUT_MODELS.get(inferred_model_format)(
+        input_model_name = get_input_model_registered_name(
+            model_path, engine_config.model_format)
+        input_model = INPUT_MODELS.get(input_model_name)(
             model_path=model_path, tokenizer_path=model_path, ckpt_path=None)
 
-        output_model = OUTPUT_MODELS.get(output_format)(
-            input_model=input_model, cfg=cfg, to_file=False, out_dir='')
+        output_model_name, cfg = \
+            get_output_model_registered_name_and_config(
+                model_path, engine_config.model_format)
+        self.config = TurbomindModelConfig.from_engine_config(engine_config)
+        self.config.update(cfg)
+        output_model = OUTPUT_MODELS.get(output_model_name)(
+            input_model=input_model,
+            cfg=self.config,
+            to_file=False,
+            out_dir='')
 
-        cfg = output_model.cfg
-        if engine_config.session_len is not None:
-            cfg.session_len = engine_config.session_len
-
-        self.model_name = cfg.model_name
-        self.config = cfg
-        self.data_type = data_type
-
-        logger.warning(f'model_config:\n\n{cfg.toini()}')
+        self.config = output_model.cfg
+        self.config.model_name = match_name \
+            if match_name is not None else 'base'
+        self.model_name = self.config.model_name
+        logger.error(f'model_config:\n\n{self.config.toini()}')
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir='',
-            config=cfg.toini(),
+            config=self.config.toini(),
             tensor_para_size=self.gpu_count,
-            data_type=data_type)
+            data_type=self.config.weight_type)
 
         # create empty weight
         self._create_weight(model_comm)
@@ -333,7 +315,7 @@ class TurboMind:
         # update cls
         self.config = cfg
         self.model_name = cfg.model_name
-        self.data_type = cfg.weight_type
+        # self.data_type = cfg.weight_type
 
         # create model
         logger.warning(f'model_config:\n\n{cfg.toini()}')
@@ -342,7 +324,7 @@ class TurboMind:
             model_dir=weight_dir,
             config=cfg.toini(),
             tensor_para_size=self.gpu_count,
-            data_type=self.data_type)
+            data_type=self.config.weight_type)
 
         # create weight and load params
         self._create_weight(model_comm)
@@ -353,7 +335,6 @@ class TurboMind:
             cls,
             pretrained_model_name_or_path: str,
             engine_config: TurbomindEngineConfig = None,
-            model_name: Optional[str] = None,
             model_format: Optional[str] = None,
             group_size: Optional[int] = None,
             tp: Optional[int] = None,
@@ -375,7 +356,6 @@ class TurboMind:
                       on huggingface.co, such as "internlm/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
-            model_name (str): needed when pretrained_model_name_or_path is c)
             model_format (str): model format
             group_size (int): group size
             tp (int): tensor parallel size
@@ -383,7 +363,7 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         model_source = get_model_source(pretrained_model_name_or_path)
-        logger.warning(f'model_source: {model_source}')
+        logger.info(f'model_source: {model_source}')
         return cls(model_path=pretrained_model_name_or_path,
                    engine_config=engine_config,
                    model_source=model_source,

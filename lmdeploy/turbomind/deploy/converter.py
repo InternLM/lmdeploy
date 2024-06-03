@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import copy
 import os
 import os.path as osp
 import re
@@ -117,8 +116,7 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
 
 
 def get_output_model_registered_name_and_config(model_path: str,
-                                                model_format: str,
-                                                config: TurbomindModelConfig):
+                                                model_format: str):
     """Get the registered name of the turbomind model and its configuration
     according to the input model path, format and user-input config. The name
     will be used to access the OUTPUT_MODELS registry.
@@ -127,13 +125,12 @@ def get_output_model_registered_name_and_config(model_path: str,
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
             ['meta_llama',  'hf', 'awq']
-        config: the user-input turbomind model's configuration
     """
-    assert config, 'turbomind config should not be None'
     register_name = 'fp16'
     turbomind_model_arch = 'llama'
     weight_type = 'fp16'
-    _config = copy.deepcopy(config)
+
+    config = TurbomindModelConfig.from_dict({}, allow_none=True)
 
     if model_format == 'meta_llama':
         session_len = 2048
@@ -161,11 +158,11 @@ def get_output_model_registered_name_and_config(model_path: str,
             if turbomind_model_arch == 'xcomposer2':
                 register_name = 'plora'
 
-    _config.model_arch = turbomind_model_arch
-    _config.session_len = session_len + 8
-    _config.weight_type = weight_type
+    config.model_arch = turbomind_model_arch
+    config.session_len = session_len + 8
+    config.weight_type = weight_type
 
-    return register_name, _config
+    return register_name, config
 
 
 def pack_model_repository(workspace_path: str):
@@ -255,16 +252,17 @@ def main(model_name: str,
             f'"{input_model_name}". The registered names are {register_names}')
         exit(-1)
 
-    cfg = TurbomindModelConfig.from_dict({}, allow_none=True)
-    cfg.model_name = model_name
-    cfg.tensor_para_size = tp
-    cfg.group_size = group_size
+    # cfg = TurbomindModelConfig.from_dict({}, allow_none=True)
     output_model_name, cfg = get_output_model_registered_name_and_config(
-        model_path, model_format, cfg)
+        model_path, model_format)
     print(f'output_model_name: {output_model_name}')
     register_names = list(OUTPUT_MODELS.module_dict.keys())
     if output_model_name not in register_names:
         exit(-1)
+
+    cfg.model_name = model_name
+    cfg.tensor_para_size = tp
+    cfg.group_size = group_size
     print(f'turbomind model config: {cfg}')
 
     create_workspace(dst_path)
