@@ -128,7 +128,7 @@ class TurbomindModelConfig:
 
     def update(self, other: 'TurbomindModelConfig') -> None:
         """Update the attributes of this instance with the attributes from
-        another instance, but only if the attributes in this instance are None.
+        another instance.
 
         Args:
             other (TurbomindModelConfig): The instance from which to copy
@@ -141,6 +141,9 @@ class TurbomindModelConfig:
             if getattr(self, field_name) is None and getattr(
                     other, field_name) is not None:
                 setattr(self, field_name, getattr(other, field_name))
+        # update group_size and weight_type
+        self.group_size = other.group_size
+        self.weight_type = other.weight_type
 
 
 def _weight_dtype_map(weight_type: str, default=None):

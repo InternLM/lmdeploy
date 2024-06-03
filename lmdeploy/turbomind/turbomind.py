@@ -245,9 +245,10 @@ class TurboMind:
         input_model = INPUT_MODELS.get(input_model_name)(
             model_path=model_path, tokenizer_path=model_path, ckpt_path=None)
 
-        output_model_name, cfg = \
-            get_output_model_registered_name_and_config(
-                model_path, engine_config.model_format)
+        output_model_name, cfg = get_output_model_registered_name_and_config(
+            model_path=model_path,
+            model_format=engine_config.model_format,
+            group_size=0)
         self.config = TurbomindModelConfig.from_engine_config(engine_config)
         self.config.update(cfg)
         output_model = OUTPUT_MODELS.get(output_model_name)(
@@ -260,7 +261,7 @@ class TurboMind:
         self.config.model_name = match_name \
             if match_name is not None else 'base'
         self.model_name = self.config.model_name
-        logger.error(f'model_config:\n\n{self.config.toini()}')
+        logger.info(f'model_config:\n\n{self.config.toini()}')
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir='',

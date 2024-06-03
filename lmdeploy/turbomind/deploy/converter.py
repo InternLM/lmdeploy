@@ -116,7 +116,8 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
 
 
 def get_output_model_registered_name_and_config(model_path: str,
-                                                model_format: str):
+                                                model_format: str,
+                                                group_size: int):
     """Get the registered name of the turbomind model and its configuration
     according to the input model path, format and user-input config. The name
     will be used to access the OUTPUT_MODELS registry.
@@ -143,6 +144,7 @@ def get_output_model_registered_name_and_config(model_path: str,
             weight_type = 'int4'
             register_name = 'w4-plora' \
                 if turbomind_model_arch == 'xcomposer2' else 'w4'
+            group_size = 128 if group_size == 0 else group_size
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
             # Qwen-1 didn't set torch_dtype. It used bf16 as default
@@ -161,6 +163,7 @@ def get_output_model_registered_name_and_config(model_path: str,
     config.model_arch = turbomind_model_arch
     config.session_len = session_len + 8
     config.weight_type = weight_type
+    config.group_size = group_size
 
     return register_name, config
 
@@ -243,7 +246,7 @@ def main(model_name: str,
 
     input_model_name = get_input_model_registered_name(model_path,
                                                        model_format)
-    print(f'input_model_name: {input_model_name}')
+    print(f'input_model_registered_name : {input_model_name}')
     register_names = list(INPUT_MODELS.module_dict.keys())
     if input_model_name not in register_names:
         print(
@@ -251,17 +254,15 @@ def main(model_name: str,
             f'"{input_model_name}". The registered names are {register_names}')
         exit(-1)
 
-    # cfg = TurbomindModelConfig.from_dict({}, allow_none=True)
     output_model_name, cfg = get_output_model_registered_name_and_config(
-        model_path, model_format)
-    print(f'output_model_name: {output_model_name}')
+        model_path, model_format, group_size)
+    print(f'output_model_registered_name: {output_model_name}')
     register_names = list(OUTPUT_MODELS.module_dict.keys())
     if output_model_name not in register_names:
         exit(-1)
 
     cfg.model_name = model_name
     cfg.tensor_para_size = tp
-    cfg.group_size = group_size
 
     create_workspace(dst_path)
 
