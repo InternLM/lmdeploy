@@ -360,6 +360,12 @@ class JitFunction230Wrapper:
                                        for k, v in cuda_opt_fields.items())
         cuda_opt_args = ', '.join(f'{k}={k}' for k in cuda_opt_fields)
 
+        triton_version = version.parse(triton.__version__)
+        if triton_version == version.parse('2.3.0'):
+            mni_acc_default = '0 if target[1] >= 89 else None'
+        else:
+            mni_acc_default = '2**30 if target[1] == 90 else 0'
+
         src = f"""
 def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, warmup=False, **kwargs):
     device = get_current_device()
@@ -367,7 +373,7 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
     target = get_current_target()
     if target[1] >= 89:
         allow_fp8e4nv = True
-        max_num_imprecise_acc_default = 0
+    max_num_imprecise_acc_default = {mni_acc_default}
     options = CUDAOptions({cuda_opt_args}, )
     sig_key = ({sig_key_str}, )
     spec_key = ({spec_key_str}, )
@@ -385,11 +391,18 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
-    kernel.run(grid_0, grid_1, grid_2, kernel.num_warps, kernel.num_ctas,
-               kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],
-               kernel.shared, stream, kernel.function, launch_enter_hook,
-               launch_exit_hook, kernel,
-               *assemble_tensormap_to_arg(kernel.metadata["tensormaps_info"], args))
+    if kernel.metadata["tensormaps_info"] is not None:
+        kernel.run(grid_0, grid_1, grid_2, kernel.num_warps, kernel.num_ctas,
+                kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],
+                kernel.shared, stream, kernel.function, launch_enter_hook,
+                launch_exit_hook, kernel,
+                *assemble_tensormap_to_arg(kernel.metadata["tensormaps_info"], args))
+    else:
+        kernel.run(grid_0, grid_1, grid_2, kernel.num_warps, kernel.num_ctas,
+                kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],
+                kernel.shared, stream, kernel.function, launch_enter_hook,
+                launch_exit_hook, kernel,
+                {sig_name_str})
 
     return kernel
 """   # noqa: E501
@@ -444,7 +457,7 @@ def wrap_jit_func(
 
         if triton_version == version.parse('2.2.0'):
             return JitFunction220Wrapper(func, type_hint)
-        if triton_version == version.parse('2.3.0'):
+        if version.parse('2.2.0') < triton_version <= version.parse('2.3.1'):
             return JitFunction230Wrapper(func, type_hint)
         return func
 
