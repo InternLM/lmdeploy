@@ -262,7 +262,6 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
-
   test_triton:
     if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.triton_regression)}}
     runs-on: [self-hosted, linux-a100-2]
@@ -417,7 +416,6 @@ jobs:
           cd ..
           rm -rf $workdir
           mkdir $workdir
-
 
   test_restful:
     if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.restful_regression)}}
