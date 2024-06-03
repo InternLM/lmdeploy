@@ -703,7 +703,7 @@ class TestRestfulInterfaceChatInteractive:
             outputList.append(output)
         assert_chat_interactive_stream_return(outputList[-1],
                                               True,
-                                              index=len(outputList) - 2)
+                                              index=len(outputList) - 1)
         for index in range(0, len(outputList) - 1):
             assert_chat_interactive_stream_return(outputList[index],
                                                   index=index)
@@ -723,7 +723,7 @@ class TestRestfulInterfaceChatInteractive:
 
         assert_chat_interactive_stream_return(outputList[-1],
                                               True,
-                                              index=len(outputList) - 2)
+                                              index=len(outputList) - 1)
         for index in range(0, len(outputList) - 1):
             assert_chat_interactive_stream_return(outputList[index],
                                                   index=index)
