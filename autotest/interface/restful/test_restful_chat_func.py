@@ -434,7 +434,7 @@ class TestRestfulInterfaceChatCompletions:
         api_client = APIClient(BASE_URL)
         for output in api_client.chat_completions_v1(
                 model=MODEL_NAME,
-                messages='Hi, pls intro yourself' * 10000,
+                messages='Hi, pls intro yourself' * 100000,
                 temperature=0.01):
             continue
         assert output.get('choices')[0].get('finish_reason') == 'length'
@@ -445,7 +445,7 @@ class TestRestfulInterfaceChatCompletions:
         outputList = []
         for output in api_client.chat_completions_v1(
                 model=MODEL_NAME,
-                messages='Hi, pls intro yourself' * 10000,
+                messages='Hi, pls intro yourself' * 100000,
                 stream=True,
                 temperature=0.01):
             outputList.append(output)
