@@ -81,7 +81,32 @@ def get_cuda_autotune_config():
     configs=get_cuda_autotune_config(),
     key=['N', 'K'],
 )
-@wrap_jit_func
+@wrap_jit_func(type_hint=dict(
+    A=torch.Tensor,
+    B=torch.Tensor,
+    C=torch.Tensor,
+    SortedIdx=torch.Tensor,
+    ExpStart=torch.Tensor,
+    ExpEnd=torch.Tensor,
+    Weights=torch.Tensor,
+    N=int,
+    K=int,
+    stride_am=int,
+    stride_ak=int,
+    stride_be=int,
+    stride_bn=int,
+    stride_bk=int,
+    stride_cm=int,
+    stride_cn=int,
+    BLOCK_SIZE_M=torch.int32,
+    BLOCK_SIZE_N=torch.int32,
+    BLOCK_SIZE_K=torch.int32,
+    GROUP_SIZE_M=torch.int32,
+    ENABLE_WEIGHTS=bool,
+    top_k=torch.int32,
+    reindex_a=bool,
+    reindex_c=bool,
+))
 @triton.jit
 def fused_moe_kernel(
     A,

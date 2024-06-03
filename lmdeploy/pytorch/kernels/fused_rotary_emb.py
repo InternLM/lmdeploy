@@ -7,7 +7,28 @@ from torch import Tensor
 from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
-@wrap_jit_func
+@wrap_jit_func(type_hint=dict(Q=Tensor,
+                              K=Tensor,
+                              PostionIds=Tensor,
+                              InvFreq=Tensor,
+                              scaling_factor=float,
+                              OutQ=Tensor,
+                              OutK=Tensor,
+                              stride_bq=int,
+                              stride_sq=int,
+                              stride_hq=int,
+                              stride_dq=int,
+                              stride_bk=int,
+                              stride_sk=int,
+                              stride_hk=int,
+                              stride_dk=int,
+                              stride_bp=int,
+                              stride_sp=int,
+                              max_seq_len=int,
+                              BLOCK=torch.int32,
+                              BLOCK_HQ=torch.int32,
+                              BLOCK_HK=torch.int32,
+                              BLOCK_F=torch.int32))
 @triton.jit
 def _fused_rotary_emb_kernel(
         Q, K, PostionIds, InvFreq, scaling_factor, OutQ, OutK, stride_bq,

@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import torch
 import triton
 import triton.language as tl
 from torch import Tensor
@@ -11,7 +12,36 @@ def _div_up(val, other):
     return (val + other - 1) // other
 
 
-@wrap_jit_func
+@wrap_jit_func(type_hint=dict(
+    KStates=Tensor,
+    VStates=Tensor,
+    KCaches=Tensor,
+    VCaches=Tensor,
+    QStartLoc=Tensor,
+    QSeqLens=Tensor,
+    KVSeqLens=Tensor,
+    BlockOffsets=Tensor,
+    num_heads=torch.int32,
+    head_dim=torch.int32,
+    stride_kss=int,
+    stride_ksh=int,
+    stride_ksd=int,
+    stride_vss=int,
+    stride_vsh=int,
+    stride_vsd=int,
+    stride_kcn=int,
+    stride_kcb=int,
+    stride_kch=int,
+    stride_kcd=int,
+    stride_vcn=int,
+    stride_vcb=int,
+    stride_vch=int,
+    stride_vcd=int,
+    stride_boff=int,
+    BLOCK=torch.int32,
+    BLOCK_D=torch.int32,
+    BLOCK_H=torch.int32,
+))
 @triton.jit
 def _fill_kv_cache_kernel(
     KStates,

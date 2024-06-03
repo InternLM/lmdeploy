@@ -7,7 +7,16 @@ from torch import Tensor
 from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
-@wrap_jit_func
+@wrap_jit_func(type_hint=dict(
+    input=Tensor,
+    weight=Tensor,
+    output=Tensor,
+    input_row_stride=int,
+    n_cols=torch.int32,
+    eps=float,
+    N_COLS=torch.int32,
+    BLOCK_N=torch.int32,
+))
 @triton.jit
 def rms_norm_kernel(input, weight, output, input_row_stride, n_cols, eps,
                     N_COLS: tl.constexpr, BLOCK_N: tl.constexpr):

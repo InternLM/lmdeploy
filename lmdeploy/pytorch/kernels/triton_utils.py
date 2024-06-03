@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
 import inspect
-from typing import Callable, cast
+from typing import Callable, Dict, Sequence, TypeVar, Union, cast, overload
 
 import torch
 import triton
@@ -32,11 +32,33 @@ TRITON_DIVIIBILITY = getattr(JITFunction, 'divisibility', 16)
 TRITON_DIVIIBILITY_8 = getattr(JITFunction, 'divisibility_8', 8)
 
 
+def _check_type_hint(jit_func: JITFunction, type_hint: Union[Dict, Sequence]):
+    """check type hint."""
+    params = jit_func.params
+    arg_key = tuple(p.name for p in params)
+
+    if isinstance(type_hint, Dict):
+        for key in arg_key:
+            if key not in type_hint:
+                type_hint[key] = None
+        return type_hint
+    elif type_hint is None:
+        return dict((key, None) for key in arg_key)
+    elif isinstance(type_hint, Sequence):
+        assert len(arg_key) == len(type_hint)
+        return dict(zip(arg_key, type_hint))
+    else:
+        raise RuntimeError(f'Unknown type_hint: {type_hint}')
+
+
 class JitFunction220Wrapper:
 
-    def __init__(self, jit_func: JITFunction):
+    def __init__(self,
+                 jit_func: JITFunction,
+                 type_hint: Union[Dict, Sequence] = None):
         """jit func."""
         self.jit_func = jit_func
+        self.type_hint = _check_type_hint(jit_func, type_hint)
         self.run = self._make_launcher(jit_func)
         self.arg_names = jit_func.arg_names
 
@@ -67,21 +89,31 @@ class JitFunction220Wrapper:
                                      get_arch_default_num_stages,
                                      get_arch_default_num_warps)
 
-        def _make_spec_key_str(anno, key):
-            if 'Tensor' in anno:
+        def _make_spec_key_str(key):
+            anno = self.type_hint[key]
+            if anno == torch.Tensor:
                 return f'({key}.data_ptr() % {TRITON_DIVIIBILITY} == 0, )'
-            if anno == 'int' or anno == 'bool':
+            elif anno in [int, bool, torch.int32, torch.int64, torch.uint64]:
                 return (f'({key} % {TRITON_DIVIIBILITY} == 0, '
                         f'{key} % {TRITON_DIVIIBILITY_8} == 0, '
                         f'{key} == 1, )')
+            elif anno is not None:
+                return '(False,)'
             return f'_specialization_key({key})'
 
-        def _make_sig_key_str(anno, key):
-            if anno == 'bool':
+        def _make_sig_key_str(key):
+            anno = self.type_hint[key]
+            if anno == bool:
                 return '"i1"'
-            if anno == 'float':
+            elif anno == float:
                 return '"fp32"'
-            if 'Tensor' in anno:
+            elif anno == torch.int32:
+                return '"i32"'
+            elif anno == torch.uint64:
+                return '"u64"'
+            elif anno == torch.int64:
+                return '"i64"'
+            elif anno == torch.Tensor:
                 return f'{key}.dtype'
             return f'_key_of({key})'
 
@@ -103,18 +135,11 @@ class JitFunction220Wrapper:
         # sig key
         sig_key = tuple(p.name for p in params if not p.is_constexpr)
         sig_name_str = ', '.join(key for key in sig_key)
-        annotations = tuple(p.annotation for p in params if not p.is_constexpr)
-        sig_key_str = ', '.join(
-            _make_sig_key_str(anno, key)
-            for anno, key in zip(annotations, sig_key))
+        sig_key_str = ', '.join(_make_sig_key_str(key) for key in sig_key)
 
         # spec key
         spec_key = tuple(p.name for p in params if not p.do_not_specialize)
-        spec_annos = tuple(p.annotation for p in params
-                           if not p.do_not_specialize)
-        spec_key_str = ', '.join(
-            _make_spec_key_str(anno, key)
-            for anno, key in zip(spec_annos, spec_key))
+        spec_key_str = ', '.join(_make_spec_key_str(key) for key in spec_key)
 
         # options
         cuda_opt_fields = dict(
@@ -180,23 +205,38 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
-    bin.c_wrapper(
-        grid_0,
-        grid_1,
-        grid_2,
-        bin.num_warps,
-        bin.num_ctas,
-        bin.clusterDims[0],
-        bin.clusterDims[1],
-        bin.clusterDims[2],
-        bin.shared,
-        stream,
-        bin.cu_function,
-        launch_enter_hook,
-        launch_exit_hook,
-        bin,
-        *bin.assemble_tensormap_to_arg(non_constexpr_arg_values),
-    )
+    if not hasattr(bin, 'tensormaps_info'):
+        bin.c_wrapper(
+            grid_0,
+            grid_1,
+            grid_2,
+            bin.num_warps,
+            bin.num_ctas,
+            *bin.clusterDims,
+            bin.shared,
+            stream,
+            bin.cu_function,
+            launch_enter_hook,
+            launch_exit_hook,
+            bin,
+            {sig_name_str},
+        )
+    else:
+        bin.c_wrapper(
+            grid_0,
+            grid_1,
+            grid_2,
+            bin.num_warps,
+            bin.num_ctas,
+            *bin.clusterDims,
+            bin.shared,
+            stream,
+            bin.cu_function,
+            launch_enter_hook,
+            launch_exit_hook,
+            bin,
+            *bin.assemble_tensormap_to_arg(non_constexpr_arg_values),
+        )
 
     return bin
 """   # noqa: E501
@@ -222,9 +262,12 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
 
 class JitFunction230Wrapper:
 
-    def __init__(self, jit_func: JITFunction):
+    def __init__(self,
+                 jit_func: JITFunction,
+                 type_hint: Union[Dict, Sequence] = None):
         """jit func."""
         self.jit_func = jit_func
+        self.type_hint = _check_type_hint(jit_func, type_hint)
         self.run = self._make_launcher(jit_func)
         self.arg_names = jit_func.arg_names
 
@@ -257,21 +300,31 @@ class JitFunction230Wrapper:
         from triton.compiler.backends.cuda import CUDABackend, CUDAOptions
         from triton.runtime.driver import driver
 
-        def _make_spec_key_str(anno, key):
-            if 'Tensor' in anno:
+        def _make_spec_key_str(key):
+            anno = self.type_hint[key]
+            if anno == torch.Tensor:
                 return f'({key}.data_ptr() % {TRITON_DIVIIBILITY} == 0, )'
-            if anno == 'int' or anno == 'bool':
+            elif anno in [int, bool, torch.int32, torch.int64, torch.uint64]:
                 return (f'({key} % {TRITON_DIVIIBILITY} == 0, '
                         f'{key} % {TRITON_DIVIIBILITY_8} == 0, '
                         f'{key} == 1, )')
+            elif anno is not None:
+                return '(False,)'
             return f'_specialization_key({key})'
 
-        def _make_sig_key_str(anno, key):
-            if anno == 'bool':
+        def _make_sig_key_str(key):
+            anno = self.type_hint[key]
+            if anno == bool:
                 return '"i1"'
-            if anno == 'float':
+            elif anno == float:
                 return '"fp32"'
-            if 'Tensor' in anno:
+            elif anno == torch.int32:
+                return '"i32"'
+            elif anno == torch.uint64:
+                return '"u64"'
+            elif anno == torch.int64:
+                return '"i64"'
+            elif anno == torch.Tensor:
                 return f'{key}.dtype'
             return f'_key_of({key})'
 
@@ -293,18 +346,11 @@ class JitFunction230Wrapper:
         # sig key
         sig_key = tuple(p.name for p in params if not p.is_constexpr)
         sig_name_str = ', '.join(key for key in sig_key)
-        annotations = tuple(p.annotation for p in params if not p.is_constexpr)
-        sig_key_str = ', '.join(
-            _make_sig_key_str(anno, key)
-            for anno, key in zip(annotations, sig_key))
+        sig_key_str = ', '.join(_make_sig_key_str(key) for key in sig_key)
 
         # spec key
         spec_key = tuple(p.name for p in params if not p.do_not_specialize)
-        spec_annos = tuple(p.annotation for p in params
-                           if not p.do_not_specialize)
-        spec_key_str = ', '.join(
-            _make_spec_key_str(anno, key)
-            for anno, key in zip(spec_annos, spec_key))
+        spec_key_str = ', '.join(_make_spec_key_str(key) for key in spec_key)
 
         # cuda opt key/default
         cuda_opt_fields = dict(
@@ -370,12 +416,39 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
         return functools.partial(cast(Callable, self.run), grid=grid)
 
 
-def wrap_jit_func(func):
-    """wrap jit func."""
-    triton_version = version.parse(triton.__version__)
+T = TypeVar('T')
 
-    if triton_version == version.parse('2.2.0'):
-        return JitFunction220Wrapper(func)
-    if triton_version == version.parse('2.3.0'):
-        return JitFunction230Wrapper(func)
-    return func
+
+@overload
+def wrap_jit_func(func: T):
+    ...
+
+
+@overload
+def wrap_jit_func(
+    *,
+    type_hint=None,
+):
+    ...
+
+
+def wrap_jit_func(
+    func: T = None,
+    *,
+    type_hint=None,
+):
+    """wrap jit func."""
+
+    def decorator(func: T):
+        triton_version = version.parse(triton.__version__)
+
+        if triton_version == version.parse('2.2.0'):
+            return JitFunction220Wrapper(func, type_hint)
+        if triton_version == version.parse('2.3.0'):
+            return JitFunction230Wrapper(func, type_hint)
+        return func
+
+    if func is not None:
+        return decorator(func)
+    else:
+        return decorator
