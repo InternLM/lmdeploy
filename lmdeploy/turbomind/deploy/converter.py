@@ -37,7 +37,7 @@ def get_input_model_registered_name(model_path: str, model_format: str):
     arch = get_model_arch(model_path)[0]
     register_name = SUPPORTED_ARCHS[arch]
     if model_format == 'awq':
-        register_name = arch + '-awq'
+        register_name = register_name + '-awq'
     return register_name
 
 
@@ -262,7 +262,6 @@ def main(model_name: str,
     cfg.model_name = model_name
     cfg.tensor_para_size = tp
     cfg.group_size = group_size
-    print(f'turbomind model config: {cfg}')
 
     create_workspace(dst_path)
 
@@ -278,6 +277,7 @@ def main(model_name: str,
         ckpt_path=quant_path)
     output_model = OUTPUT_MODELS.get(output_model_name)(
         input_model=input_model, cfg=cfg, to_file=True, out_dir=weight_path)
+    print(f'turbomind model config: {output_model.cfg}')
 
     output_model.export()
 
