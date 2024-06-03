@@ -205,13 +205,14 @@ class CogVLMChatTemplateWrapper(VLChatTemplateWrapper):
         prompt = ''
         for i, msg in enumerate(new_messages):
             num_images = msg.pop('num_images', 0)
-            if i == 0 and num_images == 0 and sequence_start:
+            if num_images == 0:
                 role = msg['role']
                 msg = self.llm_chat_template.messages2prompt([msg],
-                                                             sequence_start)
+                                                             sequence_start
+                                                             and i == 0)
                 msg = dict(role=role, content=msg)
-            prompt_i = self.chat_template.messages2prompt([msg],
-                                                          sequence_start)
+            prompt_i = self.chat_template.messages2prompt([msg], sequence_start
+                                                          and i == 0)
             if num_images > 0:
                 prompt_i = (IMAGE_TOKEN * num_images) + prompt_i
             prompt += prompt_i
