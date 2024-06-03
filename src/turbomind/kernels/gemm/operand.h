@@ -24,7 +24,7 @@ struct VoidOperand {
         }
     };
 
-    using SmemCopy = VoidSmemCopy;
+    using SmemCopyAtom = VoidSmemCopyAtom;
 
     struct GetGmemIter {
         static constexpr auto apply(...)
@@ -36,16 +36,16 @@ struct VoidOperand {
 
 /// TODO: fix AlignC, AlignS
 /// TODO: fix GroupSize
-template<class Operand, class Iterator, int M, int K, int WARP_M, int WARP_K, int WARPS>
+template<class Operand, class Iterator, int M, int K, int WARPS>
 struct MakeOperand {
 
-    static constexpr Pack  kPack      = Operand::kPack;
-    static constexpr Order kOrder     = Operand::kOrder;
-    static constexpr int   kGroupSize = 0;
+    static constexpr Pack  kPack  = Operand::kPack;
+    static constexpr Order kOrder = Operand::kOrder;
 
-    static constexpr int2 CS = mk2cs<kOrder>(M, K);
-    /// TODO: fix `16`, we dont want WARP_X here in the first place
-    static constexpr int2 WARP_CS = mk2cs<kOrder>(WARP_M, 16);
+    /// TODO: handle group size
+    static constexpr int kGroupSize = 1;
+
+    static constexpr int2 CS = Packing<kPack>::apply(mk2cs<kOrder>(M, K));
 
     static constexpr pair<CS.x, CS.y> kShapeCS{};
 
@@ -56,7 +56,7 @@ struct MakeOperand {
     using GmemIter = typename decltype(Operand::GetGmemIter::apply(
         type_c<Operand>, type_c<Iterator>, type_c<SmemLayout>, kShapeCS, constant<WARPS>{}))::type;
 
-    using SmemCopy = typename Operand::SmemCopy::template Type<WARP_CS.y, WARP_CS.x>;
+    using SmemCopyAtom = typename Operand::SmemCopyAtom;
 };
 
 // CPO for getting specific operand templates

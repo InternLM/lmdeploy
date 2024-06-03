@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/gemm/iterator_sm80.h"
+#include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
@@ -10,15 +11,20 @@
 
 namespace turbomind::gemm {
 
-template<int M_, int K_, int Pack_M, class Operand, class Td, class Converter>
+template<int M_, int K_, int Pack_M, class Operand_, class Td, class Converter>
 struct ConvertOperand {
-    using Ts         = typename Operand::Dtype;
-    using SmemLayout = typename Operand::SmemLayout;
-    using SmemCopy   = typename Operand::SmemCopy;
-    using GmemIter   = typename Operand::GmemIter;
 
     static constexpr int M = M_;
     static constexpr int K = K_;
+
+    using Operand = MakeOperand<Operand_, IteratorSm80, M_, K_, 1>;
+
+    using Ts         = typename Operand::Dtype;
+    using SmemLayout = typename Operand::SmemLayout;
+    using GmemIter   = typename Operand::GmemIter;
+    //                                   ATOM::K
+    using SmemCopy = SmemCopy<Operand, M_, 16, 16, 16>;
+    //                                         dM  dK
 
     using Accessor = SmemAccessor<Ts, SmemLayout>;
 
@@ -26,8 +32,8 @@ struct ConvertOperand {
 
     using PtrD = get_pointer_type<Td>;
 
-    static constexpr int COPY_M = cs2mk<kOrderS>(SmemCopy::C, SmemCopy::S).x;
-    static constexpr int COPY_K = cs2mk<kOrderS>(SmemCopy::C, SmemCopy::S).y;
+    static constexpr int COPY_M = M_;
+    static constexpr int COPY_K = 16;
 
     static constexpr int ITER_K   = K / COPY_K;
     static constexpr int WARP_CNT = M / COPY_M;
@@ -107,7 +113,7 @@ struct ConvertOperand {
             for (int k = 0; k < ITER_K; ++k) {
 
                 // Load from smem as we are doing GEMMs
-                SmemCopy::copy(Accessor{smem}, data, _mk2cs(warp_offset_m, k * COPY_K));
+                SmemCopy::copy(Accessor{smem}, data, int2{warp_offset_m, k * COPY_K});
 
                 PRAGMA_UNROLL
                 for (int m = 0; m < kFragNum; m += Pack_M) {

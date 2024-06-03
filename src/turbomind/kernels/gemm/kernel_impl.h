@@ -65,7 +65,7 @@ public:
         }
 
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-            &max_active_ctas_, gemm_kernel<Gemm>, Impl::WARP_CNT * WARP_SIZE, smem_size_);
+            &max_active_ctas_, gemm_kernel<Gemm>, Impl::WARPS * WARP_SIZE, smem_size_);
 
         name_ = GetName();
     }
@@ -115,7 +115,7 @@ public:
         const auto log_tile = swizzle;
 
         const auto grid  = Map::get_grid_shape(tiles, log_tile);
-        const auto block = Gemm::Impl::WARP_CNT * WARP_SIZE;
+        const auto block = Gemm::Impl::WARPS * WARP_SIZE;
 
         using Ta = typename Gemm::Ta;
         using Tb = typename Gemm::Tb;
@@ -132,7 +132,7 @@ public:
                 Print(typename Gemm::OperandB::GmemIter::ThreadMap{});
                 // std::cout << "\nQ:\n";
                 // Print(typename Impl::ThreadMapQ{});
-                printf("warp count: %d\n", Impl::WARP_CNT);
+                printf("warp count: %d\n", Impl::WARPS);
                 return 0;
             }();
         }

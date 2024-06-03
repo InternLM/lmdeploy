@@ -19,11 +19,13 @@ struct Transform {
                                      DataU&,
                                      DataV&)
     {
+        static_assert(sizeof(frag_A) == sizeof(data_A));
         PRAGMA_UNROLL
         for (int i = 0; i < std::size(frag_A[k]); ++i) {
             frag_A[k][i] = data_A[k][i];
         }
 
+        static_assert(sizeof(frag_B) == sizeof(data_B));
         auto& frag_B_k = (decltype(data_B[k])&)frag_B[k];
         PRAGMA_UNROLL
         for (int i = 0; i < std::size(frag_B_k); ++i) {

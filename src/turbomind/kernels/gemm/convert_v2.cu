@@ -39,8 +39,7 @@ struct Config {
 
     static constexpr int BLOCK_SIZE = 32;
 
-    using Operand =
-        typename GetOperand<MMA, Op, Ord, false>::Operand::template type<half, CTA_M, CTA_K, CTA_M, 1, false>;
+    using Operand = typename GetOperand<MMA, Op, Dtype_, Ord, false>::Operand;
 
     using Stype = typename Operand::Dtype;
     using Dtype = Dtype_;
@@ -85,16 +84,18 @@ int Convert(const void*         S,  //
     const MatrixLayout Ddesc = trans ? transpose(_Ddesc) : _Ddesc;
 
     auto invoke = [&](auto mma, auto operand, auto order, auto dtype, auto pack_num) -> bool {
-        // Make args constexpr explictly, some compilers failed to see const-ness of the args
-        constexpr MMA_Tag mma_tag      = mma;
-        constexpr Op_Tag  op_tag       = operand;
-        constexpr Order   order_tag    = order;
-        constexpr int     pack_num_tag = pack_num;
+        using Dtype = typename get_dtype<dtype>::type;
+        if constexpr (GetOperand<mma, operand, Dtype, order, false>::value) {  // is operand exist?
+            // Make args constexpr explictly, some compilers failed to see const-ness of the args
+            constexpr MMA_Tag mma_tag      = mma;
+            constexpr Op_Tag  op_tag       = operand;
+            constexpr Order   order_tag    = order;
+            constexpr int     pack_num_tag = pack_num;
 
-        using Dtype  = typename get_dtype<dtype>::type;
-        using Config = Config<mma_tag, op_tag, order_tag, Dtype, pack_num_tag>;
+            using Config = Config<mma_tag, op_tag, order_tag, Dtype, pack_num_tag>;
 
-        Convert_v2_Impl<Config>(S, Sdesc, D, Ddesc, stream);
+            Convert_v2_Impl<Config>(S, Sdesc, D, Ddesc, stream);
+        }
 
         return true;
     };
@@ -113,15 +114,14 @@ int Convert(const void*         S,  //
     };
 
     auto dispatch_3 = [&](auto mma, auto operand, auto order) -> bool {
-        if constexpr (GetOperand<mma, operand, order, false>::value) {  // is operand exist?
-            /// TODO: add U8, U4
-            switch (Ddesc.type) {
-                case DataType::F16:
-                    return dispatch_4(mma, operand, order, constant<DataType::F16>{});
-                default:
-                    return false;
-            }
+        /// TODO: add U8, U4
+        switch (Ddesc.type) {
+            case DataType::F16:
+                return dispatch_4(mma, operand, order, constant<DataType::F16>{});
+            default:
+                return false;
         }
+        // }
         return false;
     };
 

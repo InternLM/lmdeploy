@@ -7,245 +7,82 @@
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/smem.h"
+#include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/utils.h"
 
 namespace turbomind::gemm {
 
-struct LDSM_x4_N {
-    template<class T>
-    __device__ static void copy(const T* src, T* dst)
-    {
-        ldsm_x4(*(Array<uint32_t, 4>*)dst, cast_smem_ptr_to_uint(src));
-    }
-};
+struct VoidSmemCopyAtom {
 
-struct LDSM_x4_T {
-    template<class T>
-    __device__ static void copy(const T* src, T* dst)
-    {
-        ldsm_x4_trans(*(Array<uint32_t, 4>*)dst, cast_smem_ptr_to_uint(src));
-    }
-};
-
-template<int bytes>
-struct LDS {
-    template<class S, class D>
-    __device__ static void copy(S src, D dst)
-    {
-        if constexpr (bytes == 1) {
-            *(char*)dst = *(const char*)src;
-        }
-        else if constexpr (bytes == 2) {
-            *(short*)dst = *(const short*)src;
-        }
-        else if constexpr (bytes == 4) {
-            *(int1*)dst = *(const int1*)src;
-        }
-        else if constexpr (bytes == 8) {
-            *(int2*)dst = *(const int2*)src;
-        }
-        else if constexpr (bytes == 16) {
-            *(int4*)dst = *(const int4*)src;
-        }
-        else {
-            static_assert(sizeof(S) != sizeof(S), "not implemented");
-        }
-    }
-};
-
-template<class T, bool Trans>
-struct SmemCopy_MMA_16816_A {
-    static constexpr int S = 16;
-    static constexpr int C = 16;
-
-    using Copy = std::conditional_t<Trans, LDSM_x4_T, LDSM_x4_N>;
-    using Frag = Array<T, 8>;
-
-    __device__ static int2 get_offset(int lane_id)
-    {
-        return {
-            lane_id / 16 * 8,  // c
-            lane_id % 16       // s
-        };
-    }
-};
-
-template<class T, bool Trans>
-struct SmemCopy_MMA_16816_B {
-    static constexpr int S = 16;
-    static constexpr int C = 16;
-
-    using Copy = std::conditional_t<Trans, LDSM_x4_T, LDSM_x4_N>;
-    using Frag = Array<T, 8>;
-
-    __device__ static int2 get_offset(int lane_id)
-    {
-        return {
-            lane_id / 8 * 8 % 16,           // c
-            lane_id % 8 + lane_id / 16 * 8  // s
-        };
-    }
-};
-
-template<class T>
-struct LoadFragment_MMA_16816_Q {  // (M, K)
-    static constexpr int C = 8;
     static constexpr int S = 1;
+    static constexpr int C = 1;
 
-    using Copy = LDS<sizeof(T)>;
-    using Frag = Array<T, 2>;
+    using Frag = Array<int, 1>;
 
-    __device__ static int2 get_offset(int lane_id)
+    template<class S, class D>
+    __device__ static void copy(S, D, bool)
     {
-        return {lane_id / 4, 0};
     }
 
-    // __device__ static void apply(const T* src, T* dst)
-    // {
-    //     PRAGMA_UNROLL
-    //     for (int i = 0; i < 2; ++i) {
-    //         Lds(*(Array<T, 1>*)dst + i, src + i * 8);
-    //     }
-    // }
+    __device__ static int2 get_offset(int)
+    {
+        return {};
+    }
 };
 
-template<class Atom_, int S_, int C_>
-struct SmemCopy_ {
+template<class T, int FragSize, int FragNum, int RepeatC = 1>
+struct SmemCopyAtom_Pack_v2 {
+    static constexpr int C = 16;
+    static constexpr int S = 16;
 
-    using Atom = Atom_;
+    using Frag = Array<T, FragSize * FragNum>;
 
-    static constexpr int S = S_;
-    static constexpr int C = C_;
+    __device__ static int2 get_offset(int thread_idx)
+    {
+        const int lane_id = thread_idx % WARP_SIZE;
+        return {lane_id / RepeatC * Frag::size(), 0};
+    }
 
-    struct Detail {
-        static constexpr int ITER_S   = S / Atom::S;
-        static constexpr int ITER_C   = C / Atom::C;
-        static constexpr int ITER_CNT = ITER_S * ITER_C;
-    };
+    template<class S, class D>
+    __device__ static void copy(S src_ptr, D dst_ptr, bool mask)
+    {
+        if (mask) {
+            Lds(*(Frag*)dst_ptr, src_ptr);
+        }
+    }
+};
 
-    using Frag = typename Atom::Frag[Detail::ITER_CNT];
+template<class Operand, int M, int K, int dM, int dK>
+struct SmemCopy {
+    using Atom = typename Operand::SmemCopyAtom;
+
+    static constexpr int2 kShape = mk2cs<Operand::kOrder>(M, K);
+    static constexpr int2 kDelta = mk2cs<Operand::kOrder>(dM, dK);
+    // static constexpr int2 kRepeat = mk2cs<Operand::kOrder>(1, Operand::kGroupSize);
+
+    static constexpr int ITER_C = kShape.x / Atom::C;
+    static constexpr int ITER_S = kShape.y / Atom::S;
+
+    using Frag = typename Atom::Frag[ITER_S * ITER_C];
+
+    using Pack = Packing<Operand::kPack>;
 
     template<class Accessor>
-    __device__ static void copy(Accessor src, Frag& dst, int2 offset_cs)
+    __device__ static void copy(Accessor src, Frag& dst, int2 offset_mk, bool mask = true)
     {
-        static constexpr int DELTA_S = Atom::S;
-        static constexpr int DELTA_C = Atom::C;
-        const int2           thr_cs  = Atom::get_offset(threadIdx.x % WARP_SIZE);
+        const int2 thr    = Atom::get_offset(threadIdx.x);
+        const int2 offset = mk2cs<Operand::kOrder>(offset_mk.x, offset_mk.y);
         PRAGMA_UNROLL
-        for (int s = 0; s < Detail::ITER_S; ++s) {
+        for (int s = 0; s < ITER_S; ++s) {
             PRAGMA_UNROLL
-            for (int c = 0; c < Detail::ITER_C; ++c) {
-                const int ss = offset_cs.y + thr_cs.y + s * DELTA_S;
-                const int cc = offset_cs.x + thr_cs.x + c * DELTA_C;
-                Atom::Copy::copy(&src(ss, cc), dst[s * Detail::ITER_C + c].data());
+            for (int c = 0; c < ITER_C; ++c) {
+                const int  cc = (offset.x + c * kDelta.x) / 1;  // kRepeat.x;
+                const int  ss = (offset.y + s * kDelta.y) / 1;  // kRepeat.y;
+                const int2 cs = Pack::apply(int2{cc, ss});
+                Atom::copy(&src(cs.y + thr.y, cs.x + thr.x), dst[s * ITER_C + c].data(), mask);
             }
         }
     }
-};
-
-template<class T, int S_, int C_, int P_S, int P_C>
-struct SmemCopy_Packed {
-    //          S                C
-    // (CTA_M / Pm / 16m, CTA_K * Pm * 16m)
-    // (CTA_K      / 16k, CTA_M      * 16k)
-
-    static constexpr int S = S_;
-    static constexpr int C = C_;
-
-    struct Detail {
-        static constexpr int ITER_S   = S / 16;
-        static constexpr int ITER_C   = C / 16;
-        static constexpr int ITER_CNT = ITER_S * ITER_C;
-    };
-
-    static constexpr int kFragmentSize = 8 * P_S * P_C;
-
-    using Frag = Array<T, kFragmentSize>[Detail::ITER_CNT];
-
-    template<class Accessor>
-    __device__ static void copy(Accessor src, Frag& dst, int2 offset_cs)
-    {
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        PRAGMA_UNROLL
-        for (int s = 0; s < Detail::ITER_S; ++s) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < Detail::ITER_C; ++c) {
-                const int ss = (offset_cs.y + s * 16) / P_S / 16;
-                const int cc = (offset_cs.x + c * 16) * P_S * 16 + lane_id * kFragmentSize;
-                Lds(dst[s * Detail::ITER_C + c], &src(ss, cc));
-                // // printf("%d %d %d\n", offset_cs.y, ss, cc);
-                // if (s == 0 && c == 0 && offset_cs.x == 0 && offset_cs.y == 0 && threadIdx.x == 0) {
-                // if (threadIdx.x == 16) {
-                //     printf("%d %d %d\n", offset_cs.y, ss, cc);
-                //     for (int i = 0; i < kFragmentSize; ++i) {
-                //         int index = (int)dst[c][i];
-                //         printf("t%02d,v%d = (%d,%d)\n", threadIdx.x, i, index % 32, index / 32);
-                //     }
-                // }
-            }
-        }
-
-        // if (threadIdx.x == 0) {
-        //     for (int s = 0; s < 2; ++s) {
-        //         for (int c = 0; c < 512; ++c) {
-        //             printf("s=%d, c=%d, v=%d\n", s, c, (int)src(s, c));
-        //         }
-        //     }
-        // }
-    }
-};
-
-struct VoidSmemCopy {
-    template<int S_, int C_>
-    struct Type {
-        static constexpr int S = S_;
-        static constexpr int C = C_;
-
-        static constexpr int kFragmentSize = 1;
-
-        using Frag = Array<int, kFragmentSize>[1];
-
-        template<class Accessor>
-        __device__ static void copy(Accessor, Frag&, int2)
-        {
-        }
-    };
-};
-
-template<class Atom_>
-struct SmemCopy_v2_ {
-
-    template<int S_, int C_>
-    struct Type {
-        using Atom = Atom_;
-
-        static constexpr int S = S_;
-        static constexpr int C = C_;
-
-        struct Detail {
-            static constexpr int ITER_S   = S / Atom::S;
-            static constexpr int ITER_C   = C / Atom::C;
-            static constexpr int ITER_CNT = ITER_S * ITER_C;
-        };
-
-        using Frag = typename Atom::Frag[Detail::ITER_CNT];
-
-        template<class Accessor>
-        __device__ static void copy(Accessor src, Frag& dst, int2 offset_cs)
-        {
-            static constexpr int DELTA_S = Atom::S;
-            static constexpr int DELTA_C = Atom::C;
-            const int2           thr_cs  = Atom::get_offset(threadIdx.x % WARP_SIZE);
-            PRAGMA_UNROLL
-            for (int s = 0; s < Detail::ITER_S; ++s) {
-                PRAGMA_UNROLL
-                for (int c = 0; c < Detail::ITER_C; ++c) {
-                    const int ss = offset_cs.y + thr_cs.y + s * DELTA_S;
-                    const int cc = offset_cs.x + thr_cs.x + c * DELTA_C;
-                    Atom::Copy::copy(&src(ss, cc), dst[s * Detail::ITER_C + c].data());
-                }
-            }
-        }
-    };
 };
 
 }  // namespace turbomind::gemm

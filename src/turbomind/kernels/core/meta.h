@@ -33,6 +33,6 @@ template<auto u, auto v>
 struct pair {};
 
 template<auto u, auto v, auto w>
-struct tuple {};
+struct triplet {};
 
 }  // namespace turbomind

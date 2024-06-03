@@ -13,6 +13,8 @@ struct SM80_MMA_16x8x16_F32_F16_F16_F32_TN {
     static constexpr int N = 8;
     static constexpr int K = 16;
 
+    static constexpr int kThreadCount = 32;
+
     using FragA = Array<half, 8>;
     using FragB = Array<half, 4>;
     using FragC = Array<float, 4>;
@@ -33,19 +35,41 @@ struct SM80_MMA_16x8x16_F32_F16_F16_F32_TN {
             ((Func&&)func)((Array<float, 2>&)c[m * 2], mi, ni);
         }
     }
+
+    __device__ static int get_group_id(int thread_idx)
+    {
+        return thread_idx / WARP_SIZE;
+    }
 };
 
-template<class MMA_Atom_, int M_, int N_, int K_>
-struct TiledMMA {
-    using MMA_Atom = MMA_Atom_;
+template<class MMA_Atom_, class ThreadGroupMap>
+struct Tiled_MMA_v2 {
+    using Atom = MMA_Atom_;
+    using Map  = ThreadGroupMap;
 
-    static constexpr int M = M_;
-    static constexpr int N = N_;
-    static constexpr int K = K_;
+    static constexpr int kGroupCount  = Map::kGroupCount;
+    static constexpr int kThreadCount = kGroupCount * Atom::kThreadCount;
 
-    static constexpr int ITER_M = M / MMA_Atom::M;
-    static constexpr int ITER_N = N / MMA_Atom::N;
-    static constexpr int ITER_K = K / MMA_Atom::K;
+    static constexpr int kTileIterM = Map::kIterM;
+    static constexpr int kTileIterN = Map::kIterN;
+    static constexpr int kTileIterK = Map::kIterK;
+
+    static constexpr int kDeltaM = Map::kDeltaM;
+    static constexpr int kDeltaN = Map::kDeltaN;
+    static constexpr int kDeltaK = Map::kDeltaK;
+
+    static constexpr int kAtomM = Map::TileM / Atom::M;
+    static constexpr int kAtomN = Map::TileN / Atom::N;
+    static constexpr int kAtomK = Map::TileK / Atom::K;
+
+    static constexpr int kMmaIterM = kTileIterM * kAtomM;
+    static constexpr int kMmaIterN = kTileIterN * kAtomN;
+    static constexpr int kMmaIterK = kTileIterK * kAtomK;
+
+    __device__ static int3 get_offset(int thread_idx)
+    {
+        return Map::get_offset(Atom::get_group_id(thread_idx));
+    }
 };
 
 }  // namespace turbomind::gemm

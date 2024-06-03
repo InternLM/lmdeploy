@@ -45,11 +45,14 @@ struct GemmUniversal {
 
     static constexpr bool SplitK = SplitK_;
 
-    static constexpr int kChunkSizeK = std::max(Impl::G, CTA_K);
+    // static constexpr int kChunkSizeK = std::max(Impl::G, CTA_K);
+
+    // TODO: 
+    static constexpr int kChunkSizeK = CTA_K;
 
     using FragC = typename Impl::FragC;
 
-    static constexpr int WARP_CNT = Impl::WARP_CNT;
+    static constexpr int WARP_CNT = Impl::WARPS;
 
     using OperandA = typename Mainloop::OperandA;
     using OperandB = typename Mainloop::OperandB;

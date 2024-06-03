@@ -87,7 +87,7 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(1024, 1024, 1024);
 
-    // Run<T, Tb>(256, 256, 1024);
+    // Run<T, Tb>(128, 128, 128);
 }
 
 namespace turbomind::gemm {

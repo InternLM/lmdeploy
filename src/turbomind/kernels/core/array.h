@@ -84,12 +84,12 @@ struct Array {
         return data() + N;
     }
 
-    TM_HOST_DEVICE constexpr std::integral_constant<int, N> size() const noexcept
+    TM_HOST_DEVICE static constexpr std::integral_constant<int, N> size() noexcept
     {
         return {};
     }
 
-    TM_HOST_DEVICE constexpr std::false_type empty() const noexcept
+    TM_HOST_DEVICE static constexpr std::false_type empty() noexcept
     {
         return {};
     }
@@ -119,12 +119,12 @@ struct Array<uint4_t, N> {
         return __a[i / 8];
     }
 
-    TM_HOST_DEVICE constexpr std::integral_constant<int, N> size() const noexcept
+    TM_HOST_DEVICE static constexpr std::integral_constant<int, N> size() noexcept
     {
         return {};
     }
 
-    TM_HOST_DEVICE constexpr std::false_type empty() const noexcept
+    TM_HOST_DEVICE static constexpr std::false_type empty() noexcept
     {
         return {};
     }

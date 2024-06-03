@@ -37,7 +37,7 @@ struct SmemIter {
 template<int M_,
          int N_,
          int K_,
-         class TiledMma,
+         class MMA,
          class OperandA_,
          class OperandB_,
          class OperandU_,
@@ -46,9 +46,10 @@ template<int M_,
          int Stages_>
 struct MainloopSm80_v2 {
 
-    using MMA_Atom = typename TiledMma::MMA_Atom;
+    using MMA_Atom = typename MMA::Atom;
+    using MMA_Map  = typename MMA::Map;
 
-    using FragC = typename MMA_Atom::FragC[TiledMma::ITER_M][TiledMma::ITER_N];
+    using FragC = typename MMA_Atom::FragC[MMA::kMmaIterM][MMA::kMmaIterN];
 
     static constexpr int Stages = Stages_;
 
@@ -56,20 +57,17 @@ struct MainloopSm80_v2 {
     static constexpr int CTA_N = N_;
     static constexpr int CTA_K = K_;
 
-    static constexpr int WARP_M = TiledMma::M;
-    static constexpr int WARP_N = TiledMma::N;
-    static constexpr int WARP_K = TiledMma::K;
+    static constexpr int WARP_M = MMA_Map::kFootprintM;
+    static constexpr int WARP_N = MMA_Map::kFootprintN;
+    static constexpr int WARP_K = MMA_Map::kFootprintK;
 
-    static constexpr int WARPS = (CTA_M / WARP_M) * (CTA_N / WARP_N) * (CTA_K / WARP_K);
+    static constexpr int WARPS = MMA::kThreadCount / WARP_SIZE;
 
-    /// TODO: remove this thing
-    static constexpr int G = 128;
+    using OperandA = MakeOperand<OperandA_, IteratorSm80, CTA_M, CTA_K, WARPS>;
+    using OperandU = MakeOperand<OperandU_, IteratorSm80, CTA_M, CTA_K, WARPS>;
 
-    using OperandA = MakeOperand<OperandA_, IteratorSm80, CTA_M, CTA_K, WARP_M, WARP_K, WARPS>;
-    using OperandU = MakeOperand<OperandU_, IteratorSm80, CTA_M, CTA_K, WARP_M, WARP_K, WARPS>;
-
-    using OperandB = MakeOperand<OperandB_, IteratorSm80, CTA_N, CTA_K, WARP_N, WARP_K, WARPS>;
-    using OperandV = MakeOperand<OperandV_, IteratorSm80, CTA_N, CTA_K, WARP_N, WARP_K, WARPS>;
+    using OperandB = MakeOperand<OperandB_, IteratorSm80, CTA_N, CTA_K, WARPS>;
+    using OperandV = MakeOperand<OperandV_, IteratorSm80, CTA_N, CTA_K, WARPS>;
 
     using Transform = Transform_;
 
@@ -87,10 +85,10 @@ struct MainloopSm80_v2 {
     using SmemLayoutU = typename OperandU::SmemLayout;
     using SmemLayoutV = typename OperandV::SmemLayout;
 
-    using SmemCopyA = typename OperandA::SmemCopy;
-    using SmemCopyB = typename OperandB::SmemCopy;
-    using SmemCopyU = typename OperandU::SmemCopy;
-    using SmemCopyV = typename OperandV::SmemCopy;
+    using SmemCopyA = SmemCopy<OperandA, MMA_Map::kFootprintM, MMA_Map::TileK, MMA_Map::kDeltaM, MMA_Map::kDeltaK>;
+    using SmemCopyU = SmemCopy<OperandU, MMA_Map::kFootprintM, MMA_Map::TileK, MMA_Map::kDeltaM, MMA_Map::kDeltaK>;
+    using SmemCopyB = SmemCopy<OperandB, MMA_Map::kFootprintN, MMA_Map::TileK, MMA_Map::kDeltaN, MMA_Map::kDeltaK>;
+    using SmemCopyV = SmemCopy<OperandV, MMA_Map::kFootprintN, MMA_Map::TileK, MMA_Map::kDeltaN, MMA_Map::kDeltaK>;
 
     using SmemAccessorA = SmemAccessor<Ta, SmemLayoutA>;
     using SmemAccessorB = SmemAccessor<Tb, SmemLayoutB>;
@@ -102,13 +100,8 @@ struct MainloopSm80_v2 {
     using GmemIterU = typename OperandU::GmemIter;
     using GmemIterV = typename OperandV::GmemIter;
 
-    static constexpr int WARP_CNT_M = M_ / TiledMma::M;
-    static constexpr int WARP_CNT_N = N_ / TiledMma::N;
-    static constexpr int WARP_CNT_K = K_ / TiledMma::K;
-    static constexpr int WARP_CNT   = WARP_CNT_M * WARP_CNT_N * WARP_CNT_K;
-
     static constexpr int kMaxPrefetchIter =
-        std::min(ceil_div(std::max(GmemIterA::ITER_S, GmemIterB::ITER_S), 4), TiledMma::ITER_K);
+        std::min(ceil_div(std::max(GmemIterA::ITER_S, GmemIterB::ITER_S), 4), MMA::kTileIterK);
 
     static constexpr int kBatchA = ceil_div(GmemIterA::ITER_S, kMaxPrefetchIter);
     static constexpr int kBatchB = ceil_div(GmemIterB::ITER_S, kMaxPrefetchIter);
@@ -202,13 +195,16 @@ struct MainloopSm80_v2 {
                                int            tile_iter,
                                SharedStorage& storage)
     {
-        typename MMA_Atom::FragA frag_A[TiledMma::ITER_K][TiledMma::ITER_M];
-        typename MMA_Atom::FragB frag_B[TiledMma::ITER_K][TiledMma::ITER_N];
+        static_assert(MMA::kAtomK == 1);
 
-        typename SmemCopyA::Frag data_A[TiledMma::ITER_K];
-        typename SmemCopyB::Frag data_B[TiledMma::ITER_K];
-        typename SmemCopyU::Frag data_U[TiledMma::ITER_K];
-        typename SmemCopyV::Frag data_V[TiledMma::ITER_K];
+        // mma_iter_x = tile_iter_x * atom_x
+        typename MMA_Atom::FragA frag_A[MMA::kTileIterK][MMA::kMmaIterM];
+        typename MMA_Atom::FragB frag_B[MMA::kTileIterK][MMA::kMmaIterN];
+
+        typename SmemCopyA::Frag data_A[MMA::kTileIterK];
+        typename SmemCopyB::Frag data_B[MMA::kTileIterK];
+        typename SmemCopyU::Frag data_U[MMA::kTileIterK];
+        typename SmemCopyV::Frag data_V[MMA::kTileIterK];
 
         SmemIter<get_pointer_type<Ta>, SmemLayoutA::kSize, Stages> smem_A{storage.A.data()};
         SmemIter<get_pointer_type<Tb>, SmemLayoutB::kSize, Stages> smem_B{storage.B.data()};
@@ -245,7 +241,7 @@ struct MainloopSm80_v2 {
 
         auto prefetch_batch = [&](int k) {
             Prefetch(gmem_iters, k, gmem_mask);
-            if (k == TiledMma::ITER_K - 1) {
+            if (k == MMA::kTileIterK - 1) {
                 __pipeline_commit();
                 AdvanceGmemStage(gmem_iters);
                 if (--gmem_iter == 0) {
@@ -259,17 +255,17 @@ struct MainloopSm80_v2 {
             AdvanceSmemStage(gmem_iters, smem_iters);
         };
 
-        const int warp_id  = threadIdx.x / WARP_SIZE;
-        const int offset_m = warp_id_m(warp_id) * TiledMma::M;
-        const int offset_n = warp_id_n(warp_id) * TiledMma::N;
-        const int offset_k = warp_id_k(warp_id) * TiledMma::K;
+        const int3 offset_mnk = MMA::get_offset(threadIdx.x);
+        const int  offset_m   = offset_mnk.x;
+        const int  offset_n   = offset_mnk.y;
+        const int  offset_k   = offset_mnk.z;
 
         auto preload = [&](int k) {
             const int current_k = offset_k + k * MMA_Atom::K;
-            SmemCopyA::copy(SmemAccessorA{smem_A.pointer}, data_A[k], mk2cs<OperandA::kOrder>(offset_m, current_k));
-            SmemCopyU::copy(SmemAccessorU{smem_U.pointer}, data_U[k], mk2cs<OperandU::kOrder>(offset_m, current_k));
-            SmemCopyB::copy(SmemAccessorB{smem_B.pointer}, data_B[k], mk2cs<OperandB::kOrder>(offset_n, current_k));
-            SmemCopyV::copy(SmemAccessorV{smem_V.pointer}, data_V[k], mk2cs<OperandV::kOrder>(offset_n, current_k));
+            SmemCopyA::copy(SmemAccessorA{smem_A.pointer}, data_A[k], {offset_m, current_k});
+            SmemCopyU::copy(SmemAccessorU{smem_U.pointer}, data_U[k], {offset_m, current_k});
+            SmemCopyB::copy(SmemAccessorB{smem_B.pointer}, data_B[k], {offset_n, current_k});
+            SmemCopyV::copy(SmemAccessorV{smem_V.pointer}, data_V[k], {offset_n, current_k});
         };
 
         PRAGMA_UNROLL
@@ -294,7 +290,7 @@ struct MainloopSm80_v2 {
             if constexpr (!kFusePrefetch) {
                 prefetch_stage();
             }
-            constexpr int ITER_K = TiledMma::ITER_K;
+            constexpr int ITER_K = MMA::kTileIterK;
             static_assert(ITER_K > 1);
 
             PRAGMA_UNROLL
@@ -302,9 +298,9 @@ struct MainloopSm80_v2 {
                 // preload for next iter
                 preload((k + 1) % ITER_K);
                 PRAGMA_UNROLL
-                for (int n = 0; n < TiledMma::ITER_N; ++n) {
+                for (int n = 0; n < MMA::kMmaIterN; ++n) {
                     PRAGMA_UNROLL
-                    for (int m = 0; m < TiledMma::ITER_M; ++m) {
+                    for (int m = 0; m < MMA::kMmaIterM; ++m) {
                         MMA_Atom::fma(frag_C[m][n], frag_A[k][m], frag_B[k][n], frag_C[m][n]);
                     }
                 }
@@ -322,57 +318,23 @@ struct MainloopSm80_v2 {
         __pipeline_wait_prior(0);
     }
 
-    __device__ static int warp_id_m(int warp_id)
-    {
-        if constexpr (WARP_CNT_M == 1) {
-            return 0;
-        }
-        else {
-            return warp_id % WARP_CNT_M;
-        }
-    }
-
-    __device__ static int warp_id_n(int warp_id)
-    {
-        if constexpr (WARP_CNT_N == 1) {
-            return 0;
-        }
-        else {
-            return warp_id / WARP_CNT_M % WARP_CNT_N;
-        }
-    }
-
-    __device__ static int warp_id_k(int warp_id)
-    {
-        if constexpr (WARP_CNT_K == 1) {
-            return 0;
-        }
-        else {
-            return warp_id / WARP_CNT_M / WARP_CNT_N;
-        }
-    }
-
     template<class Tc, class Func>
     __device__ static void StoreC(FragC& frag_C, SharedStorage& storage, Func&& func)
     {
-        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int3 offset_mnk = MMA::get_offset(threadIdx.x);
+        const int  offset_m   = offset_mnk.x;
+        const int  offset_n   = offset_mnk.y;
+        // const int  offset_k   = offset_mnk.z;
 
-        const int warp_idx_m = warp_id_m(warp_id);
-        const int warp_idx_n = warp_id_n(warp_id);
-        // const int warp_idx_k = warp_id_k(warp_id);
-
-        const int warp_offset_m = warp_idx_m * WARP_M;
-        const int warp_offset_n = warp_idx_n * WARP_N;
-
-        static_assert(WARP_CNT_K == 1);
+        // static_assert(WARP_CNT_K == 1);
 
         PRAGMA_UNROLL
-        for (int m = 0; m < TiledMma::ITER_M; ++m) {
+        for (int m = 0; m < MMA::kMmaIterM; ++m) {
             PRAGMA_UNROLL
-            for (int n = 0; n < TiledMma::ITER_N; ++n) {
+            for (int n = 0; n < MMA::kMmaIterN; ++n) {
                 MMA_Atom::foreach_C(frag_C[m][n], [&](auto vec, int mi, int ni) {
-                    ((Func&&)func)(warp_offset_m + m * MMA_Atom::M + mi,  //
-                                   warp_offset_n + n * MMA_Atom::N + ni,
+                    ((Func&&)func)(offset_m + m * MMA_Atom::M + mi,  //
+                                   offset_n + n * MMA_Atom::N + ni,
                                    cast<Tc>(vec));
                 });
             }
