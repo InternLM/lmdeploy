@@ -9,10 +9,11 @@ BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 class TestRestfulInterfaceBase:
 
-    def test_get_model(self):
+    def test_get_model(self, config):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
-        assert model_name == MODEL_NAME, api_client.available_models
+        assert model_name == '/'.join([config.get('model_path'), MODEL_NAME
+                                       ]), api_client.available_models
 
     def test_encode(self):
         api_client = APIClient(BASE_URL)
@@ -81,8 +82,9 @@ class TestRestfulInterfaceBase:
 
     def test_completions_stream(self):
         api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
         outputList = []
-        for output in api_client.completions_v1(model=MODEL_NAME,
+        for output in api_client.completions_v1(model=model_name,
                                                 prompt='Shanghai is',
                                                 stream='true',
                                                 temperature=0.01):
@@ -90,7 +92,7 @@ class TestRestfulInterfaceBase:
 
         for index in range(1, len(outputList) - 1):
             output = outputList[index]
-            assert (output.get('model') == MODEL_NAME)
+            assert (output.get('model') == model_name)
             for message in output.get('choices'):
                 assert message.get('index') == 0
                 assert len(message.get('text')) > 0
@@ -102,8 +104,9 @@ class TestRestfulInterfaceBase:
 
     def test_completions_stream_stopword(self):
         api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
         outputList = []
-        for output in api_client.completions_v1(model=MODEL_NAME,
+        for output in api_client.completions_v1(model=model_name,
                                                 prompt='Beijing is',
                                                 stream='true',
                                                 stop=' is',
@@ -112,7 +115,7 @@ class TestRestfulInterfaceBase:
 
         for index in range(1, len(outputList) - 2):
             output = outputList[index]
-            assert (output.get('model') == MODEL_NAME)
+            assert (output.get('model') == model_name)
             assert (output.get('object') == 'text_completion')
             for message in output.get('choices'):
                 assert ' is' not in message.get('text')
@@ -127,9 +130,10 @@ class TestRestfulInterfaceBase:
 
     def test_completions_stream_stopwords(self):
         api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
         outputList = []
         for output in api_client.completions_v1(
-                model=MODEL_NAME,
+                model=model_name,
                 prompt='Beijing is',
                 stream='true',
                 stop=[' Beijing', ' city', ' China'],
@@ -138,7 +142,7 @@ class TestRestfulInterfaceBase:
 
         for index in range(1, len(outputList) - 2):
             output = outputList[index]
-            assert (output.get('model') == MODEL_NAME)
+            assert (output.get('model') == model_name)
             assert (output.get('object') == 'text_completion')
             for message in output.get('choices'):
                 assert ' Beijing' not in message.get('text')
