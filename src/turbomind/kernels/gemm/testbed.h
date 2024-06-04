@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/quantization.h"
 #include "src/turbomind/kernels/gemm/reference.h"
@@ -12,6 +13,7 @@
 #include "src/turbomind/kernels/gemm/utils.h"
 #include <fstream>
 #include <thrust/universal_vector.h>
+#include <type_traits>
 
 namespace turbomind::gemm {
 
@@ -25,7 +27,15 @@ using thrust::universal_vector;
         }                                                                                                              \
     } while (0)
 
-template<class Ta, class Tb, class Tc, Order order_a, Order order_b>
+template<class Ta,
+         class Tb,
+         class Tc,
+         Order order_a,
+         Order order_b,
+         Pack  pack_a,
+         Pack  pack_b,
+         Pack  pack_u = 0,
+         Pack  pack_v = 0>
 class Testbed {
 public:
     static constexpr size_t kMaxSplits = 16;
@@ -73,8 +83,8 @@ public:
         b_.resize(n * k);
         c_.resize(m * n);
 
-        a_desc_ = MatrixLayout{get_data_type_v<Ta>, order_a, m, k, mk2cs<order_a>(m, k).x};
-        b_desc_ = MatrixLayout{get_data_type_v<Tb>, order_b, k, n, _kn2cs<order_a>(k, n).x};
+        a_desc_ = MatrixLayout{get_data_type_v<Tc>, order_a, m, k, mk2cs<order_a>(m, k).x};
+        b_desc_ = MatrixLayout{get_data_type_v<Tc>, order_b, k, n, _kn2cs<order_a>(k, n).x};
         c_desc_ = MatrixLayout{get_data_type_v<Tc>, order_c_, m, n, mk2cs<order_c_>(m, n).x};
 
         c_f_.resize(c_.size());
@@ -105,19 +115,42 @@ public:
         a_pack_desc_ = a_desc_;
         b_pack_desc_ = b_desc_;
 
-        /// TODO: Revise packing condition
-        if constexpr (1) {
-            a_pack_desc_.pack = HMMA_16816 | OPERAND_A | 1;
-            Convert(a_.data().get(), a_desc_, a_pack_.data().get(), a_pack_desc_, stream_);
+        constexpr bool is_quant_a = !std::is_same_v<Ta, Tc>;
+        constexpr bool is_quant_b = !std::is_same_v<Tb, Tc>;
+
+        if constexpr (is_quant_a) {
+            static_assert(pack_a && pack_u);
+            Quantize<Ta>(a_, m, k, order_a, g, a_f_, a_q_, u_, stream);
+            u_pack_desc_ = u_desc_ = {get_data_type_v<Tc>, kColMajor, m, ceil_div(k, g), m};
+            u_pack_desc_.pack      = pack_u;
+            CHECK(!Convert(u_.data().get(), u_desc_, u_pack_.data().get(), u_pack_desc_, stream_));
+        }
+
+        if constexpr (is_quant_b) {
+            static_assert(pack_b && pack_v);
+            constexpr Order _order_b = transpose(order_b);
+            Quantize<Tb>(b_, n, k, _order_b, g, b_f_, b_q_, v_, stream);
+            u_pack_desc_ = u_desc_ = {get_data_type_v<Tc>, kColMajor, n, ceil_div(k, g), n};
+            u_pack_desc_.pack      = pack_u;
+            CHECK(!Convert(u_.data().get(), u_desc_, u_pack_.data().get(), u_pack_desc_, stream_));
+        }
+
+        if constexpr (pack_a) {
+            a_pack_desc_.type = get_data_type_v<Ta>;
+            a_pack_desc_.pack = pack_a;
+            const auto a_data = is_quant_a ? (void*)a_q_.data().get() : (void*)a_.data().get();
+            CHECK(!Convert(a_data, a_desc_, a_pack_.data().get(), a_pack_desc_, stream_));
         }
         else {
             cudaMemcpyAsync(
                 (Ta*)a_pack_.data().get(), a_.data().get(), sizeof(Ta) * a_.size(), cudaMemcpyDefault, stream);
         }
 
-        if constexpr (1) {
-            b_pack_desc_.pack = HMMA_16816 | OPERAND_B | 1;
-            Convert(b_.data().get(), b_desc_, b_pack_.data().get(), b_pack_desc_, stream_);
+        if constexpr (pack_b) {
+            b_pack_desc_.type = get_data_type_v<Tb>;
+            b_pack_desc_.pack = pack_b;
+            const auto b_data = is_quant_b ? (void*)b_q_.data().get() : (void*)b_.data().get();
+            CHECK(!Convert(b_data, b_desc_, b_pack_.data().get(), b_pack_desc_, stream_));
         }
         else {
             cudaMemcpyAsync(
@@ -202,41 +235,6 @@ public:
         Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
     }
 
-private:
-    void Quantize(int g)
-    {
-        // b_q_.resize(n_ * k_);
-        // q_.resize(k_ / g * n_ * 2);
-
-        // g_ = g;
-
-        // universal_vector<Array<T, 2>> minmax(k_ / g_ * n_);
-
-        // const int  threads = std::min(256, n_);
-        // const dim3 blocks((n_ + threads - 1) / threads, k_ / g_);
-
-        // find_stats<<<blocks, threads, 0, stream_>>>(minmax.data().get(),  //
-        //                                             b_.data().get(),
-        //                                             n_,
-        //                                             k_,
-        //                                             g);
-
-        // find_params<Tb, true><<<(minmax.size() + 255) / 256, 256, 0, stream_>>>(q_.data().get(),  //
-        //                                                                         minmax.data().get(),
-        //                                                                         minmax.size());
-
-        // // universal_vector<T> b_f(b_.size());
-        // b_f_.resize(b_.size());
-        // quantize<Tb><<<blocks, threads, 0, stream_>>>(b_q_.data().get(),  //
-        //                                               b_f_.data().get(),
-        //                                               b_.data().get(),
-        //                                               q_.data().get(),
-        //                                               n_,
-        //                                               k_,
-        //                                               g);
-    }
-
-private:
 private:
     int m_{};
     int n_{};

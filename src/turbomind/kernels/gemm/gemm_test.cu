@@ -46,7 +46,11 @@ T& gTestbed()
 template<class T, class Tb>
 void Run(int m, int n, int k, int g = 128)
 {
-    auto& test = gTestbed<gemm::Testbed<half, half, half, Order::kColMajor, Order::kColMajor>>();
+    constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;
+    constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
+    constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
+    constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
+    auto& test = gTestbed<gemm::Testbed<uint8_t, uint8_t, half, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
 
     test.Initialize(m, n, k, g, 0);
     for (int i = 0; i < 10; ++i) {
