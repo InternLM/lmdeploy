@@ -3,7 +3,6 @@ import asyncio
 import dataclasses
 import os
 import random
-from argparse import ArgumentError
 from contextlib import asynccontextmanager
 from itertools import count
 from queue import Empty, Queue
@@ -55,12 +54,7 @@ def deduce_a_name(
         model_name = get_model_name_from_workspace_model(model_path)
     # may get a model name from model_path
     if model_name is None:
-        model_name = best_match_model(model_path)
-        if model_name is None:
-            raise ArgumentError(None,
-                                f'Please set model_name for {model_path}')
-        else:
-            logger.info(f'matched chat template name: {model_name}')
+        model_name = model_path
     return model_name
 
 
