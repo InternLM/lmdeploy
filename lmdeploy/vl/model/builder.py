@@ -57,6 +57,8 @@ def vl_model_with_tokenizer(model_path: str, with_llm: bool = True):
     llm = vl_model
     if hasattr(vl_model, 'language_model'):  # deepseek vl
         llm = vl_model.language_model
+    if hasattr(vl_model, 'llm'):  # MiniCPMV
+        llm = vl_model.llm
     llm.config.use_cache = False
     llm.half().eval()
     from transformers import AutoTokenizer
