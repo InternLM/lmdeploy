@@ -15,14 +15,14 @@ pip install lmdeploy
 ```
 
 使用pip安装CogVLM依赖xformers，更多方式可参考[xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers)。
-注意，xformers依赖torch，因而需要根据现有torch版本选择合适版本进行安装。如对于`torch==2.2.0`，可按如下方式安装。
+注意，xformers依赖torch，因而需要根据现有torch版本选择合适版本进行安装。如对于`torch==2.2.2`，可按如下方式安装。
 
 ```shell
-# for torch==2.2.0
+# for torch==2.2.2
 # cuda 11.8 version
-pip3 install -U 'xformers<=0.0.24' --index-url https://download.pytorch.org/whl/cu118
+pip3 install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
 # cuda 12.1 version
-pip3 install -U 'xformers<=0.0.24' --index-url https://download.pytorch.org/whl/cu121
+pip3 install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ### 准备

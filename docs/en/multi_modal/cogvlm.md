@@ -15,14 +15,14 @@ pip install lmdeploy
 ```
 
 Install xformers for cogvlm with pip. Refer to [installing-xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers) for more.
-Note xformers depends on torch and you should select a version that won't reinstall torch. The following works for `torch==2.2.0`.
+Note xformers depends on torch and you should select a version that won't reinstall torch. The following works for `torch==2.2.2`.
 
 ```shell
-# for torch==2.2.0
+# for torch==2.2.2
 # cuda 11.8 version
-pip3 install -U 'xformers<=0.0.24' --index-url https://download.pytorch.org/whl/cu118
+pip3 install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
 # cuda 12.1 version
-pip3 install -U 'xformers<=0.0.24' --index-url https://download.pytorch.org/whl/cu121
+pip3 install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ### Prepare
