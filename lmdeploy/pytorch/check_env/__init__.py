@@ -111,9 +111,11 @@ def check_transformers_version(model_path: str,
         """check model transformers version."""
         logger.debug('Checking <Model> required transformers version.')
         try:
-            model_trans_version = getattr(config, 'transformers_version')
-            model_trans_version = version.parse(model_trans_version)
-            assert trans_version >= model_trans_version, 'Version mismatch.'
+            model_trans_version = getattr(config, 'transformers_version', None)
+            if model_trans_version is not None:
+                model_trans_version = version.parse(model_trans_version)
+                assert trans_version >= model_trans_version, \
+                    'Version mismatch.'
         except Exception as e:
             message = (f'model `{model_path}` requires '
                        f'transformers version {model_trans_version} '
