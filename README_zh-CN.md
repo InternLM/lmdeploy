@@ -125,7 +125,6 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Dbrx (132B)</li>
   <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
-  <li>StarCoder2 (3B - 15B)</li>
 </ul>
 </td>
 <td>

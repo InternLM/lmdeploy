@@ -124,7 +124,6 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Dbrx (132B)</li>
   <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
-  <li>StarCoder2 (3B - 15B)</li>
 </ul>
 </td>
 <td>
