@@ -219,7 +219,7 @@ class BaseChatTemplate(BaseModel):
                        assistant=self.eoa + self.separator,
                        system=self.eosys)
         ret = ''
-        if self.meta_instruction is not None:
+        if self.meta_instruction is not None and sequence_start:
             if len(messages) and messages[0]['role'] != 'system':
                 ret += f'{self.system}{self.meta_instruction}{self.eosys}'
         for message in messages:
@@ -228,6 +228,64 @@ class BaseChatTemplate(BaseModel):
             ret += f'{box_map[role]}{content}{eox_map[role]}'
         ret += f'{self.assistant}'
         return ret
+
+
+@MODELS.register_module(name='cogvlm')
+class CogVLM(BaseChatTemplate):
+    """Chat template of CogVLM model."""
+
+    def __init__(self,
+                 meta_instruction='',
+                 eosys='',
+                 user='Question: ',
+                 separator='\n',
+                 eoh=' ',
+                 assistant='Answer:',
+                 eoa='</s>',
+                 stop_words=['</s>'],
+                 **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         separator=separator,
+                         assistant=assistant,
+                         eoa=eoa,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'cogvlm' in path and 'cogvlm2' not in path:
+            return 'cogvlm'
+
+
+@MODELS.register_module(name='cogvlm2')
+class CogVLM2(CogVLM):
+    """Chat template of CogVLM2 model."""
+
+    def __init__(self,
+                 eoa='<|end_of_text|>',
+                 stop_words=['<|end_of_text|>'],
+                 **kwargs):
+        super().__init__(eoa=eoa, stop_words=stop_words, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'cogvlm2' in path:
+            return 'cogvlm2'
 
 
 @MODELS.register_module(name='wizardlm')
@@ -262,12 +320,39 @@ class Vicuna(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'llava' in path and 'v1.5' in path:
-            return 'vicuna'
-        if 'vicuna' in path:
+        if 'vicuna' in path and 'llava' not in path:
             return 'vicuna'
         if 'wizardlm' in path:
             return 'wizardlm'
+
+
+@MODELS.register_module(name='llava-v1')
+class Llavav1(Vicuna):
+    """Chat template of llava-v1 model."""
+
+    def __init__(
+            self,
+            meta_instruction="""A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.""",  # noqa: E501
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction, **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'llava' in path and 'v1' in path and 'v1.6-34b' not in path \
+            and 'mistral' not in path:
+            return 'llava-v1'
 
 
 @MODELS.register_module(name='mini-gemini-vicuna')
@@ -444,7 +529,7 @@ class InternLM2Chat7B(InternLMChat7B):
                        environment=self.eoenv)
         name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
         ret = ''
-        if self.meta_instruction is not None:
+        if self.meta_instruction is not None and sequence_start:
             if len(messages) and messages[0]['role'] != 'system':
                 ret += f'{self.system}{self.meta_instruction}{self.eosys}'
         for message in messages:
@@ -1016,10 +1101,11 @@ class MistralChat(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'instruct' in model_path.lower():
-            if 'mistral' in model_path.lower():
+        model_path = model_path.lower()
+        if 'instruct' in model_path or 'llava' in model_path:
+            if 'mistral' in model_path:
                 return 'mistral'
-            if 'mixtral' in model_path.lower():
+            if 'mixtral' in model_path:
                 return 'mixtral'
 
 
@@ -1143,6 +1229,12 @@ class DeepseekVL(BaseChatTemplate):
                          eoa=eoa,
                          session_len=session_len,
                          **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True):
+        return super().messages2prompt(messages, sequence_start)[:-1]
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -1293,12 +1385,12 @@ class ChatmlDirect(BaseChatTemplate):
     def __init__(self,
                  system='<|im_start|>system\n',
                  meta_instruction='Answer the questions.',
-                 eosys='<|im_end|>\n',
+                 eosys='<|im_end|>',
                  user='<|im_start|>user\n',
-                 eoh='<|im_end|>\n',
+                 eoh='<|im_end|>',
                  assistant='<|im_start|>assistant\n',
                  eoa='<|im_end|>',
-                 separator='\n',
+                 separator='',
                  session_len=4096,
                  **kwargs):
         super().__init__(system,

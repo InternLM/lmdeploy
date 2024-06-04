@@ -281,3 +281,15 @@ class EngineOutput:
     token_ids: List[int]
     num_token: int
     logprobs: List[Dict[int, float]] = None
+
+
+@dataclass
+class VisionConfig:
+    """Vison model configs.
+
+    Args:
+        max_batch_size (int): the max image size passed to the model, since
+            some models will use image patch, the actual running batch could
+            be larger than this value.
+    """
+    max_batch_size: int = 1

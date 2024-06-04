@@ -86,6 +86,14 @@ quatization_case_config:
         - internlm/internlm2-20b
         - Qwen/Qwen1.5-7B-Chat
         - meta-llama/Meta-Llama-3-8B-Instruct
+        - Qwen/Qwen-VL-Chat
+        - liuhaotian/llava-v1.5-7b
+        - liuhaotian/llava-v1.5-13b
+        - liuhaotian/llava-v1.6-vicuna-7b
+        - 01-ai/Yi-VL-6B
+        - deepseek-ai/deepseek-vl-1.3b-chat
+        - OpenGVLab/InternVL-Chat-V1-5
+        - internlm/internlm-xcomposer2-vl-7b
     kvint:
         - meta-llama/Llama-2-7b-chat-hf
         - meta-llama/Meta-Llama-3-8B-Instruct

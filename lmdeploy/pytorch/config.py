@@ -1,35 +1,49 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, List, Literal
 
 import torch
 
 
-def _get_torch_dtype(config: Any, default: str = 'float16'):
-    """Get the torch dtype from the model config.
+def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
+    """Update the torch dtype from the model config.
 
     Args:
-        config: Config of the hf model.
+        config (ModelConfig): The input model config.
         default (str): default device type.
     """
+    from lmdeploy.utils import get_logger
+    logger = get_logger('lmdeploy')
 
     def __hack_qwen():
         """hack qwen."""
-        torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
-        ) else 'float16'
-        if config.bf16:
+        is_bf16_supported = torch.cuda.is_bf16_supported()
+        torch_dtype = 'bfloat16' if is_bf16_supported else 'float16'
+        if config.hf_config.bf16 and is_bf16_supported:
             torch_dtype = 'bfloat16'
-        elif config.fp16:
+        elif config.hf_config.fp16:
             torch_dtype = 'float16'
-        setattr(config, 'torch_dtype', torch_dtype)
+        return torch_dtype
 
-    if config.model_type == 'qwen' and config.torch_dtype is None:
-        __hack_qwen()
+    def __hack_cogvlm():
+        """hack cogvlm."""
+        return 'bfloat16' if torch.cuda.is_bf16_supported() else 'float16'
 
-    torch_dtype = getattr(config, 'torch_dtype', default)
-    # torch_dtype in config could be none
-    torch_dtype = torch_dtype or default
-    return eval(f'torch.{torch_dtype}')
+    torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
+    if torch_dtype is None:
+        if config.hf_config.model_type == 'qwen':
+            torch_dtype = __hack_qwen()
+        elif config.model_arch == 'CogVLMForCausalLM':
+            torch_dtype = __hack_cogvlm()
+        else:
+            logger.warning('Model config does not have `torch_dtype`,'
+                           f' use default: {default}')
+            torch_dtype = default
+        # update hf_config as well
+        setattr(config.hf_config, 'torch_dtype', torch_dtype)
+
+    config.dtype = eval(f'torch.{torch_dtype}')
+    return config
 
 
 @dataclass
@@ -75,7 +89,7 @@ class ModelConfig:
     num_attention_heads: int
     num_key_value_heads: int
     bos_token_id: int
-    eos_token_id: int
+    eos_token_id: List[int]
     head_dim: int
     sliding_window: int = -1
     dtype: torch.dtype = torch.float16
@@ -83,6 +97,9 @@ class ModelConfig:
     vocab_size: int = 40000
     hf_config: Any = None
     init_kwargs: Dict[str, Any] = field(default_factory=dict)
+    model_arch: str = None
+    unused_modules: List[str] = None
+    task_type: Literal['llm', 'vlm'] = 'llm'
 
     def get_head_size(self):
         """get head size."""
@@ -101,6 +118,8 @@ class ModelConfig:
     @classmethod
     def from_hf_config(cls, hf_config: Any, model_path: str = None):
         """from huggingface config."""
+        from lmdeploy.archs import check_vl_llm
+
         if model_path is None:
             model_path = ''
 
@@ -207,6 +226,15 @@ class ModelConfig:
                 cfg.eos_token_id = 151645
             return cfg
 
+        def __build_cogvlm():
+            cfg = __build_default()
+            if getattr(hf_config, 'num_multi_query_heads', None):
+                cfg.num_key_value_heads = hf_config.num_multi_query_heads
+            cfg.unused_modules = ['model.vision']
+            return cfg
+
+        model_arch = getattr(hf_config, 'architectures', [None])[0]
+
         if hf_config.model_type == 'falcon':
             model_config = __build_falcon()
         elif hf_config.model_type == 'chatglm':
@@ -217,10 +245,22 @@ class ModelConfig:
             model_config = __build_dbrx()
         elif hf_config.model_type == 'qwen':
             model_config = __build_qwen()
+        elif model_arch == 'CogVLMForCausalLM':
+            model_config = __build_cogvlm()
         else:
             model_config = __build_default()
 
-        model_config.dtype = _get_torch_dtype(hf_config)
-
         model_config.hf_config = hf_config
+        model_config.model_arch = model_arch
+
+        # should after setting `hf_config` and `model_arch` attributes
+        model_config = _update_torch_dtype(model_config)
+
+        if check_vl_llm(hf_config.to_dict()):
+            model_config.task_type = 'vlm'
+
+        # update eos_token_id to list
+        if isinstance(model_config.eos_token_id, int):
+            model_config.eos_token_id = [model_config.eos_token_id]
+
         return model_config

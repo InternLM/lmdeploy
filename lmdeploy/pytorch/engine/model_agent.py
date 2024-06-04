@@ -163,6 +163,67 @@ class AdapterInfo:
 
 
 @dataclass
+class VisionModelInputs:
+    """Vision model inputs."""
+    history_lengths: torch.LongTensor = None
+    history_image_nums: torch.LongTensor = None
+    history_image_token_lengths: torch.LongTensor = None
+    input_embeddings: List[List[torch.Tensor]] = None
+    input_embedding_ranges: List[torch.LongTensor] = None
+    input_embedding_indexing: torch.BoolTensor = None
+
+    def to_device(self, device: str):
+        """to device."""
+        out_dict = dict()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if isinstance(v, torch.Tensor):
+                v = v.to(device)
+            elif k == 'input_embedding_ranges' and v is not None:
+                v = [e.to(device) for e in v]
+            elif k == 'input_embeddings' and v is not None:
+                v = [[e.to(device) for e in li] for li in v]
+            out_dict[k] = v
+
+        return VisionModelInputs(**out_dict)
+
+    def get_inputs(self, history_lengths: torch.Tensor,
+                   seq_lengths: torch.Tensor):
+        """get vision embedding inputs."""
+        input_embeddings = None
+        input_embedding_indexing = None
+        if self.input_embeddings is not None and len(
+                self.input_embeddings) > 0:
+            input_embedding_li = []
+            for (his_len, seq_len, embeddings,
+                 emb_ranges) in zip(history_lengths, seq_lengths,
+                                    self.input_embeddings,
+                                    self.input_embedding_ranges):
+                for emb, (emb_start, emb_end) in zip(embeddings, emb_ranges):
+                    start = max(emb_start, his_len) - emb_start
+                    end = min(emb_end, his_len + seq_len) - emb_start
+                    if 0 <= start < end:
+                        input_embedding_li.append(emb[start:end])
+            # has embeddings
+            if len(input_embedding_li) > 0:
+                input_embeddings = torch.cat(input_embedding_li, dim=0)
+                device = input_embeddings.device
+                starts = history_lengths - self.history_lengths
+                ends = starts + seq_lengths
+                input_embedding_indexing = torch.cat([
+                    indexing[s:e] for indexing, s, e in zip(
+                        self.input_embedding_indexing, starts, ends)
+                ],
+                                                     dim=0)
+                index_ranges = torch.arange(input_embedding_indexing.numel(),
+                                            device=device)
+                input_embedding_indexing = index_ranges[
+                    input_embedding_indexing]
+        return input_embeddings, input_embedding_indexing
+
+
+@dataclass
 class ModelInputs:
     """Input of the model."""
     input_ids: torch.LongTensor
@@ -176,6 +237,7 @@ class ModelInputs:
     local_adapter_ids: torch.LongTensor = None
     adapter_info: AdapterInfo = None
     meta: Any = None
+    vision_inputs: VisionModelInputs = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -223,6 +285,7 @@ class ModelInputs:
                 local_adapter_ids=self.local_adapter_ids,
                 adapter_info=self.adapter_info,
                 meta=self.meta,
+                vision_inputs=self.vision_inputs,
             )
             ret.append(inp)
             block_start += num_blocks
@@ -237,6 +300,8 @@ class ModelInputs:
             v = getattr(self, k)
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
+            elif isinstance(v, VisionModelInputs):
+                v = v.to_device(device)
             elif isinstance(v, AdapterInfo):
                 v = v.to_device(device)
             out_dict[k] = v
@@ -267,6 +332,8 @@ class StepContext:
     world_size: int = 1
     local_adapter_ids: torch.LongTensor = None
     adapter_params: Dict[str, AdapterInfo] = None
+    input_embeddings: torch.Tensor = None
+    input_embedding_indexing: torch.Tensor = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -289,6 +356,13 @@ class StepContext:
         q_seq_length = inputs.seq_length
         max_q_seq_length = inputs.max_q_seq_length
         history_lengths = inputs.history_lengths
+
+        # for vlm
+        input_embeddings, input_embedding_indexing = None, None
+        if inputs.vision_inputs is not None:
+            input_embeddings, input_embedding_indexing = \
+                inputs.vision_inputs.get_inputs(history_lengths, q_seq_length)
+
         batch_size = len(q_seq_length)
         device = q_seq_length.device
 
@@ -307,7 +381,6 @@ class StepContext:
         # position ids 1d
         position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
                                                   device)
-
         # seq_len + history_length
         kv_seq_length = q_seq_length + history_lengths
         max_kv_seq_length = max_q_seq_length + inputs.max_history_length
@@ -324,6 +397,8 @@ class StepContext:
                           block_offsets=inputs.block_offsets,
                           position_ids=position_ids,
                           position_ids_1d=position_ids_1d,
+                          input_embeddings=input_embeddings,
+                          input_embedding_indexing=input_embedding_indexing,
                           attention_mask=attention_mask,
                           q_start_loc=q_start_loc,
                           history_lengths=inputs.history_lengths,
@@ -344,7 +419,7 @@ class StepContext:
                             seq_length: torch.LongTensor,
                             device: str = 'cuda'):
         """get 1d position_ids."""
-        if position_ids.size(1) == 1:
+        if position_ids.size(0) == 1 or position_ids.size(1) == 1:
             position_ids_1d = position_ids.flatten()
         else:
             position_ids_1d = [
@@ -432,6 +507,25 @@ def _add_adapters(hf_model: torch.nn.Module, adapters: Dict[str, str]):
     for name, path in adapters.items():
         config = PeftConfig.from_pretrained(path)
         inject_adapter_in_model(config, model=hf_model, adapter_name=name)
+
+
+def _remove_unused_modules(hf_model: torch.nn.Module, model_cfg: ModelConfig):
+    """remove unused modules."""
+    if model_cfg.unused_modules is not None and len(
+            model_cfg.unused_modules) > 0:
+        for mod in model_cfg.unused_modules:
+            has_mod = True
+            parts = mod.split('.')
+            mod_path = 'hf_model'
+            for p in parts:
+                if eval(f'hasattr({mod_path}, "{p}")'):
+                    mod_path = f'{mod_path}.{p}'
+                else:
+                    has_mod = False
+                    break
+            if has_mod:
+                exec(f'del {mod_path}')
+    return hf_model
 
 
 def _unparam_lora_weight(model: torch.nn.Module):
@@ -564,6 +658,8 @@ class BaseModelAgent(AutoModelAgent):
                 **self.model_config.init_kwargs)
             hf_model.eval()
             hf_model.config.use_cache = True
+            # build for vlm model
+            _remove_unused_modules(hf_model, self.model_config)
 
         if adapters:
             _load_adapters(hf_model, adapters)
@@ -722,6 +818,8 @@ def _tp_build_model(
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code,
                 **model_config.init_kwargs)
+            # build for vlm model
+            _remove_unused_modules(model, model_config)
             if rank == 0:
                 device_map = _create_device_map(model, world_size)
             _add_adapters(model, adapters)

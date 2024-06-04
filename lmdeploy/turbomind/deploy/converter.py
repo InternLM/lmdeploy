@@ -289,6 +289,8 @@ def main(model_name: str,
     if inferred_model_format.find('awq') != -1:
         cfg.weight_type = 'int4'
         output_format = 'w4'
+        if 'xcomposer2' in inferred_model_format:
+            output_format = 'plora-w4'
         assert group_size > 0, f'group_size: {group_size} should > 0'
     else:
         output_format = update_output_format(model_name, inferred_model_format,

@@ -33,3 +33,8 @@ if [[ $1 == *"internlm2-chat-20b"* ]] || [[ $1 == *"Qwen1.5-32B-Chat"* ]]
 then
   echo "TP_INFO=--tp 2" >> "$GITHUB_ENV"
 fi
+
+if [[ $1 == *"internlm2"* ]] || [[ $1 == *"Llama-3"* ]]
+then
+  echo "LONGTEXT_BENCHMARK=TRUE" >> "$GITHUB_ENV"
+fi

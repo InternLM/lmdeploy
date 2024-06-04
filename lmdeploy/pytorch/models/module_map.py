@@ -266,3 +266,17 @@ MODULE_MAP.update({
     'modeling_phi3.Phi3RMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
+
+# cogvlm
+MODULE_MAP.update({
+    'modeling_cogvlm.RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'modeling_cogvlm.MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'modeling_cogvlm.VisionExpertMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.cogvlm.PatchedVisionExpertMLP',
+    'modeling_cogvlm.VisionExpertAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.cogvlm.PatchedVisionExpertAttention',
+    'modeling_cogvlm.CogVLMModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.cogvlm.PatchedCogVLMModel',
+})
