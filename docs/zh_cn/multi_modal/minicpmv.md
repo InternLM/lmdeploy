@@ -22,11 +22,9 @@ pip install lmdeploy
 from lmdeploy import pipeline
 from lmdeploy.vl import load_image
 
+pipe = pipeline('openbmb/MiniCPM-Llama3-V-2_5')
 
-if __name__ == "__main__":
-    pipe = pipeline('openbmb/MiniCPM-Llama3-V-2_5')
-
-    image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-    response = pipe(('describe this image', image))
-    print(response)
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image))
+print(response)
 ```
