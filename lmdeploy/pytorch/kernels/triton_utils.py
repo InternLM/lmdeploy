@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
 import inspect
-from typing import Callable, Dict, Sequence, TypeVar, Union, cast, overload
+from typing import Callable, Dict, Sequence, cast, overload
 
 import torch
 import triton
@@ -31,8 +31,10 @@ else:
 TRITON_DIVIIBILITY = getattr(JITFunction, 'divisibility', 16)
 TRITON_DIVIIBILITY_8 = getattr(JITFunction, 'divisibility_8', 8)
 
+TypeHintType = Dict[str, type] | Sequence[type] | None
 
-def _check_type_hint(jit_func: JITFunction, type_hint: Union[Dict, Sequence]):
+
+def _check_type_hint(jit_func: JITFunction, type_hint: TypeHintType):
     """check type hint."""
     params = jit_func.params
     arg_key = tuple(p.name for p in params)
@@ -53,9 +55,7 @@ def _check_type_hint(jit_func: JITFunction, type_hint: Union[Dict, Sequence]):
 
 class JitFunction220Wrapper:
 
-    def __init__(self,
-                 jit_func: JITFunction,
-                 type_hint: Union[Dict, Sequence] = None):
+    def __init__(self, jit_func: JITFunction, type_hint: TypeHintType = None):
         """jit func."""
         self.jit_func = jit_func
         self.type_hint = _check_type_hint(jit_func, type_hint)
@@ -262,9 +262,7 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
 
 class JitFunction230Wrapper:
 
-    def __init__(self,
-                 jit_func: JITFunction,
-                 type_hint: Union[Dict, Sequence] = None):
+    def __init__(self, jit_func: JITFunction, type_hint: TypeHintType = None):
         """jit func."""
         self.jit_func = jit_func
         self.type_hint = _check_type_hint(jit_func, type_hint)
@@ -297,7 +295,7 @@ class JitFunction230Wrapper:
 
         return (False, )
 
-    def _make_launcher(self, jit_func: triton.JITFunction):
+    def _make_launcher(self, jit_func: JITFunction):
         """make input builder."""
         from dataclasses import fields
 
@@ -435,30 +433,27 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
         return functools.partial(cast(Callable, self.run), grid=grid)
 
 
-T = TypeVar('T')
-
-
 @overload
-def wrap_jit_func(func: T):
+def wrap_jit_func(func: JITFunction):
     ...
 
 
 @overload
 def wrap_jit_func(
     *,
-    type_hint=None,
+    type_hint: TypeHintType = None,
 ):
     ...
 
 
 def wrap_jit_func(
-    func: T = None,
+    func: JITFunction = None,
     *,
-    type_hint=None,
+    type_hint: TypeHintType = None,
 ):
     """wrap jit func."""
 
-    def decorator(func: T):
+    def decorator(func: JITFunction):
         triton_version = version.parse(triton.__version__)
 
         if triton_version == version.parse('2.2.0'):
