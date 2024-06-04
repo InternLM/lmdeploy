@@ -179,9 +179,12 @@ class NodeManager:
                                        ] * len(urls_without_speeds)
             min_latency = float('inf')
             min_index = 0
-            for index, speed in enumerate(all_the_speeds):
+            # random traverse nodes for low concurrency situation
+            all_indexes = [i for i in range(len(all_the_speeds))]
+            random.shuffle(all_indexes)
+            for index in all_indexes:
                 latency = self.nodes[
-                    all_matched_urls[index]].unfinished / speed
+                    all_matched_urls[index]].unfinished / all_the_speeds[index]
                 if min_latency > latency:
                     min_latency = latency
                     min_index = index
