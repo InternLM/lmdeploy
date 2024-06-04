@@ -9,6 +9,7 @@ from .internvl import InternVLVisionModel
 from .internvl_llava import InternVLLlavaVisionModel
 from .llava import LlavaVisionModel
 from .mini_gemeni import MiniGeminiVisionModel
+from .minicpmv import MiniCPMVModel
 from .qwen import QwenVisionModel
 from .xcomposer2 import Xcomposer2VisionModel
 from .yi import YiVisionModel
@@ -45,6 +46,8 @@ def load_vl_model(model_path: str, with_llm: bool = False):
         return InternVLVisionModel(model_path, with_llm)
     if arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiVisionModel(model_path, with_llm)
+    if arch == 'MiniCPMV':
+        return MiniCPMVModel(model_path, with_llm)
     raise ValueError(f'unsupported vl model with arch {arch}')
 
 

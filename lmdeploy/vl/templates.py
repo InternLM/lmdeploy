@@ -239,6 +239,35 @@ class MiniGeminiLlamaTempateWrapper(VLChatTemplateWrapper):
         return res
 
 
+class MiniCPMVTempateWrapper(VLChatTemplateWrapper):
+    """MiniCPMV chat template."""
+
+    def append_image_token(self, prompt, num_images: int):
+        return f'<image>{IMAGE_TOKEN}</image>\n' * num_images + prompt
+
+    def update_image_token(self, prompt, features):
+        _features = []
+        _prompt = []
+        segs = prompt.split(f'<image>{IMAGE_TOKEN}</image>\n')
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(features):
+                _feat = features[i - 1]['embeddings'].split(1)
+                _feat = [x.squeeze() for x in _feat]
+                _features.extend(_feat)
+                _seg = f'<image>{IMAGE_TOKEN}</image>'
+                if len(_feat) > 1:
+                    grid = features[i - 1]['grid']
+                    if grid is not None:
+                        _slice = '\n'.join(
+                            [f'<image>{IMAGE_TOKEN}</image>' * grid[0]] *
+                            grid[1])
+                        _seg = f'{_seg}<slice>{_slice}</slice>\n'
+                _prompt.append(_seg)
+            _prompt.append(seg)
+        _prompt = ''.join(_prompt)
+        return _prompt, _features
+
+
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
@@ -261,4 +290,6 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return InternVLChatTemplateWrapper(chat_template)
     elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiLlamaTempateWrapper(chat_template)
+    elif arch == 'MiniCPMV':
+        return MiniCPMVTempateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')

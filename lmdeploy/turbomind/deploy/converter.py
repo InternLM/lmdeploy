@@ -23,6 +23,7 @@ special_input_model_map = {
     'internlm2': 'internlm2',
     'xcomposer2': 'xcomposer2',
     'deepseekvl': 'deepseekvl',
+    'minicpmv': 'minicpmv',
     'internvl': 'internvl'
 }
 

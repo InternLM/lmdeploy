@@ -56,6 +56,13 @@ class VLAsyncEngine(AsyncEngine):
             images = await self.vl_prompt_template.async_collect_pil_images(
                 prompt)
             features = await self.vl_encoder.async_infer(images)
+
+            from lmdeploy.vl.templates import MiniCPMVTempateWrapper
+            if isinstance(self.vl_prompt_template, MiniCPMVTempateWrapper):
+                decorated, features = self.vl_prompt_template.update_image_token(
+                    decorated, features)
+                segs = decorated.split(IMAGE_TOKEN)
+
             features = [x.cpu().numpy() for x in features]
             input_ids = []
             begins = []

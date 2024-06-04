@@ -34,6 +34,8 @@ SUPPORTED_ARCHS = dict(
     InternVLChatModel='internvl',
     # deepseek-vl
     MultiModalityCausalLM='deepseekvl',
+    # MiniCPMV
+    MiniCPMV='minicpmv',
     # mini gemini
     MGMLlamaForCausalLM='llama',
     MiniGeminiLlamaForCausalLM='llama')

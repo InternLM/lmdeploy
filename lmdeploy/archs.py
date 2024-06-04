@@ -132,6 +132,8 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return True
+    elif arch == 'MiniCPMV':
+        return True
     return False
 
 
