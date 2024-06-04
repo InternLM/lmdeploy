@@ -59,7 +59,7 @@ class VLAsyncEngine(AsyncEngine):
 
             from lmdeploy.vl.templates import MiniCPMVTempateWrapper
             if isinstance(self.vl_prompt_template, MiniCPMVTempateWrapper):
-                decorated, features = self.vl_prompt_template.update_image_token(
+                decorated, features = self.vl_prompt_template.update_image_token(  # noqa: E501
                     decorated, features)
                 segs = decorated.split(IMAGE_TOKEN)
 
