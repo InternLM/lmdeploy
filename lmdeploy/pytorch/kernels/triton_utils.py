@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
 import inspect
-from typing import Callable, Dict, Sequence, cast, overload
+from typing import Callable, Dict, Sequence, Union, cast, overload
 
 import torch
 import triton
@@ -31,7 +31,7 @@ else:
 TRITON_DIVIIBILITY = getattr(JITFunction, 'divisibility', 16)
 TRITON_DIVIIBILITY_8 = getattr(JITFunction, 'divisibility_8', 8)
 
-TypeHintType = Dict[str, type] | Sequence[type] | None
+TypeHintType = Union[Dict[str, type], Sequence[type], None]
 
 
 def _check_type_hint(jit_func: JITFunction, type_hint: TypeHintType):
