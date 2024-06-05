@@ -42,7 +42,7 @@ def convert(config, model_case, cuda_prefix):
             dst_path, '--model-format awq --group-size 128 --trust-remote-code'
         ]),
                                      config,
-                                     model_name,
+                                     model_case,
                                      True,
                                      cuda_prefix=cuda_prefix)
     else:
@@ -51,7 +51,7 @@ def convert(config, model_case, cuda_prefix):
             dst_path, '--trust-remote-code'
         ]),
                                      config,
-                                     model_name,
+                                     model_case,
                                      True,
                                      cuda_prefix=cuda_prefix)
 
