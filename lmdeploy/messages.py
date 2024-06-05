@@ -177,7 +177,7 @@ class PytorchEngineConfig:
             it defaults to 0.8, signifying the percentage of FREE GPU memory
             to be reserved for the k/v cache
         eviction_type (str): What action to perform when kv cache
-            is full, ['recompute', 'copy'], Default 'recompute'.
+            is full, ['recompute', 'copy'], Deprecated.
         prefill_interval (int): Interval to perform prefill,
             Default 16.
         block_size (int): paging cache block size, default 64.
@@ -189,6 +189,7 @@ class PytorchEngineConfig:
         max_prefill_token_num (int): tokens per iteration.
         thread_safe (bool): thread safe engine instance.
         enable_prefix_caching (bool): Enable token match and sharing caches.
+        device_type (str): The inference device type, options ['cuda']
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
         revision (str): The specific model version to use.
@@ -209,6 +210,7 @@ class PytorchEngineConfig:
     max_prefill_token_num: int = 4096
     thread_safe: bool = False
     enable_prefix_caching: bool = False
+    device_type: str = 'cuda'
     download_dir: str = None
     revision: str = None
 
@@ -222,6 +224,9 @@ class PytorchEngineConfig:
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
         assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
+        assert self.device_type in [
+            'cuda'
+        ], (f'invalid device_type: {self.device_type}')
 
 
 class ResponseType(enum.Enum):

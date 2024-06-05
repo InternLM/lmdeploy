@@ -14,7 +14,6 @@ from ..dist_utils import (colwise_parallelize_linear_fn,
 from ..kernels import apply_rotary_pos_emb as apply_rotary_pos_emb_old
 from ..kernels import (fill_kv_cache, fused_rotary_emb, paged_attention_fwd,
                        rms_norm)
-from .functional import attention_forward_with_rerope, repeat_kv
 
 TRANSFORMERS_VERSION = version.parse(transformers.__version__)
 
@@ -68,109 +67,6 @@ class LlamaAttention(nn.Module):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs
-
-    def _contiguous_batching_forward_rerope_impl(
-        self,
-        hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        attention_mask: Optional[torch.Tensor] = None,
-        world_size: int = 1
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """rerope rewrite."""
-        context = self.context.context
-        history_lengths = context.history_lengths
-
-        def apply_rotary_pos_emb_rerope(q, k, cos, sin, position_ids):
-            assert 1 == position_ids.shape[0]
-
-            _, seq_len = position_ids.shape
-            _, dim = cos.shape
-
-            cos = cos[position_ids].reshape(
-                seq_len, 1, dim)  # [bs, seq_len, dim] to [seq_len, 1, dim]
-            sin = sin[position_ids].reshape(
-                seq_len, 1, dim)  # [bs, seq_len, dim] to [seq_len, 1, dim]
-
-            q_embed = ((q * cos[-q.shape[0]:]) +
-                       (rotate_half(q) *
-                        sin[-q.shape[0]:])) if q is not None else None
-            k_embed = ((k * cos) +
-                       (rotate_half(k) * sin)) if k is not None else None
-            return q_embed, k_embed
-
-        def _rotary_emb_context_rerope_fn(query_states, key_states,
-                                          value_states, position_ids, window):
-            kv_seq_len, num_dim, dim = key_states.shape
-
-            cos, sin = self.rotary_emb(value_states,
-                                       seq_len=max(kv_seq_len, window + 1))
-
-            query_states1, key_states1 = apply_rotary_pos_emb_rerope(
-                query_states, key_states, cos, sin, position_ids)
-
-            query_states2, _ = apply_rotary_pos_emb_rerope(
-                query_states, None, cos, sin, position_ids * 0 + window)
-
-            # repeat k/v heads if n_kv_heads < n_heads
-            if self.num_key_value_groups > 1:
-                key_states1 = repeat_kv(key_states1, self.num_key_value_groups)
-                key_states2 = repeat_kv(key_states, self.num_key_value_groups)
-                value_states = repeat_kv(value_states,
-                                         self.num_key_value_groups)
-            else:
-                key_states2 = key_states
-
-            query_states1 = query_states1.transpose(0, 1).reshape(
-                1, num_dim, kv_seq_len, dim)
-            query_states2 = query_states2.transpose(0, 1).reshape(
-                1, num_dim, kv_seq_len, dim)
-            key_states1 = key_states1.transpose(0, 1).reshape(
-                1, num_dim, kv_seq_len, dim)
-            key_states2 = key_states2.transpose(0, 1).reshape(
-                1, num_dim, kv_seq_len, dim)
-            value_states = value_states.transpose(0, 1).reshape(
-                1, num_dim, kv_seq_len, dim)
-
-            return query_states1, query_states2, key_states1, key_states2, value_states  # noqa: E501
-
-        def _rotary_emb_generate_rerope_fn(key_states, value_states,
-                                           position_ids, window):
-            kv_seq_len = key_states.shape[0]
-            cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-
-            position_ids = (position_ids[:, -1] -
-                            position_ids).clip(max=window)
-            _, key_states = apply_rotary_pos_emb_rerope(
-                None, key_states, cos, -sin, position_ids)
-
-            if self.num_key_value_groups > 1:
-                key_states = repeat_kv(key_states, self.num_key_value_groups)
-                value_states = repeat_kv(value_states,
-                                         self.num_key_value_groups)
-            return key_states, value_states
-
-        attn_output = attention_forward_with_rerope(
-            hidden_states,
-            history_lengths=history_lengths,
-            block_offsets=context.block_offsets,
-            num_heads=self.num_heads // world_size,
-            num_kv_heads=self.num_key_value_heads // world_size,
-            head_dim=self.head_dim,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            attention_mask=attention_mask,
-            context=context,
-            q_proj=self.q_proj,
-            k_proj=self.k_proj,
-            v_proj=self.v_proj,
-            o_proj=self.o_proj,
-            rotary_emb_context_fn=_rotary_emb_context_rerope_fn,
-            rotary_emb_generate_fn=_rotary_emb_generate_rerope_fn,
-            layer_id=id(self))
-        return attn_output, None, past_key_value
 
     def _contiguous_batching_forward_default_impl(
         self,
@@ -306,44 +202,6 @@ class LlamaAttention(nn.Module):
 
         return attn_output, None, past_key_value
 
-    def _contiguous_batching_forward_impl(
-        self,
-        hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        attention_mask: Optional[torch.Tensor] = None,
-        world_size: int = 1,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """Rewrite implementation of LlamaAttention.forward.
-
-        Add continuous batching support. Add paged attention support. TP
-        support.
-        """
-        assert not output_attentions
-
-        json_config = self.context.context.json_config
-        use_rerope = False
-        if json_config is not None:
-            use_rerope = json_config.get('rerope', False)
-        if use_rerope:
-            return self._contiguous_batching_forward_rerope_impl(
-                hidden_states,
-                position_ids=position_ids,
-                past_key_value=past_key_value,
-                output_attentions=output_attentions,
-                attention_mask=attention_mask,
-                world_size=world_size)
-        else:
-            return self._contiguous_batching_forward_default_impl(
-                hidden_states,
-                position_ids=position_ids,
-                past_key_value=past_key_value,
-                output_attentions=output_attentions,
-                attention_mask=attention_mask,
-                world_size=world_size)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -359,7 +217,7 @@ class LlamaAttention(nn.Module):
         world_size = 1
         if dist.is_initialized():
             world_size = dist.get_world_size()
-        return self._contiguous_batching_forward_impl(
+        return self._contiguous_batching_forward_default_impl(
             hidden_states,
             position_ids,
             past_key_value,

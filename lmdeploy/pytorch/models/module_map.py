@@ -266,3 +266,8 @@ MODULE_MAP.update({
     'modeling_phi3.Phi3RMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
+
+# ascend module
+ASCEND_MODULE_MAP = dict()
+
+DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)

@@ -60,12 +60,13 @@ def check_env_triton():
         _handle_exception(e, 'Triton', logger)
 
 
-def check_env():
+def check_env(device_type: str):
     """check all environment."""
     logger = get_logger('lmdeploy')
     logger.info('Checking environment for PyTorch Engine.')
     check_env_torch()
-    check_env_triton()
+    if device_type == 'cuda':
+        check_env_triton()
 
 
 MIN_TRANSFORMERS_VERSION = '4.33.0'
