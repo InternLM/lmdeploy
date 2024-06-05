@@ -286,7 +286,7 @@ def run_pipeline_vl_chat_test(config, model_case):
 
     image = load_image(PIC1)
     response = pipe(('describe this image', image))
-    result = 'tiger' in response.text.lower()
+    result = 'tiger' in response.text.lower() or '虎' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: simple example tiger not in ' + response.text +
                     '\n')
@@ -305,7 +305,7 @@ def run_pipeline_vl_chat_test(config, model_case):
         }]
     }]
     response = pipe(prompts)
-    result = 'tiger' in response.text.lower()
+    result = 'tiger' in response.text.lower() or '虎' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: OpenAI format example: tiger not in ' +
                     response.text + '\n')
