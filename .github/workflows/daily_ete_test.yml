@@ -146,7 +146,7 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
