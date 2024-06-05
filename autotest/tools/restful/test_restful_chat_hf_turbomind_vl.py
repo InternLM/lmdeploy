@@ -91,7 +91,8 @@ def run_all_step(config, port: int = DEFAULT_PORT):
         temperature=0.8,
         top_p=0.8)
     file.writelines(str(response).lower() + '\n')
-    assert 'tiger' in str(response).lower(), response
+    assert 'tiger' in str(response).lower() or '虎' in str(
+        response).lower(), response
 
     api_client = APIClient(http_url)
     model_name = api_client.available_models[0]
@@ -112,7 +113,7 @@ def run_all_step(config, port: int = DEFAULT_PORT):
                                                messages=messages):
         continue
     file.writelines(str(item) + '\n')
-    assert 'tiger' in str(item).lower(), item
+    assert 'tiger' in str(item).lower() or '虎' in str(item).lower(), item
 
     allure.attach.file(restful_log,
                        attachment_type=allure.attachment_type.TEXT)
