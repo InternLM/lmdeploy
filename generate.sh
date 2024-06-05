@@ -2,7 +2,7 @@
 
 builder="-G Ninja"
 
-if [ "$1" == "make" ]; then
+if [ "$1" = "make" ]; then
     builder=""
 fi
 
