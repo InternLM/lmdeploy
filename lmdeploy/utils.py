@@ -268,6 +268,11 @@ def _get_and_verify_max_len(
     max_model_len: Optional[int],
 ) -> int:
     """Get and verify the model's maximum length."""
+    if not isinstance(hf_tm_config, PretrainedConfig) and \
+            hasattr(hf_tm_config, 'session_len'):
+        # turbomind backend already has session_len
+        return getattr(hf_tm_config, 'session_len')
+
     logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')
     possible_keys = [

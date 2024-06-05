@@ -271,9 +271,6 @@ class TurboMind:
             input_model=input_model, cfg=cfg, to_file=False, out_dir='')
 
         cfg = output_model.cfg
-        if engine_config.session_len is not None:
-            cfg.session_len = engine_config.session_len
-
         cfg.update_prefill_conifg(engine_config)
         self.model_name = cfg.model_name
         self.config = cfg
