@@ -49,7 +49,7 @@ def _get_weight_map(model_path: str, weight_type: str):
     elif weight_type == 'pytorch':
         load_index = osp.join(model_path, WEIGHTS_INDEX_NAME)
     else:
-        raise RuntimeError('Unknown weight type.')
+        raise RuntimeError(f'Unsupported weight type: {weight_type}.')
 
     with open(load_index, mode='r', encoding='utf-8') as f:
         index = json.load(f)
