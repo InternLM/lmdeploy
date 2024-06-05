@@ -2,14 +2,10 @@
 import os
 from typing import Literal, Optional, Union
 
-from lmdeploy.serve.async_engine import AsyncEngine
-from lmdeploy.serve.vl_async_engine import VLAsyncEngine
 from lmdeploy.utils import get_hf_config_content
 
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .utils import get_logger
-
-SUPPORTED_TASKS = {'llm': AsyncEngine, 'vlm': VLAsyncEngine}
 
 logger = get_logger('lmdeploy')
 
@@ -137,6 +133,9 @@ def check_vl_llm(config: dict) -> bool:
 
 def get_task(model_path: str):
     """get pipeline type and pipeline class from model config."""
+    from lmdeploy.serve.async_engine import AsyncEngine
+    from lmdeploy.serve.vl_async_engine import VLAsyncEngine
+
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # workspace model
         return 'llm', AsyncEngine
