@@ -98,15 +98,14 @@ class TurbomindModelConfig:
         ret.rotary_embedding = ret.size_per_head
         return ret
 
-
     def update_prefill_conifg(self, config: TurbomindEngineConfig):
         assert self.session_len is not None
         if config.max_prefill_token_num is not None and \
                 config.num_tokens_per_iter == 0:
             self.num_tokens_per_iter = config.max_prefill_token_num
             self.max_prefill_iters = (self.session_len +
-                                     config.max_prefill_token_num -
-                                     1) // config.max_prefill_token_num
+                                      config.max_prefill_token_num -
+                                      1) // config.max_prefill_token_num
 
     def toini(self):
         config = copy.deepcopy(self.__dict__)
