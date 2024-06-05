@@ -11,6 +11,7 @@ LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单�
 - [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
 - [MGM](https://huggingface.co/YanweiLi/MGM-7B)
 - [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
+- [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/zh_cn/multi_modal/cogvlm.md)
 
 我们诚挚邀请社区在 LMDeploy 中添加更多 VLM 模型的支持。
 

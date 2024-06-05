@@ -69,14 +69,9 @@ def pipeline(model_path: str,
             if backend_config is not None else None
         model_path = get_model(model_path, download_dir, revision)
 
-    pipeline_type, pipeline_class = get_task(model_path)
-    if pipeline_type == 'vlm':
-        assert (type(backend_config) is TurbomindEngineConfig) or \
-            (backend_config is None), \
-            f'{pipeline_type} model only support turbomind backend.'
+    _, pipeline_class = get_task(model_path)
 
-    if pipeline_type == 'llm' and type(
-            backend_config) is not PytorchEngineConfig:
+    if type(backend_config) is not PytorchEngineConfig:
         # set auto backend mode
         backend_config = autoget_backend_config(model_path, backend_config)
     backend = 'pytorch' if type(
