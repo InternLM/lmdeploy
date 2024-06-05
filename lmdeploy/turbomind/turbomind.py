@@ -274,6 +274,7 @@ class TurboMind:
         if engine_config.session_len is not None:
             cfg.session_len = engine_config.session_len
 
+        cfg.update_prefill_conifg(engine_config)
         self.model_name = cfg.model_name
         self.config = cfg
         self.data_type = data_type

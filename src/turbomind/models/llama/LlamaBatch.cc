@@ -1160,13 +1160,13 @@ void LlamaBatch<T>::OutputContextLogits(T*                                  cont
     if (context_logits_buf_ == nullptr) {
         NcclGuard guard(model_->tensor_para_, stream_, true);
         context_logits_buf_ =
-            (float*)allocator_->malloc(sizeof(float) * model_->vocab_size_padded_ * max_context_token_num_);
+            (float*)allocator_->malloc(sizeof(float) * model_->vocab_size_padded_ * num_tokens_per_iter_);
         const auto tp = model_->tensor_para_.world_size_;
         if (tp > 1) {
             FT_CHECK(model_->vocab_size_padded_ % tp == 0);
             const auto local_vocab_size = model_->vocab_size_padded_ / tp;
             local_context_logits_buf_ =
-                (float*)allocator_->malloc(sizeof(float) * model_->vocab_size_padded_ * max_context_token_num_);
+                (float*)allocator_->malloc(sizeof(float) * model_->vocab_size_padded_ * num_tokens_per_iter_);
         }
     }
 
