@@ -15,7 +15,6 @@ from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 MODEL = 'internlm/internlm2-chat-20b'
-MODEL_NAME = 'internlm2'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
@@ -29,8 +28,8 @@ class TestRestfulInterfaceBase:
     def test_get_model(self, config):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
-        assert model_name == '/'.join([config.get('model_path'), MODEL_NAME
-                                       ]), api_client.available_models
+        assert model_name == '/'.join([config.get('model_path'),
+                                       MODEL]), api_client.available_models
 
         model_list = get_model_list(BASE_URL + '/v1/models')
         assert model_name in model_list, model_list
