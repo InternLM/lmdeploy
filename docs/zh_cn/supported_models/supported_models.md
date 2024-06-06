@@ -23,7 +23,7 @@
 |   LLaVA(1.5,1.6)    |  7B - 34B   |    Yes    |    -    |    -    |  Yes  |
 |    InternVL-Chat    | v1.1- v1.5  |    Yes    |    -    |    -    |  Yes  |
 |   MiniGeminiLlama   |     7B      |    Yes    |   No    |   No    |  Yes  |
-|        GLM4        |     9B      |    Yes    |   Yes   |   Yes   |  No   |
+|        GLM4         |     9B      |    Yes    |   Yes   |   Yes   |  No   |
 
 “-” 表示还没有验证。
 
