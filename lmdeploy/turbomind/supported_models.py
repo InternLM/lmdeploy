@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from transformers import AutoConfig
-
+from lmdeploy.archs import get_model_arch
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -37,29 +36,6 @@ SUPPORTED_ARCHS = dict(
     # mini gemini
     MGMLlamaForCausalLM='llama',
     MiniGeminiLlamaForCausalLM='llama')
-
-
-def get_model_arch(model_path: str):
-    try:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-    except Exception as e:  # noqa
-        from transformers import PretrainedConfig
-        cfg = PretrainedConfig.from_pretrained(model_path)
-
-    _cfg = cfg.to_dict()
-    if _cfg.get('architectures', None):
-        arch = _cfg['architectures'][0]
-        if _cfg.get('auto_map'):
-            for _, v in _cfg['auto_map'].items():
-                if 'InternLMXComposer2ForCausalLM' in v:
-                    arch = 'InternLMXComposer2ForCausalLM'
-    elif _cfg.get('auto_map',
-                  None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
-        arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
-    else:
-        raise RuntimeError(
-            f'Could not find model architecture from config: {_cfg}')
-    return arch, cfg
 
 
 def is_supported(model_path: str):

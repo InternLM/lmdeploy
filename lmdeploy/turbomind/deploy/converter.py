@@ -8,11 +8,12 @@ from pathlib import Path
 import fire
 import torch
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.model import MODELS
 from lmdeploy.utils import get_model
 
 from ...utils import _get_and_verify_max_len
-from ..supported_models import SUPPORTED_ARCHS, get_model_arch, is_supported
+from ..supported_models import SUPPORTED_ARCHS, is_supported
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 
@@ -161,7 +162,7 @@ def get_output_model_registered_name_and_config(model_path: str,
             if turbomind_model_arch == 'xcomposer2':
                 register_name = 'plora'
 
-    config.model_arch = turbomind_model_arch
+    config.model_arch = model_arch
     config.session_len = session_len + 8
     config.weight_type = weight_type
     config.group_size = group_size
