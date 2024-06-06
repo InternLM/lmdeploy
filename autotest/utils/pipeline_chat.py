@@ -313,7 +313,8 @@ def run_pipeline_vl_chat_test(config, model_case):
     image_urls = [PIC2, PIC1]
     images = [load_image(img_url) for img_url in image_urls]
     response = pipe(('describe these images', images))
-    result = 'tiger' in response.text.lower() or 'ski' in response.text.lower()
+    result = 'tiger' in response.text.lower() or 'ski' in response.text.lower(
+    ) or '虎' in response.text.lower() or '滑雪' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: Multi-images example: tiger or ski not in ' +
                     response.text + '\n')
