@@ -316,7 +316,6 @@ class TurboMind:
         # update cls
         self.config = cfg
         self.model_name = cfg.model_name
-        # self.data_type = cfg.weight_type
 
         # create model
         logger.warning(f'model_config:\n\n{cfg.toini()}')
