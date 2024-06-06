@@ -1444,6 +1444,17 @@ class Phi3Instruct(BaseChatTemplate):
                          stop_words=stop_words,
                          **kwargs)
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if all([c in path for c in ['phi-3', 'instruct']]):
+            return 'phi-3'
+
 
 @MODELS.register_module(name='glm-4-chat')
 class Glm4Chat(BaseChatTemplate):
