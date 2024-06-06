@@ -4,14 +4,10 @@ from typing import Literal, Optional, Union
 
 from transformers import AutoConfig
 
-from lmdeploy.serve.async_engine import AsyncEngine
-from lmdeploy.serve.vl_async_engine import VLAsyncEngine
 from lmdeploy.utils import get_hf_config_content
 
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .utils import get_logger
-
-SUPPORTED_TASKS = {'llm': AsyncEngine, 'vlm': VLAsyncEngine}
 
 logger = get_logger('lmdeploy')
 
@@ -126,6 +122,8 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
+    elif arch == 'CogVLMForCausalLM':
+        return True
     elif arch == 'InternLMXComposer2ForCausalLM':
         return True
     elif arch == 'InternVLChatModel':
@@ -137,11 +135,14 @@ def check_vl_llm(config: dict) -> bool:
 
 def get_task(model_path: str):
     """get pipeline type and pipeline class from model config."""
+    from lmdeploy.serve.async_engine import AsyncEngine
+
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # workspace model
         return 'llm', AsyncEngine
     config = get_hf_config_content(model_path)
     if check_vl_llm(config):
+        from lmdeploy.serve.vl_async_engine import VLAsyncEngine
         return 'vlm', VLAsyncEngine
 
     # default task, pipeline_class
