@@ -36,7 +36,9 @@ SUPPORTED_ARCHS = dict(
     MultiModalityCausalLM='deepseekvl',
     # mini gemini
     MGMLlamaForCausalLM='llama',
-    MiniGeminiLlamaForCausalLM='llama')
+    MiniGeminiLlamaForCausalLM='llama',
+    # glm-4
+    ChatGLMModel='glm4')
 
 
 def get_model_arch(model_path: str):

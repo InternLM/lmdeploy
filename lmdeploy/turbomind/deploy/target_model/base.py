@@ -158,6 +158,8 @@ class BaseOutputModel(ABC):
         self.to_file = to_file
         self.out_dir = out_dir
         self.tm_params = {}
+        model_info = self.input_model.model_info()
+        self.permute_qk = model_info.get('permute_qk', True)
 
     @abstractmethod
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:

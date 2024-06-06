@@ -13,6 +13,32 @@ from lmdeploy.utils import get_logger
 # importing are starting from the package root lmdeploy
 
 
+# replace this after turbomind.supported_models.get_model_arch has been
+# moved to a proper place
+def _get_model_arch(model_path: str):
+    from transformers import AutoConfig
+    try:
+        cfg = AutoConfig.from_pretrained(model_path,
+                                         trust_remote_code=True).to_dict()
+    except Exception as e:  # noqa
+        from transformers import PretrainedConfig
+        cfg = PretrainedConfig.get_config_dict(model_path)[0]
+
+    if cfg.get('architectures', None):
+        arch = cfg['architectures'][0]
+        if cfg.get('auto_map'):
+            for _, v in cfg['auto_map'].items():
+                if 'InternLMXComposer2ForCausalLM' in v:
+                    arch = 'InternLMXComposer2ForCausalLM'
+    elif cfg.get('auto_map',
+                 None) and 'AutoModelForCausalLM' in cfg['auto_map']:
+        arch = cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
+    else:
+        raise RuntimeError(
+            f'Could not find model architecture from config: {cfg}')
+    return arch, cfg
+
+
 @dataclass
 class DetokenizeState:
     """A state collection of incrementally detekenization.
@@ -195,12 +221,13 @@ class HuggingFaceTokenizer:
         model_dir (str): the directory of the tokenizer model
     """
 
-    def __init__(self, model_dir: str):
+    def __init__(self, model_dir: str, add_special_tokens: bool = True):
         from transformers import AutoTokenizer
         self.logger = get_logger('lmdeploy')
         self.model = AutoTokenizer.from_pretrained(model_dir,
                                                    trust_remote_code=True)
         self._prefix_space_tokens = None
+        self.add_special_tokens = add_special_tokens
 
         if self.model.eos_token_id is None:
             generation_config_file = osp.join(model_dir,
@@ -290,14 +317,13 @@ class HuggingFaceTokenizer:
         if self.token2id == {}:
             # decode is slower than convert_ids_to_tokens
             if self.maybe_decode_bytes:
-                try:
-                    self.token2id = {
-                        self.model.decode(i): i
-                        for i in range(self.vocab_size)
-                    }
-                except Exception as e:
-                    # qwen-vl
-                    assert str(e) == 'Unclosed image token'
+                self.token2id = {}
+                for i in range(self.vocab_size):
+                    try:
+                        self.token2id[self.model.decode(i)] = i
+                    except:  # noqa: E722
+                        # some tokens just can't be decoded by `decode`
+                        pass
             else:
                 self.token2id = {
                     self.model.convert_ids_to_tokens(i): i
@@ -332,7 +358,9 @@ class HuggingFaceTokenizer:
         Returns:
             list[int]: token ids
         """
-        encoded = self.model.encode(s, **kwargs)
+        encoded = self.model.encode(s,
+                                    add_special_tokens=self.add_special_tokens,
+                                    **kwargs)
         if not add_bos:
             # in the middle of a session
             if len(encoded) and encoded[0] == self.bos_token_id:
@@ -501,7 +529,9 @@ class Tokenizer:
         if not use_hf_model:
             self.model = SentencePieceTokenizer(model_file)
         else:
-            self.model = HuggingFaceTokenizer(model_folder)
+            arch, _ = _get_model_arch(model_folder)
+            add_special_tokens = arch not in ['ChatGLMModel']
+            self.model = HuggingFaceTokenizer(model_folder, add_special_tokens)
 
     @property
     def vocab_size(self):
