@@ -123,6 +123,4 @@ quatization_case_config:
         - meta-llama/Llama-2-7b-chat-hf
         - meta-llama/Meta-Llama-3-8B-Instruct
         - internlm/internlm2-chat-20b
-        - internlm/internlm2-chat-7b
         - 01-ai/Yi-6B-Chat
-        - internlm/internlm2-20b
