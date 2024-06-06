@@ -93,7 +93,7 @@ class JitFunction220Wrapper:
             anno = self.type_hint[key]
             if anno == torch.Tensor:
                 return f'({key}.data_ptr() % {TRITON_DIVIIBILITY} == 0, )'
-            elif anno in [int, bool, torch.int32, torch.int64, torch.uint64]:
+            elif anno in [int, bool, torch.int32, torch.int64]:
                 return (f'({key} % {TRITON_DIVIIBILITY} == 0, '
                         f'{key} % {TRITON_DIVIIBILITY_8} == 0, '
                         f'{key} == 1, )')
@@ -109,8 +109,6 @@ class JitFunction220Wrapper:
                 return '"fp32"'
             elif anno == torch.int32:
                 return '"i32"'
-            elif anno == torch.uint64:
-                return '"u64"'
             elif anno == torch.int64:
                 return '"i64"'
             elif anno == torch.Tensor:
@@ -308,7 +306,7 @@ class JitFunction230Wrapper:
             anno = self.type_hint[key]
             if anno == torch.Tensor:
                 return f'({key}.data_ptr() % {TRITON_DIVIIBILITY} == 0, )'
-            elif anno in [int, bool, torch.int32, torch.int64, torch.uint64]:
+            elif anno in [int, bool, torch.int32, torch.int64]:
                 return (f'({key} % {TRITON_DIVIIBILITY} == 0, '
                         f'{key} % {TRITON_DIVIIBILITY_8} == 0, '
                         f'{key} == 1, )')
@@ -324,8 +322,6 @@ class JitFunction230Wrapper:
                 return '"fp32"'
             elif anno == torch.int32:
                 return '"i32"'
-            elif anno == torch.uint64:
-                return '"u64"'
             elif anno == torch.int64:
                 return '"i64"'
             elif anno == torch.Tensor:
