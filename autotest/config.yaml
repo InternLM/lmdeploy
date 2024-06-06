@@ -101,6 +101,7 @@ quatization_case_config:
         - OpenGVLab/InternVL-Chat-V1-5
         - internlm/internlm-xcomposer2-vl-7b
         - internlm/internlm-xcomposer2-7b
+        - internlm/internlm-xcomposer2-4khd-7b
     kvint:
         - meta-llama/Llama-2-7b-chat-hf
         - meta-llama/Meta-Llama-3-8B-Instruct
