@@ -31,9 +31,7 @@ def _get_event_loop():
 class LogitsMixin:
     """Helper class to calculate logits and ppl."""
 
-    def prepare_inputs(self,
-                       prompts: Union[PromptType, List[PromptType]],
-                       do_preprocess: bool = True):
+    def prepare_inputs(self, prompts: Union[PromptType, List[PromptType]]):
         if hasattr(self, '_convert_prompts'):
             prompts = self._convert_prompts(prompts)
         need_list_wrap = isinstance(prompts, str) or isinstance(
@@ -47,7 +45,7 @@ class LogitsMixin:
         for prompt in prompts:
             out = _get_event_loop().run_until_complete(
                 self._get_prompt_input(prompt,
-                                       do_preprocess=do_preprocess,
+                                       do_preprocess=True,
                                        sequence_start=True,
                                        adapter_name=None))
             decorated.append(out['prompt'])
