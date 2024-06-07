@@ -144,7 +144,7 @@ def get_output_model_registered_name_and_config(model_path: str,
         session_len = _get_and_verify_max_len(model_config, None)
         if model_format == 'awq':
             weight_type = 'int4'
-            register_name = 'w4-plora' \
+            register_name = 'plora-w4' \
                 if turbomind_model_arch == 'xcomposer2' else 'w4'
             group_size = 128 if group_size == 0 else group_size
         else:
