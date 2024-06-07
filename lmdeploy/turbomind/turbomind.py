@@ -33,7 +33,7 @@ lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 
-logger = get_logger('lmdeploy:turbomind')
+logger = get_logger('lmdeploy')
 
 MAX_LOGPROBS = 1024
 
@@ -258,6 +258,7 @@ class TurboMind:
             out_dir='')
 
         self.config = output_model.cfg
+        self.config.update_prefill_config(engine_config)
         self.config.model_name = match_name \
             if match_name is not None else 'base'
         self.model_name = self.config.model_name
