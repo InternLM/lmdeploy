@@ -107,7 +107,7 @@ class EngineGenerationConfig(GenerationConfig):
             self.n) == int and self.n > 0, 'n is not a positive integer'
         assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
-        assert self.temperature >= 0 and self.temperature <= 1  # [0,1]
+        assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
 
 
 @pydantic_dataclass
