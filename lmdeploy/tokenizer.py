@@ -18,7 +18,7 @@ def _is_add_special_tokens(model_path: str):
     try:
         cfg = AutoConfig.from_pretrained(model_path,
                                          trust_remote_code=True).to_dict()
-    except Exception as e:  # noqa
+    except:  # noqa
         from transformers import PretrainedConfig
         cfg = PretrainedConfig.get_config_dict(model_path)[0]
 
@@ -26,7 +26,7 @@ def _is_add_special_tokens(model_path: str):
         if cfg['architectures'][0] == 'ChatGLMModel' and 'glm-4' in cfg[
                 '_name_or_path']:
             return False
-    except:
+    except:  # noqa
         pass
 
     return True
