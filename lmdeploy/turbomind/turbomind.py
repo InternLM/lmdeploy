@@ -309,9 +309,8 @@ class TurboMind:
         # update cfg
         if engine_config is not None:
             engine_config.tp = cfg.tensor_para_size
-            cfg = _update_tm_config(cfg, engine_config)
-            if engine_config.session_len is not None:
-                cfg.session_len = engine_config.session_len
+            _cfg = _update_tm_config(cfg, engine_config)
+            cfg.update(_cfg)
 
         # update cls
         self.config = cfg
