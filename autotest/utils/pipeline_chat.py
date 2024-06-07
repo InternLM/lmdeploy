@@ -333,12 +333,14 @@ def run_pipeline_vl_chat_test(config, model_case):
 
     image = load_image(PIC2)
     sess = pipe.chat(('describe this image', image))
-    result = 'ski' in sess.response.text.lower()
+    result = 'ski' in sess.response.text.lower(
+    ) or '滑雪' in sess.response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: Multi-turn example: ski not in ' +
                     sess.response.text + '\n')
     sess = pipe.chat('What is the woman doing?', session=sess)
-    result = 'ski' in sess.response.text.lower()
+    result = 'ski' in sess.response.text.lower(
+    ) or '滑雪' in sess.response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: Multi-turn example: ski not in ' +
                     sess.response.text + '\n')

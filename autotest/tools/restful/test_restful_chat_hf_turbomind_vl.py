@@ -67,10 +67,11 @@ def run_all_step(config, port: int = DEFAULT_PORT):
     log_path = config.get('log_path')
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
-    model_name = client.models.list().data[0].id.split('/')[-1]
+    model_name = client.models.list().data[0].id
 
-    restful_log = os.path.join(log_path,
-                               'restful_vl_' + model_name + str(port) + '.log')
+    restful_log = os.path.join(
+        log_path,
+        'restful_vl_' + model_name.split('/')[-1] + str(port) + '.log')
     file = open(restful_log, 'w')
 
     response = client.chat.completions.create(
