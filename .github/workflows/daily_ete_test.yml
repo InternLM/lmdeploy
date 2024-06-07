@@ -50,7 +50,7 @@ on:
         default: true
       pipeline_regression:
         required: true
-        description: 'Whether start a interface pipeline regression'
+        description: 'Whether start an interface pipeline regression'
         type: boolean
         default: true
   schedule:
