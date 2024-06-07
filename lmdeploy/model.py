@@ -948,7 +948,8 @@ class ChatGLM2(BaseModel):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'chatglm' in model_path.lower():
+        path = model_path.lower()
+        if 'chatglm' in path and 'chatglm3' not in path:
             return 'chatglm'
 
 
@@ -1456,14 +1457,15 @@ class Phi3Instruct(BaseChatTemplate):
             return 'phi-3'
 
 
-@MODELS.register_module(name='glm-4-chat')
+@MODELS.register_module(name='glm4')
+@MODELS.register_module(name='chatglm3')
 class Glm4Chat(BaseChatTemplate):
     """Chat template of InternLM model."""
 
     def __init__(
             self,
             system='<|system|>',
-            meta_instruction='你是一个名为 GLM-4 的人工智能助手。你是基于智谱AI训练的语言模型 GLM-4 模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。',
+            meta_instruction=None,
             eosys='',
             user='<|user|>',
             eoh='',
@@ -1539,8 +1541,8 @@ class Glm4Chat(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if all([c in path for c in ['glm-4', 'chat']]):
-            return 'glm-4-chat'
+        if 'glm-4' in path or 'chatglm3' in path:
+            return 'glm4'
 
 
 def best_match_model(query: str) -> Optional[str]:

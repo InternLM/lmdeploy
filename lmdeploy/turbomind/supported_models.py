@@ -37,7 +37,7 @@ SUPPORTED_ARCHS = dict(
     # mini gemini
     MGMLlamaForCausalLM='llama',
     MiniGeminiLlamaForCausalLM='llama',
-    # glm-4
+    # chatglm2/3, glm4
     ChatGLMModel='glm4')
 
 
@@ -108,4 +108,8 @@ def is_supported(model_path: str):
                 # by turbomind yet
                 if hidden_size // num_attn_head != 128:
                     support_by_turbomind = False
+            elif arch == 'ChatGLMModel':
+                # chatglm1 is not supported
+                support_by_turbomind = cfg.get('original_rope', False)
+
     return support_by_turbomind

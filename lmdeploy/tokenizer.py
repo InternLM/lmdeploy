@@ -13,9 +13,7 @@ from lmdeploy.utils import get_logger
 # importing are starting from the package root lmdeploy
 
 
-# replace this after turbomind.supported_models.get_model_arch has been
-# moved to a proper place
-def _get_model_arch(model_path: str):
+def _is_add_special_tokens(model_path: str):
     from transformers import AutoConfig
     try:
         cfg = AutoConfig.from_pretrained(model_path,
@@ -24,19 +22,14 @@ def _get_model_arch(model_path: str):
         from transformers import PretrainedConfig
         cfg = PretrainedConfig.get_config_dict(model_path)[0]
 
-    if cfg.get('architectures', None):
-        arch = cfg['architectures'][0]
-        if cfg.get('auto_map'):
-            for _, v in cfg['auto_map'].items():
-                if 'InternLMXComposer2ForCausalLM' in v:
-                    arch = 'InternLMXComposer2ForCausalLM'
-    elif cfg.get('auto_map',
-                 None) and 'AutoModelForCausalLM' in cfg['auto_map']:
-        arch = cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
-    else:
-        raise RuntimeError(
-            f'Could not find model architecture from config: {cfg}')
-    return arch, cfg
+    try:
+        if cfg['architectures'][0] == 'ChatGLMModel' and 'glm-4' in cfg[
+                '_name_or_path']:
+            return False
+    except:
+        pass
+
+    return True
 
 
 @dataclass
@@ -529,8 +522,7 @@ class Tokenizer:
         if not use_hf_model:
             self.model = SentencePieceTokenizer(model_file)
         else:
-            arch, _ = _get_model_arch(model_folder)
-            add_special_tokens = arch not in ['ChatGLMModel']
+            add_special_tokens = _is_add_special_tokens(model_folder)
             self.model = HuggingFaceTokenizer(model_folder, add_special_tokens)
 
     @property

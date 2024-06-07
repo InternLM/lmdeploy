@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import os.path as osp
+from typing import List
 
 import torch
 
@@ -90,35 +91,39 @@ class Glm4Reader(LlamaReader):
 
 @INPUT_MODELS.register_module(name='glm4')
 class Glm4Model(LlamaModel):
-    """Glm4 model in hf format."""
+    """Glm2/3/4 model in hf format."""
 
     Reader = Glm4Reader
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
         super().__init__(model_path, tokenizer_path, **kwargs)
+        config_path = osp.join(self.model_path, 'config.json')
+        with open(config_path) as f:
+            self.config = json.load(f)
 
     def tokenizer_info(self):
         """Read tokenizer info."""
-        n_words = 151552
+        n_words = self.config['padded_vocab_size']
         bos_id = 0
-        eos_id = 151329
+        eos_id = self.config['eos_token_id']
+        if isinstance(eos_id, List):
+            eos_id = eos_id[0]
         return n_words, bos_id, eos_id
 
     def model_info(self):
         """Read model info."""
-        params_path = osp.join(self.model_path, 'config.json')
-        with open(params_path) as f:
-            config = json.load(f)
-            num_layer = config['num_hidden_layers']
-            norm_eps = config['layernorm_epsilon']
-            rope_theta = float(config.get('rotary_emb_base', 10000.0))
-            rope_ratio = float(config.get('rope_ratio'))
-            rope_theta *= rope_ratio
-            attn_head_num = config['num_attention_heads']
-            kv_head_num = attn_head_num
-            if config['multi_query_attention']:
-                kv_head_num = config['multi_query_group_num']
-            seq_length = config['seq_length']
+        config = self.config
+        num_layer = config.get('num_hidden_layers', None)
+        num_layer = config.get('num_layers', num_layer)
+        norm_eps = config['layernorm_epsilon']
+        rope_theta = float(config.get('rotary_emb_base', 10000.0))
+        rope_ratio = float(config.get('rope_ratio', 1.0))
+        rope_theta *= rope_ratio
+        attn_head_num = config['num_attention_heads']
+        kv_head_num = attn_head_num
+        if config['multi_query_attention']:
+            kv_head_num = config['multi_query_group_num']
+        seq_length = config['seq_length']
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
                     attn_head_num=attn_head_num,
