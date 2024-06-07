@@ -934,8 +934,11 @@ class Engine:
             sequence_end (bool): indicator for ending a sequence
             adapter_names (List[str]): The name of the adapters.
         """
-        return self.engine_instance.decode(input_ids,
-                                           steps=steps,
-                                           sequence_start=sequence_start,
-                                           sequence_end=sequence_end,
-                                           adapter_names=adapter_names)
+        return self.engine_instance.decode(
+            input_ids,
+            steps=steps,
+            input_embeddings=input_embeddings,
+            input_embedding_ranges=input_embedding_ranges,
+            sequence_start=sequence_start,
+            sequence_end=sequence_end,
+            adapter_names=adapter_names)

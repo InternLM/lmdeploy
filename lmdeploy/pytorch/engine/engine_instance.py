@@ -483,15 +483,29 @@ class EngineInstance:
         logger.debug('Decoding logits.')
         batch_size = len(input_ids)
 
-        def __add_messages(session_ids, input_ids, adapter_names):
+        def __add_messages(session_ids, input_ids, adapter_names,
+                           input_embeddings, input_embedding_ranges):
             add_msgs = []
             sampling_param = SamplingParam(max_new_tokens=0)
-            for session_id, token_id, adapter_name in zip(
-                    session_ids, input_ids, adapter_names):
+            batch_size = len(input_ids)
+            if input_embeddings is None:
+                input_embeddings = [None] * batch_size
+                input_embedding_ranges = [None] * batch_size
+            for session_id, token_id, adapter_name, input_emb, input_ranges in zip(  # noqa: E501
+                    session_ids, input_ids, adapter_names, input_embeddings,
+                    input_embedding_ranges):
+                cur_input_embeddings: List[InputEmbeddings] = None
+                if input_emb is not None and len(input_emb) > 0:
+                    assert len(input_emb) == len(input_ranges)
+                    cur_input_embeddings = [
+                        InputEmbeddings(emb, rg[0], rg[1])
+                        for emb, rg in zip(input_emb, input_ranges)
+                    ]
                 msg = dict(token_ids=token_id,
                            session_id=session_id,
                            sampling_param=sampling_param,
                            adapter_name=adapter_name,
+                           input_embeddings=cur_input_embeddings,
                            return_logits=True)
                 add_msgs.append(msg)
             req_types = [RequestType.ADD_MESSAGE] * batch_size
@@ -513,7 +527,8 @@ class EngineInstance:
                                      dict(session_id=sid))
                 self._try_add_session(sid)
 
-        req_ids = __add_messages(session_ids, input_ids, adapter_names)
+        req_ids = __add_messages(session_ids, input_ids, adapter_names,
+                                 input_embeddings, input_embedding_ranges)
         req_idx_map = dict(zip(req_ids, range(len(req_ids))))
 
         finish_count = batch_size

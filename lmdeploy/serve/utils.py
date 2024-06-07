@@ -123,6 +123,8 @@ class LogitsMixin:
                     emb = emb[offx:emb.shape[0] - offy]
                     off = max(begin - iter_len * i, 0)
                     rng = [off, off + emb.shape[0]]
+                    if self.backend == 'pytorch':
+                        emb = emb.numpy()
                     iembs.append(emb)
                     iranges.append(rng)
 
