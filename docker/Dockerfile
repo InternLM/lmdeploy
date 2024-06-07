@@ -6,7 +6,7 @@ RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update && apt-get install -
 
 ENV PATH=/opt/py38/bin:$PATH
 
-RUN python3 -m pip install --no-cache-dir --upgrade pip &&\
+RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools &&\
     python3 -m pip install --no-cache-dir torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118 &&\
     python3 -m pip install --no-cache-dir cmake packaging wheel
 
@@ -36,3 +36,5 @@ RUN cd /opt/lmdeploy &&\
     rm -rf build
 
 ENV LD_LIBRARY_PATH=/opt/tritonserver/lib:$LD_LIBRARY_PATH
+# explicitly set ptxas path for triton
+ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas

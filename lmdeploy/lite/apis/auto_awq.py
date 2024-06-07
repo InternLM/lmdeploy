@@ -47,7 +47,7 @@ def save_vl_model(vl_model, model_path, dst_path):
                              safe_serialization=safe_serialization)
     candidate = [
         'preprocessor_config.json', 'processor_config.json', 'vit',
-        'generation_config.json'
+        'generation_config.json', 'added_tokens.json'
     ]
     for name in candidate:
         tmp_path = osp.join(model_path, name)

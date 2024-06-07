@@ -8,21 +8,24 @@ CogVLM 是一个强大的开源视觉语言模型（VLM）. LMDeploy 已在PyTor
 
 ### 安装
 
+安装 torch, torchvision 以及 CogVLM 依赖 xformers，可参考[Pytorch](https://pytorch.org/get-started)和[xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers)
+
+```shell
+# cuda 11.8
+pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu118
+# cuda 12.1
+pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu121
+```
+
 使用 pip(Python 3.8+)安装LMDeploy，更多安装方式参考 [安装](https://lmdeploy.readthedocs.io/zh-cn/latest/get_started.html#id2)。
 
 ```shell
+# cuda 11.8
+export LMDEPLOY_VERSION=0.4.2
+export PYTHON_VERSION=38
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
+# cuda 12.1
 pip install lmdeploy
-```
-
-使用pip安装CogVLM依赖xformers，更多方式可参考[xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers)。
-注意，xformers依赖torch，因而需要根据现有torch版本选择合适版本进行安装。如对于`torch==2.2.2`，可按如下方式安装。
-
-```shell
-# for torch==2.2.2
-# cuda 11.8 version
-pip3 install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
-# cuda 12.1 version
-pip3 install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ### 准备

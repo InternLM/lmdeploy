@@ -101,7 +101,8 @@ class ActivationObserver(GlobalAvailMixin):
         """
         if self.observed:
             return
-        assert len(x.shape) == 3
+        if len(x.shape) != 3:
+            return
         assert x.size(2) == self.dim
         cur_val = x.flatten(0, 1)
         cur_max = cur_val.max(0)[0].cpu()
