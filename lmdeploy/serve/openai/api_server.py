@@ -128,11 +128,11 @@ async def check_request(request) -> Optional[JSONResponse]:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             f'The top_k `{request.top_k}` cannot be a negative integer.')
-    if hasattr(request, 'temperature') and not (request.temperature <= 1
+    if hasattr(request, 'temperature') and not (request.temperature <= 2
                                                 and request.temperature >= 0):
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
-            f'The temperature `{request.temperature}` must be in [0, 1]')
+            f'The temperature `{request.temperature}` must be in [0, 2]')
     return
 
 
