@@ -61,7 +61,7 @@ def test_turbomind_model_config_udpate():
                                           rope_scaling_factor=3.0,
                                           use_logn_attn=True,
                                           max_prefill_iters=64,
-                                          max_tokens_per_iter=256)
+                                          num_tokens_per_iter=256)
     other = TurbomindModelConfig.from_engine_config(engine_config)
     this.update(other)
 
@@ -76,3 +76,10 @@ def test_turbomind_model_config_udpate():
     assert (this.quant_policy == other.quant_policy)
     assert (this.rope_scaling_factor == other.rope_scaling_factor)
     assert (this.use_logn_attn == other.use_logn_attn)
+
+    engine_config = TurbomindEngineConfig(max_prefill_iters=512,
+                                          num_tokens_per_iter=1024)
+    other = TurbomindModelConfig.from_engine_config(engine_config)
+    this.update(other)
+    assert (this.max_prefill_iters == other.max_prefill_iters)
+    assert (this.num_tokens_per_iter == other.num_tokens_per_iter)

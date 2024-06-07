@@ -267,6 +267,10 @@ def _get_and_verify_max_len(
                         TypeVar('TurbomindModelConfig')],
     max_model_len: Optional[int],
 ) -> int:
+    if hasattr(hf_tm_config, 'session_len'):
+        # `hf_tm_config` is TurbomindModelConfig
+        session_len = getattr(hf_tm_config, 'session_len')
+        return max_model_len if max_model_len else session_len
     """Get and verify the model's maximum length."""
     logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')
