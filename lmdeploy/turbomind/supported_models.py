@@ -109,7 +109,7 @@ def is_supported(model_path: str):
                 if hidden_size // num_attn_head != 128:
                     support_by_turbomind = False
             elif arch == 'ChatGLMModel':
-                # chatglm1 is not supported
-                support_by_turbomind = cfg.get('original_rope', False)
+                # chatglm1/2/3 is not working yet
+                support_by_turbomind = cfg.get('rope_ratio', 1) > 1
 
     return support_by_turbomind

@@ -23,9 +23,9 @@ def _is_add_special_tokens(model_path: str):
         cfg = PretrainedConfig.get_config_dict(model_path)[0]
 
     try:
-        if cfg['architectures'][0] == 'ChatGLMModel' and 'glm-4' in cfg[
-                '_name_or_path']:
-            return False
+        if cfg['architectures'][0] == 'ChatGLMModel':
+            # only glm4 has `rope_ratio` > 1, we need add_special_tokens=False
+            return cfg.get('rope_ratio', 1) == 1
     except:  # noqa
         pass
 
