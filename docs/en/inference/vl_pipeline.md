@@ -11,6 +11,7 @@ Currently, it supports the following models.
 - [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
 - [MGM](https://huggingface.co/YanweiLi/MGM-7B)
 - [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
+- [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/en/multi_modal/cogvlm.md)
 
 We genuinely invite the community to contribute new VLM support to LMDeploy. Your involvement is truly appreciated.
 
@@ -135,12 +136,12 @@ For more information about customizing a chat template, please refer to [this](.
 
 ### Setting vision model parameters
 
-The default parameters of the visual model can be modified by setting `VisonConfig`.
+The default parameters of the visual model can be modified by setting `VisionConfig`.
 
 ```python
-from lmdeploy import pipeline, VisonConfig
+from lmdeploy import pipeline, VisionConfig
 from lmdeploy.vl import load_image
-vision_config=VisonConfig(max_batch_size=16)
+vision_config=VisionConfig(max_batch_size=16)
 pipe = pipeline('liuhaotian/llava-v1.5-7b', vision_config=vision_config)
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))

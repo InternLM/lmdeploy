@@ -3,6 +3,7 @@ import os
 
 from lmdeploy.utils import get_hf_config_content, get_model
 
+from .cogvlm import CogVLMVisionModel
 from .deepseek import DeepSeekVisionModel
 from .internvl import InternVLVisionModel
 from .internvl_llava import InternVLLlavaVisionModel
@@ -36,6 +37,8 @@ def load_vl_model(model_path: str, with_llm: bool = False):
             return LlavaVisionModel(model_path, with_llm=with_llm, arch=arch)
     if arch == 'MultiModalityCausalLM':
         return DeepSeekVisionModel(model_path, with_llm)
+    elif arch == 'CogVLMForCausalLM':
+        return CogVLMVisionModel(model_path, with_llm)
     if arch == 'InternLMXComposer2ForCausalLM':
         return Xcomposer2VisionModel(model_path, with_llm)
     if arch == 'InternVLChatModel':

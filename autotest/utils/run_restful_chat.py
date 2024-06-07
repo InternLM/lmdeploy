@@ -250,6 +250,6 @@ def get_model(url):
     try:
         api_client = APIClient(url)
         model_name = api_client.available_models[0]
-        return model_name
+        return model_name.split('/')[-1]
     except Exception:
         return None

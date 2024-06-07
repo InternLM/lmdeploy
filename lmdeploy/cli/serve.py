@@ -298,8 +298,8 @@ class SubCliServe:
         if args.chat_template:
             chat_template_config = ChatTemplateConfig.from_json(
                 args.chat_template)
-        from lmdeploy.messages import VisonConfig
-        vision_config = VisonConfig(args.vision_max_batch_size)
+        from lmdeploy.messages import VisionConfig
+        vision_config = VisionConfig(args.vision_max_batch_size)
         run_api_server(args.model_path,
                        model_name=args.model_name,
                        backend=backend,
