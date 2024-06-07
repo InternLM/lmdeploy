@@ -271,7 +271,7 @@ class ModelInputs:
             if overlap:
                 block_end += 1
 
-            block_offsets = self.block_offsets[:, :block_end]
+            block_offsets = self.block_offsets
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
