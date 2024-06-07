@@ -101,6 +101,8 @@ class TurbomindModelConfig:
 
     def update_prefill_config(self, config: TurbomindEngineConfig):
         """Update the attributes related to split&fuse."""
+        if config.session_len is not None:
+            self.session_len = config.session_len
         assert self.session_len is not None
         if config.max_prefill_token_num is not None and \
                 config.num_tokens_per_iter == 0:
