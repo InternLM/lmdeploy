@@ -154,7 +154,7 @@ class InternVLVisionModel(VisonModel):
         outputs = outputs.to(self.model.device, dtype=torch.float16)
         outputs = self.model.extract_feature(outputs)
         outputs = torch.split(outputs, split, dim=0)
-        outputs = [x.reshape(-1, x.shape[-1]).half() for x in outputs]
+        outputs = [x.reshape(-1, x.shape[-1]) for x in outputs]
         return outputs
 
     def _forward(self, images: List[Image]):
