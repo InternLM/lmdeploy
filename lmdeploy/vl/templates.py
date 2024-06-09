@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from copy import deepcopy
 from typing import Dict, List, Tuple, Union
 
 import PIL
@@ -56,7 +55,7 @@ class VLChatTemplateWrapper:
                     item = {
                         'type': 'image_data',
                         'image_data': {
-                            'data': deepcopy(image)
+                            'data': image
                         }
                     }
                 else:
