@@ -139,7 +139,8 @@ void Quantize(const thrust::universal_vector<S>&  x,
 
     x_p.resize(x.size());
     x_q.resize(x.size());
-    x_u.resize(stats.size());
+    /// FIXME: correct the size
+    x_u.resize(stats.size() * 32);
 
     if (order == Order::kRowMajor) {
         thrust::copy(policy, x.begin(), x.end(), _x.begin());

@@ -120,6 +120,8 @@ struct GmemIteratorSm80 {
         return mk2cs<kOrder>(mk.x, mk.y);
     }
 
+    __device__ GmemIteratorSm80(): smem_data_{Pointer{nullptr}} {};
+
     __device__ GmemIteratorSm80(Pointer data, int stride_s, int2 offset, int2 delta, int2 extent):
         smem_data_{Pointer{nullptr}}
     {

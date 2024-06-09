@@ -36,17 +36,16 @@ struct VoidOperand {
 
 /// TODO: fix AlignC, AlignS
 /// TODO: fix GroupSize
-template<class Operand, class Iterator, int M, int K, int WARPS>
+template<class Operand, class Iterator, int M, int K, int WARPS, int GroupSize = 1>
 struct MakeOperand {
 
     using Dtype = typename Operand::Dtype;
 
-    static constexpr Pack  kPack  = Operand::kPack;
-    static constexpr Order kOrder = Operand::kOrder;
+    static constexpr Pack  kPack      = Operand::kPack;
+    static constexpr Order kOrder     = Operand::kOrder;
+    static constexpr int   kGroupSize = GroupSize;
 
-    static constexpr int kGroupSize = 1;
-
-    static constexpr int2 CS = Packing<kPack>::apply(mk2cs<kOrder>(M, K));
+    static constexpr int2 CS = Packing<kPack>::apply(mk2cs<kOrder>(M, ceil_div(K, kGroupSize)));
 
     static constexpr pair<CS.x, CS.y> kShapeCS{};
 

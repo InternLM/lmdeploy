@@ -68,7 +68,7 @@ struct SmemCopy_MMA_16816_B {
 };
 
 template<class T>
-struct LoadFragment_MMA_16816_Q {  // (M, K)
+struct SmemCopy_MMA_16816_U {  // (M, K)
     static constexpr int C = 16;
     static constexpr int S = 16;
 
@@ -77,6 +77,15 @@ struct LoadFragment_MMA_16816_Q {  // (M, K)
     __device__ static int2 get_offset(int lane_id)
     {
         return {lane_id / 4, 0};
+    }
+
+    template<class S, class D>
+    __device__ static void copy(S&& src_ptr, D&& dst_ptr, bool mask)
+    {
+        PRAGMA_UNROLL
+        for (int i = 0; i < 2; ++i) {
+            Lds(*((Array<T, 1>*)dst_ptr + i), src_ptr + i * 8);
+        }
     }
 
     // __device__ static void apply(const T* src, T* dst)

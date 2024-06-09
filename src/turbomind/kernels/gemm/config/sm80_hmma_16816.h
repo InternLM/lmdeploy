@@ -60,7 +60,20 @@ struct Operand_B_T {
     using GetGmemIter   = GetGmemIter;
 };
 
-template<class A, class B, class U = VoidOperand, class V = VoidOperand>
+template<class T>
+struct Operand_U {
+    using Dtype = T;
+
+    static constexpr Pack  kPack  = 0;
+    static constexpr Order kOrder = kColMajor;
+
+    using SmemCopyAtom = SmemCopy_MMA_16816_U<T>;
+
+    using GetSmemLayout = GetSmemLayout;
+    using GetGmemIter   = GetGmemIter;
+};
+
+template<class A, class TransformA, class U, class B, class TransformB, class V, class Tc>
 struct SM80_HMMA_16816_F32 {
     template<int  CTA_M,
              int  CTA_N,
@@ -71,12 +84,28 @@ struct SM80_HMMA_16816_F32 {
              int  Stages,
              bool SplitK,
              bool AlignedM,
-             bool AlignedN>
+             bool AlignedN,
+             int  GroupSizeU = 1,
+             int  GroupSizeV = 1>
     struct Type {
-        using MMA_Map  = RakedThreadGroupMap<CTA_M, CTA_N, CTA_K, 16, 16, 16, WARP_CNT_M, WARP_CNT_N, WARP_CNT_K>;
-        using MMA      = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
-        using Mainloop = MainloopSm80_v2<CTA_M, CTA_N, CTA_K, MMA, A, B, U, V, Transform, Stages>;
-        using Kernel   = GemmUniversal<void, Mainloop, CtaMap, AlignedM, AlignedN, SplitK>;
+        using MMA_Map = RakedThreadGroupMap<CTA_M, CTA_N, CTA_K, 16, 16, 16, WARP_CNT_M, WARP_CNT_N, WARP_CNT_K>;
+        using MMA     = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
+
+        using Mainloop = MainloopSm80_v2<CTA_M,
+                                         CTA_N,
+                                         CTA_K,
+                                         MMA,
+                                         A,
+                                         TransformA,
+                                         U,
+                                         GroupSizeU,
+                                         B,
+                                         TransformB,
+                                         V,
+                                         GroupSizeV,
+                                         Stages>;
+
+        using Kernel = GemmUniversal<void, Mainloop, Tc, CtaMap, AlignedM, AlignedN, SplitK>;
     };
 };
 
@@ -90,6 +119,16 @@ struct GetOperand<HMMA_16816, OPERAND_A, T, kColMajor, false>: std::true_type {
 template<class T>
 struct GetOperand<HMMA_16816, OPERAND_B, T, kRowMajor, false>: std::true_type {
     using Operand = sm80_hmma_16816::Operand_B_T<T>;
+};
+
+template<class T>
+struct GetOperand<HMMA_16816, OPERAND_U, T, kColMajor, false>: std::true_type {
+    using Operand = sm80_hmma_16816::Operand_U<T>;
+};
+
+template<class T>
+struct GetOperand<HMMA_16816, OPERAND_V, T, kColMajor, false>: std::true_type {
+    using Operand = sm80_hmma_16816::Operand_U<T>;
 };
 
 namespace sm80_hmma_16816 {

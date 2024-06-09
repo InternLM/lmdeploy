@@ -15,18 +15,18 @@
 
 namespace turbomind::gemm {
 
-template<class Arch_, class Mainloop, class CtaMap_, bool AlignedM_, bool AlignedN_, bool SplitK_>
+template<class Arch_, class Mainloop, class Tc_, class CtaMap_, bool AlignedM_, bool AlignedN_, bool SplitK_>
 struct GemmUniversal {
 
     // using Impl = typename Mainloop::Impl;
     using Impl = Mainloop;
 
-    using T = typename Impl::Ta;
-
     using Ta = typename Impl::Ta;
     using Tb = typename Impl::Tb;
     using Tu = typename Impl::Tu;
     using Tv = typename Impl::Tv;
+
+    using Tc = Tc_;
 
     using Arch   = Arch_;
     using CtaMap = CtaMap_;
@@ -47,7 +47,7 @@ struct GemmUniversal {
 
     // static constexpr int kChunkSizeK = std::max(Impl::G, CTA_K);
 
-    // TODO: 
+    // TODO: add group size
     static constexpr int kChunkSizeK = CTA_K;
 
     using FragC = typename Impl::FragC;
@@ -86,7 +86,7 @@ struct GemmUniversal {
         int    ldb;
         PtrV   V;
         int    ldv;
-        T*     C;
+        Tc*    C;
         int    ldc;
         int    log_tile;
         int3   tiled_shape;
@@ -189,9 +189,9 @@ struct GemmUniversal {
     {
         static_assert(kOrderC == Order::kRowMajor);
 
-        Impl::template StoreC<T>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
+        Impl::template StoreC<Tc>(frag_C, storage, [&](int mi, int ni, const auto& vec) {
             if (check_m(mi, end_m) && check_n(ni, end_n)) {
-                Store(param.C + cs2idx(mk2cs<kOrderC>(offset_m + mi, offset_n + ni), param.ldc), cast<T>(vec));
+                Store(param.C + cs2idx(mk2cs<kOrderC>(offset_m + mi, offset_n + ni), param.ldc), cast<Tc>(vec));
             }
         });
     }
@@ -248,7 +248,7 @@ struct GemmUniversal {
                 const int  index = (offset_m + mi) * param.n + offset_n + ni;
                 const bool mask  = check_m(mi, end_m) && check_n(ni, end_n);
                 if (mask)
-                    Store(&param.C[index], cast<T>(accu_C[s][c]));
+                    Store(&param.C[index], cast<Tc>(accu_C[s][c]));
             }
         }
     }

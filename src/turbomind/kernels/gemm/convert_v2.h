@@ -128,8 +128,12 @@ struct ConvertOperand {
                     const int pack_index = cs2idx(_mk2cs(pack_idx_m, pack_idx_k),  //
                                                   _mk2cs(pack_cnt_m, pack_cnt_k).x);
 
-                    // Store in [pack_id, lane_id]
-                    Store(param.dst + (pack_index * WARP_SIZE + lane_id) * kPackSize, packed);
+                    // Store in [pack_id, lane_id], static cast is needed to decay SubBytePtr<T> to T*
+                    auto dst_ptr = static_cast<Td*>(param.dst + (pack_index * WARP_SIZE + lane_id) * kPackSize);
+
+                    if (pack_idx_m < pack_cnt_m && pack_idx_k < pack_cnt_k) {
+                        Store(dst_ptr, packed);
+                    }
                 }
             }
 

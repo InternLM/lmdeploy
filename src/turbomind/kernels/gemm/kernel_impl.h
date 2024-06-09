@@ -28,9 +28,9 @@ public:
         desc_.order_b = transpose(Impl::OperandB::kOrder);
         desc_.order_c = Gemm::kOrderC;
 
-        desc_.type_a = get_data_type_v<typename Gemm::T>;
+        desc_.type_a = get_data_type_v<typename Gemm::Ta>;
         desc_.type_b = get_data_type_v<typename Gemm::Tb>;
-        desc_.type_c = get_data_type_v<typename Gemm::T>;
+        desc_.type_c = get_data_type_v<typename Gemm::Tc>;
 
         desc_.pack_a = Impl::OperandA::kPack;
         desc_.pack_b = Impl::OperandB::kPack;
@@ -121,7 +121,7 @@ public:
         using Tb = typename Gemm::Tb;
         using Tu = typename Gemm::Tu;
         using Tv = typename Gemm::Tv;
-        using Tc = typename Gemm::T;
+        using Tc = typename Gemm::Tc;
 
         if constexpr (1) {
             [[maybe_unused]] static const int _ = [] {

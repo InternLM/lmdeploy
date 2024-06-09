@@ -60,10 +60,7 @@ __host__ __device__ constexpr Index cs2idx(int2 cs, Index ld)
 }
 
 template<Pack pack>
-struct Packing {};
-
-template<>
-struct Packing<0> {
+struct Packing {
     __host__ __device__ static constexpr int2 apply(int2 cs)
     {
         return cs;

@@ -2,35 +2,74 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
 #include <iterator>
 
 namespace turbomind::gemm {
 
-struct Transform {
-    template<class FragA, class FragB, class DataA, class DataB, class DataU, class DataV>
-    __device__ static void transform(FragA& frag_A,  //
-                                     FragB& frag_B,
-                                     int    k,
-                                     DataA& data_A,
-                                     DataB& data_B,
-                                     DataU&,
-                                     DataV&)
+struct Transform_Default {
+    template<class T, int Nf, int Mf, int K, int Nd, int Md, class S>
+    __device__ static void apply(Array<T, Nf> (&frag)[K][Mf], int k, Array<T, Nd> (&data)[K][Md], S&)
     {
-        static_assert(sizeof(frag_A) == sizeof(data_A));
-        PRAGMA_UNROLL
-        for (int i = 0; i < std::size(frag_A[k]); ++i) {
-            frag_A[k][i] = data_A[k][i];
-        }
+        static_assert(Nf * Mf == Nd * Md);
+        static_assert(Nd % Nf == 0 && Mf % Md == 0);
+        static_assert(sizeof(frag) == sizeof(data));
 
-        static_assert(sizeof(frag_B) == sizeof(data_B));
-        auto& frag_B_k = (decltype(data_B[k])&)frag_B[k];
+        // Alignment must be manually enforced for `reinterpret_cast`
+        auto& frag_k = reinterpret_cast<Array<T, Nd>(&)[Md]>(frag[k]);
+        auto& data_k = data[k];
+
         PRAGMA_UNROLL
-        for (int i = 0; i < std::size(frag_B_k); ++i) {
-            frag_B_k[i] = data_B[k][i];
+        for (int i = 0; i < std::size(frag_k); ++i) {
+            frag_k[i] = data_k[i];
         }
+    }
+};
+
+template<int StatStepS, int StatStepC>
+struct Transform_HMMA_16816 {
+    template<class F, int Nf, int Mf, int K, class D, int Nd, int Md, class S, int Ns, int Ms>
+    __device__ static void
+    apply(Array<F, Nf> (&frag)[K][Mf], int k, Array<D, Nd> (&data)[K][Md], Array<S, Ns> (&stat)[K][Ms])
+    {
+        static_assert(Nf * Mf == Nd * Md);
+        static_assert(Nd % Nf == 0 && Mf % Md == 0);
+        static_assert(Nf * Mf == Ns * Ms * 4);
+
+        auto& frag_k = reinterpret_cast<Array<F, Nd>(&)[Md]>(frag[k]);
+        auto& stat_k = reinterpret_cast<Array<S, 1>(&)[Ns * Ms]>(stat[k]);
+        auto& data_k = data[k];
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < Md; ++m) {
+            auto tmp = ConvertKvCache<D, F>::convert(data_k[m]);
+            PRAGMA_UNROLL
+            for (int i = 0; i < Nd; i += 8) {
+                PRAGMA_UNROLL
+                for (int s = 0; s < 2; ++s) {
+                    PRAGMA_UNROLL
+                    for (int c = 0; c < 2; ++c) {
+                        const int idx = (m * Nd + i) / 8 + s * StatStepS + c * StatStepC;
+                        dequant((Array<F, 2>&)tmp[s * 4 + c * 2], stat_k[idx]);
+                    }
+                }
+            }
+
+            frag_k[m] = tmp;
+        }
+    }
+
+    template<class F>
+    __device__ static void dequant(Array<F, 2>& x, Array<uint32_t, 1> s)
+    {
+        Array<F, 2>& _s = (Array<F, 2>&)s;
+
+        x[0] = __hfma(x[0], _s[0], _s[1]);
+        x[1] = __hfma(x[1], _s[0], _s[1]);
     }
 };
 

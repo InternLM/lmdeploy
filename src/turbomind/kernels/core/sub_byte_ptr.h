@@ -11,6 +11,8 @@ struct SubBytePtr {
 
     constexpr SubBytePtr() = default;
 
+    constexpr __host__ __device__ explicit SubBytePtr(T* ptr): ptr_((char*)ptr) {}
+
     constexpr __host__ __device__ SubBytePtr(char* ptr): ptr_(ptr) {}
 
     __device__ T& operator[](int i)

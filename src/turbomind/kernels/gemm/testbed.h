@@ -90,21 +90,20 @@ public:
         c_f_.resize(c_.size());
         c_ref_.resize(c_.size());
 
-        a_q_.resize(a_.size());
-        b_q_.resize(b_.size());
+        // a_q_.resize(a_.size());
+        // b_q_.resize(b_.size());
 
-        u_.resize(a_.size());
-        v_.resize(b_.size());
+        // u_.resize(a_.size());
+        // v_.resize(b_.size());
 
-        a_f_.resize(a_.size());
-        b_f_.resize(b_.size());
+        // a_f_.resize(a_.size());
+        // b_f_.resize(b_.size());
 
         /// TODO: Revise packed format
         a_pack_.resize(a_.size() / kVecSize);
         b_pack_.resize(b_.size() / kVecSize);
 
-        u_pack_.resize(u_.size());
-        v_pack_.resize(v_.size());
+        
 
         barriers_.resize(m_ * n_);
         partials_.resize(kMaxSplits * m_ * n_);
@@ -121,18 +120,29 @@ public:
         if constexpr (is_quant_a) {
             static_assert(pack_a && pack_u);
             Quantize<Ta>(a_, m, k, order_a, g, a_f_, a_q_, u_, stream);
-            u_pack_desc_ = u_desc_ = {get_data_type_v<Tc>, kColMajor, m, ceil_div(k, g), m};
+            u_pack_desc_ = u_desc_ = {DataType::U32, kColMajor, m, ceil_div(k, g), m};
             u_pack_desc_.pack      = pack_u;
+            u_pack_.resize(u_.size());
             CHECK(!Convert(u_.data().get(), u_desc_, u_pack_.data().get(), u_pack_desc_, stream_));
+            quant_a_ = {QuantType::kAsym_FMA, g};
+
+            cudaDeviceSynchronize();
+
+            for (int i = 0; i < u_pack_.size(); ++i) {
+                std::cout << (float)u_pack_[i] << " ";
+            }
+            std::cout << "\n";
         }
 
         if constexpr (is_quant_b) {
             static_assert(pack_b && pack_v);
             constexpr Order _order_b = transpose(order_b);
             Quantize<Tb>(b_, n, k, _order_b, g, b_f_, b_q_, v_, stream);
-            u_pack_desc_ = u_desc_ = {get_data_type_v<Tc>, kColMajor, n, ceil_div(k, g), n};
-            u_pack_desc_.pack      = pack_u;
-            CHECK(!Convert(u_.data().get(), u_desc_, u_pack_.data().get(), u_pack_desc_, stream_));
+            v_pack_desc_ = v_desc_ = {DataType::U32, kColMajor, n, ceil_div(k, g), n};
+            v_pack_desc_.pack      = pack_v;
+            v_pack_.resize(v_.size());
+            CHECK(!Convert(v_.data().get(), v_desc_, v_pack_.data().get(), v_pack_desc_, stream_));
+            quant_b_ = {QuantType::kAsym_FMA, g};
         }
 
         if constexpr (pack_a) {
@@ -163,8 +173,8 @@ public:
         const Operation operation{
             dispatch_policy_,
             Epilogue::kNone,
-            QuantDesc{QuantType::kNone, 0},
-            QuantDesc{QuantType::kNone, 0},
+            quant_a_,
+            quant_b_,
         };
 
         const Workspace workspace{barriers_.data().get(),
@@ -232,7 +242,7 @@ public:
 
         // Compare(c_.data().get(), c_f_.data().get(), n_, n_, m_, 0);
 
-        Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
+        Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 1);
     }
 
 private:
@@ -280,6 +290,9 @@ private:
     MatrixLayout b_pack_desc_;
     MatrixLayout u_pack_desc_;
     MatrixLayout v_pack_desc_;
+
+    QuantDesc quant_a_{};
+    QuantDesc quant_b_{};
 
     universal_vector<int>   barriers_;
     universal_vector<float> partials_;

@@ -56,10 +56,10 @@ struct Converter<uint16_t, uint4_t> {
 
 template<>
 struct Converter<uint16_t, uint8_t> {
-    template<class U, int N>
-    __device__ Array<uint8_t, N> operator()(const Array<U, N>& x)
+    template<int N>
+    __device__ Array<uint8_t, N> operator()(const Array<uint16_t, N>& x)
     {
-        static_assert(sizeof(U) == 2);
+        // static_assert(sizeof(U) == 2);
         auto&             vi = (const Array<uint16_t, N>&)x;
         Array<uint8_t, N> vo;
         PRAGMA_UNROLL

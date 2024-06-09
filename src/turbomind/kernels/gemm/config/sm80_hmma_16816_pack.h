@@ -44,6 +44,19 @@ struct Operand_B_T {
     using GetGmemIter   = GetGmemIter;
 };
 
+template<class T>
+struct Operand_U {
+    using Dtype = T;
+
+    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_U | 1;
+    static constexpr Order kOrder = Order::kColMajor;
+
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, 2, 1, 4>;
+
+    using GetSmemLayout = GetSmemLayout;
+    using GetGmemIter   = GetGmemIter;
+};
+
 }  // namespace sm80_hmma_16816_pack
 
 template<class T>
@@ -54,6 +67,16 @@ struct GetOperand<HMMA_16816, OPERAND_A, T, kColMajor, true>: std::true_type {
 template<class T>
 struct GetOperand<HMMA_16816, OPERAND_B, T, kRowMajor, true>: std::true_type {
     using Operand = sm80_hmma_16816_pack::Operand_B_T<T>;
+};
+
+template<>
+struct GetOperand<HMMA_16816, OPERAND_U, uint32_t, kColMajor, true>: std::true_type {
+    using Operand = sm80_hmma_16816_pack::Operand_U<uint32_t>;
+};
+
+template<>
+struct GetOperand<HMMA_16816, OPERAND_V, uint32_t, kColMajor, true>: std::true_type {
+    using Operand = sm80_hmma_16816_pack::Operand_U<uint32_t>;
 };
 
 }  // namespace turbomind::gemm

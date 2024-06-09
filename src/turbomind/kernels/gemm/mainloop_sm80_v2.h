@@ -39,10 +39,13 @@ template<int M_,
          int K_,
          class MMA,
          class OperandA_,
-         class OperandB_,
+         class TransformA_,
          class OperandU_,
+         int GroupSizeU_,
+         class OperandB_,
+         class TransformB_,
          class OperandV_,
-         class Transform_,
+         int GroupSizeV_,
          int Stages_>
 struct MainloopSm80_v2 {
 
@@ -64,12 +67,13 @@ struct MainloopSm80_v2 {
     static constexpr int WARPS = MMA::kThreadCount / WARP_SIZE;
 
     using OperandA = MakeOperand<OperandA_, IteratorSm80, CTA_M, CTA_K, WARPS>;
-    using OperandU = MakeOperand<OperandU_, IteratorSm80, CTA_M, CTA_K, WARPS>;
+    using OperandU = MakeOperand<OperandU_, IteratorSm80, CTA_M, CTA_K, WARPS, GroupSizeU_>;
 
     using OperandB = MakeOperand<OperandB_, IteratorSm80, CTA_N, CTA_K, WARPS>;
-    using OperandV = MakeOperand<OperandV_, IteratorSm80, CTA_N, CTA_K, WARPS>;
+    using OperandV = MakeOperand<OperandV_, IteratorSm80, CTA_N, CTA_K, WARPS, GroupSizeV_>;
 
-    using Transform = Transform_;
+    using TransformA = TransformA_;
+    using TransformB = TransformB_;
 
     using Ta = typename OperandA::Dtype;
     using Tb = typename OperandB::Dtype;
@@ -190,7 +194,7 @@ struct MainloopSm80_v2 {
     __device__ void operator()(GmemIterA&     gmem_A,
                                GmemIterB&     gmem_B,
                                GmemIterU&     gmem_U,
-                               GmemIterU&     gmem_V,
+                               GmemIterV&     gmem_V,
                                FragC&         frag_C,
                                int            tile_iter,
                                SharedStorage& storage)
@@ -279,7 +283,9 @@ struct MainloopSm80_v2 {
         // r: 0, w:-1
 
         preload(0);
-        Transform::transform(frag_A, frag_B, 0, data_A, data_B, data_U, data_V);
+        // Transform(frag_A, frag_B, 0, data_A, data_B, data_U, data_V);
+        TransformA::apply(frag_A, 0, data_A, data_U);
+        TransformB::apply(frag_B, 0, data_B, data_V);
 
         if constexpr (kFusePrefetch) {
             prefetch_batch(0);
@@ -310,7 +316,8 @@ struct MainloopSm80_v2 {
                 if (k + 1 == ITER_K - 1) {
                     advance_and_wait_smem_stage();
                 }
-                Transform::transform(frag_A, frag_B, (k + 1) % ITER_K, data_A, data_B, data_U, data_V);
+                TransformA::apply(frag_A, (k + 1) % ITER_K, data_A, data_U);
+                TransformB::apply(frag_B, (k + 1) % ITER_K, data_B, data_V);
             }
         }
 

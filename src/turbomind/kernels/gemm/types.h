@@ -65,6 +65,9 @@ enum class Epilogue : int {
 enum class DataType : int {
     U4,
     U8,
+    U16,
+    U32,
+    U64,
     F16,
     F32,
     BF16,
@@ -125,6 +128,26 @@ struct get_dtype {};
 template<>
 struct get_dtype<DataType::F16> {
     using type = half;
+};
+
+template<>
+struct get_dtype<DataType::U4> {
+    using type = uint4_t;
+};
+
+template<>
+struct get_dtype<DataType::U8> {
+    using type = uint8_t;
+};
+
+template<>
+struct get_dtype<DataType::U16> {
+    using type = uint16_t;
+};
+
+template<>
+struct get_dtype<DataType::U32> {
+    using type = uint32_t;
 };
 
 struct QuantDesc {
