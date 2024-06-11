@@ -586,6 +586,18 @@ class AsyncEngine:
                                                     adapter_name)
         prompt = prompt_input['prompt']
         input_ids = prompt_input['input_ids']
+        finish_reason = None
+        logger.info(f'prompt={prompt!r}, '
+                    f'gen_config={gen_config}, '
+                    f'prompt_token_id={input_ids}, '
+                    f'adapter_name={adapter_name}.')
+        logger.info(f'session_id={session_id}, '
+                    f'history_tokens={self.id2step[str(session_id)]}, '
+                    f'input_tokens={len(input_ids)}, '
+                    f'max_new_tokens={gen_config.max_new_tokens}, '
+                    f'seq_start={sequence_start}, seq_end={sequence_end}, '
+                    f'step={step}, prep={do_preprocess}')
+
         if gen_config.max_new_tokens is None:
             # for interactive endpoint, will try maximum possible token num
             gen_config.max_new_tokens = max(
@@ -604,18 +616,6 @@ class AsyncEngine:
                              0, 'length')
                 if sequence_end is True and sequence_start is False:
                     await self.end_session(session_id)
-
-        finish_reason = None
-        logger.info(f'prompt={prompt!r}, '
-                    f'gen_config={gen_config}, '
-                    f'prompt_token_id={input_ids}, '
-                    f'adapter_name={adapter_name}.')
-        logger.info(f'session_id={session_id}, '
-                    f'history_tokens={self.id2step[str(session_id)]}, '
-                    f'input_tokens={len(input_ids)}, '
-                    f'max_new_tokens={gen_config.max_new_tokens}, '
-                    f'seq_start={sequence_start}, seq_end={sequence_end}, '
-                    f'step={step}, prep={do_preprocess}')
 
         generator = await self.get_generator(False, session_id)
         async with self.safe_run(session_id):
