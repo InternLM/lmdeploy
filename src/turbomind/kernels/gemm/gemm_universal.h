@@ -37,9 +37,6 @@ struct GemmUniversal {
     static constexpr int CTA_N = Impl::CTA_N;
     static constexpr int CTA_K = Impl::CTA_K;
 
-    static constexpr int G     = 128;
-    static constexpr int CTA_G = ceil_div(CTA_K, G);
-
     static constexpr bool AlignedM = AlignedM_;
     static constexpr bool AlignedN = AlignedN_;
 
@@ -126,8 +123,9 @@ struct GemmUniversal {
 
         typename OperandA::GmemIter gmem_A{param.A, param.lda, {offset_m, offset_k}, {0, CTA_K}, {end_m, CTA_K}};
         typename OperandB::GmemIter gmem_B{param.B, param.ldb, {offset_n, offset_k}, {0, CTA_K}, {end_n, CTA_K}};
+
         typename OperandU::GmemIter gmem_U{param.U, param.ldu, {offset_m, offset_k}, {0, CTA_K}, {end_m, CTA_K}};
-        typename OperandV::GmemIter gmem_V{param.V, param.ldv, {offset_n, offset_k}, {0, CTA_G}, {end_n, CTA_G}};
+        typename OperandV::GmemIter gmem_V{param.V, param.ldv, {offset_n, offset_k}, {0, CTA_K}, {end_n, CTA_K}};
 
         Mainloop mainloop{};
 

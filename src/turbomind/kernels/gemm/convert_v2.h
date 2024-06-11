@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
@@ -22,21 +23,29 @@ struct ConvertOperand {
     using Ts         = typename Operand::Dtype;
     using SmemLayout = typename Operand::SmemLayout;
     using GmemIter   = typename Operand::GmemIter;
-    //                                   ATOM::K
-    using SmemCopy = SmemCopy<Operand, M_, 16, 16, 16>;
-    //                                         dM  dK
+
+    static constexpr bool is_UV = K_ < 16;
+
+    using SmemCopyAtom = typename Operand::SmemCopyAtom;
+
+    using SmemCopy = std::conditional_t<!is_UV,
+                                        SmemCopy<Operand, M_, 16, 16, 16>,  // AB
+                                        SmemCopy<Operand, M_, K_, 16, 1>>;  // UV
+
+    static constexpr int kRepeatC = !is_UV ? 1 : 4;
 
     using Accessor = SmemAccessor<Ts, SmemLayout>;
 
     static constexpr auto kOrderS = Operand::kOrder;
 
+    static constexpr int2 CopyAtom_MK = cs2mk<kOrderS>(SmemCopyAtom::C, SmemCopyAtom::S);
+
+    static constexpr int ITER_K = ceil_div(K, CopyAtom_MK.y);
+
+    /// TODO: generailize this
+    static constexpr int WARP_CNT = 1;
+
     using PtrD = get_pointer_type<Td>;
-
-    static constexpr int COPY_M = M_;
-    static constexpr int COPY_K = 16;
-
-    static constexpr int ITER_K   = K / COPY_K;
-    static constexpr int WARP_CNT = M / COPY_M;
 
     struct Param {
         int       m;
@@ -80,7 +89,7 @@ struct ConvertOperand {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
-        const int warp_offset_m = warp_id * COPY_M;
+        const int warp_offset_m = 0;
 
         GmemIter gmem{(Ts*)param.src, param.lds, {cta_offset_m, 0}, {0, K}, {M, K}};
 
@@ -97,8 +106,18 @@ struct ConvertOperand {
         constexpr int kFragNum  = get_fragment_num(data);
         constexpr int kPackSize = kFragSize * Pack_M;
 
-        const int pack_cnt_k = cta_cnt_k * ITER_K;
-        const int pack_cnt_m = cta_cnt_m * WARP_CNT * kFragNum;
+        const int pack_cnt_k = ceil_div(param.k, CopyAtom_MK.y);
+        const int pack_cnt_m = ceil_div(param.m, CopyAtom_MK.x * Pack_M);
+
+        if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
+            printf("m=%d, k=%d, CTA_M=%d, CTA_K=%d, pack_cnt_m=%d, pack_cnt_k=%d\n",
+                   param.m,
+                   param.k,
+                   M_,
+                   K_,
+                   pack_cnt_m,
+                   pack_cnt_k);
+        }
 
         for (int cta_idx_k = 0; cta_idx_k < cta_cnt_k; ++cta_idx_k) {
 
@@ -113,7 +132,7 @@ struct ConvertOperand {
             for (int k = 0; k < ITER_K; ++k) {
 
                 // Load from smem as we are doing GEMMs
-                SmemCopy::copy(smem, data, int2{warp_offset_m, k * COPY_K});
+                SmemCopy::copy(smem, data, int2{warp_offset_m, k * CopyAtom_MK.y});
 
                 PRAGMA_UNROLL
                 for (int m = 0; m < kFragNum; m += Pack_M) {
@@ -129,9 +148,16 @@ struct ConvertOperand {
                                                   _mk2cs(pack_cnt_m, pack_cnt_k).x);
 
                     // Store in [pack_id, lane_id], static cast is needed to decay SubBytePtr<T> to T*
-                    auto dst_ptr = static_cast<Td*>(param.dst + (pack_index * WARP_SIZE + lane_id) * kPackSize);
+                    auto dst_ptr = [&] {
+                        if constexpr (!is_UV) {
+                            return static_cast<Td*>(param.dst + (pack_index * WARP_SIZE + lane_id) * kPackSize);
+                        }
+                        else {
+                            return static_cast<Td*>(param.dst + (pack_index * 8 + lane_id / 4) * kPackSize);
+                        }
+                    }();
 
-                    if (pack_idx_m < pack_cnt_m && pack_idx_k < pack_cnt_k) {
+                    if (pack_idx_m < pack_cnt_m && pack_idx_k < pack_cnt_k && lane_id % kRepeatC == 0) {
                         Store(dst_ptr, packed);
                     }
                 }

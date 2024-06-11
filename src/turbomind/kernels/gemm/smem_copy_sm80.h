@@ -70,12 +70,13 @@ struct SmemCopy_MMA_16816_B {
 template<class T>
 struct SmemCopy_MMA_16816_U {  // (M, K)
     static constexpr int C = 16;
-    static constexpr int S = 16;
+    static constexpr int S = 1;
 
     using Frag = Array<T, 2>;
 
     __device__ static int2 get_offset(int lane_id)
     {
+        // UV always in M-major 
         return {lane_id / 4, 0};
     }
 

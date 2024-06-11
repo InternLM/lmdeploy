@@ -143,6 +143,13 @@ public:
             v_pack_.resize(v_.size());
             CHECK(!Convert(v_.data().get(), v_desc_, v_pack_.data().get(), v_pack_desc_, stream_));
             quant_b_ = {QuantType::kAsym_FMA, g};
+
+            cudaDeviceSynchronize();
+
+            for (int i = 0; i < v_pack_.size(); ++i) {
+                std::cout << (float)v_pack_[i] << " ";
+            }
+            std::cout << "\n";
         }
 
         if constexpr (pack_a) {

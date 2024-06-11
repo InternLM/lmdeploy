@@ -20,6 +20,8 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
             half>;
 
         // Add(std::make_unique<KernelImpl<Config::Type<256, 128, 64, 4, 2, 1, 3, false, 0, 0>::Kernel>>());
+        Add(std::make_unique<KernelImpl<Config::Type<128, 128, 32, 2, 2, 1, 3, false, 0, 0>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<16, 16, 32, 1, 1, 1, 3, false, 0, 0>::Kernel>>());
     }
 
     {

@@ -53,7 +53,7 @@ void Run(int m, int n, int k, int g = 128)
     auto& test = gTestbed<gemm::Testbed<uint8_t, uint8_t, half, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
 
     test.Initialize(m, n, k, g, 0);
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 1; ++i) {
         test.Run();
     }
 

@@ -51,7 +51,7 @@ constexpr bool is_UV(Op_Tag op)
 template<MMA_Tag MMA, Op_Tag Op, Order Ord, class Stype_, class Dtype_, int PackNum>
 struct Config {
     static constexpr int CTA_M = 32;
-    static constexpr int CTA_K = 32;
+    static constexpr int CTA_K = !is_UV(Op) ? 32 : 8;
 
     static constexpr int BLOCK_SIZE = 32;
 
