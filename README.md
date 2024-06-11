@@ -137,6 +137,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>MiniGeminiLlama (7B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
+  <li>MiniCPM-Llama3-V-2_5</li>
 </ul>
 </td>
 </tr>
@@ -205,6 +206,8 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
 # Third-party projects
 
 - Deploying LLMs offline on the NVIDIA Jetson platform by LMDeploy: [LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
+
+- Example project for deploying LLMs using LMDeploy and BentoML: [BentoLMDeploy](https://github.com/bentoml/BentoLMDeploy)
 
 # Contributing
 

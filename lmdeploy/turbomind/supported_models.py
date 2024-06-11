@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from transformers import AutoConfig
-
+from lmdeploy.archs import get_model_arch
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -34,34 +33,13 @@ SUPPORTED_ARCHS = dict(
     InternVLChatModel='internvl',
     # deepseek-vl
     MultiModalityCausalLM='deepseekvl',
+    # MiniCPMV
+    MiniCPMV='minicpmv',
     # mini gemini
     MGMLlamaForCausalLM='llama',
     MiniGeminiLlamaForCausalLM='llama',
     # chatglm2/3, glm4
     ChatGLMModel='glm4')
-
-
-def get_model_arch(model_path: str):
-    try:
-        cfg = AutoConfig.from_pretrained(model_path,
-                                         trust_remote_code=True).to_dict()
-    except Exception as e:  # noqa
-        from transformers import PretrainedConfig
-        cfg = PretrainedConfig.get_config_dict(model_path)[0]
-
-    if cfg.get('architectures', None):
-        arch = cfg['architectures'][0]
-        if cfg.get('auto_map'):
-            for _, v in cfg['auto_map'].items():
-                if 'InternLMXComposer2ForCausalLM' in v:
-                    arch = 'InternLMXComposer2ForCausalLM'
-    elif cfg.get('auto_map',
-                 None) and 'AutoModelForCausalLM' in cfg['auto_map']:
-        arch = cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
-    else:
-        raise RuntimeError(
-            f'Could not find model architecture from config: {cfg}')
-    return arch, cfg
 
 
 def is_supported(model_path: str):
@@ -97,13 +75,13 @@ def is_supported(model_path: str):
             support_by_turbomind = True
             # special cases
             if arch == 'BaichuanForCausalLM':
-                num_attn_head = cfg['num_attention_heads']
+                num_attn_head = cfg.num_attention_heads
                 if num_attn_head == 40:
                     # baichuan-13B, baichuan2-13B not supported by turbomind
                     support_by_turbomind = False
             elif arch == 'Qwen2ForCausalLM':
-                num_attn_head = cfg['num_attention_heads']
-                hidden_size = cfg['hidden_size']
+                num_attn_head = cfg.num_attention_heads
+                hidden_size = cfg.hidden_size
                 # qwen2 0.5b size_per_head is 64, which hasn't been supported
                 # by turbomind yet
                 if hidden_size // num_attn_head != 128:

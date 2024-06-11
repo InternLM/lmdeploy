@@ -4,7 +4,6 @@ from typing import List
 
 import torch
 from PIL.Image import Image
-from torchvision import transforms
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.vl.model.base import VisonModel
@@ -15,6 +14,7 @@ class CogVLMVisionModel(VisonModel):
     """CogVLM vision model."""
 
     def __init__(self, model_path: str, with_llm: bool = False):
+        from torchvision import transforms
         self.with_llm = with_llm
         self.model_path = model_path
         self.hf_config = AutoConfig.from_pretrained(model_path,
