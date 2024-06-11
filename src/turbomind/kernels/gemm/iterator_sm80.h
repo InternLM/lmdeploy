@@ -122,12 +122,12 @@ struct GmemIteratorSm80 {
     __device__ GmemIteratorSm80(): smem_data_{Pointer{nullptr}} {};
 
     __device__ GmemIteratorSm80(Pointer data, int stride_s, int2 offset, int2 delta, int2 extent):
-        smem_data_{Pointer{nullptr}}
+        smem_data_{Pointer{(T*)nullptr}}
     {
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
 
-        data += cs2idx(pack(to_cs(offset)), stride_s);
+        data   = data + cs2idx(pack(to_cs(offset)), stride_s);
         extent = pack(to_cs(extent));
 
         int stride_k = cs2idx(pack(to_cs(delta)), stride_s);

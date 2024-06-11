@@ -54,7 +54,7 @@ struct SmemIter {
     __device__ void Advance()
     {
         pipe_iter_ += 1;
-        pointer += Step;
+        pointer = pointer + Step;
         if (pipe_iter_ == Stages) {
             pipe_iter_ = 0;
             pointer    = base_;

@@ -46,8 +46,9 @@ struct SmemCopyAtom_Pack_v2 {
     template<class S, class D>
     __device__ static void copy(S src_ptr, D dst_ptr, bool mask)
     {
+        auto dst_raw_ptr = (T*)dst_ptr; // SubBytePtr<T> -> T*
         if (mask) {
-            Lds(*(Frag*)dst_ptr, src_ptr);
+            Lds(*(Frag*)dst_raw_ptr, src_ptr);
         }
     }
 };

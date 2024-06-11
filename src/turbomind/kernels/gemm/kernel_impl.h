@@ -157,7 +157,7 @@ public:
         typename Gemm::Param param{m,
                                    n,
                                    k,
-                                   (Ta*)A,
+                                   typename Gemm::PtrA{(Ta*)A},
                                    lda,
                                    (Tu*)U,
                                    Udesc.ld,
