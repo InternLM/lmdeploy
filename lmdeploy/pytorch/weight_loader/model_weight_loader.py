@@ -210,12 +210,9 @@ def load_model_weights(model: torch.nn.Module,
                        rank: int = 0,
                        world_size: int = 1,
                        device: torch.device = 'cpu'):
-    """Loading model weights.
-
-    Please waiting.
-    """
+    """Loading model weights."""
     if rank == 0:
-        logger.info('Loading model weights.')
+        logger.info('Loading model weights, please waiting.')
     if adapters is None:
         adapters = dict()
     loader = ModelWeightLoader(checkpoint_path, adapters=adapters)
