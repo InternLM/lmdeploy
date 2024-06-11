@@ -122,8 +122,8 @@ def main(model_path: str,
                 sequence_start, sequence_end = True, True
                 step = 0
 
-            print(f'{prompt} ', end='', flush=True)
-            state = DetokenizeState()
+            print(f'{prompt}', end='', flush=True)
+            state = DetokenizeState(len(input_ids))
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     input_ids=[input_ids],
@@ -134,7 +134,7 @@ def main(model_path: str,
                     gen_config=gen_config,
                     ignore_eos=False,
                     random_seed=seed if nth_round == 1 else None):
-                res, tokens = outputs.token_ids, outputs.num_token
+                res, tokens = input_ids + outputs.token_ids, outputs.num_token
                 # decode res
                 response, state = tokenizer.detokenize_incrementally(
                     res, state=state)
