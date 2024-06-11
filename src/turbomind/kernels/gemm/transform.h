@@ -40,12 +40,17 @@ struct Transform_HMMA_16816 {
         static_assert(Nd % Nf == 0 && Mf % Md == 0);
         static_assert(Nf * Mf == Ns * Ms * 4);
 
+        // static_assert(Nf != Nf);
+
         auto& frag_k = reinterpret_cast<Array<F, Nd>(&)[Md]>(frag[k]);
         auto& stat_k = reinterpret_cast<Array<S, 1>(&)[Ns * Ms]>(stat[k]);
         auto& data_k = data[k];
 
         PRAGMA_UNROLL
         for (int m = 0; m < Md; ++m) {
+            // if (threadIdx.x == 0) {
+            //     printf("m = %d\n", m);
+            // }
             auto tmp = ConvertKvCache<D, F>::convert(data_k[m]);
             PRAGMA_UNROLL
             for (int i = 0; i < Nd; i += 8) {
@@ -53,7 +58,10 @@ struct Transform_HMMA_16816 {
                 for (int s = 0; s < 2; ++s) {
                     PRAGMA_UNROLL
                     for (int c = 0; c < 2; ++c) {
-                        const int idx = (m * Nd + i) / 8 + s * StatStepS + c * StatStepC;
+                        const int idx = (m * Nd + i) / 8 * 2 + s * StatStepS + c * StatStepC;
+                        // if (threadIdx.x == 0) {
+                        //     printf("idx=%d\n", idx);
+                        // }
                         dequant((Array<F, 2>&)tmp[s * 4 + c * 2], stat_k[idx]);
                     }
                 }
@@ -67,7 +75,9 @@ struct Transform_HMMA_16816 {
     __device__ static void dequant(Array<F, 2>& x, Array<uint32_t, 1> s)
     {
         Array<F, 2>& _s = (Array<F, 2>&)s;
-
+        // if (threadIdx.x % 4 == 0) {
+        //     printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)_s[0], (float)_s[1]);
+        // }
         x[0] = __hfma(x[0], _s[0], _s[1]);
         x[1] = __hfma(x[1], _s[0], _s[1]);
     }

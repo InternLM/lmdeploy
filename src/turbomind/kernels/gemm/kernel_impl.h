@@ -127,11 +127,16 @@ public:
             [[maybe_unused]] static const int _ = [] {
                 std::cout << "A:\n";
                 Print(typename Gemm::OperandA::GmemIter::ThreadMap{});
-                std::cout << Gemm::OperandA::SmemLayout::S << " " << Gemm::OperandA::SmemLayout::C << "\n";
                 std::cout << "\nB:\n";
                 Print(typename Gemm::OperandB::GmemIter::ThreadMap{});
-                // std::cout << "\nQ:\n";
-                // Print(typename Impl::ThreadMapQ{});
+                if constexpr (!std::is_same_v<Ta, Tc>) {
+                    std::cout << "\nU:\n";
+                    Print(typename Gemm::OperandU::GmemIter::ThreadMap{});
+                }
+                if constexpr (!std::is_same_v<Tb, Tc>) {
+                    std::cout << "\nV:\n";
+                    Print(typename Gemm::OperandV::GmemIter::ThreadMap{});
+                }
                 printf("warp count: %d\n", Impl::WARPS);
                 return 0;
             }();

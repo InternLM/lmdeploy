@@ -10,6 +10,14 @@
 #include "src/turbomind/kernels/gemm/utils.h"
 #include <cuda_pipeline_primitives.h>
 
+template<class T>
+__device__ void print_type(T)
+{
+    if (threadIdx.x == 0) {
+        printf("%s\n", __PRETTY_FUNCTION__);
+    }
+}
+
 namespace turbomind::gemm {
 
 template<int M_, int K_, int Pack_M, class Operand_, class Td, class Converter>
@@ -30,7 +38,7 @@ struct ConvertOperand {
 
     using SmemCopy = std::conditional_t<!is_UV,
                                         SmemCopy<Operand, M_, 16, 16, 16>,  // AB
-                                        SmemCopy<Operand, M_, K_, 16, 1>>;  // UV
+                                        SmemCopy<Operand, M_, 1, 16, 1>>;   // UV
 
     static constexpr int kRepeatC = !is_UV ? 1 : 4;
 
@@ -91,7 +99,10 @@ struct ConvertOperand {
 
         const int warp_offset_m = 0;
 
-        GmemIter gmem{(Ts*)param.src, param.lds, {cta_offset_m, 0}, {0, K}, {M, K}};
+        const int extent_m = min(M, param.m);
+        const int extent_k = min(K, param.k);
+
+        GmemIter gmem{(Ts*)param.src, param.lds, {cta_offset_m, 0}, {0, K}, {extent_m, extent_k}};
 
         gmem.smem_data_ = smem;
 
@@ -110,14 +121,22 @@ struct ConvertOperand {
         const int pack_cnt_m = ceil_div(param.m, CopyAtom_MK.x * Pack_M);
 
         if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
-            printf("m=%d, k=%d, CTA_M=%d, CTA_K=%d, pack_cnt_m=%d, pack_cnt_k=%d\n",
-                   param.m,
-                   param.k,
-                   M_,
-                   K_,
-                   pack_cnt_m,
-                   pack_cnt_k);
+            printf("m=%d, k=%d, lds = %d\n", param.m, param.k, param.lds);
+            printf(
+                "CTA_M=%d, CTA_K=%d, cta_cnt_m=%d, cta_cnt_k=%d, cta_idx_m=%d, ITER_K=%d, pack_cnt_m=%d, pack_cnt_k=%d\n",
+                M_,
+                K_,
+                cta_cnt_m,
+                cta_cnt_k,
+                cta_idx_m,
+                ITER_K,
+                pack_cnt_m,
+                pack_cnt_k);
         }
+
+        // if (is_UV) {
+        //     print_type(Array<Td, kPackSize>{});
+        // }
 
         for (int cta_idx_k = 0; cta_idx_k < cta_cnt_k; ++cta_idx_k) {
 
@@ -130,6 +149,10 @@ struct ConvertOperand {
 
             PRAGMA_UNROLL
             for (int k = 0; k < ITER_K; ++k) {
+
+                // if (is_UV && threadIdx.x == 0) {
+                //     printf("k = %d\n", k);
+                // }
 
                 // Load from smem as we are doing GEMMs
                 SmemCopy::copy(smem, data, int2{warp_offset_m, k * CopyAtom_MK.y});
@@ -158,6 +181,7 @@ struct ConvertOperand {
                     }();
 
                     if (pack_idx_m < pack_cnt_m && pack_idx_k < pack_cnt_k && lane_id % kRepeatC == 0) {
+                        // print(data[m]);
                         Store(dst_ptr, packed);
                     }
                 }
@@ -165,6 +189,14 @@ struct ConvertOperand {
 
             __syncthreads();
         }
+    }
+
+    __device__ void print(...) {}
+
+    __device__ void print(Array<uint32_t, 2> _x)
+    {
+        auto& x = (const Array<half, 4>&)_x;
+        printf("tidx=%d, %f %f %f %f\n", (int)threadIdx.x, (float)x[0], (float)x[1], (float)x[2], (float)x[3]);
     }
 };
 

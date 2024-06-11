@@ -19,6 +19,7 @@ struct VoidGmemIter {
     __device__ void Prefetch(bool) {}
     __device__ void Advance() {}
     int*            smem_data_;
+    bool            g_mask{false};
 };
 
 struct GetGmemIter {

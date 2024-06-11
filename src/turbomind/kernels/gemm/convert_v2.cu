@@ -84,6 +84,9 @@ void Convert_v2_Impl(const void* S, const MatrixLayout& Sdesc, void* D, const Ma
     constexpr int threads = Config::BLOCK_SIZE;
     const int     blocks  = ceil_div(Sdesc.rows, CTA_M);
 
+    std::cout << "ThreadMap:\n";
+    Print(typename Kernel::GmemIter::ThreadMap{});
+
     convert_kernel<Kernel><<<blocks, threads, kSmemSize, stream>>>(param);
 }
 

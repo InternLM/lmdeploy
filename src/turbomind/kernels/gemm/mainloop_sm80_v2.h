@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include "src/turbomind/kernels/gemm/operand.h"
@@ -14,6 +15,33 @@
 #include <cuda_pipeline_primitives.h>
 
 namespace turbomind::gemm {
+
+template<int Stages>
+struct GroupIter {
+    int iter_ = 0;
+
+    __device__ void Advance()
+    {
+        iter_ += 1;
+        if (iter_ == Stages) {
+            iter_ = 0;
+        }
+    }
+
+    __device__ constexpr explicit operator bool()
+    {
+        return iter_ == 0;
+    }
+};
+
+template<>
+struct GroupIter<1> {
+    __device__ void               Advance() {}
+    __device__ constexpr explicit operator bool()
+    {
+        return true;
+    }
+};
 
 template<class Pointer, int Step, int Stages>
 struct SmemIter {
@@ -215,6 +243,12 @@ struct MainloopSm80_v2 {
         SmemIter<get_pointer_type<Tu>, SmemLayoutU::kSize, Stages> smem_U{storage.U.data()};
         SmemIter<get_pointer_type<Tv>, SmemLayoutV::kSize, Stages> smem_V{storage.V.data()};
 
+        GroupIter<ceil_div(GroupSizeU_, CTA_K)> gmem_group_iter_U{};
+        GroupIter<ceil_div(GroupSizeV_, CTA_K)> gmem_group_iter_V{};
+
+        auto smem_group_iter_U = gmem_group_iter_U;
+        auto smem_group_iter_V = gmem_group_iter_V;
+
         // a separate counter tends to generate better code
         int gmem_iter = tile_iter;
         int gmem_mask = true;
@@ -238,6 +272,10 @@ struct MainloopSm80_v2 {
             Prefetch(gmem_iters, gmem_mask);
             __pipeline_commit();
             AdvanceGmemStage(gmem_iters);
+            gmem_group_iter_U.Advance();
+            gmem_group_iter_V.Advance();
+            gmem_U.g_mask = (bool)gmem_group_iter_U;
+            gmem_V.g_mask = (bool)gmem_group_iter_V;
             if (--gmem_iter == 0) {
                 gmem_mask = false;
             }
@@ -248,6 +286,10 @@ struct MainloopSm80_v2 {
             if (k == MMA::kTileIterK - 1) {
                 __pipeline_commit();
                 AdvanceGmemStage(gmem_iters);
+                gmem_group_iter_U.Advance();
+                gmem_group_iter_V.Advance();
+                gmem_U.g_mask = (bool)gmem_group_iter_U;
+                gmem_V.g_mask = (bool)gmem_group_iter_V;
                 if (--gmem_iter == 0) {
                     gmem_mask = false;
                 }
@@ -265,11 +307,15 @@ struct MainloopSm80_v2 {
         const int  offset_k   = offset_mnk.z;
 
         auto preload = [&](int k) {
+            // if (threadIdx.x == 0) {
+            //     printf("k = %d\n", k);
+            // }
+            // __syncthreads();
             const int current_k = offset_k + k * MMA_Atom::K;
             SmemCopyA::copy(smem_A.pointer, data_A[k], {offset_m, current_k});
-            SmemCopyU::copy(smem_U.pointer, data_U[k], {offset_m, current_k});
+            SmemCopyU::copy(smem_U.pointer, data_U[k], {offset_m, current_k / GroupSizeU_}, (bool)smem_group_iter_U);
             SmemCopyB::copy(smem_B.pointer, data_B[k], {offset_n, current_k});
-            SmemCopyV::copy(smem_V.pointer, data_V[k], {offset_n, current_k});
+            SmemCopyV::copy(smem_V.pointer, data_V[k], {offset_n, current_k / GroupSizeV_}, (bool)smem_group_iter_V);
         };
 
         PRAGMA_UNROLL
@@ -315,6 +361,8 @@ struct MainloopSm80_v2 {
                 }
                 if (k + 1 == ITER_K - 1) {
                     advance_and_wait_smem_stage();
+                    smem_group_iter_U.Advance();
+                    smem_group_iter_V.Advance();
                 }
                 TransformA::apply(frag_A, (k + 1) % ITER_K, data_A, data_U);
                 TransformB::apply(frag_B, (k + 1) % ITER_K, data_B, data_V);

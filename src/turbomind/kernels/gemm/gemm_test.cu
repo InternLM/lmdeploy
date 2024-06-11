@@ -50,10 +50,10 @@ void Run(int m, int n, int k, int g = 128)
     constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
     constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
     constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
-    auto& test = gTestbed<gemm::Testbed<uint8_t, uint8_t, half, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
+    auto& test = gTestbed<gemm::Testbed<uint8_t, half, half, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
 
     test.Initialize(m, n, k, g, 0);
-    for (int i = 0; i < 1; ++i) {
+    for (int i = 0; i < 10; ++i) {
         test.Run();
     }
 
@@ -87,11 +87,11 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(16, 16, 64);
 
-    // Run<T, Tb>(16384, 16384, 16384);
+    Run<T, Tb>(16384, 16384, 16384);
 
     // Run<T, Tb>(1024, 1024, 1024);
 
-    Run<T, Tb>(16, 16, 128);
+    // Run<T, Tb>(256, 16, 128);
 }
 
 namespace turbomind::gemm {

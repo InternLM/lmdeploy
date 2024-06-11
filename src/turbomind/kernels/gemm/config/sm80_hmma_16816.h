@@ -69,8 +69,14 @@ struct Operand_U {
 
     using SmemCopyAtom = SmemCopy_MMA_16816_U<T>;
 
-    using GetSmemLayout = GetSmemLayout;
-    using GetGmemIter   = GetGmemIter;
+    struct GetSmemLayout {
+        template<int C, int S>
+        static constexpr auto apply(pair<C, S>)
+        {
+            return SmemLayoutV2<S, C>{};
+        }
+    };
+    using GetGmemIter = GetGmemIter;
 };
 
 template<class A, class TransformA, class U, class B, class TransformB, class V, class Tc>

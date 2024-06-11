@@ -140,7 +140,7 @@ void Quantize(const thrust::universal_vector<S>&  x,
     x_p.resize(x.size());
     x_q.resize(x.size());
     /// FIXME: correct the size
-    x_u.resize(stats.size() * 32);
+    x_u.resize(stats.size() * 2);
 
     if (order == Order::kRowMajor) {
         thrust::copy(policy, x.begin(), x.end(), _x.begin());
@@ -183,6 +183,18 @@ void Quantize(const thrust::universal_vector<S>&  x,
     cudaStreamSynchronize(stream);
 
     Compare(_x_p.data().get(), _x.data().get(), k, k, m);
+
+    const int kg = ceil_div(k, group_size);
+    for (int i = 0; i < m * kg; ++i) {
+        // int mi = i % m;
+        // int ki = i / m;
+
+        // x_u[i * 2]     = i;
+        // x_u[i * 2 + 1] = i;
+
+        // x_u[i * 2]     = i * 2;
+        // x_u[i * 2 + 1] = i * 2 + 1;
+    }
 }
 
 }  // namespace turbomind::gemm

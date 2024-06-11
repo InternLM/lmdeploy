@@ -103,13 +103,14 @@ public:
         a_pack_.resize(a_.size() / kVecSize);
         b_pack_.resize(b_.size() / kVecSize);
 
-        
-
         barriers_.resize(m_ * n_);
         partials_.resize(kMaxSplits * m_ * n_);
 
         rng_.GenerateUniform(a_.data().get(), a_.size(), 1, -.5f);
         rng_.GenerateUniform(b_.data().get(), b_.size(), 1, -.5f);
+
+        a_f_ = a_;
+        b_f_ = b_;
 
         a_pack_desc_ = a_desc_;
         b_pack_desc_ = b_desc_;
@@ -126,12 +127,12 @@ public:
             CHECK(!Convert(u_.data().get(), u_desc_, u_pack_.data().get(), u_pack_desc_, stream_));
             quant_a_ = {QuantType::kAsym_FMA, g};
 
-            cudaDeviceSynchronize();
+            // cudaDeviceSynchronize();
 
-            for (int i = 0; i < u_pack_.size(); ++i) {
-                std::cout << (float)u_pack_[i] << " ";
-            }
-            std::cout << "\n";
+            // for (int i = 0; i < u_pack_.size(); ++i) {
+            //     std::cout << (float)u_pack_[i] << " ";
+            // }
+            // std::cout << "\n";
         }
 
         if constexpr (is_quant_b) {
@@ -144,12 +145,12 @@ public:
             CHECK(!Convert(v_.data().get(), v_desc_, v_pack_.data().get(), v_pack_desc_, stream_));
             quant_b_ = {QuantType::kAsym_FMA, g};
 
-            cudaDeviceSynchronize();
+            // cudaDeviceSynchronize();
 
-            for (int i = 0; i < v_pack_.size(); ++i) {
-                std::cout << (float)v_pack_[i] << " ";
-            }
-            std::cout << "\n";
+            // for (int i = 0; i < v_pack_.size(); ++i) {
+            //     std::cout << (float)v_pack_[i] << " ";
+            // }
+            // std::cout << "\n";
         }
 
         if constexpr (pack_a) {
@@ -193,11 +194,11 @@ public:
                                 nullptr,
                                 a_pack_.data().get(),
                                 a_pack_desc_,
-                                u_.data().get(),
+                                u_pack_.data().get(),
                                 u_pack_desc_,
                                 b_pack_.data().get(),
                                 b_pack_desc_,
-                                v_.data().get(),
+                                v_pack_.data().get(),
                                 v_pack_desc_,
                                 nullptr,
                                 c_.data().get(),
@@ -231,9 +232,9 @@ public:
     void CompareC()
     {
         for (int i = 0; i < 10; ++i) {
-            reference_.gemm(a_.data().get(),  //
+            reference_.gemm(a_f_.data().get(),  //
                             a_desc_,
-                            b_.data().get(),
+                            b_f_.data().get(),
                             b_desc_,
                             c_ref_.data().get(),
                             c_desc_);
@@ -249,7 +250,7 @@ public:
 
         // Compare(c_.data().get(), c_f_.data().get(), n_, n_, m_, 0);
 
-        Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 1);
+        Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
     }
 
 private:

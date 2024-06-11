@@ -30,10 +30,10 @@ struct VoidSmemCopyAtom {
     }
 };
 
-template<class T, int FragSize, int FragNum, int RepeatC = 1>
+template<class T, int S_, int C_, int FragSize, int FragNum, int RepeatC = 1>
 struct SmemCopyAtom_Pack_v2 {
-    static constexpr int C = 16;
-    static constexpr int S = 16;
+    static constexpr int S = S_;
+    static constexpr int C = C_;
 
     using Frag = Array<T, FragSize * FragNum>;
 
@@ -56,9 +56,9 @@ template<class Operand, int M, int K, int dM, int dK>
 struct SmemCopy {
     using Atom = typename Operand::SmemCopyAtom;
 
-    static constexpr int2 kShape = mk2cs<Operand::kOrder>(M, K);
-    static constexpr int2 kDelta = mk2cs<Operand::kOrder>(dM, dK);
-    // static constexpr int2 kRepeat = mk2cs<Operand::kOrder>(1, Operand::kGroupSize);
+    static constexpr int2 kShape  = mk2cs<Operand::kOrder>(M, K);
+    static constexpr int2 kDelta  = mk2cs<Operand::kOrder>(dM, dK);
+    static constexpr int2 kRepeat = mk2cs<Operand::kOrder>(1, Operand::kGroupSize);
 
     static constexpr int ITER_C = kShape.x / Atom::C;
     static constexpr int ITER_S = kShape.y / Atom::S;
@@ -79,8 +79,8 @@ struct SmemCopy {
         for (int s = 0; s < ITER_S; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
-                const int  cc = (offset.x + c * kDelta.x) / 1;  // kRepeat.x;
-                const int  ss = (offset.y + s * kDelta.y) / 1;  // kRepeat.y;
+                const int  cc = (offset.x + c * kDelta.x) / kRepeat.x;
+                const int  ss = (offset.y + s * kDelta.y) / kRepeat.y;
                 const int2 cs = Pack::apply(int2{cc, ss});
                 Atom::copy(&smem(cs.y + thr.y, cs.x + thr.x), dst[s * ITER_C + c].data(), mask);
             }

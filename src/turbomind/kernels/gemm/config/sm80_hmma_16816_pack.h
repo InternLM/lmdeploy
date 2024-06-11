@@ -25,7 +25,7 @@ struct Operand_A_N {
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | 1;
     static constexpr Order kOrder = Order::kColMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, 8, 1>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, 16, 16, 8, 1>;
 
     using GetSmemLayout = GetSmemLayout;
     using GetGmemIter   = GetGmemIter;
@@ -38,7 +38,7 @@ struct Operand_B_T {
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | 1;
     static constexpr Order kOrder = Order::kRowMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, 8, 1>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, 16, 16, 8, 1>;
 
     using GetSmemLayout = GetSmemLayout;
     using GetGmemIter   = GetGmemIter;
@@ -51,7 +51,7 @@ struct Operand_U {
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_U | 1;
     static constexpr Order kOrder = Order::kColMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, 2, 1, 4>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, 16, 16, 2, 1, 4>;
 
     using GetSmemLayout = GetSmemLayout;
     using GetGmemIter   = GetGmemIter;

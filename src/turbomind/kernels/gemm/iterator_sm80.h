@@ -105,8 +105,7 @@ struct GmemIteratorSm80 {
 
     Predicate<Map::kIterS, Map::kIterC, (AlignedC && Map::kAlignedC), (AlignedS && Map::kAlignedS)> pred_;
 
-    int  g_counter_{};
-    bool g_mask_{true};
+    bool g_mask{true};
 
     SmemAccessor<T, SmemLayout> smem_data_;
 
@@ -220,7 +219,7 @@ struct GmemIteratorSm80 {
 
                 // CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, g_mask_ && tile_mask && pred_(s, c));
 
-                bool mask = tile_mask && pred_(s, c);
+                bool mask = tile_mask && pred_(s, c) && g_mask;
                 // if constexpr (G_CTA > 1) {
                 //     mask = mask & g_mask_;
                 // }
@@ -239,7 +238,7 @@ struct GmemIteratorSm80 {
             // if constexpr (SmemLayout::kIsTrivial) {
             //     smem_data_.ptr_ += Map::kDeltaS * SmemLayout::C - Map::kIterC * Map::kDeltaC;
             // }
-            if (g_mask_) {
+            if (g_mask) {
                 src_data_ += src_step_s_;
             }
         }
@@ -273,7 +272,7 @@ struct GmemIteratorSm80 {
         //     printf("[advance]  counter=%d, g_mask=%d\n", g_counter_, (int)g_mask_);
         // }
 
-        if (g_mask_) {
+        if (g_mask) {
             src_data_ = src_ptr_ + src_offset_;
             src_ptr_ += stride_k_;
         }

@@ -56,6 +56,9 @@ struct GemmUniversal {
     using OperandU = typename Mainloop::OperandU;
     using OperandV = typename Mainloop::OperandV;
 
+    static constexpr int kGroupSizeU = OperandU::kGroupSize;
+    static constexpr int kGroupSizeV = OperandV::kGroupSize;
+
     using SharedStorage = typename Mainloop::SharedStorage;
 
     static constexpr Order kOrderA = OperandA::kOrder;
@@ -124,8 +127,16 @@ struct GemmUniversal {
         typename OperandA::GmemIter gmem_A{param.A, param.lda, {offset_m, offset_k}, {0, CTA_K}, {end_m, CTA_K}};
         typename OperandB::GmemIter gmem_B{param.B, param.ldb, {offset_n, offset_k}, {0, CTA_K}, {end_n, CTA_K}};
 
-        typename OperandU::GmemIter gmem_U{param.U, param.ldu, {offset_m, offset_k}, {0, CTA_K}, {end_m, CTA_K}};
-        typename OperandV::GmemIter gmem_V{param.V, param.ldv, {offset_n, offset_k}, {0, CTA_K}, {end_n, CTA_K}};
+        typename OperandU::GmemIter gmem_U{param.U,
+                                           param.ldu,
+                                           {offset_m, ceil_div(offset_k, kGroupSizeU)},
+                                           {0, ceil_div(CTA_K, kGroupSizeU)},
+                                           {end_m, ceil_div(CTA_K, kGroupSizeU)}};
+        typename OperandV::GmemIter gmem_V{param.V,
+                                           param.ldv,
+                                           {offset_n, ceil_div(offset_k, kGroupSizeV)},
+                                           {0, ceil_div(CTA_K, kGroupSizeV)},
+                                           {end_n, ceil_div(CTA_K, kGroupSizeV)}};
 
         Mainloop mainloop{};
 
