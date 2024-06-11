@@ -9,6 +9,7 @@ from .internvl import InternVLVisionModel
 from .internvl_llava import InternVLLlavaVisionModel
 from .llava import LlavaVisionModel
 from .mini_gemeni import MiniGeminiVisionModel
+from .minicpmv import MiniCPMVModel
 from .qwen import QwenVisionModel
 from .xcomposer2 import Xcomposer2VisionModel
 from .yi import YiVisionModel
@@ -45,6 +46,8 @@ def load_vl_model(model_path: str, with_llm: bool = False):
         return InternVLVisionModel(model_path, with_llm)
     if arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiVisionModel(model_path, with_llm)
+    if arch == 'MiniCPMV':
+        return MiniCPMVModel(model_path, with_llm)
     raise ValueError(f'unsupported vl model with arch {arch}')
 
 
@@ -54,6 +57,8 @@ def vl_model_with_tokenizer(model_path: str, with_llm: bool = True):
     llm = vl_model
     if hasattr(vl_model, 'language_model'):  # deepseek vl
         llm = vl_model.language_model
+    if hasattr(vl_model, 'llm'):  # MiniCPMV
+        llm = vl_model.llm
     llm.config.use_cache = False
     llm.half().eval()
     from transformers import AutoTokenizer
