@@ -8,21 +8,25 @@ CogVLM is a powerful open-source visual language model (VLM). LMDeploy supports 
 
 ### Install
 
+Install torch, torchvision and xformers for CogVLM by referring to [Pytorch](https://pytorch.org/get-started) and [installing-xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers)
+
+```shell
+# cuda 11.8
+pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu118
+# cuda 12.1
+pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu121
+```
+
 Install LMDeploy with pip (Python 3.8+). Refer to [Installation](https://lmdeploy.readthedocs.io/en/latest/get_started.html#installation) for more.
 
 ```shell
+# cuda 11.8
+# to get the latest version, run: pip index versions lmdeploy
+export LMDEPLOY_VERSION=0.4.2
+export PYTHON_VERSION=38
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
+# cuda 12.1
 pip install lmdeploy
-```
-
-Install xformers for cogvlm with pip. Refer to [installing-xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers) for more.
-Note xformers depends on torch and you should select a version that won't reinstall torch. The following works for `torch==2.2.2`.
-
-```shell
-# for torch==2.2.2
-# cuda 11.8 version
-pip3 install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
-# cuda 12.1 version
-pip3 install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ### Prepare

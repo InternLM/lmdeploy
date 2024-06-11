@@ -206,6 +206,7 @@ print(response)
 # 社区项目
 
 - 使用LMDeploy在英伟达Jetson系列板卡部署大模型：[LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
+- 使用 LMDeploy 和 BentoML 部署大模型的示例项目：[BentoLMDeploy](https://github.com/bentoml/BentoLMDeploy)
 
 # 贡献指南
 
