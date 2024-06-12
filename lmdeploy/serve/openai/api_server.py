@@ -533,7 +533,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         # TODO may move to generate function
         text, action = text.split('<|action_start|><|plugin|>\n')
         action = action.split('<|action_end|>'.strip())[0]
-        try:
+        try:  # TODO add json_schema guidance to turbomind
             action = json.loads(action)
             tool_calls = [
                 ToolCall(id=request_id,

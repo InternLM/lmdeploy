@@ -191,6 +191,47 @@ for message in messages:
         print(item)
 ```
 
+### 工具调用
+
+目前的 LMDeploy 只支持 InternLM2 模型的工具调用。启动好 InternLM2 模型的服务后，运行下面 demo 即可。
+
+```python
+from openai import OpenAI
+
+tools = [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_current_weather",
+      "description": "Get the current weather in a given location",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA",
+          },
+          "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+        },
+        "required": ["location"],
+      },
+    }
+  }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+client = OpenAI(api_key='YOUR_API_KEY',base_url='http://0.0.0.0:23333/v1')
+response = client.chat.completions.create(
+    model='internlm2',
+    messages=messages,
+    temperature=0.8,
+    top_p=0.8,
+    stream=False,
+    tools=tools,
+    tool_choice={"type": "function", "function": {"name": "get_current_weather"}})
+print(response)
+```
+
 ### 使用 Java/Golang/Rust
 
 可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。
