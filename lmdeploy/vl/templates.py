@@ -5,9 +5,11 @@ from typing import Dict, List, Tuple, Union
 import PIL
 
 from lmdeploy.model import BaseModel
-from lmdeploy.utils import get_hf_config_content
+from lmdeploy.utils import get_hf_config_content, get_logger
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64, load_image
+
+logger = get_logger('lmdeploy')
 
 VLPromptType = Union[str, Tuple[str, PIL.Image.Image],
                      Tuple[str, List[PIL.Image.Image]]]
@@ -97,10 +99,11 @@ class VLChatTemplateWrapper:
                     num_images += 1
                 elif item['type'] == 'text':
                     prompt = item['text']
-            new_item = {
-                'role': 'user',
-                'content': self.append_image_token(prompt, num_images)
-            }
+            # if IMAGE_TOKEN in user prompt, use user custom prompt instead
+            # of adding IMAGE_TOKEN to user prompt
+            if IMAGE_TOKEN not in prompt and num_images > 0:
+                prompt = self.append_image_token(prompt, num_images)
+            new_item = {'role': 'user', 'content': prompt}
             new_messages.append(new_item)
         return new_messages
 
@@ -136,6 +139,10 @@ class DeepSeekVLChatTemplateWrapper(VLChatTemplateWrapper):
 
     def append_image_token(self, prompt, num_images: int):
         """append image tokens to user prompt."""
+        logger.error(
+            f'for deepseek-vl model, the user should insert the {IMAGE_TOKEN} '
+            'to user prompt manually, please read https://lmdeploy.readthedocs'
+            '.io/en/latest/inference/vl_pipeline.html for more details.')
         if num_images == 1:
             return f'{IMAGE_TOKEN}{prompt}'
         res = ''
@@ -155,6 +162,61 @@ class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
             res += f'Picture {str(i)}:{IMAGE_TOKEN}\n'
         res = res + prompt
         return res
+
+
+class CogVLMChatTemplateWrapper(VLChatTemplateWrapper):
+    """cogvlm chat template wrapper."""
+
+    def __init__(self, chat_template: BaseModel):
+        from lmdeploy.model import Vicuna
+        self.chat_template = chat_template
+        self.llm_chat_template = Vicuna(eoa=chat_template.eoa,
+                                        stop_words=chat_template.stop_words)
+
+    def convert_messages(self, messages, sequence_start=True):
+        """convert GPT4V message format to GPT4 text format."""
+        new_messages = []
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            if role != 'user' or isinstance(content, str):
+                new_messages.append(message)
+                continue
+            num_images = 0
+            for item in content:
+                if item['type'] == 'image_url':
+                    num_images += 1
+                elif item['type'] == 'text':
+                    prompt = item['text']
+
+            new_item = {
+                'role': 'user',
+                'content': prompt,
+                'num_images': num_images
+            }
+            new_messages.append(new_item)
+        return new_messages
+
+    def messages2prompt(self, messages, sequence_start=True) -> str:
+        """convert messages to decorated prompt."""
+        if isinstance(messages, str):
+            return self.chat_template.messages2prompt(messages, sequence_start)
+        new_messages = self.convert_messages(messages, sequence_start)
+        prompt = ''
+        for i, msg in enumerate(new_messages):
+            num_images = msg.pop('num_images', 0)
+            if num_images == 0:
+                role = msg['role']
+                msg = self.llm_chat_template.messages2prompt([msg],
+                                                             sequence_start
+                                                             and i == 0)
+                msg = dict(role=role, content=msg)
+            prompt_i = self.chat_template.messages2prompt([msg], sequence_start
+                                                          and i == 0)
+            if num_images > 0:
+                prompt_i = (IMAGE_TOKEN * num_images) + prompt_i
+            prompt += prompt_i
+        return prompt
 
 
 class InternLMXComposer2TemplateWrapper(VLChatTemplateWrapper):
@@ -177,6 +239,35 @@ class MiniGeminiLlamaTempateWrapper(VLChatTemplateWrapper):
         return res
 
 
+class MiniCPMVTempateWrapper(VLChatTemplateWrapper):
+    """MiniCPMV chat template."""
+
+    def append_image_token(self, prompt, num_images: int):
+        return f'<image>{IMAGE_TOKEN}</image>\n' * num_images + prompt
+
+    def update_image_token(self, prompt, features):
+        _features = []
+        _prompt = []
+        segs = prompt.split(f'<image>{IMAGE_TOKEN}</image>\n')
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(features):
+                _feat = features[i - 1]['embeddings'].split(1)
+                _feat = [x.squeeze() for x in _feat]
+                _features.extend(_feat)
+                _seg = f'<image>{IMAGE_TOKEN}</image>'
+                if len(_feat) > 1:
+                    grid = features[i - 1]['grid']
+                    if grid is not None:
+                        _slice = '\n'.join(
+                            [f'<image>{IMAGE_TOKEN}</image>' * grid[0]] *
+                            grid[1])
+                        _seg = f'{_seg}<slice>{_slice}</slice>\n'
+                _prompt.append(_seg)
+            _prompt.append(seg)
+        _prompt = ''.join(_prompt)
+        return _prompt, _features
+
+
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
@@ -187,14 +278,18 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
     arch = config['architectures'][0]
     if arch == 'QWenLMHeadModel':
         return QwenVLChatTemplateWrapper(chat_template)
-    elif arch == 'LlavaLlamaForCausalLM':
+    elif arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
         return LlavaVLChatTemplateWrapper(chat_template)
     elif arch == 'MultiModalityCausalLM':  # deepseek-vl
         return DeepSeekVLChatTemplateWrapper(chat_template)
+    elif arch == 'CogVLMForCausalLM':
+        return CogVLMChatTemplateWrapper(chat_template)
     elif arch in ['InternLMXComposer2ForCausalLM', 'InternLM2ForCausalLM']:
         return InternLMXComposer2TemplateWrapper(chat_template)
     elif arch == 'InternVLChatModel':
         return InternVLChatTemplateWrapper(chat_template)
     elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiLlamaTempateWrapper(chat_template)
+    elif arch == 'MiniCPMV':
+        return MiniCPMVTempateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')

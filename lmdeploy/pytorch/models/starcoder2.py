@@ -4,30 +4,32 @@ from typing import Optional, Tuple
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
 
-from ..dist_utils import (colwise_parallelize_linear_fn,
-                          rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
+from ..weight_loader.dist_utils import (colwise_parallelize_linear,
+                                        rowwise_parallelize_linear)
 
 
 class PatchedStarcoder2MLP(nn.Module):
 
-    @classmethod
-    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['c_fc']:
-            colwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
-        elif mod_name in ['c_proj']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        for mod_name in ['c_fc']:
+            colwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
+        for mod_name in ['c_proj']:
+            rowwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs
@@ -42,21 +44,24 @@ class PatchedStarcoder2MLP(nn.Module):
 
 class PatchedStarcoder2Attention(nn.Module):
 
-    @classmethod
-    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['q_proj', 'k_proj', 'v_proj']:
-            colwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
-        elif mod_name in ['o_proj']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        for mod_name in ['q_proj', 'k_proj', 'v_proj']:
+            colwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
+        for mod_name in ['o_proj']:
+            rowwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs

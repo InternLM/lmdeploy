@@ -74,16 +74,17 @@ def smooth_quant(model: str,
                  w_bits: int = 8,
                  device: str = 'cuda'):
 
-    model, tokenizer, work_dir = calibrate(model,
-                                           calib_dataset,
-                                           calib_samples,
-                                           calib_seqlen,
-                                           work_dir,
-                                           device,
-                                           w_bits=w_bits,
-                                           w_group_size=-1,
-                                           search_scale=search_scale,
-                                           batch_size=batch_size)
+    model_path = model
+    vl_model, model, tokenizer, work_dir = calibrate(model,
+                                                     calib_dataset,
+                                                     calib_samples,
+                                                     calib_seqlen,
+                                                     work_dir,
+                                                     device,
+                                                     w_bits=w_bits,
+                                                     w_group_size=-1,
+                                                     search_scale=search_scale,
+                                                     batch_size=batch_size)
 
     # calibrate function exports the calibration statistics
     # (inputs, outputs, keys and values) to `work_dir`.
@@ -119,12 +120,11 @@ def smooth_quant(model: str,
 
     if search_scale:
         awq_ratios = inp_stats['ratios']
+        act_scales = inp_stats['absmean']
         awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios, -1,
                    device)
     else:
         smooth_layers(layers, fc2fcs, norm2fcs, act_scales, -1, device)
-
-    # smooth_layers(layers, fc2fcs, norm2fcs, act_scales, -1, device)
 
     rmsnorms = collect_target_modules(model, norm_type)
 
@@ -149,9 +149,13 @@ def smooth_quant(model: str,
     else:
         model.config.auto_map = AUTO_MAP[type(model).__name__]
 
-    model.save_pretrained(work_dir,
-                          max_shard_size='2GB',
-                          safe_serialization=False)
+    if vl_model:
+        from .auto_awq import save_vl_model
+        save_vl_model(vl_model, model_path, work_dir)
+    else:
+        model.save_pretrained(work_dir,
+                              max_shard_size='2GB',
+                              safe_serialization=False)
     tokenizer.save_pretrained(work_dir)
 
     shutil.copy(MODEL_PATH_MAP[type(model).__name__], work_dir)

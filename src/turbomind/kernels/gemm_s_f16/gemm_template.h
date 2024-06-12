@@ -364,6 +364,9 @@ struct Gemm {
             case 1:
                 store_accum<1>(tb_frag_C, tb_smem_C, C, M, N, cta_m, cta_n, warp_id_m, warp_id_n, lane_id, slice_id);
                 break;
+            case 2:
+                store_accum<2>(tb_frag_C, tb_smem_C, C, M, N, cta_m, cta_n, warp_id_m, warp_id_n, lane_id, slice_id);
+                break;
             default:
                 return;
         }

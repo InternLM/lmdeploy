@@ -58,6 +58,7 @@ jobs:
           python3 -m pip install -r requirements/build.txt
           mkdir build
           cd build
+          cp -r /nvme/qa_test_models/offline_pkg/_deps .
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
               -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \

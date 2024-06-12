@@ -25,12 +25,13 @@ def test_pipeline_chat_pytorch_tp1(config, common_case_config, model,
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'pytorch'))
+                args=(config, common_case_config, model, 'pytorch', worker_id))
     p.start()
     p.join()
 
     # assert script
-    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch')
+    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch',
+                             worker_id)
 
 
 @pytest.mark.order(6)
@@ -45,12 +46,13 @@ def test_pipeline_chat_pytorch_tp2(config, common_case_config, model,
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
     p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'pytorch'))
+                args=(config, common_case_config, model, 'pytorch', worker_id))
     p.start()
     p.join()
 
     # assert script
-    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch')
+    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch',
+                             worker_id)
 
 
 @pytest.mark.order(6)
@@ -81,14 +83,15 @@ def test_modelscope_pipeline_chat_pytorch_tp1(config, common_case_config,
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
     p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'pytorch', None,
-                      False))
+                args=(config, common_case_config, model, 'pytorch', worker_id,
+                      None, False))
     p.start()
     p.join()
     del os.environ['LMDEPLOY_USE_MODELSCOPE']
 
     # assert script
-    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch')
+    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch',
+                             worker_id)
 
 
 @pytest.mark.order(6)
@@ -102,16 +105,18 @@ def test_pipeline_chat_pytorch_with_lora_tp1(config, common_case_config, model,
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'pytorch_lora', {
-                    'adapters': {
-                        'adapter0': 'lora/Llama2-Chinese-7b-Chat-LoRA'
-                    }
-                }))
+                args=(config, common_case_config, model, 'pytorch_lora',
+                      worker_id, {
+                          'adapters': {
+                              'adapter0': 'lora/Llama2-Chinese-7b-Chat-LoRA'
+                          }
+                      }))
     p.start()
     p.join()
 
     # assert script
-    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch_lora')
+    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch_lora',
+                             worker_id)
 
 
 @pytest.mark.order(6)
@@ -126,14 +131,16 @@ def test_pipeline_chat_pytorch_with_lora_tp2(config, common_case_config, model,
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
     p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'pytorch_lora', {
-                    'adapters': {
-                        'adapter0': 'lora/2024-01-25_self_dup',
-                        'adapter1': 'lora/2024-01-25_self'
-                    }
-                }))
+                args=(config, common_case_config, model, 'pytorch_lora',
+                      worker_id, {
+                          'adapters': {
+                              'adapter0': 'lora/2024-01-25_self_dup',
+                              'adapter1': 'lora/2024-01-25_self'
+                          }
+                      }))
     p.start()
     p.join()
 
     # assert script
-    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch_lora')
+    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch_lora',
+                             worker_id)

@@ -128,6 +128,16 @@ def _openclip_vision_tower_load_model(self):
     self.vision_stages.requires_grad_(False)
 
 
+old_func = torch.nn.Module.load_state_dict
+
+
+def _load_state_dict(self,
+                     state_dict,
+                     strict: bool = True,
+                     assign: bool = False):
+    return old_func(self, state_dict, strict=False, assign=assign)
+
+
 @contextmanager
 def init_mini_gemini_model():
     origin_func_path = [
@@ -136,7 +146,8 @@ def init_mini_gemini_model():
         'mgm.model.multimodal_encoder.clip_encoder.CLIPVisionTower.__init__',  # noqa: E501
         'mgm.model.multimodal_encoder.clip_encoder.CLIPVisionTower.load_model',  # noqa: E501
         'mgm.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.__init__',  # noqa: E501
-        'mgm.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.load_model'  # noqa: E501
+        'mgm.model.multimodal_encoder.openclip_encoder.OpenCLIPVisionTower.load_model',  # noqa: E501
+        'torch.nn.Module.load_state_dict',
     ]
     rewrite_func = [
         _build_vision_tower,
@@ -145,6 +156,7 @@ def init_mini_gemini_model():
         _clip_vision_tower_load_model,
         _openclip_vision_tower__init__,
         _openclip_vision_tower_load_model,
+        _load_state_dict,
     ]
     from lmdeploy.vl.model.utils import rewrite_ctx
     with rewrite_ctx(origin_func_path, rewrite_func):
@@ -154,7 +166,8 @@ def init_mini_gemini_model():
 class MiniGeminiVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path, with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         check_mini_gemini_install()
         self.build_model()
@@ -163,23 +176,32 @@ class MiniGeminiVisionModel(VisonModel):
         # empty init
         from accelerate import init_empty_weights
         from mgm.mm_utils import process_images
-        from mgm.model import MGMLlamaForCausalLM
+        from mgm.model import MGMLlamaForCausalLM  # noqa
+        from mgm.model.language_model.mgm_llama import MGMConfig
+        from transformers import AutoModelForCausalLM
         with init_empty_weights(), disable_transformers_logging(
         ), hack_import_with(['deepspeed']):
             warnings.simplefilter('ignore')
             with init_mini_gemini_model():
-                model = MGMLlamaForCausalLM.from_pretrained(self.model_path)
-                setattr(model.config, 'model_path', self.model_path)
+                config = MGMConfig.from_pretrained(self.model_path,
+                                                   trust_remote_code=True)
+                setattr(config, 'quantization_config', {})
+                setattr(config, 'model_path', self.model_path)
+                model = AutoModelForCausalLM.from_config(
+                    config, trust_remote_code=True)
                 model.get_model().initialize_uni_modules(model.config,
                                                          for_eval=True)
                 vision_tower = model.get_vision_tower()
                 vision_tower.load_model()
                 vision_tower_aux = model.get_vision_tower_aux()
                 vision_tower_aux.load_model()
-                del model.lm_head
-                del model.model.embed_tokens
-                del model.model.layers
-                del model.model.norm
+                if not self.with_llm:
+                    del model.lm_head
+                    del model.model.embed_tokens
+                    del model.model.layers
+                    del model.model.norm
+                else:
+                    self.vl_model = model
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
@@ -204,7 +226,7 @@ class MiniGeminiVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=device_map,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['CLIPEncoderLayer', 'ConvNeXtStage'],
                 dtype=torch.half)
 

@@ -1239,22 +1239,7 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
         ++state_->h_context_length[i];
     }
 
-    {  // set output tokens ids and sequence length
-        int* output_ptr = h_output_ids_;
-        for (int i = 0; i < batch_size - g.partial; ++i) {
-            if (state_->requests[i] && (state_->requests[i]->stream_cb || state_->h_finished[i])) {
-                auto      output_ids = state_->requests[i]->outputs[rank_].getPtr<int>("output_ids");
-                auto      output_len = state_->requests[i]->outputs[rank_].getPtr<int>("sequence_length");
-                const int count      = state_->h_context_length[i];
-                // TODO: sync history output tokens at when receiving the request and copy the last token here
-                std::copy(output_ptr, output_ptr + count, output_ids);
-                *output_len = count;
-            }
-            output_ptr += session_len_;
-        }
-    }
-
-    {  // output logprobs
+    {  // output logprobs, should be set before sequence_length
         float*    sampled_logprobs_ptr = h_sampled_logprobs_;
         uint32_t* sampled_indexes_ptr  = h_sampled_indexes_;
         uint32_t* sampled_nums_ptr     = h_sampled_nums_;
@@ -1276,6 +1261,21 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
             sampled_logprobs_ptr += kMaxLogProb;
             sampled_indexes_ptr += kMaxLogProb;
             sampled_nums_ptr++;
+        }
+    }
+
+    {  // set output tokens ids and sequence length
+        int* output_ptr = h_output_ids_;
+        for (int i = 0; i < batch_size - g.partial; ++i) {
+            if (state_->requests[i] && (state_->requests[i]->stream_cb || state_->h_finished[i])) {
+                auto      output_ids = state_->requests[i]->outputs[rank_].getPtr<int>("output_ids");
+                auto      output_len = state_->requests[i]->outputs[rank_].getPtr<int>("sequence_length");
+                const int count      = state_->h_context_length[i];
+                // TODO: sync history output tokens at when receiving the request and copy the last token here
+                std::copy(output_ptr, output_ptr + count, output_ids);
+                *output_len = count;
+            }
+            output_ptr += session_len_;
         }
     }
 

@@ -13,7 +13,8 @@ from lmdeploy.vl.model.utils import disable_logging
 class QwenVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path, with_llm: bool = False):
+        self.with_llm = with_llm
         self.model_path = model_path
         self.build_model()
 
@@ -22,11 +23,15 @@ class QwenVisionModel(VisonModel):
         with init_empty_weights():
             config = AutoConfig.from_pretrained(self.model_path,
                                                 trust_remote_code=True)
+            config.quantization_config = {}  # disable vision part quantization
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)
-            del model.lm_head
-            for key in ['wte', 'h', 'ln_f']:
-                setattr(model.transformer, key, None)
+            if not self.with_llm:
+                del model.lm_head
+                for key in ['wte', 'h', 'ln_f']:
+                    setattr(model.transformer, key, None)
+            else:
+                self.vl_model = model
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
@@ -51,7 +56,7 @@ class QwenVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=device_map,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['VisualAttentionBlock'],
                 dtype=torch.half)
 

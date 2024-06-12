@@ -4,15 +4,14 @@ from typing import List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.distributed._tensor import DeviceMesh, Shard, distribute_tensor
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from ..dist_utils import (colwise_parallelize_linear_fn,
-                          rowwise_parallelize_linear_fn, try_to_local)
 from ..kernels import apply_rotary_pos_emb
 from ..kernels.alibi_pagedattention import alibi_paged_attention_fwd
 from ..kernels.fill_kv_cache import fill_kv_cache
 from ..kernels.pagedattention import paged_attention_fwd
+from ..weight_loader.dist_utils import (colwise_split_parallelize_linear,
+                                        rowwise_parallelize_linear)
 
 
 class PatchedRMSNorm(nn.Module):
@@ -29,57 +28,33 @@ class PatchedRMSNorm(nn.Module):
         return ret
 
 
-def _attention_partition_fn(mod_name: str, mod: nn.Module,
-                            device_mesh: DeviceMesh):
-    """A function for attention partition."""
-
-    def __w_pack_linear_fn(mod: nn.Module):
-        """fn for w pack linear."""
-        for name, param in mod.named_parameters():
-            param = param.unflatten(0, (3, -1))
-            dist_tensor = distribute_tensor(param, device_mesh, [Shard(1)])
-            dist_tensor = try_to_local(dist_tensor)
-            dist_tensor = dist_tensor.flatten(0, 1)
-            dist_param = torch.nn.Parameter(dist_tensor)
-            mod.register_parameter(name, dist_param)
-
-    def __w_pack_lora_linear_fn(mod: nn.Module):
-        """fn for w pack lora linear."""
-        mod._tp_mode = 'colwise'
-        base_layer = mod.base_layer
-        __w_pack_linear_fn(base_layer)
-
-        for lora_a_mod in mod.lora_A.values():
-            colwise_parallelize_linear_fn(lora_a_mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
-
-        for lora_b_mod in mod.lora_B.values():
-            __w_pack_linear_fn(lora_b_mod)
-
-    if mod_name in ['W_pack']:
-        from peft.tuners.lora import Linear as LoraLinear
-        if isinstance(mod, LoraLinear):
-            __w_pack_lora_linear_fn(mod)
-        else:
-            __w_pack_linear_fn(mod)
-    elif mod_name in ['o_proj']:
-        rowwise_parallelize_linear_fn(mod,
-                                      device_mesh=device_mesh,
-                                      to_local=True)
+def _attention_load_weights(mod, loader, rank: int = 0, world_size: int = 1):
+    """load weights."""
+    w_pack_out = mod.W_pack.out_features
+    sections = [w_pack_out // 3] * 3
+    colwise_split_parallelize_linear(mod.W_pack,
+                                     sections,
+                                     loader,
+                                     rank=rank,
+                                     world_size=world_size,
+                                     prefix='W_pack')
+    rowwise_parallelize_linear(mod.o_proj,
+                               loader,
+                               rank=rank,
+                               world_size=world_size,
+                               prefix='o_proj')
 
 
 class Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper."""
 
-    @classmethod
-    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        return _attention_partition_fn(mod_name, mod, device_mesh)
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        _attention_load_weights(self, loader, rank=rank, world_size=world_size)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs
@@ -193,14 +168,13 @@ class Attention(nn.Module):
 class BaichuanAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper."""
 
-    @classmethod
-    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        return _attention_partition_fn(mod_name, mod, device_mesh)
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        _attention_load_weights(self, loader, rank=rank, world_size=world_size)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs

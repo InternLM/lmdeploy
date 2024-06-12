@@ -11,7 +11,7 @@ from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 
 from lmdeploy.archs import get_task
@@ -131,11 +131,11 @@ async def check_request(request) -> Optional[JSONResponse]:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             f'The top_k `{request.top_k}` cannot be a negative integer.')
-    if hasattr(request, 'temperature') and not (request.temperature <= 1
+    if hasattr(request, 'temperature') and not (request.temperature <= 2
                                                 and request.temperature >= 0):
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
-            f'The temperature `{request.temperature}` must be in [0, 1]')
+            f'The temperature `{request.temperature}` must be in [0, 2]')
     if hasattr(request,
                'tool_choice') and request.tool_choice in ['auto', 'required']:
         return create_error_response(
@@ -237,6 +237,12 @@ def _create_chat_completion_logprobs(tokenizer: Tokenizer,
                     TopLogprob(token=token, bytes=_bytes, logprob=prob))
         content.append(item)
     return ChoiceLogprobs(content=content)
+
+
+@app.get('/health')
+async def health() -> Response:
+    """Health check."""
+    return Response(status_code=200)
 
 
 @app.post('/v1/chat/completions_qos')

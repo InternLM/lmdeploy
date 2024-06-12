@@ -18,10 +18,12 @@ def test_pipeline_chat_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind'))
+                args=(config, common_case_config, model, 'turbomind',
+                      worker_id))
     p.start()
     p.join()
-    assert_pipeline_chat_log(config, common_case_config, model, 'turbomind')
+    assert_pipeline_chat_log(config, common_case_config, model, 'turbomind',
+                             worker_id)
 
 
 @pytest.mark.order(6)
@@ -35,10 +37,12 @@ def test_pipeline_chat_tp2(config, common_case_config, model, worker_id):
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
     p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind'))
+                args=(config, common_case_config, model, 'turbomind',
+                      worker_id))
     p.start()
     p.join()
-    assert_pipeline_chat_log(config, common_case_config, model, 'turbomind')
+    assert_pipeline_chat_log(config, common_case_config, model, 'turbomind',
+                             worker_id)
 
 
 @pytest.mark.order(6)
@@ -53,12 +57,14 @@ def test_pipeline_chat_kvint_tp1(config, common_case_config, model,
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind-kvint', {
-                    'quant_policy': quant_policy
-                }))
+                args=(config, common_case_config, model, 'turbomind-kvint',
+                      worker_id, {
+                          'quant_policy': quant_policy
+                      }))
     p.start()
     p.join()
-    assert_pipeline_chat_log(config, common_case_config, model, 'turbomind')
+    assert_pipeline_chat_log(config, common_case_config, model,
+                             'turbomind-kvint', worker_id)
 
 
 @pytest.mark.order(6)
@@ -74,13 +80,14 @@ def test_pipeline_chat_kvint_tp2(config, common_case_config, model,
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
     p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind-kvint', {
-                    'quant_policy': quant_policy
-                }))
+                args=(config, common_case_config, model, 'turbomind-kvint',
+                      worker_id, {
+                          'quant_policy': quant_policy
+                      }))
     p.start()
     p.join()
     assert_pipeline_chat_log(config, common_case_config, model,
-                             'turbomind-kvint')
+                             'turbomind-kvint', worker_id)
 
 
 @pytest.mark.order(6)
@@ -111,9 +118,10 @@ def test_modelscope_pipeline_chat_tp1(config, common_case_config, model,
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
     p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind', None,
-                      False))
+                args=(config, common_case_config, model, 'turbomind',
+                      worker_id, None, False))
     p.start()
     p.join()
     del os.environ['LMDEPLOY_USE_MODELSCOPE']
-    assert_pipeline_chat_log(config, common_case_config, model, 'turbomind')
+    assert_pipeline_chat_log(config, common_case_config, model, 'turbomind',
+                             worker_id)

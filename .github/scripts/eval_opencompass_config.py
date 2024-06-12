@@ -1,25 +1,72 @@
 from mmengine.config import read_base
-from opencompass.models import (HuggingFaceCausalLM, LmdeployPytorchModel,
-                                TurboMindModel)
+from opencompass.models import LmdeployPytorchModel, TurboMindModel
 
 with read_base():
     # choose a list of datasets
-    from .datasets.ceval.ceval_gen_5f30c7 import \
+    from .datasets.bbh.bbh_gen_5b92b0 import bbh_datasets  # noqa: F401, E501
+    from .datasets.ceval.ceval_gen_2daf24 import \
         ceval_datasets  # noqa: F401, E501
+    from .datasets.cmmlu.cmmlu_gen_c13365 import \
+        cmmlu_datasets  # noqa: F401, E501
     from .datasets.crowspairs.crowspairs_gen_381af0 import \
         crowspairs_datasets  # noqa: F401, E501
+    from .datasets.GaokaoBench.GaokaoBench_no_subjective_gen_4c31db import \
+        GaokaoBench_datasets  # noqa: F401, E501
+    from .datasets.gpqa.gpqa_gen_4baadb import \
+        gpqa_datasets  # noqa: F401, E501
     from .datasets.gsm8k.gsm8k_gen_1d7fe4 import \
         gsm8k_datasets  # noqa: F401, E501
-    from .datasets.mmlu.mmlu_gen_a484b3 import \
+    from .datasets.hellaswag.hellaswag_10shot_gen_e42710 import \
+        hellaswag_datasets  # noqa: F401, E501
+    from .datasets.humaneval.humaneval_gen_8e312c import \
+        humaneval_datasets  # noqa: F401, E501
+    from .datasets.IFEval.IFEval_gen_3321a3 import \
+        ifeval_datasets  # noqa: F401, E501
+    from .datasets.math.math_0shot_gen_393424 import \
+        math_datasets  # noqa: F401, E501
+    from .datasets.mbpp.sanitized_mbpp_gen_a0fc46 import \
+        sanitized_mbpp_datasets  # noqa: F401, E501
+    from .datasets.mmlu.mmlu_gen_4d595a import \
         mmlu_datasets  # noqa: F401, E501
+    from .datasets.nq.nq_open_1shot_gen_01cf41 import \
+        nq_datasets  # noqa: F401, E501
     from .datasets.race.race_gen_69ee4f import \
         race_datasets  # noqa: F401, E501
     from .datasets.SuperGLUE_WiC.SuperGLUE_WiC_gen_d06864 import \
         WiC_datasets  # noqa: F401, E501
     from .datasets.SuperGLUE_WSC.SuperGLUE_WSC_gen_7902a7 import \
         WSC_datasets  # noqa: F401, E501
-    from .datasets.triviaqa.triviaqa_gen_2121ce import \
+    from .datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import \
+        TheoremQA_datasets  # noqa: F401, E501
+    from .datasets.triviaqa.triviaqa_wiki_1shot_gen_eaf81e import \
         triviaqa_datasets  # noqa: F401, E501
+    from .datasets.winogrande.winogrande_5shot_gen_b36770 import \
+        winogrande_datasets  # noqa: F401, E501
+    # read hf models
+    from .models.baichuan.hf_baichuan2_7b_chat import \
+        models as hf_baichuan2_chat_7b  # noqa: F401, E501
+    from .models.gemma.hf_gemma_7b_it import \
+        models as hf_gemma_chat_7b  # noqa: F401, E501
+    from .models.hf_internlm.hf_internlm2_chat_7b import \
+        models as hf_internlm2_chat_7b  # noqa: F401, E501
+    from .models.hf_internlm.hf_internlm2_chat_20b import \
+        models as hf_internlm2_chat_20b  # noqa: F401, E501
+    from .models.hf_internlm.hf_internlm_chat_7b import \
+        models as hf_internlm_chat_7b  # noqa: F401, E501
+    from .models.hf_internlm.hf_internlm_chat_20b import \
+        models as hf_internlm_chat_20b  # noqa: F401, E501
+    from .models.hf_llama.hf_llama2_7b_chat import \
+        models as hf_llama2_chat_7b  # noqa: F401, E501
+    from .models.hf_llama.hf_llama3_8b_instruct import \
+        models as hf_llama_3_8b_instruct  # noqa: F401, E501
+    from .models.mistral.hf_mistral_7b_instruct_v0_1 import \
+        models as hf_mistral_chat_7b  # noqa: F401, E501
+    from .models.mistral.hf_mixtral_8x7b_instruct_v0_1 import \
+        models as hf_mixtral_chat_8x7b  # noqa: F401, E501
+    from .models.qwen.hf_qwen1_5_7b_chat import \
+        models as hf_qwen1_5_chat_7b  # noqa: F401, E501
+    from .models.qwen.hf_qwen_7b_chat import \
+        models as hf_qwen_chat_7b  # noqa: F401, E501
     # and output the results in a chosen format
     from .summarizers.medium import summarizer  # noqa: F401, E501
 
@@ -101,7 +148,7 @@ gemma_meta_template = dict(round=[
                            eos_token_id=1)
 
 MAX_SESSION_LEN = 2048
-MAX_NEW_TOKENS = 100
+MAX_NEW_TOKENS = 1024
 
 tb_engine_config_template_max_bs_8 = dict(session_len=MAX_SESSION_LEN,
                                           max_batch_size=8,
@@ -225,21 +272,6 @@ run_cfg_tp2_template = dict(num_gpus=2, num_procs=1)
 
 # ===== Configs for internlm/internlm-chat-7b =====
 # config for internlm-chat-7b
-hf_internlm_chat_7b = dict(type=HuggingFaceCausalLM,
-                           abbr='internlm-chat-7b-hf',
-                           path='internlm/internlm-chat-7b',
-                           tokenizer_path='internlm/internlm-chat-7b',
-                           model_kwargs=model_kwargs_template,
-                           tokenizer_kwargs=tokenizer_kwargs_template,
-                           max_out_len=MAX_NEW_TOKENS,
-                           max_seq_len=MAX_SESSION_LEN,
-                           batch_size=16,
-                           batch_padding=False,
-                           meta_template=internlm_meta_template,
-                           run_cfg=run_cfg_tp1_template,
-                           end_str='<eoa>')
-
-# config for internlm-chat-7b
 tb_internlm_chat_7b = dict(type=TurboMindModel,
                            abbr='internlm-chat-7b-turbomind',
                            path='internlm/internlm-chat-7b',
@@ -296,21 +328,6 @@ tb_internlm_chat_20b = dict(type=TurboMindModel,
                             run_cfg=run_cfg_tp1_template,
                             end_str='<eoa>')
 
-# config for internlm-chat-20b
-hf_internlm_chat_20b = dict(type=HuggingFaceCausalLM,
-                            abbr='internlm-chat-20b-hf',
-                            path='internlm/internlm-chat-20b',
-                            tokenizer_path='internlm/internlm-chat-20b',
-                            tokenizer_kwargs=tokenizer_kwargs_template,
-                            max_out_len=MAX_NEW_TOKENS,
-                            max_seq_len=MAX_SESSION_LEN,
-                            batch_size=8,
-                            batch_padding=False,
-                            model_kwargs=dict(trust_remote_code=True,
-                                              device_map='auto'),
-                            run_cfg=run_cfg_tp2_template,
-                            end_str='<eoa>')
-
 # config for internlm-chat-20b-w4 model
 tb_internlm_chat_20b_w4a16 = dict(
     type=TurboMindModel,
@@ -352,21 +369,6 @@ tb_internlm2_chat_7b = dict(type=TurboMindModel,
                             max_seq_len=MAX_SESSION_LEN,
                             batch_size=128,
                             concurrency=128,
-                            meta_template=internlm2_meta_template,
-                            run_cfg=run_cfg_tp1_template,
-                            end_str='<|im_end|>')
-
-# config for internlm2-chat-7b
-hf_internlm2_chat_7b = dict(type=HuggingFaceCausalLM,
-                            abbr='internlm2-chat-7b-hf',
-                            path='internlm/internlm2-chat-7b',
-                            tokenizer_path='internlm/internlm2-chat-7b',
-                            model_kwargs=model_kwargs_template,
-                            tokenizer_kwargs=tokenizer_kwargs_template,
-                            max_out_len=MAX_NEW_TOKENS,
-                            max_seq_len=MAX_SESSION_LEN,
-                            batch_size=16,
-                            batch_padding=False,
                             meta_template=internlm2_meta_template,
                             run_cfg=run_cfg_tp1_template,
                             end_str='<|im_end|>')
@@ -430,21 +432,6 @@ tb_internlm2_chat_20b = dict(
     run_cfg=run_cfg_tp2_template,
     end_str='<|im_end|>')
 
-# config for internlm2-chat-20b
-hf_internlm2_chat_20b = dict(type=HuggingFaceCausalLM,
-                             abbr='internlm2-chat-20b-hf',
-                             path='internlm/internlm2-chat-20b',
-                             tokenizer_path='internlm/internlm2-chat-20b',
-                             model_kwargs=model_kwargs_template,
-                             tokenizer_kwargs=tokenizer_kwargs_template,
-                             max_out_len=MAX_NEW_TOKENS,
-                             max_seq_len=MAX_SESSION_LEN,
-                             batch_size=8,
-                             batch_padding=False,
-                             meta_template=internlm2_meta_template,
-                             run_cfg=run_cfg_tp2_template,
-                             end_str='<|im_end|>')
-
 # config for internlm2-chat-20b-w4 model
 tb_internlm2_chat_20b_w4a16 = dict(
     type=TurboMindModel,
@@ -495,47 +482,43 @@ pt_internlm2_chat_20b = dict(
 tb_qwen_chat_7b = dict(type=TurboMindModel,
                        abbr='qwen-7b-chat-turbomind',
                        path='Qwen/Qwen-7B-Chat',
-                       engine_config=tb_engine_config_template_max_bs_16,
+                       engine_config=tb_engine_config_template_max_bs_128,
                        gen_config=qwen_gen_config_template,
                        max_out_len=MAX_NEW_TOKENS,
                        max_seq_len=MAX_SESSION_LEN,
-                       batch_size=16,
-                       concurrency=16,
+                       batch_size=128,
+                       concurrency=128,
                        meta_template=qwen_meta_template,
                        run_cfg=run_cfg_tp1_template,
                        end_str='<|im_end|>')
+
+tb_qwen_chat_7b_w4a16 = dict(
+    type=TurboMindModel,
+    abbr='qwen-7b-chat-4bits-turbomind',
+    path='Qwen/Qwen-7B-Chat-inner-4bits',
+    engine_config=tb_awq_engine_config_template_max_bs_128,
+    gen_config=qwen_gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=128,
+    concurrency=128,
+    meta_template=qwen_meta_template,
+    run_cfg=run_cfg_tp1_template,
+    end_str='<|im_end|>')
 
 # config for qwen-chat-7b pytorch
 pt_qwen_chat_7b = dict(type=LmdeployPytorchModel,
                        abbr='qwen-7b-chat-pytorch',
                        path='Qwen/Qwen-7B-Chat',
-                       engine_config=pt_engine_config_template_max_bs_16,
+                       engine_config=pt_engine_config_template_max_bs_64,
                        gen_config=qwen_gen_config_template,
                        max_out_len=MAX_NEW_TOKENS,
                        max_seq_len=MAX_SESSION_LEN,
-                       batch_size=16,
-                       concurrency=16,
+                       batch_size=64,
+                       concurrency=64,
                        meta_template=qwen_meta_template,
                        run_cfg=run_cfg_tp1_template,
                        end_str='<|im_end|>')
-
-# config for qwen-chat-7b huggingface
-hf_qwen_chat_7b = dict(
-    type=HuggingFaceCausalLM,
-    abbr='qwen-7b-chat-hf',
-    path='Qwen/Qwen-7B-Chat',
-    tokenizer_path='Qwen/Qwen-7B-Chat',
-    model_kwargs=model_kwargs_template,
-    tokenizer_kwargs=tokenizer_kwargs_template,
-    pad_token_id=151643,
-    max_out_len=MAX_NEW_TOKENS,
-    max_seq_len=MAX_SESSION_LEN,
-    batch_size=16,
-    batch_padding=False,
-    meta_template=qwen_meta_template,
-    run_cfg=run_cfg_tp1_template,
-    end_str='<|im_end|>',
-)
 
 # ===== Configs for meta-llama/Llama-2-7b-chat-hf =====
 # config for llama2-chat-7b turbomind
@@ -552,6 +535,21 @@ tb_llama2_chat_7b = dict(type=TurboMindModel,
                          run_cfg=run_cfg_tp1_template,
                          end_str='[INST]')
 
+# config for llama2-chat-7b-w4a16 turbomind
+tb_llama2_chat_7b_wa416 = dict(
+    type=TurboMindModel,
+    abbr='llama-2-7b-chat-4bits-turbomind',
+    path='meta-llama/Llama-2-7b-chat-hf-inner-4bits',
+    engine_config=tb_awq_engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=128,
+    concurrency=128,
+    meta_template=llama2_meta_template,
+    run_cfg=run_cfg_tp1_template,
+    end_str='[INST]')
+
 # config for llama2-chat-7b pytorch
 pt_llama2_chat_7b = dict(type=LmdeployPytorchModel,
                          abbr='llama-2-7b-chat-pytorch',
@@ -563,21 +561,6 @@ pt_llama2_chat_7b = dict(type=LmdeployPytorchModel,
                          batch_size=128,
                          concurrency=128,
                          meta_template=llama2_meta_template,
-                         run_cfg=run_cfg_tp1_template,
-                         end_str='[INST]')
-
-# config for llama2-chat-7b huggingface
-hf_llama2_chat_7b = dict(type=HuggingFaceCausalLM,
-                         abbr='llama-2-7b-chat-hf',
-                         path='meta-llama/Llama-2-7b-chat-hf',
-                         tokenizer_path='meta-llama/Llama-2-7b-chat-hf',
-                         model_kwargs=model_kwargs_template,
-                         tokenizer_kwargs=tokenizer_kwargs_template,
-                         meta_template=llama2_meta_template,
-                         max_out_len=MAX_NEW_TOKENS,
-                         max_seq_len=MAX_SESSION_LEN,
-                         batch_size=16,
-                         batch_padding=False,
                          run_cfg=run_cfg_tp1_template,
                          end_str='[INST]')
 
@@ -593,20 +576,6 @@ tb_baichuan2_chat_7b = dict(type=TurboMindModel,
                             batch_size=16,
                             concurrency=16,
                             meta_template=baichuan2_meta_template,
-                            run_cfg=run_cfg_tp1_template)
-
-# config for baichuan2-chat-7b huggingface
-hf_baichuan2_chat_7b = dict(type=HuggingFaceCausalLM,
-                            abbr='baichuan2-7b-chat-hf',
-                            path='baichuan-inc/Baichuan2-7B-Chat',
-                            tokenizer_path='baichuan-inc/Baichuan2-7B-Chat',
-                            tokenizer_kwargs=tokenizer_kwargs_template,
-                            meta_template=baichuan2_meta_template,
-                            max_out_len=MAX_NEW_TOKENS,
-                            max_seq_len=MAX_SESSION_LEN,
-                            batch_size=16,
-                            batch_padding=False,
-                            model_kwargs=model_kwargs_template,
                             run_cfg=run_cfg_tp1_template)
 
 # config for baichuan2-chat-7b pytorch
@@ -638,38 +607,7 @@ pt_mistral_chat_7b = dict(type=LmdeployPytorchModel,
                           run_cfg=run_cfg_tp1_template,
                           end_str='</s>')
 
-# config for hf Mistral-7B-Instruct-v0.1
-hf_mistral_chat_7b = dict(abbr='mistral-7b-instruct-v0.1-hf',
-                          type=HuggingFaceCausalLM,
-                          path='mistralai/Mistral-7B-Instruct-v0.1',
-                          tokenizer_path='mistralai/Mistral-7B-Instruct-v0.1',
-                          model_kwargs=model_kwargs_template,
-                          tokenizer_kwargs=tokenizer_kwargs_template,
-                          meta_template=mistral_meta_template,
-                          max_out_len=MAX_NEW_TOKENS,
-                          max_seq_len=MAX_SESSION_LEN,
-                          batch_size=16,
-                          batch_padding=False,
-                          run_cfg=run_cfg_tp1_template,
-                          end_str='</s>')
-
 # ===== Configs for mistralai/Mixtral-8x7B-Instruct-v0.1 =====
-# config for hf Mixtral-8x7B-Instruct-v0.1
-hf_mixtral_chat_8x7b = dict(
-    abbr='mixtral-8x7b-instruct-v0.1-hf',
-    type=HuggingFaceCausalLM,
-    path='mistralai/Mixtral-8x7B-Instruct-v0.1',
-    tokenizer_path='mistralai/Mixtral-8x7B-Instruct-v0.1',
-    model_kwargs=model_kwargs_template,
-    tokenizer_kwargs=tokenizer_kwargs_template,
-    meta_template=mistral_meta_template,
-    max_out_len=MAX_NEW_TOKENS,
-    max_seq_len=MAX_SESSION_LEN,
-    batch_size=8,
-    batch_padding=False,
-    run_cfg=run_cfg_tp2_template,
-    end_str='</s>')
-
 # config for pt Mixtral-8x7B-Instruct-v0.1
 pt_mixtral_chat_8x7b = dict(
     type=LmdeployPytorchModel,
@@ -686,20 +624,6 @@ pt_mixtral_chat_8x7b = dict(
     end_str='</s>')
 
 # ===== Configs for Qwen/Qwen1.5-7B-Chat =====
-hf_qwen1_5_chat_7b = dict(type=HuggingFaceCausalLM,
-                          abbr='qwen1.5-7b-chat-hf',
-                          path='Qwen/Qwen1.5-7B-Chat',
-                          model_kwargs=model_kwargs_template,
-                          tokenizer_kwargs=tokenizer_kwargs_template,
-                          meta_template=qwen1_5_meta_template,
-                          pad_token_id=151645,
-                          max_out_len=MAX_NEW_TOKENS,
-                          max_seq_len=MAX_SESSION_LEN,
-                          batch_size=8,
-                          batch_padding=False,
-                          run_cfg=run_cfg_tp1_template,
-                          end_str='<|im_end|>')
-
 tb_qwen1_5_chat_7b = dict(type=TurboMindModel,
                           abbr='qwen1.5-7b-chat-turbomind',
                           path='Qwen/Qwen1.5-7B-Chat',
@@ -769,20 +693,6 @@ pt_qwen1_5_moe_2_7b_chat = dict(
     end_str='<|im_end|>')
 
 # ===== Configs for google/gemma-7b-it =====
-hf_gemma_chat_7b = dict(type=HuggingFaceCausalLM,
-                        abbr='gemma-7b-it-pytorch',
-                        path='google/gemma-7b-it',
-                        tokenizer_path='google/gemma-7b-it',
-                        model_kwargs=model_kwargs_template,
-                        tokenizer_kwargs=tokenizer_kwargs_template,
-                        meta_template=mistral_meta_template,
-                        max_out_len=MAX_NEW_TOKENS,
-                        max_seq_len=MAX_SESSION_LEN,
-                        batch_size=16,
-                        batch_padding=False,
-                        run_cfg=run_cfg_tp1_template,
-                        end_str='end_of_turn')
-
 pt_gemma_chat_7b = dict(type=LmdeployPytorchModel,
                         abbr='gemma-7b-it-pytorch',
                         path='google/gemma-7b-it',
@@ -854,3 +764,41 @@ pt_llama_3_8b_instruct = dict(
     meta_template=llama3_meta_template,
     run_cfg=run_cfg_tp1_template,
     end_str='[INST]')
+
+# config for code llama
+tb_codellama_7b_chat = dict(type=TurboMindModel,
+                            abbr='codellama-7b-chat-turbomind',
+                            path='codellama/CodeLlama-7b-Instruct-hf',
+                            engine_config=tb_engine_config_template_max_bs_128,
+                            gen_config=gen_config_template,
+                            max_out_len=MAX_NEW_TOKENS,
+                            max_seq_len=MAX_SESSION_LEN,
+                            batch_size=128,
+                            concurrency=128,
+                            run_cfg=dict(num_gpus=1, num_procs=1),
+                            end_str='</s>')
+
+tb_codellama_7b_chat_w4a16 = dict(
+    type=TurboMindModel,
+    abbr='codellama-7b-chat-4bits-turbomind',
+    path='codellama/CodeLlama-7b-Instruct-hf-inner-4bits',
+    engine_config=tb_awq_engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=128,
+    concurrency=128,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+    end_str='</s>')
+
+pt_codellama_7b_chat = dict(type=LmdeployPytorchModel,
+                            abbr='codellama-7b-chat-pytorch',
+                            path='codellama/CodeLlama-7b-Instruct-hf',
+                            engine_config=pt_engine_config_template_max_bs_128,
+                            gen_config=gen_config_template,
+                            max_out_len=MAX_NEW_TOKENS,
+                            max_seq_len=MAX_SESSION_LEN,
+                            batch_size=128,
+                            concurrency=128,
+                            run_cfg=dict(num_gpus=1, num_procs=1),
+                            end_str='</s>')
