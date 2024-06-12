@@ -42,7 +42,6 @@ class LlavaNextVisionModel(VisonModel):
             model,
             dtype=torch.half,
             no_split_module_classes=no_split_module_classes)
-        model.config.tie_word_embeddings = False
         device_map = infer_auto_device_map(
             model,
             no_split_module_classes=no_split_module_classes,
