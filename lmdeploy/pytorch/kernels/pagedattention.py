@@ -708,7 +708,7 @@ def paged_attention_fwd(
         else:
             p2_kv_group_num = triton.next_power_of_2(kv_group_num)
             BLOCK_H = max(16, min(BLOCK, p2_kv_group_num))
-            grid_1 = triton.cdiv(head, min(BLOCK_H, p2_kv_group_num))
+            grid_1 = triton.cdiv(head, min(BLOCK_H, kv_group_num))
             grid = (batch, grid_1, SPLIT_K)
             _fwd_grouped_split_kernel[grid](
                 q,
