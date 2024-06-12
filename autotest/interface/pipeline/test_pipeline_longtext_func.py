@@ -78,8 +78,10 @@ def stream_infer_basic(config, model, log_name):
 
 
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize(
-    'model', ['internlm/internlm2-chat-7b', 'internlm/internlm2-chat-1_8b'])
+@pytest.mark.parametrize('model', [
+    'internlm/internlm2-chat-7b', 'internlm/internlm2-chat-1_8b',
+    'Qwen/Qwen2-7B-Instruct'
+])
 def test_long_test_passkey_tp1(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
@@ -92,9 +94,10 @@ def test_long_test_passkey_tp1(config, model, worker_id):
 
 
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize(
-    'model',
-    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
+@pytest.mark.parametrize('model', [
+    'internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits',
+    'Qwen/Qwen2-7B-Instruct'
+])
 def test_long_test_passkey_tp2(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
