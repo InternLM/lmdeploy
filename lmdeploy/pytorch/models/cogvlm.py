@@ -4,12 +4,11 @@ from typing import List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from ..dist_utils import (colwise_split_parallelize_linear_fn,
-                          rowwise_parallelize_linear_fn)
 from ..kernels import fill_kv_cache, fused_rotary_emb, paged_attention_fwd
+from ..weight_loader.dist_utils import (colwise_split_parallelize_linear,
+                                        rowwise_parallelize_linear)
 
 LANGUAGE_TOKEN_TYPE = 0
 VISION_TOKEN_TYPE = 1
@@ -57,8 +56,9 @@ class PatchedVisionExpertMLP(nn.Module):
 
 class PatchedVisionExpertAttention(nn.Module):
 
-    def _distribute_qkv_linear(self, mod: nn.Module, device_mesh: DeviceMesh):
-        """distribute qkv linear."""
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
         num_heads = self.config.num_attention_heads
         num_kv_heads = getattr(self.config, 'num_multi_query_heads', num_heads)
         head_dim = self.config.hidden_size // num_heads
@@ -66,23 +66,25 @@ class PatchedVisionExpertAttention(nn.Module):
             self.config.hidden_size, num_kv_heads * head_dim,
             num_kv_heads * head_dim
         ]
-        colwise_split_parallelize_linear_fn(mod, sections, device_mesh)
-
-    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in [
+        for name in [
                 'vision_expert_query_key_value',
                 'language_expert_query_key_value'
         ]:
-            self._distribute_qkv_linear(mod, device_mesh=device_mesh)
-        elif mod_name in ['vision_expert_dense', 'language_expert_dense']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+            colwise_split_parallelize_linear(getattr(self, name),
+                                             sections,
+                                             loader,
+                                             rank=rank,
+                                             world_size=world_size,
+                                             prefix=name)
+        for name in ['vision_expert_dense', 'language_expert_dense']:
+            rowwise_parallelize_linear(getattr(self, name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=name)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs

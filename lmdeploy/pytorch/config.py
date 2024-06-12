@@ -95,7 +95,6 @@ class ModelConfig:
     dtype: torch.dtype = torch.float16
     multi_query_attention: bool = False
     vocab_size: int = 40000
-    json_config: dict = field(default_factory=dict)
     hf_config: Any = None
     init_kwargs: Dict[str, Any] = field(default_factory=dict)
     model_arch: str = None
@@ -256,9 +255,8 @@ class ModelConfig:
 
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config)
-        model_config.json_config = model_config.hf_config.to_dict()
 
-        if check_vl_llm(model_config.json_config):
+        if check_vl_llm(hf_config.to_dict()):
             model_config.task_type = 'vlm'
 
         # update eos_token_id to list
