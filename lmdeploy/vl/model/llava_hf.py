@@ -25,7 +25,7 @@ class LlavaHfVisionModel(VisonModel):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
 
-        with init_empty_weights():
+        with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
             from transformers import LlavaForConditionalGeneration
             model = LlavaForConditionalGeneration._from_config(self.hf_config)

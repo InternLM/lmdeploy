@@ -25,7 +25,7 @@ class LlavaNextVisionModel(VisonModel):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
 
-        with init_empty_weights():
+        with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
             from transformers import LlavaNextForConditionalGeneration
             model = LlavaNextForConditionalGeneration._from_config(
@@ -42,6 +42,7 @@ class LlavaNextVisionModel(VisonModel):
             model,
             dtype=torch.half,
             no_split_module_classes=no_split_module_classes)
+        model.config.tie_word_embeddings = False
         device_map = infer_auto_device_map(
             model,
             no_split_module_classes=no_split_module_classes,

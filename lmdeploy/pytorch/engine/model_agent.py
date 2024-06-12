@@ -823,7 +823,7 @@ def _tp_build_model(
         else:
             from_config_func = model_config.auto_model_cls._from_config
 
-        with init_empty_weights():
+        with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
             model = from_config_func(config, **model_init_kwargs)
             # build for vlm model
