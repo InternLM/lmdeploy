@@ -104,6 +104,8 @@ class ImageEncoder:
         """Model forward."""
         time_start = time.perf_counter()
         outputs = self.model.forward(inputs)
+        if isinstance(outputs[0], torch.Tensor):
+            outputs = [x.cpu() for x in outputs]
         time_end = time.perf_counter()
         logger.info(f'ImageEncoder forward {len(inputs)} images, '
                     f'cost {time_end - time_start:.3f}s')
