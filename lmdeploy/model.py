@@ -127,7 +127,7 @@ class BaseModel:
         return prompt
 
     @abstractmethod
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
         """Return the prompt that is concatenated with other elements in the
         chat template. When messages arg is a string, return
         self.get_prompt(messages). When messages arg is a chat history, return
@@ -201,7 +201,7 @@ class BaseChatTemplate(BaseModel):
             return f'{self.separator}{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -281,7 +281,7 @@ class Llavav1(Vicuna):
     def get_prompt(self, prompt, sequence_start=True):
         return super().get_prompt(prompt, sequence_start)[:-1]
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
         return super().messages2prompt(messages, sequence_start)[:-1]
 
     @classmethod
@@ -306,7 +306,7 @@ class MiniGemini(Vicuna):
     def get_prompt(self, prompt, sequence_start=True):
         return super().get_prompt(prompt, sequence_start)[:-1]
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
         return super().messages2prompt(messages, sequence_start)[:-1]
 
     @classmethod
@@ -449,7 +449,11 @@ class InternLM2Chat7B(InternLMChat7B):
         if 'internlm2' in path and ('chat' in path or 'math' in path):
             return 'internlm2'
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self,
+                        messages,
+                        sequence_start=True,
+                        tools=None,
+                        **kwargs):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -470,9 +474,18 @@ class InternLM2Chat7B(InternLMChat7B):
                        environment=self.eoenv)
         name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
         ret = ''
-        if self.meta_instruction is not None:
+        if self.meta_instruction is not None and sequence_start:
             if len(messages) and messages[0]['role'] != 'system':
                 ret += f'{self.system}{self.meta_instruction}{self.eosys}'
+
+        tools_prompt = dict(
+            role='system',
+            name='plugin',  # only support internlm2
+            content=json.dumps(tools, ensure_ascii=False))
+        insert_index = 0
+        if messages[0]['role'] == 'system':
+            insert_index = 1
+        messages.insert(insert_index, tools_prompt)
         for message in messages:
             role = message['role']
             content = message['content']
@@ -707,7 +720,7 @@ class Llama3(BaseChatTemplate):
                 prompt, sequence_start)
         return super().get_prompt(prompt, sequence_start)
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
         if sequence_start and not isinstance(messages, str):
             return '<|begin_of_text|>' + super().messages2prompt(
                 messages, sequence_start)[:-1]
@@ -864,7 +877,7 @@ class ChatGLM2(BaseModel):
         ret += f'{self._assistant}'
         return ret
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
         """message to prompt."""
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
@@ -1098,7 +1111,7 @@ class Deepseek(BaseChatTemplate):
     def get_prompt(self, prompt, sequence_start=True):
         return super().get_prompt(prompt, sequence_start)[:-1]
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
         return super().messages2prompt(messages, sequence_start)[:-1]
 
     @classmethod
@@ -1133,7 +1146,7 @@ class InternVLZH(BaseChatTemplate):
     def get_prompt(self, prompt, sequence_start=True):
         return super().get_prompt(prompt, sequence_start)[:-1]
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
         return super().messages2prompt(messages, sequence_start)[:-1]
 
     @classmethod

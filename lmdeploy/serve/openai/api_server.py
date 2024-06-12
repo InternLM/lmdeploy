@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import copy
+import json
 import os
 import time
+from asyncio.log import logger
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
@@ -25,8 +27,9 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     CompletionResponse, CompletionResponseChoice,
     CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
     EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-    GenerateRequest, GenerateRequestQos, GenerateResponse, LogProbs, ModelCard,
-    ModelList, ModelPermission, TopLogprob, UsageInfo)
+    FunctionResponse, GenerateRequest, GenerateRequestQos, GenerateResponse,
+    LogProbs, ModelCard, ModelList, ModelPermission, ToolCall, TopLogprob,
+    UsageInfo)
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
@@ -133,6 +136,12 @@ async def check_request(request) -> Optional[JSONResponse]:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             f'The temperature `{request.temperature}` must be in [0, 1]')
+    if hasattr(request,
+               'tool_choice') and request.tool_choice in ['auto', 'required']:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            'Current tool_choice only support a dict referring to one'
+            f' of {request.tools}.')
     return
 
 
@@ -383,6 +392,14 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
+    - tools (List): A list of tools the model may call. Currently, only
+        internlm2 functions are supported as a tool. Use this to provide
+        a list of functions the model may generate JSON inputs for.
+    - tool_choice (str | object): Controls which (if any) tool is called by
+        the model. `auto` and `required` are not supported yet. `none` means
+        the model will not call any tool and instead generates a message.
+        Specifying a particular tool via {"type": "function", "function":
+        {"name": "my_function"}} forces the model to call that tool.
 
     Additional arguments supported by LMDeploy:
     - top_k (int): The number of the highest probability vocabulary
@@ -428,10 +445,21 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens)
 
+    tools = None
+    if request.tools and request.tool_choice != 'none':
+        if request.stream is True:
+            logger.warning('Set stream to False for tools')
+            request.stream = False
+        if request.tool_choice:
+            tools = [
+                item.model_dump() for item in request.tools
+                if item.function.name == request.tool_choice.function.name
+            ]
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
         gen_config=gen_config,
+        tools=tools,
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
@@ -500,6 +528,25 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         if res.logprobs:
             final_logprobs.extend(res.logprobs)
 
+    tool_calls = None
+    if request.tool_choice != 'none' and '<|plugin|>' in text:
+        # TODO may move to generate function
+        text, action = text.split('<|action_start|><|plugin|>\n')
+        action = action.split('<|action_end|>'.strip())[0]
+        try:
+            action = json.loads(action)
+            tool_calls = [
+                ToolCall(id=request_id,
+                         function=FunctionResponse(
+                             name=action['name'],
+                             arguments=action['parameters']))
+            ]
+        except Exception as e:
+            logger.error(f'Exception: {e}')
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                'Failed to parse fc related info to json format!')
+
     logprobs = None
     if gen_logprobs and len(final_logprobs):
         logprobs = _create_chat_completion_logprobs(
@@ -510,7 +557,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     choices = []
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        message=ChatMessage(role='assistant', content=text),
+        message=ChatMessage(role='assistant',
+                            content=text,
+                            tool_calls=tool_calls),
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
     )

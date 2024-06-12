@@ -42,7 +42,7 @@ class QwenVLChatTemplate(Qwen7BChat):
         prompt = self._concat_image_info(prompt)
         return super().get_prompt(prompt, sequence_start)
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
         """Apply chat template to history."""
         if isinstance(messages, str) or isinstance(messages[0], str):
             return self.get_prompt(messages, sequence_start)

@@ -78,6 +78,31 @@ class ChatCompletionRequestQos(BaseModel):
     top_k: Optional[int] = 40
 
 
+class Function(BaseModel):
+    """Function descriptions."""
+    description: Optional[str] = Field(default=None, examples=[None])
+    name: str
+    parameters: Optional[object] = None
+
+
+class Tool(BaseModel):
+    """Function wrapper."""
+    type: str = Field(default='function', examples=['function'])
+    function: Function
+
+
+class ToolChoiceFuncName(BaseModel):
+    """The name of tool choice function."""
+    name: str
+
+
+class ToolChoice(BaseModel):
+    """The tool choice definition."""
+    function: ToolChoiceFuncName
+    type: Literal['function'] = Field(default='function',
+                                      examples=['function'])
+
+
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
@@ -85,6 +110,8 @@ class ChatCompletionRequest(BaseModel):
     messages: Union[str, List[Dict[str, Any]]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])  # noqa
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
+    tools: Optional[List[Tool]] = Field(default=None, examples=[None])
+    tool_choice: Union[ToolChoice, Literal['auto', 'required','none']] = Field(default='none', examples=['none'])  # noqa
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
     n: Optional[int] = 1
@@ -103,10 +130,24 @@ class ChatCompletionRequest(BaseModel):
     top_k: Optional[int] = 40
 
 
+class FunctionResponse(BaseModel):
+    """Function response."""
+    name: str
+    arguments: object
+
+
+class ToolCall(BaseModel):
+    """Tool call response."""
+    id: str
+    type: Literal['function'] = 'function'
+    function: FunctionResponse
+
+
 class ChatMessage(BaseModel):
     """Chat messages."""
     role: str
     content: str
+    tool_calls: List[ToolCall]
 
 
 class LogProbs(BaseModel):
