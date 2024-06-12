@@ -14,10 +14,12 @@ from lmdeploy.utils import get_logger, get_model, logging_timer
 from ..adapter.adapter import AdapterManager, SchedulerAdapter
 from ..check_env import check_adapters, check_env, check_model
 from ..config import CacheConfig, SchedulerConfig
-from ..messages import MessageStatus, SchedulerSequence
+from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
+                        MessageStatus, SchedulerSequence)
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
-from .model_agent import AdapterInfo, AutoModelAgent, ModelInputs
+from .model_agent import (AdapterInfo, AutoModelAgent, ModelInputs,
+                          VisionModelInputs)
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -275,9 +277,11 @@ class Engine:
             if eos_token_id is None:
                 return
             if sampling_param.ignore_eos:
-                sampling_param.bad_words.append(eos_token_id)
-            elif eos_token_id not in sampling_param.stop_words:
-                sampling_param.stop_words.append(eos_token_id)
+                sampling_param.bad_words += eos_token_id
+            else:
+                for eid in eos_token_id:
+                    if eid not in sampling_param.stop_words:
+                        sampling_param.stop_words.append(eid)
 
         def __update_max_new_tokens(msg):
             """update max new tokens."""
@@ -300,18 +304,21 @@ class Engine:
             if len(sess.sequences) == 0:
                 assert len(
                     req.data['token_ids']) > 0, ('Empty input is not allowed.')
-                sess.add_sequence(req.data['token_ids'],
-                                  sampling_param=req.data['sampling_param'],
-                                  adapter_name=req.data['adapter_name'],
-                                  return_logits=req.data.get(
-                                      'return_logits', False))
+                sess.add_sequence(
+                    req.data['token_ids'],
+                    sampling_param=req.data['sampling_param'],
+                    adapter_name=req.data['adapter_name'],
+                    return_logits=req.data.get('return_logits', False),
+                    input_embeddings=req.data.get('input_embeddings'),
+                )
                 msg = next(iter(sess.sequences.values()))
                 __update_bad_words(msg)
                 __update_max_new_tokens(msg)
                 self.scheduler.add_sequence(msg)
             else:
                 msg = next(iter(sess.sequences.values()))
-                msg.update_token_ids(req.data['token_ids'])
+                msg.update_token_ids(req.data['token_ids'],
+                                     req.data.get('input_embeddings'))
                 msg.num_new_tokens = 0
                 msg.sampling_param = req.data['sampling_param']
                 msg.return_logits = req.data.get('return_logits', False)
@@ -379,6 +386,64 @@ class Engine:
 
         num_ignored_history = [msg.num_ignored_history for msg in messages]
         num_ignored_history = torch.tensor(num_ignored_history)
+
+        def __get_cogvlm_image_info():
+            """Get cogvlm history image info for position ids."""
+            history_image_nums = torch.LongTensor(
+                [msg.history_image_num for msg in messages])
+            history_image_token_lengths = torch.LongTensor(
+                [msg.history_image_token_len for msg in messages])
+            return history_image_nums, history_image_token_lengths
+
+        def __get_vlm_embeddings():
+            """get vlm input embeddings and indexings."""
+            input_embeddings = [[
+                torch.from_numpy(emb.embeddings)
+                for emb in msg.input_embeddings
+            ] for msg in messages]
+            input_embedding_ranges = [
+                torch.tensor([[emb.start, emb.end]
+                              for emb in msg.input_embeddings])
+                for msg in messages
+            ]
+            input_embedding_indexing = torch.zeros(
+                (batch_size, max_q_seq_length), dtype=torch.bool)
+            for msg_id, msg in enumerate(messages):
+                for emb in msg.input_embeddings:
+                    # make slice index relative to embeddings
+                    emb_start = emb.start - msg.history_len
+                    emb_end = emb.end - msg.history_len
+                    input_embedding_indexing[msg_id][emb_start:emb_end] = True
+            return (input_embeddings, input_embedding_indexing,
+                    input_embedding_ranges)
+
+        # for vlm
+        vision_embedding_inputs = None
+        if self.model_config.task_type == 'vlm':
+            history_image_nums = None
+            history_image_token_lengths = None
+            # only for cogvlm
+            if self.model_config.model_arch == 'CogVLMForCausalLM':
+                (history_image_nums,
+                 history_image_token_lengths) = __get_cogvlm_image_info()
+
+            input_embeddings = None
+            input_embedding_indexing = None
+            input_embedding_ranges = None
+            has_embedding = any(
+                [len(msg.input_embeddings) > 0 for msg in messages])
+            if has_embedding:
+                (input_embeddings, input_embedding_indexing,
+                 input_embedding_ranges) = __get_vlm_embeddings()
+
+            vision_embedding_inputs = VisionModelInputs(
+                history_lengths=history_lengths,
+                history_image_nums=history_image_nums,
+                history_image_token_lengths=history_image_token_lengths,
+                input_embeddings=input_embeddings,
+                input_embedding_indexing=input_embedding_indexing,
+                input_embedding_ranges=input_embedding_ranges)
+
         return ModelInputs(input_ids=input_ids,
                            seq_length=seq_length,
                            history_lengths=history_lengths,
@@ -389,6 +454,7 @@ class Engine:
                            num_ignored_history=num_ignored_history,
                            local_adapter_ids=local_adapter_ids,
                            adapter_info=adapter_info,
+                           vision_inputs=vision_embedding_inputs,
                            meta=meta)
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,
@@ -772,12 +838,15 @@ class Engine:
         from .engine_instance import EngineInstance
         return EngineInstance(self)
 
-    async def async_batched_infer(self,
-                                  session_ids: List[int],
-                                  token_ids: List[List[int]] = None,
-                                  gen_config: EngineGenerationConfig = None,
-                                  adapter_names: List[str] = None,
-                                  keep_cache: bool = False):
+    async def async_batched_infer(
+            self,
+            session_ids: List[int],
+            token_ids: List[List[int]] = None,
+            gen_config: EngineGenerationConfig = None,
+            adapter_names: List[str] = None,
+            keep_cache: bool = False,
+            input_embeddings: List[InputEmbeddingType] = None,
+            input_embedding_ranges: List[InputEmbeddingRangeType] = None):
         """Send inference request.
 
         Args:
@@ -797,20 +866,28 @@ class Engine:
             token_ids=token_ids,
             gen_config=gen_config,
             adapter_names=adapter_names,
+            input_embeddings=input_embeddings,
+            input_embedding_ranges=input_embedding_ranges,
             keep_cache=keep_cache)
 
-    def batched_infer(self,
-                      session_ids: List[int],
-                      token_ids: List[List[int]] = None,
-                      gen_config: EngineGenerationConfig = None,
-                      adapter_names: List[str] = None,
-                      keep_cache: bool = False):
+    def batched_infer(
+            self,
+            session_ids: List[int],
+            token_ids: List[List[int]] = None,
+            gen_config: EngineGenerationConfig = None,
+            adapter_names: List[str] = None,
+            keep_cache: bool = False,
+            input_embeddings: List[InputEmbeddingType] = None,
+            input_embedding_ranges: List[InputEmbeddingRangeType] = None):
         """batched infer."""
-        return self.engine_instance.batched_infer(session_ids=session_ids,
-                                                  token_ids=token_ids,
-                                                  gen_config=gen_config,
-                                                  adapter_names=adapter_names,
-                                                  keep_cache=keep_cache)
+        return self.engine_instance.batched_infer(
+            session_ids=session_ids,
+            token_ids=token_ids,
+            gen_config=gen_config,
+            adapter_names=adapter_names,
+            input_embeddings=input_embeddings,
+            input_embedding_ranges=input_embedding_ranges,
+            keep_cache=keep_cache)
 
     async def async_add_session(self, session_id: int):
         """Add new session."""

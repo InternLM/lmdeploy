@@ -11,6 +11,7 @@ LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单�
 - [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
 - [MGM](https://huggingface.co/YanweiLi/MGM-7B)
 - [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
+- [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/zh_cn/multi_modal/cogvlm.md)
 
 我们诚挚邀请社区在 LMDeploy 中添加更多 VLM 模型的支持。
 
@@ -135,12 +136,12 @@ print(response)
 
 ### 设置视觉模型参数
 
-可通过设置 `VisonConfig` 修改视觉模型默认参数
+可通过设置 `VisionConfig` 修改视觉模型默认参数
 
 ```python
-from lmdeploy import pipeline, VisonConfig
+from lmdeploy import pipeline, VisionConfig
 from lmdeploy.vl import load_image
-vision_config=VisonConfig(max_batch_size=16)
+vision_config=VisionConfig(max_batch_size=16)
 pipe = pipeline('liuhaotian/llava-v1.5-7b', vision_config=vision_config)
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))
