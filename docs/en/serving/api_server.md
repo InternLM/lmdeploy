@@ -201,16 +201,18 @@ tools = [
   }
 ]
 messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+tool_choice={"type": "function", "function": {"name": "get_current_weather"}}
 
 client = OpenAI(api_key='YOUR_API_KEY',base_url='http://0.0.0.0:23333/v1')
+model_name = client.models.list().data[0].id
 response = client.chat.completions.create(
-    model='internlm2',
+    model=model_name,
     messages=messages,
     temperature=0.8,
     top_p=0.8,
     stream=False,
     tools=tools,
-    tool_choice={"type": "function", "function": {"name": "get_current_weather"}})
+    tool_choice=tool_choice)
 print(response)
 ```
 
