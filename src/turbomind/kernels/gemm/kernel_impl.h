@@ -161,7 +161,7 @@ public:
                                    lda,
                                    (Tu*)U,
                                    Udesc.ld,
-                                   _cast((Tb*)B),
+                                   typename Gemm::PtrB{(Tb*)B},
                                    ldb,
                                    (Tv*)V,
                                    Vdesc.ld,
