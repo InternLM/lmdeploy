@@ -29,10 +29,12 @@ template<class T>
 struct Operand_A_N {
     using Dtype = T;
 
-    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | 1;
+    static constexpr int Pack_M = 2;
+
+    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | Pack_M;
     static constexpr Order kOrder = Order::kColMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16, 16, 8, 1>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
 
     using GetSmemLayout = GetSmemLayout<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -42,10 +44,12 @@ template<class T>
 struct Operand_B_T {
     using Dtype = T;
 
-    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | 1;
+    static constexpr int Pack_M = 1;
+
+    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | Pack_M;
     static constexpr Order kOrder = Order::kRowMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16, 16, 8, 1>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
 
     using GetSmemLayout = GetSmemLayout<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -55,10 +59,12 @@ template<class T>
 struct Operand_U {
     using Dtype = T;
 
-    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_U | 1;
+    static constexpr int Pack_M = 2;
+
+    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_U | Pack_M;
     static constexpr Order kOrder = Order::kColMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16, 16, 2, 1, 4>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 2, Pack_M, 4>;
 
     using GetSmemLayout = GetSmemLayout<kOrder>;
     using GetGmemIter   = GetGmemIter;

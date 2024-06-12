@@ -62,7 +62,7 @@ struct Transform_HMMA_16816 {
                         // if (threadIdx.x == 0) {
                         //     printf("idx=%d\n", idx);
                         // }
-                        dequant((Array<F, 2>&)tmp[s * 4 + c * 2], stat_k[idx]);
+                        dequant((Array<F, 2>&)tmp[i + s * 4 + c * 2], stat_k[idx]);
                     }
                 }
             }
@@ -78,6 +78,7 @@ struct Transform_HMMA_16816 {
         // if (threadIdx.x % 4 == 0) {
         //     printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)_s[0], (float)_s[1]);
         // }
+        // printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)x[0], (float)x[1]);
         x[0] = __hfma(x[0], _s[0], _s[1]);
         x[1] = __hfma(x[1], _s[0], _s[1]);
     }

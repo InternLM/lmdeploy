@@ -14,17 +14,6 @@ namespace turbomind::gemm {
 
 namespace {
 
-// template<class Ti, class To>
-// struct _Converter {
-//     __device__ _Converter(): impl_(1, 0) {}
-//     template<class T>
-//     __device__ auto operator()(T&& t) const
-//     {
-//         return impl_((T&&)t);
-//     }
-//     ConvertKvCache<Ti, To> impl_;
-// };
-
 constexpr bool is_AB(Op_Tag op)
 {
     if (op == OPERAND_A || op == OPERAND_B) {
@@ -130,8 +119,8 @@ int Convert(const void*         S,  //
                 return invoke(mma, operand, order, stype, dtype, constant<1>{});
             case 2:
                 return invoke(mma, operand, order, stype, dtype, constant<2>{});
-            // case 4:
-            //     return invoke(mma, operand, order, dtype, constant<4>{});
+            case 4:
+                return invoke(mma, operand, order, stype, dtype, constant<4>{});
             default:
                 return false;
         }

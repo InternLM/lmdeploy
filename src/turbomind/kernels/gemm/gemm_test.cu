@@ -46,11 +46,11 @@ T& gTestbed()
 template<class T, class Tb>
 void Run(int m, int n, int k, int g = 128)
 {
-    constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;
+    constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 2;
     constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
-    constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
+    constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 2;
     constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
-    auto& test = gTestbed<gemm::Testbed<half, uint4_t, half, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
+    auto& test = gTestbed<gemm::Testbed<uint4_t, half, half, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
 
     test.Initialize(m, n, k, g, 0);
     for (int i = 0; i < 10; ++i) {
@@ -93,7 +93,7 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(256, 256, 256);
 
-    // Run<T, Tb>(16, 16, 128);
+    // Run<T, Tb>(32, 16, 128);
 }
 
 namespace turbomind::gemm {
@@ -121,7 +121,7 @@ int main(int argc, char* argv[])
     // Test<half, uint4_t>(8192, 1);
 
     const int M = 32;
-    const int N = 32;
+    const int N = 16;
     const int K = 32;
 
     universal_vector<half> a(M * K);
