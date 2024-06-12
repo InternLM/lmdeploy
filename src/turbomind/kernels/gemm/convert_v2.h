@@ -34,7 +34,7 @@ struct ConvertOperand {
 
     static constexpr bool is_UV = K_ < 16;
 
-    using SmemCopyAtom = typename Operand::SmemCopyAtom;
+    using Atom = typename Operand::SmemCopyAtom;
 
     using SmemCopy = std::conditional_t<!is_UV,
                                         SmemCopy<Operand, M_, 16, 16, 16>,  // AB
@@ -46,9 +46,7 @@ struct ConvertOperand {
 
     static constexpr auto kOrderS = Operand::kOrder;
 
-    static constexpr int2 CopyAtom_MK = cs2mk<kOrderS>(SmemCopyAtom::C, SmemCopyAtom::S);
-
-    static constexpr int ITER_K = ceil_div(K, CopyAtom_MK.y);
+    static constexpr int ITER_K = ceil_div(K, Atom::K);
 
     /// TODO: generailize this
     static constexpr int WARP_CNT = 1;
@@ -117,8 +115,8 @@ struct ConvertOperand {
         constexpr int kFragNum  = get_fragment_num(data);
         constexpr int kPackSize = kFragSize * Pack_M;
 
-        const int pack_cnt_k = ceil_div(param.k, CopyAtom_MK.y);
-        const int pack_cnt_m = ceil_div(param.m, CopyAtom_MK.x * Pack_M);
+        const int pack_cnt_k = ceil_div(param.k, Atom::K);
+        const int pack_cnt_m = ceil_div(param.m, Atom::M * Pack_M);
 
         if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
             printf("m=%d, k=%d, lds = %d\n", param.m, param.k, param.lds);
@@ -155,7 +153,7 @@ struct ConvertOperand {
                 // }
 
                 // Load from smem as we are doing GEMMs
-                SmemCopy::copy(smem, data, int2{warp_offset_m, k * CopyAtom_MK.y});
+                SmemCopy::copy(smem, data, int2{warp_offset_m, k * Atom::K});
 
                 PRAGMA_UNROLL
                 for (int m = 0; m < kFragNum; m += Pack_M) {

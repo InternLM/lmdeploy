@@ -45,15 +45,15 @@ struct MakeOperand {
     static constexpr Order kOrder     = Operand::kOrder;
     static constexpr int   kGroupSize = GroupSize;
 
-    static constexpr int2 CS = Packing<kPack>::apply(mk2cs<kOrder>(M, ceil_div(K, kGroupSize)));
+    static constexpr int2 kPackMK = Packing_v2<kPack, kOrder>::apply({M, ceil_div(K, kGroupSize)});
 
-    static constexpr pair<CS.x, CS.y> kShapeCS{};
+    static constexpr pair<kPackMK.x, kPackMK.y> kShapeMK{};
 
-    using SmemLayout   = decltype(Operand::GetSmemLayout::apply(kShapeCS));
-    using SmemAccessor = SmemAccessor<Dtype, SmemLayout>;
+    using SmemLayout   = decltype(Operand::GetSmemLayout::apply(kShapeMK));
+    using SmemAccessor = SmemAccessorV2<Dtype, SmemLayout, kOrder>;
 
     using GmemIter = typename decltype(Operand::GetGmemIter::apply(
-        type_c<Operand>, type_c<Iterator>, type_c<SmemLayout>, kShapeCS, constant<WARPS>{}))::type;
+        type_c<Operand>, type_c<Iterator>, type_c<SmemLayout>, kShapeMK, constant<WARPS>{}))::type;
 
     using SmemCopyAtom = typename Operand::SmemCopyAtom;
 };

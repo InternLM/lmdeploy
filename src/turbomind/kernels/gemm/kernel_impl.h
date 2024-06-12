@@ -146,10 +146,10 @@ public:
         int ldb = Bdesc.ld;
 
         if (Gemm::kPackA) {
-            lda = Packing<Gemm::kPackA>::apply(mk2cs<Gemm::kOrderA>(m, k)).x;
+            lda = mk2cs<Gemm::kOrderA>(Packing_v2<Gemm::kPackA, Gemm::kOrderA>::apply({m, k})).x;
         }
         if (Gemm::kPackB) {
-            ldb = Packing<Gemm::kPackB>::apply(mk2cs<Gemm::kOrderB>(n, k)).x;
+            ldb = mk2cs<Gemm::kOrderB>(Packing_v2<Gemm::kPackB, Gemm::kOrderB>::apply({n, k})).x;
         }
 
         std::cout << "lda=" << lda << ", ldb=" << ldb << ", ldc=" << Cdesc.ld << "\n";

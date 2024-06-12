@@ -109,9 +109,9 @@ struct GmemIteratorSm80 {
 
     SmemAccessor<T, SmemLayout> smem_data_;
 
-    __device__ static constexpr int2 pack(int2 cs)
+    __device__ static constexpr int2 pack(int2 mk)
     {
-        return Packing<kPack>::apply(cs);
+        return Packing_v2<kPack, kOrder>::apply(mk);
     }
 
     __device__ static constexpr int2 to_cs(int2 mk)
@@ -127,10 +127,10 @@ struct GmemIteratorSm80 {
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
 
-        data   = data + cs2idx(pack(to_cs(offset)), stride_s);
-        extent = pack(to_cs(extent));
+        data   = data + cs2idx(to_cs(pack(offset)), stride_s);
+        extent = to_cs(pack(extent));
 
-        int stride_k = cs2idx(pack(to_cs(delta)), stride_s);
+        int stride_k = cs2idx(to_cs(pack(delta)), stride_s);
 
         int2 offsets = Map::get_offset(warp_id, lane_id);
         src_offset_  = offsets.x + offsets.y * stride_s;

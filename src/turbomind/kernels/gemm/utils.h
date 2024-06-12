@@ -32,6 +32,12 @@ __host__ __device__ constexpr int2 mk2cs(int m, int k)
 }
 
 template<Order order>
+__host__ __device__ constexpr int2 mk2cs(int2 mk)
+{
+    return mk2cs<order>(mk.x, mk.y);
+}
+
+template<Order order>
 __host__ __device__ constexpr int2 cs2mk(int c, int s)
 {
     if constexpr (order == Order::kRowMajor) {
@@ -59,23 +65,34 @@ __host__ __device__ constexpr Index cs2idx(int2 cs, Index ld)
     return ld * cs.y + cs.x;
 }
 
-template<Pack pack>
-struct Packing {
-    __host__ __device__ static constexpr int2 apply(int2 cs)
+template<MMA_Tag mma, Op_Tag op, int num, Order order>
+struct PackingImpl {
+    __host__ __device__ static constexpr int2 apply(int2 mk)
     {
-        return cs;
+        return mk;
     }
 };
 
-template<>
-struct Packing<HMMA_16816 | OPERAND_A | 1> {
-    __host__ __device__ static constexpr int2 apply(int2 cs)
+template<Pack pack, Order order>
+struct Packing_v2: PackingImpl<get_mma_tag(pack), get_operand_tag(pack), get_pack_num(pack), order> {};
+
+template<int num>
+struct PackingImpl<HMMA_16816, OPERAND_A, num, kRowMajor> {
+    __host__ __device__ static constexpr int2 apply(int2 mk)
     {
-        return {cs.x * 16, cs.y / 16};
+        return {mk.x / 16 / num, mk.y * 16 * num};
     }
 };
 
-template<>
-struct Packing<HMMA_16816 | OPERAND_B | 1>: Packing<HMMA_16816 | OPERAND_A | 1> {};
+template<int num>
+struct PackingImpl<HMMA_16816, OPERAND_A, num, kColMajor> {
+    __host__ __device__ static constexpr int2 apply(int2 mk)
+    {
+        return {mk.x * 16, mk.y / 16};
+    }
+};
+
+template<int num, Order order>
+struct PackingImpl<HMMA_16816, OPERAND_B, num, order>: PackingImpl<HMMA_16816, OPERAND_A, num, order> {};
 
 }  // namespace turbomind::gemm

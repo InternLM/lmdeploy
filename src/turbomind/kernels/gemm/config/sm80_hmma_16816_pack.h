@@ -5,16 +5,23 @@
 #include "src/turbomind/kernels/gemm/config/sm80_hmma_16816.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
+#include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
 
 namespace sm80_hmma_16816_pack {
 
+template<Order order>
 struct GetSmemLayout {
-    template<int C, int S>
-    static constexpr auto apply(pair<C, S>)
+    template<int M, int K>
+    static constexpr auto apply(pair<M, K>)
     {
-        return SmemLayoutV2<S, C>{};
+        if constexpr (order == kRowMajor) {
+            return SmemLayoutV2<M, K>{};
+        }
+        else {
+            return SmemLayoutV2<K, M>{};
+        }
     }
 };
 
@@ -25,9 +32,9 @@ struct Operand_A_N {
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | 1;
     static constexpr Order kOrder = Order::kColMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, 16, 16, 8, 1>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16, 16, 8, 1>;
 
-    using GetSmemLayout = GetSmemLayout;
+    using GetSmemLayout = GetSmemLayout<kOrder>;
     using GetGmemIter   = GetGmemIter;
 };
 
@@ -38,9 +45,9 @@ struct Operand_B_T {
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | 1;
     static constexpr Order kOrder = Order::kRowMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, 16, 16, 8, 1>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16, 16, 8, 1>;
 
-    using GetSmemLayout = GetSmemLayout;
+    using GetSmemLayout = GetSmemLayout<kOrder>;
     using GetGmemIter   = GetGmemIter;
 };
 
@@ -51,9 +58,9 @@ struct Operand_U {
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_U | 1;
     static constexpr Order kOrder = Order::kColMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, 16, 16, 2, 1, 4>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16, 16, 2, 1, 4>;
 
-    using GetSmemLayout = GetSmemLayout;
+    using GetSmemLayout = GetSmemLayout<kOrder>;
     using GetGmemIter   = GetGmemIter;
 };
 

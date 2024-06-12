@@ -91,6 +91,8 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(1024, 1024, 1024);
 
+    // Run<T, Tb>(256, 256, 256);
+
     // Run<T, Tb>(16, 16, 128);
 }
 

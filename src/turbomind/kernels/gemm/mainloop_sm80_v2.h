@@ -313,9 +313,9 @@ struct MainloopSm80_v2 {
             // __syncthreads();
             const int current_k = offset_k + k * MMA_Atom::K;
             SmemCopyA::copy(smem_A.pointer, data_A[k], {offset_m, current_k});
-            SmemCopyU::copy(smem_U.pointer, data_U[k], {offset_m, current_k / GroupSizeU_}, (bool)smem_group_iter_U);
+            SmemCopyU::copy(smem_U.pointer, data_U[k], {offset_m, current_k}, (bool)smem_group_iter_U);
             SmemCopyB::copy(smem_B.pointer, data_B[k], {offset_n, current_k});
-            SmemCopyV::copy(smem_V.pointer, data_V[k], {offset_n, current_k / GroupSizeV_}, (bool)smem_group_iter_V);
+            SmemCopyV::copy(smem_V.pointer, data_V[k], {offset_n, current_k}, (bool)smem_group_iter_V);
         };
 
         PRAGMA_UNROLL

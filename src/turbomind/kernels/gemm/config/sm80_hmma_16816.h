@@ -21,14 +21,28 @@ namespace turbomind::gemm {
 namespace sm80_hmma_16816 {
 
 struct GetSmemLayout {
-    template<int C, int S>
-    static constexpr auto apply(pair<C, S>)
+    template<int S, int C>
+    static constexpr auto apply(pair<S, C>)
     {
         constexpr int S0 = S >= 16 ? 16 : 8;
         constexpr int C0 = C >= 64 ? 64 : (C >= 32 ? 32 : 16);
         using _Small     = std::conditional_t<C0 == 32, Swizzle<2, 3, 3>, Swizzle<1, 3, 3>>;
         using Swizzle    = std::conditional_t<C0 == 64, Swizzle<3, 3, 3>, _Small>;
         return SmemLayoutV2<S, C, S0, C0, Swizzle>{};
+    }
+};
+
+template<Order order>
+struct GetSmemLayoutV2 {
+    template<int M, int K>
+    static constexpr auto apply(pair<M, K>)
+    {
+        if constexpr (order == kRowMajor) {
+            return GetSmemLayout::apply(pair<M, K>{});
+        }
+        else {
+            return GetSmemLayout::apply(pair<K, M>{});
+        }
     }
 };
 
@@ -42,7 +56,7 @@ struct Operand_A_N {
 
     using SmemCopyAtom = SmemCopy_MMA_16816_B<T, true>;
 
-    using GetSmemLayout = GetSmemLayout;
+    using GetSmemLayout = GetSmemLayoutV2<kOrder>;
     using GetGmemIter   = GetGmemIter;
 };
 
@@ -56,7 +70,7 @@ struct Operand_B_T {
 
     using SmemCopyAtom = SmemCopy_MMA_16816_B<T, false>;
 
-    using GetSmemLayout = GetSmemLayout;
+    using GetSmemLayout = GetSmemLayoutV2<kOrder>;
     using GetGmemIter   = GetGmemIter;
 };
 
@@ -70,10 +84,10 @@ struct Operand_U {
     using SmemCopyAtom = SmemCopy_MMA_16816_U<T>;
 
     struct GetSmemLayout {
-        template<int C, int S>
-        static constexpr auto apply(pair<C, S>)
+        template<int M, int K>
+        static constexpr auto apply(pair<M, K>)
         {
-            return SmemLayoutV2<S, C>{};
+            return SmemLayoutV2<K, M>{};
         }
     };
     using GetGmemIter = GetGmemIter;

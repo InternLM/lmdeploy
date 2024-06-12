@@ -84,7 +84,7 @@ void Convert_v2_Impl(const void* S, const MatrixLayout& Sdesc, void* D, const Ma
     constexpr int threads = Config::BLOCK_SIZE;
     const int     blocks  = ceil_div(Sdesc.rows, CTA_M);
 
-    std::cout << "ThreadMap:\n";
+    std::cout << __PRETTY_FUNCTION__ << "\nThreadMap:\n";
     Print(typename Kernel::GmemIter::ThreadMap{});
 
     convert_kernel<Kernel><<<blocks, threads, kSmemSize, stream>>>(param);
@@ -128,8 +128,8 @@ int Convert(const void*         S,  //
         switch (get_pack_num(Ddesc.pack)) {
             case 1:
                 return invoke(mma, operand, order, stype, dtype, constant<1>{});
-            // case 2:
-            //     return invoke(mma, operand, order, dtype, constant<2>{});
+            case 2:
+                return invoke(mma, operand, order, stype, dtype, constant<2>{});
             // case 4:
             //     return invoke(mma, operand, order, dtype, constant<4>{});
             default:
