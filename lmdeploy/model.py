@@ -537,14 +537,15 @@ class InternLM2Chat7B(InternLMChat7B):
             if len(messages) and messages[0]['role'] != 'system':
                 ret += f'{self.system}{self.meta_instruction}{self.eosys}'
 
-        tools_prompt = dict(
-            role='system',
-            name='plugin',  # only support internlm2
-            content=json.dumps(tools, ensure_ascii=False))
-        insert_index = 0
-        if messages[0]['role'] == 'system':
-            insert_index = 1
-        messages.insert(insert_index, tools_prompt)
+        if tools:
+            tools_prompt = dict(
+                role='system',
+                name='plugin',  # only support internlm2
+                content=json.dumps(tools, ensure_ascii=False))
+            insert_index = 0
+            if messages[0]['role'] == 'system':
+                insert_index = 1
+            messages.insert(insert_index, tools_prompt)
         for message in messages:
             role = message['role']
             content = message['content']
