@@ -359,7 +359,8 @@ class StepContext:
 
         # for vlm
         input_embeddings, input_embedding_indexing = None, None
-        if inputs.vision_inputs is not None:
+        if (inputs.vision_inputs is not None
+                and inputs.vision_inputs.input_embeddings is not None):
             input_embeddings, input_embedding_indexing = \
                 inputs.vision_inputs.get_inputs(history_lengths, q_seq_length)
 

@@ -398,6 +398,7 @@ class Engine:
         def __get_vlm_embeddings():
             """get vlm input embeddings and indexings."""
             input_embeddings = [[
+                emb.embeddings if isinstance(emb.embeddings, torch.Tensor) else
                 torch.from_numpy(emb.embeddings)
                 for emb in msg.input_embeddings
             ] for msg in messages]
@@ -417,32 +418,30 @@ class Engine:
             return (input_embeddings, input_embedding_indexing,
                     input_embedding_ranges)
 
-        # for vlm
-        vision_embedding_inputs = None
-        if self.model_config.task_type == 'vlm':
-            history_image_nums = None
-            history_image_token_lengths = None
-            # only for cogvlm
-            if self.model_config.model_arch == 'CogVLMForCausalLM':
-                (history_image_nums,
-                 history_image_token_lengths) = __get_cogvlm_image_info()
+        # for inputs with embeddings
+        history_image_nums = None
+        history_image_token_lengths = None
+        # only for cogvlm
+        if self.model_config.model_arch == 'CogVLMForCausalLM':
+            (history_image_nums,
+             history_image_token_lengths) = __get_cogvlm_image_info()
 
-            input_embeddings = None
-            input_embedding_indexing = None
-            input_embedding_ranges = None
-            has_embedding = any(
-                [len(msg.input_embeddings) > 0 for msg in messages])
-            if has_embedding:
-                (input_embeddings, input_embedding_indexing,
-                 input_embedding_ranges) = __get_vlm_embeddings()
+        input_embeddings = None
+        input_embedding_indexing = None
+        input_embedding_ranges = None
+        has_embedding = any(
+            [len(msg.input_embeddings) > 0 for msg in messages])
+        if has_embedding:
+            (input_embeddings, input_embedding_indexing,
+             input_embedding_ranges) = __get_vlm_embeddings()
 
-            vision_embedding_inputs = VisionModelInputs(
-                history_lengths=history_lengths,
-                history_image_nums=history_image_nums,
-                history_image_token_lengths=history_image_token_lengths,
-                input_embeddings=input_embeddings,
-                input_embedding_indexing=input_embedding_indexing,
-                input_embedding_ranges=input_embedding_ranges)
+        vision_embedding_inputs = VisionModelInputs(
+            history_lengths=history_lengths,
+            history_image_nums=history_image_nums,
+            history_image_token_lengths=history_image_token_lengths,
+            input_embeddings=input_embeddings,
+            input_embedding_indexing=input_embedding_indexing,
+            input_embedding_ranges=input_embedding_ranges)
 
         return ModelInputs(input_ids=input_ids,
                            seq_length=seq_length,
@@ -929,6 +928,8 @@ class Engine:
 
     def decode(self,
                input_ids,
+               input_embeddings: List[InputEmbeddingType] = None,
+               input_embedding_ranges: List[InputEmbeddingRangeType] = None,
                steps: List[int] = None,
                sequence_start: bool = True,
                sequence_end: bool = True,
@@ -936,14 +937,18 @@ class Engine:
         """Perform context decode on input tokens.
 
         Args:
-            input_ids (numpy.ndarray): the batch of input token ids
+            input_ids (List[List[int]] | List[np.ndaray]): the batch of input
+                 token ids
             steps (List[int]): the offset of the k/v cache
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             adapter_names (List[str]): The name of the adapters.
         """
-        return self.engine_instance.decode(input_ids,
-                                           steps=steps,
-                                           sequence_start=sequence_start,
-                                           sequence_end=sequence_end,
-                                           adapter_names=adapter_names)
+        return self.engine_instance.decode(
+            input_ids,
+            input_embeddings=input_embeddings,
+            input_embedding_ranges=input_embedding_ranges,
+            steps=steps,
+            sequence_start=sequence_start,
+            sequence_end=sequence_end,
+            adapter_names=adapter_names)
