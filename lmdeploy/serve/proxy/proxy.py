@@ -137,7 +137,8 @@ class NodeManager:
         Return:
             A node url or None.
         """
-        if self.strategy == Strategy.RANDOM:
+
+        def get_matched_urls():
             urls_with_speeds, speeds, urls_without_speeds = [], [], []
             for node_url, node_status in self.nodes.items():
                 if model_name in node_status.models:
@@ -154,6 +155,12 @@ class NodeManager:
             average_speed = sum(speeds) / len(speeds) if len(speeds) else 1
             all_the_speeds = speeds + [average_speed
                                        ] * len(urls_without_speeds)
+            return all_matched_urls, all_the_speeds
+
+        if self.strategy == Strategy.RANDOM:
+            all_matched_urls, all_the_speeds = get_matched_urls()
+            if len(all_matched_urls) == 0:
+                return None
             speed_sum = sum(all_the_speeds)
             weights = [speed / speed_sum for speed in all_the_speeds]
             index = random.choices(range(len(all_matched_urls)),
@@ -161,22 +168,9 @@ class NodeManager:
             url = all_matched_urls[index]
             return url
         elif self.strategy == Strategy.MIN_EXPECTED_LATENCY:
-            urls_with_speeds, speeds, urls_without_speeds = [], [], []
-            for node_url, node_status in self.nodes.items():
-                if model_name in node_status.models:
-                    if node_status.speed is not None:
-                        urls_with_speeds.append(node_url)
-                        speeds.append(node_status.speed)
-                    else:
-                        urls_without_speeds.append(node_url)
-            all_matched_urls = urls_with_speeds + urls_without_speeds
+            all_matched_urls, all_the_speeds = get_matched_urls()
             if len(all_matched_urls) == 0:
                 return None
-            # some nodes does not contain speed
-            # we can set them the average speed value
-            average_speed = sum(speeds) / len(speeds) if len(speeds) else 1
-            all_the_speeds = speeds + [average_speed
-                                       ] * len(urls_without_speeds)
             min_latency = float('inf')
             min_index = 0
             # random traverse nodes for low concurrency situation
