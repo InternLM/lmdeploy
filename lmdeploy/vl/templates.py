@@ -3,6 +3,7 @@ import asyncio
 from typing import Dict, List, Tuple, Union
 
 import PIL
+import PIL.Image
 
 from lmdeploy.model import BaseModel
 from lmdeploy.utils import get_hf_config_content, get_logger
@@ -38,15 +39,29 @@ class VLChatTemplateWrapper:
                 images = [images]
             messages['content'][0]['text'] = prompt
             for image in images:
+                # 'image_url': means url or local path to image.
+                # 'image_data': means PIL.Image.Image object.
                 if isinstance(image, str):
                     image = load_image(image)
-                image_base64_data = encode_image_base64(image)
-                item = {
-                    'type': 'image_url',
-                    'image_url': {
-                        'url': f'data:image/jpeg;base64,{image_base64_data}'
+                    image_base64_data = encode_image_base64(image)
+                    item = {
+                        'type': 'image_url',
+                        'image_url': {
+                            'url':
+                            f'data:image/jpeg;base64,{image_base64_data}'
+                        }
                     }
-                }
+                elif isinstance(image, PIL.Image.Image):
+                    item = {
+                        'type': 'image_data',
+                        'image_data': {
+                            'data': image
+                        }
+                    }
+                else:
+                    raise ValueError(
+                        'image should be a str(url/path) or PIL.Image.Image')
+
                 messages['content'].append(item)
 
         return [messages]
@@ -61,14 +76,18 @@ class VLChatTemplateWrapper:
             if role != 'user' or isinstance(content, str):
                 continue
             for item in content:
-                if item['type'] != 'image_url':
-                    continue
-                url = item['image_url']['url']
-                images.append(url)
+                # 'image_url': means url or local path to image.
+                # 'image_data': means PIL.Image.Image object.
+                if item['type'] == 'image_url':
+                    url = item['image_url']['url']
+                    images.append(url)
+                elif item['type'] == 'image_data':
+                    data = item['image_data']['data']
+                    images.append(data)
 
         def _inner_call(i, images):
-            url = images[i]
-            images[i] = load_image(url)
+            url_or_data = images[i]
+            images[i] = load_image(url_or_data)
 
         await asyncio.gather(*[
             asyncio.get_event_loop().run_in_executor(
@@ -95,7 +114,11 @@ class VLChatTemplateWrapper:
                 continue
             num_images = 0
             for item in content:
+                # 'image_url': means url or local path to image.
+                # 'image_data': means PIL.Image.Image object.
                 if item['type'] == 'image_url':
+                    num_images += 1
+                elif item['type'] == 'image_data':
                     num_images += 1
                 elif item['type'] == 'text':
                     prompt = item['text']

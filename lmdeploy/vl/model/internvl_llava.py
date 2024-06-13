@@ -127,9 +127,9 @@ class InternVLLlavaVisionModel(VisonModel):
                 no_split_module_classes=['InternVisionEncoderLayer'],
                 dtype=torch.half)
 
-        self.model = model.model
-        self.vision_tower = model.model.vision_tower
-        self.mm_projector = model.model.mm_projector
+        self.model = model.model.eval()
+        self.vision_tower = model.model.vision_tower.eval()
+        self.mm_projector = model.model.mm_projector.eval()
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """encode images."""
