@@ -1497,7 +1497,7 @@ class Glm4Chat(BaseChatTemplate):
             str: the concatenated prompt
         """
         prompt = super(Glm4Chat, self).get_prompt(prompt, sequence_start)
-        if sequence_start and self.capability == 'chat':
+        if sequence_start:
             prompt = self.start + prompt
         return prompt
 
