@@ -61,12 +61,12 @@ class Xcomposer2VisionModel(VisonModel):
 
         # additional components.
         with add_sys_path(self.model_path):
-            if config.architectures[0] == 'InternLM2ForCausalLM':
+            try:
                 # internlm-xcomposer2-4khd-7b
                 from ixc_utils import HD_transform
                 self.HD_transform = HD_transform
                 self._forward_func = self._forward_4khd_7b
-            else:
+            except:  # noqa
                 # internlm-xcomposer2-7b
                 self._forward_func = self._forward_7b
 
@@ -99,7 +99,7 @@ class Xcomposer2VisionModel(VisonModel):
                 device_map['plora_glb_GN'], lambda x:
                 (x[0].to(device=device_map['plora_glb_GN']), ))
 
-        self.model = model
+        self.model = model.eval()
 
     def _forward_7b(self, images: List[Image]) -> List[torch.Tensor]:
         """internlm-xcomposer2-7b vit forward."""

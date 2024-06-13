@@ -91,6 +91,8 @@ def get_model_name(model):
         return 'qwen'
     if ('internvl') in model_name:
         return 'internvl-internlm2'
+    if ('internlm-xcomposer2-4khd-7b') in model_name:
+        return 'internlm-xcomposer2-4khd'
     if ('internlm-xcomposer2') in model_name:
         return 'internlm-xcomposer2'
     if len(model_name.split('-')) > 2 and '-'.join(

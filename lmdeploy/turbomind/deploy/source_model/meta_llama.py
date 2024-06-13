@@ -173,7 +173,7 @@ class MetaLlamaReader(BaseReader):
         return self.params[f'layers.{i}.ffn_norm.weight']
 
 
-@INPUT_MODELS.register_module(name='llama')
+@INPUT_MODELS.register_module(name='meta_llama')
 class MetaLlamaModel(BaseInputModel):
     """Llama model in fb format."""
 
