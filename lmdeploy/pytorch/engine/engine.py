@@ -499,12 +499,12 @@ class Engine:
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor,
                        stopped: torch.Tensor):
         """update scheduler."""
+        next_token_ids = next_token_ids.numpy()
         for token, msg, stop in zip(next_token_ids, running, stopped):
             if msg.status != MessageStatus.RUNNING:
                 continue
             msg.num_new_tokens += 1
             update_token = token
-            # if msg.num_new_tokens > msg.sampling_param.max_new_tokens:
             if stop:
                 update_token = np.empty((0, ), dtype=np.int64)
             msg.update_token_ids(update_token)
@@ -592,7 +592,7 @@ class Engine:
                 return []
             if token in msg.sampling_param.stop_words:
                 return []
-            return [token.item()]
+            return [token]
 
         def __get_q_start_loc():
             inputs = self._inputs
@@ -605,9 +605,11 @@ class Engine:
 
         running = self._running
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
+        stopped = stopped.tolist()
         self.update_running(running, next_token_ids, stopped)
 
         # generate output
+        next_token_ids = next_token_ids.tolist()
         q_start_loc = __get_q_start_loc()
         outputs: Dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
