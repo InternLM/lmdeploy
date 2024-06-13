@@ -38,6 +38,7 @@ SUPPORTED_ARCHS = dict(
     # mini gemini
     MGMLlamaForCausalLM='llama',
     MiniGeminiLlamaForCausalLM='llama',
+    # chatglm2/3, glm4
     ChatGLMModel='glm4')
 
 
