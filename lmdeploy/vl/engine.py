@@ -89,7 +89,8 @@ class ImageEncoder:
                 item = await self._que.get()
                 record.enqueue(item[0], item[1])
             inputs = record.dequeue(self.max_batch_size)
-            outputs = self.forward(inputs)
+            outputs = await asyncio.get_event_loop().run_in_executor(
+                None, self.forward, inputs)
             record.done.extend(outputs)
             while record.nofify():
                 pass
