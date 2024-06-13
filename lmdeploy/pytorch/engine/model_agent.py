@@ -17,8 +17,9 @@ from ..adapter.adapter import (AdapterWeightMap, SchedulerAdapter,
                                get_indexed_lora_linears, get_loralinear_info,
                                update_lora_linears)
 from ..config import CacheConfig, ModelConfig
-from ..models import patch
+from ..models.patch import patch, update_model
 from ..utils import get_gpu_memory
+from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
 
 logger = get_logger('lmdeploy')
@@ -329,7 +330,6 @@ class StepContext:
     kv_caches: List
     is_decoding: bool
     world_size: int = 1
-    json_config: Dict = None
     local_adapter_ids: torch.LongTensor = None
     adapter_params: Dict[str, AdapterInfo] = None
     input_embeddings: torch.Tensor = None
@@ -343,7 +343,6 @@ class StepContext:
         inputs: ModelInputs,
         world_size: int = 1,
         device: str = 'cuda',
-        json_config: dict = None,
         kv_caches: List = None,
         cache_config: CacheConfig = None,
     ):
@@ -410,7 +409,6 @@ class StepContext:
                           kv_caches=kv_caches,
                           is_decoding=inputs.is_decoding,
                           world_size=world_size,
-                          json_config=json_config,
                           local_adapter_ids=inputs.local_adapter_ids,
                           adapter_params=adapter_params)
         return ret
@@ -462,7 +460,6 @@ def model_forward(
     patched_model: torch.nn.Module,
     inputs: ModelInputs,
     cache_engine: CacheEngine,
-    json_config: dict = None,
     world_size: int = 1,
     stream: torch.cuda.Stream = None,
 ):
@@ -474,7 +471,6 @@ def model_forward(
         context = StepContext.new(
             inputs=inputs,
             world_size=world_size,
-            json_config=json_config,
             kv_caches=cache_engine.gpu_cache,
             cache_config=cache_engine.cache_config,
         )
@@ -669,6 +665,7 @@ class BaseModelAgent(AutoModelAgent):
             _load_adapters(hf_model, adapters)
 
         patched_model = patch(hf_model, _PATCH_ARG_NAMES)
+        update_model(patched_model)
 
         if adapters:
             _unparam_lora_weight(patched_model)
@@ -706,7 +703,6 @@ class BaseModelAgent(AutoModelAgent):
             self.patched_model,
             inputs,
             self.cache_engine,
-            self.model_config.json_config,
             world_size=1,
             stream=self.stream,
         )
@@ -789,35 +785,6 @@ def _tp_build_model(
     patched_model = None
     cache_engine = None
 
-    def __get_device_map(model, device_map=None):
-        """get device map of model."""
-        import psutil
-        model_size = _get_model_memory_usage(model)
-        if psutil.virtual_memory().available < model_size:
-            logger.debug('Preload model on GPU.')
-            return device_map
-        else:
-            logger.debug('Preload model on CPU.')
-            return 'cpu'
-
-    def __load_params_and_buffers(param_mod, mod):
-        """load param and buffer."""
-        for name, param in param_mod.named_parameters(recurse=False):
-            mod.register_parameter(name, param)
-        for name, buffer in param_mod.named_buffers(recurse=False):
-            mod.register_buffer(name, buffer)
-
-    def __load_state_dict_assign(param_model, model):
-        """load state dict assign."""
-        try:
-            model.load_state_dict(param_model.state_dict(), assign=True)
-        except Exception:
-            __load_params_and_buffers(param_model, model)
-            mods = dict(model.named_modules())
-            for mod_name, param_mod in param_model.named_modules():
-                mod = mods[mod_name]
-                __load_params_and_buffers(param_mod, mod)
-
     def _broadcast_config(cache_config):
         """broadcast cache config, use minimum cache."""
         if rank == 0:
@@ -862,27 +829,21 @@ def _tp_build_model(
         model.eval()
         model.config.use_cache = True
 
-        if rank == 0:
-            with LoadNoInit():
-                device_map = __get_device_map(model, device_map)
-                param_model = AutoModelForCausalLM.from_pretrained(
-                    model_path,
-                    torch_dtype=torch_dtype,
-                    device_map=device_map,
-                    trust_remote_code=trust_remote_code,
-                    **model_config.init_kwargs)
-                param_model = _remove_unused_modules(param_model, model_config)
-                _load_adapters(param_model, adapters, device_map=device_map)
-                __load_state_dict_assign(param_model, model)
-                param_model = param_model.to('meta')
-                del param_model
-
         patched_model = patch(
             model,
             extra_args=_PATCH_ARG_NAMES,
             rank=rank,
             world_size=world_size,
         )
+        load_model_weights(patched_model,
+                           model_path,
+                           adapters,
+                           rank=rank,
+                           world_size=world_size,
+                           device='cuda')
+        if rank == 0:
+            logger.debug('Updating model.')
+        update_model(patched_model)
 
         _update_cache_config(model_config,
                              cache_config,
@@ -998,7 +959,6 @@ def _tp_model_loop(
             patched_model,
             inputs,
             cache_engine,
-            model_config.json_config,
             world_size=world_size,
             stream=stream,
         )
@@ -1221,7 +1181,6 @@ class TPModelAgent(AutoModelAgent):
             self.patched_model,
             inputs,
             self.cache_engine,
-            self.model_config.json_config,
             world_size=1,
             stream=self.stream,
         )
