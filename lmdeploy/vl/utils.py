@@ -15,6 +15,30 @@ def encode_image_base64(image: Image.Image) -> str:
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 
+def encode_file_base64(image_url: str) -> str:
+    """encode raw date to base64 format."""
+    res = ''
+    if image_url.startswith('http'):
+        FETCH_TIMEOUT = int(os.environ.get('LMDEPLOY_FETCH_TIMEOUT', 10))
+        headers = {
+            'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+        }
+        try:
+            response = requests.get(image_url,
+                                    headers=headers,
+                                    timeout=FETCH_TIMEOUT)
+            response.raise_for_status()
+            res = base64.b64encode(response.content).decode('utf-8')
+        except Exception:
+            pass
+    elif os.path.exists(image_url):
+        with open(image_url, 'rb') as image_file:
+            res = base64.b64encode(image_file.read()).decode('utf-8')
+    return res
+
+
 def load_image_from_base64(image: Union[bytes, str]) -> Image.Image:
     """load image from base64 format."""
     return Image.open(BytesIO(base64.b64decode(image)))
