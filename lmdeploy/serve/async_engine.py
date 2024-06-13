@@ -604,64 +604,65 @@ class AsyncEngine:
                 len(input_ids), 128)
             logger.error(
                 f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
-            if gen_config.max_new_tokens == 128:
-                logger.error(f'run out of tokens. session_id={session_id}.')
-                yield GenOut('', self.id2step[str(session_id)], len(input_ids),
-                             0, 'length')
-                if sequence_end is True and sequence_start is False:
-                    await self.end_session(session_id)
-
-        generator = await self.get_generator(False, session_id)
-        async with self.safe_run(session_id):
-            state = DetokenizeState()
-            response = ''
-            async for outputs in generator.async_stream_infer(
-                    session_id=session_id,
-                    **prompt_input,
-                    gen_config=gen_config,
-                    adapter_name=adapter_name,
-                    stream_output=stream_response,
-                    sequence_start=sequence_start,
-                    sequence_end=sequence_end,
-                    step=self.id2step[str(session_id)]):
-                # decode res
-                res, tokens = outputs.token_ids, outputs.num_token
-                if len(res) <= state.ids_offset:
-                    continue
-
-                ids_offset = state.ids_offset
-                response, state = self.tokenizer.detokenize_incrementally(
-                    res,
-                    state,
-                    skip_special_tokens=gen_config.skip_special_tokens)
-
-                res = res[ids_offset:]
-                logprobs = None
-                if outputs.logprobs:
-                    logprobs = outputs.logprobs[ids_offset:]
-
-                # response, history token len,
-                # input token len, gen token len
-                yield GenOut(response, self.id2step[str(session_id)],
-                             len(input_ids), tokens, finish_reason, res,
-                             logprobs)
-
-            finish_reason = 'length' \
-                if tokens >= gen_config.max_new_tokens else 'stop'
-            # utf-8 char at the end means it's a potential unfinished
-            # byte sequence
-            if not response.endswith('�'):
-                response = ''  # avaid returning the last response twice
-            yield GenOut(response, self.id2step[str(session_id)],
-                         len(input_ids), tokens, finish_reason)
-            # update step
-            self.id2step[str(session_id)] += len(input_ids) + tokens
-            if sequence_end:
-                self.id2step[str(session_id)] = 0
-            # manually end pytorch session
-            # TODO modify pytorch or turbomind api
-            if self.backend == 'pytorch' and sequence_end:
+        if self.id2step[str(session_id)] + len(
+                input_ids) + gen_config.max_new_tokens > self.session_len:
+            logger.error(f'run out of tokens. session_id={session_id}.')
+            yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
+                         'length')
+            if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
+        else:
+            generator = await self.get_generator(False, session_id)
+            async with self.safe_run(session_id):
+                state = DetokenizeState()
+                response = ''
+                async for outputs in generator.async_stream_infer(
+                        session_id=session_id,
+                        **prompt_input,
+                        gen_config=gen_config,
+                        adapter_name=adapter_name,
+                        stream_output=stream_response,
+                        sequence_start=sequence_start,
+                        sequence_end=sequence_end,
+                        step=self.id2step[str(session_id)]):
+                    # decode res
+                    res, tokens = outputs.token_ids, outputs.num_token
+                    if len(res) <= state.ids_offset:
+                        continue
+
+                    ids_offset = state.ids_offset
+                    response, state = self.tokenizer.detokenize_incrementally(
+                        res,
+                        state,
+                        skip_special_tokens=gen_config.skip_special_tokens)
+
+                    res = res[ids_offset:]
+                    logprobs = None
+                    if outputs.logprobs:
+                        logprobs = outputs.logprobs[ids_offset:]
+
+                    # response, history token len,
+                    # input token len, gen token len
+                    yield GenOut(response, self.id2step[str(session_id)],
+                                 len(input_ids), tokens, finish_reason, res,
+                                 logprobs)
+
+                finish_reason = 'length' \
+                    if tokens >= gen_config.max_new_tokens else 'stop'
+                # utf-8 char at the end means it's a potential unfinished
+                # byte sequence
+                if not response.endswith('�'):
+                    response = ''  # avaid returning the last response twice
+                yield GenOut(response, self.id2step[str(session_id)],
+                             len(input_ids), tokens, finish_reason)
+                # update step
+                self.id2step[str(session_id)] += len(input_ids) + tokens
+                if sequence_end:
+                    self.id2step[str(session_id)] = 0
+                # manually end pytorch session
+                # TODO modify pytorch or turbomind api
+                if self.backend == 'pytorch' and sequence_end:
+                    await self.end_session(session_id)
 
     def chat(self,
              prompt: str,

@@ -462,10 +462,13 @@ class Engine:
                                  num_appendable_ids: torch.Tensor):
         """batched stopping criteria."""
         num_appendable_ids = num_appendable_ids - 1
-        stopped = num_appendable_ids <= 0
+        # one more step to cache last token(stop word)
+        stopped = num_appendable_ids < 0
         if stop_words is not None:
             sw_stopped = (token_ids[:, None] == stop_words).any(1)
-            stopped = stopped | sw_stopped
+            one_ids = torch.clamp_max(num_appendable_ids, 0)
+            num_appendable_ids = torch.where(sw_stopped, one_ids,
+                                             num_appendable_ids)
         return stopped, num_appendable_ids
 
     @logging_timer('SamplingLogits', logger)
@@ -496,12 +499,13 @@ class Engine:
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor,
                        stopped: torch.Tensor):
         """update scheduler."""
+        next_token_ids = next_token_ids.numpy()
         for token, msg, stop in zip(next_token_ids, running, stopped):
             if msg.status != MessageStatus.RUNNING:
                 continue
             msg.num_new_tokens += 1
             update_token = token
-            if msg.num_new_tokens > msg.sampling_param.max_new_tokens:
+            if stop:
                 update_token = np.empty((0, ), dtype=np.int64)
             msg.update_token_ids(update_token)
             if stop:
@@ -581,11 +585,14 @@ class Engine:
                             logits: torch.Tensor, stopped: torch.Tensor):
         """make infer output."""
 
-        def __get_out_token_ids(token: torch.Tensor, msg: SchedulerSequence):
+        def __get_out_token_ids(token: torch.Tensor, msg: SchedulerSequence,
+                                stopped: bool):
             """check if output is necessary."""
+            if stopped:
+                return []
             if token in msg.sampling_param.stop_words:
                 return []
-            return [token.item()]
+            return [token]
 
         def __get_q_start_loc():
             inputs = self._inputs
@@ -598,21 +605,28 @@ class Engine:
 
         running = self._running
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
+        stopped = stopped.tolist()
         self.update_running(running, next_token_ids, stopped)
 
         # generate output
+        next_token_ids = next_token_ids.tolist()
         q_start_loc = __get_q_start_loc()
         outputs: Dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
             if not is_run[idx]:
+                continue
+            token_ids = __get_out_token_ids(next_token_ids[idx], msg,
+                                            stopped[idx])
+            finish = msg.status == MessageStatus.STOPPED
+            if not finish and len(token_ids) == 0:
                 continue
             session_id = msg.session_id
             out = InferOutput(
                 session_id=session_id,
                 sender_id=msg.sender_id,
                 req_id=msg.req_id,
-                finish=(msg.status == MessageStatus.STOPPED),
-                token_ids=__get_out_token_ids(next_token_ids[idx], msg),
+                finish=finish,
+                token_ids=token_ids,
             )
             outputs[session_id] = out
 
