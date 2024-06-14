@@ -22,6 +22,7 @@ from ..models.patch import patch, update_model
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
+from .devices import get_current_device_utils
 
 logger = get_logger('lmdeploy')
 
@@ -412,6 +413,8 @@ class StepContext:
                           world_size=world_size,
                           local_adapter_ids=inputs.local_adapter_ids,
                           adapter_params=adapter_params)
+
+        ret = get_current_device_utils().update_step_context(ret)
         return ret
 
     @classmethod

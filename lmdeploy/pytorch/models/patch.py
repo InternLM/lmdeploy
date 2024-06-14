@@ -16,7 +16,7 @@ from .module_map import DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP
 logger = get_logger('lmdeploy')
 
 
-def _get_rewrite_qualname(origin_qualname: str, module_map: dict[str,
+def _get_rewrite_qualname(origin_qualname: str, module_map: Dict[str,
                                                                  str]) -> str:
     """get rewrite module from origin module name.
 
@@ -54,7 +54,7 @@ def _class_from_qualname(qualname: str) -> Any:
     return cls_type
 
 
-def _find_rewrite_module_qualname(model, module_map: dict[str, str]):
+def _find_rewrite_module_qualname(model, module_map: Dict[str, str]):
     """find rewrite module."""
     module_name = inspect.getmodule(model).__name__
     class_name = model.__class__.__name__
@@ -114,7 +114,7 @@ def _update_module_type(model: Any, cls_type: type, custom_attrs: dict = None):
 
 def _patch(model: torch.nn.Module,
            context: Addict,
-           module_map: dict[str, str] = None) -> torch.nn.Module:
+           module_map: Dict[str, str] = None) -> torch.nn.Module:
     """patch the model with rewrite module.
 
     Args:
