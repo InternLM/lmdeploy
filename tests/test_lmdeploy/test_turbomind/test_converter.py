@@ -3,8 +3,7 @@ from lmdeploy.turbomind.deploy.converter import (
     get_input_model_registered_name,
     get_output_model_registered_name_and_config)
 from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
-from lmdeploy.turbomind.deploy.target_model.base import (OUTPUT_MODELS,
-                                                         TurbomindModelConfig)
+from lmdeploy.turbomind.deploy.target_model.base import OUTPUT_MODELS
 
 
 def test_registered_models():
@@ -47,12 +46,40 @@ def test_registered_models():
         assert config.model_arch is not None
 
 
-def test_turbomind_model_config_udpate():
-    this = TurbomindModelConfig.from_dict({}, allow_none=True)
-    this.head_num = 100
-    this.weight_type = 'fp16'
+def test_update_from_engine_config():
+    import copy
+    _, _config = get_output_model_registered_name_and_config(
+        'internlm/internlm2-chat-7b', model_format='hf', group_size=0)
+    config = copy.deepcopy(_config)
+    config.update_from_engine_config(None)
+    assert (config == _config)
 
-    engine_config = TurbomindEngineConfig(model_format='awq',
+    config = copy.deepcopy(_config)
+    config.update_from_engine_config(TurbomindEngineConfig())
+    assert config.tensor_para_size == 1
+    assert config.session_len == 32776
+    assert config.max_batch_size == 128
+    assert config.cache_max_entry_count == 0.8
+    assert config.quant_policy == 0
+    assert config.max_prefill_iters == 5
+    assert config.num_tokens_per_iter == 8192
+
+    config = copy.deepcopy(_config)
+    config.update_from_engine_config(
+        TurbomindEngineConfig(max_prefill_token_num=2048,
+                              num_tokens_per_iter=0))
+    assert config.max_prefill_iters == 17
+    assert config.num_tokens_per_iter == 2048
+
+    config = copy.deepcopy(_config)
+    config.update_from_engine_config(
+        TurbomindEngineConfig(max_prefill_token_num=2048,
+                              num_tokens_per_iter=256))
+    assert config.max_prefill_iters == 1
+    assert config.num_tokens_per_iter == 256
+
+    config = copy.deepcopy(_config)
+    engine_config = TurbomindEngineConfig(model_format='hf',
                                           tp=2,
                                           session_len=4000,
                                           max_batch_size=100,
@@ -62,24 +89,16 @@ def test_turbomind_model_config_udpate():
                                           use_logn_attn=True,
                                           max_prefill_iters=64,
                                           num_tokens_per_iter=256)
-    other = TurbomindModelConfig.from_engine_config(engine_config)
-    this.update(other)
 
-    assert (this.head_num == 100)
-    assert (this.weight_type == 'fp16')
-    assert (this.tensor_para_size == other.tensor_para_size)
-    assert (this.session_len == other.session_len)
-    assert (this.max_batch_size == other.max_batch_size)
-    assert (this.cache_max_entry_count == other.cache_max_entry_count)
-    assert (this.max_prefill_iters == other.max_prefill_iters)
-    assert (this.num_tokens_per_iter == other.num_tokens_per_iter)
-    assert (this.quant_policy == other.quant_policy)
-    assert (this.rope_scaling_factor == other.rope_scaling_factor)
-    assert (this.use_logn_attn == other.use_logn_attn)
+    config.update_from_engine_config(engine_config)
 
-    engine_config = TurbomindEngineConfig(max_prefill_iters=512,
-                                          num_tokens_per_iter=1024)
-    other = TurbomindModelConfig.from_engine_config(engine_config)
-    this.update(other)
-    assert (this.max_prefill_iters == other.max_prefill_iters)
-    assert (this.num_tokens_per_iter == other.num_tokens_per_iter)
+    assert (config.tensor_para_size == engine_config.tp)
+    assert (config.session_len == engine_config.session_len)
+    assert (config.max_batch_size == engine_config.max_batch_size)
+    assert (
+        config.cache_max_entry_count == engine_config.cache_max_entry_count)
+    assert (config.quant_policy == engine_config.quant_policy)
+    assert (config.rope_scaling_factor == engine_config.rope_scaling_factor)
+    assert (config.use_logn_attn == engine_config.use_logn_attn)
+    assert (config.max_prefill_iters == engine_config.max_prefill_iters)
+    assert (config.num_tokens_per_iter == engine_config.num_tokens_per_iter)
