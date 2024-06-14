@@ -286,7 +286,9 @@ class TurboMind:
             logger.info(f'found tp={cfg.tensor_para_size} in config.ini.')
             self.gpu_count = cfg.tensor_para_size
 
-        cfg.update_from_engine_config(engine_config)
+        if engine_config is not None:
+            engine_config.tp = cfg.tensor_para_size
+            cfg.update_from_engine_config(engine_config)
 
         # update cls
         self.config = cfg
