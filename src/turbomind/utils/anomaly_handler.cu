@@ -92,7 +92,7 @@ __global__ void FixLogitsAnomaly(T*   logits,  //
 
     // Clear all logits
     for (int i = threadIdx.x; i < vocab_size; i += BLOCK_SIZE) {
-        ptr[i] = T(0);
+        ptr[i] = T(0.f);
     }
 
     // Set the fallback token
