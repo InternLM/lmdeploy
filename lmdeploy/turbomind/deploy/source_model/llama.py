@@ -31,7 +31,7 @@ class LlamaReader(BaseReader):
         self.model_cfg = model_cfg
         tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
         if tie_word_embeddings:
-            self.output_weight_key = 'model.embed_tokens.weight'
+            self.output_weight_key = self.tok_embeddings_key
         self.init_layer_id()
 
     def init_layer_id(self):
