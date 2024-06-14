@@ -489,7 +489,7 @@ jobs:
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-chat-20b --tp 2 --backend pytorch > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
-      - name: Test lmdeploy - restful api pytorch
+      - name: Test lmdeploy - restful api
         timeout-minutes: 75
         run: |
           pytest autotest/interface/restful/test_restful_chat_func.py -n 20 --alluredir=allure-results
@@ -509,7 +509,7 @@ jobs:
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2-20b --tp 2 --backend pytorch > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
-      - name: Test lmdeploy - restful api pytorch - base
+      - name: Test lmdeploy - restful api - base
         timeout-minutes: 40
         run: |
           pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=allure-results
