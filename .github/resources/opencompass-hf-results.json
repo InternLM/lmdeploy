@@ -34,11 +34,16 @@
     },
     "baichuan-inc/Baichuan2-7B-Chat": {
         "ceval": "53.85",
-        "mmlu": "50.60",
+        "mmlu": "52.49",
+        "GaokaoBench": "37.54",
+        "winogrande": "52.80",
+        "hellaswag":"51.67",
+        "math":"2.90",
         "wic": "0.16",
         "wsc": "2.88",
         "triviaqa": "46.80",
         "gsm8k": "32.15",
+        "bbh":"35.92",
         "race-middle": "71.94",
         "race-high": "67.58",
         "crows_pairs": "8.29"
