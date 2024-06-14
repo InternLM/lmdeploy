@@ -650,7 +650,8 @@ class BaseModelAgent(AutoModelAgent):
                      trust_remote_code: bool = True):
         """build patched model."""
         device = 'cuda'
-        with LoadNoInit():
+        with LoadNoInit(), warnings.catch_warnings():
+            warnings.simplefilter('ignore')
             model_init_kwargs = dict(torch_dtype=torch_dtype,
                                      device_map=device)
             model_init_kwargs.update(self.model_config.init_kwargs)
