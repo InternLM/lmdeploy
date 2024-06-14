@@ -815,7 +815,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
         pipe('Shanghai is', gen_config=gen_config)
 
     with pytest.raises(AssertionError):
-        gen_config = GenerationConfig(temperature=1.01)
+        gen_config = GenerationConfig(temperature=2.01)
         pipe('Shanghai is', gen_config=gen_config)
 
     with pytest.raises(AssertionError):
