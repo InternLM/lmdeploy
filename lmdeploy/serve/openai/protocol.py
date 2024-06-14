@@ -147,7 +147,7 @@ class ChatMessage(BaseModel):
     """Chat messages."""
     role: str
     content: str
-    tool_calls: List[ToolCall]
+    tool_calls: Optional[List[ToolCall]] = Field(default=None, examples=[None])
 
 
 class LogProbs(BaseModel):
