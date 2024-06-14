@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import dataclasses
 import os
 import os.path as osp
 import re
@@ -134,6 +135,8 @@ def get_output_model_registered_name_and_config(model_path: str,
     weight_type = 'fp16'
 
     config = TurbomindModelConfig.from_dict({}, allow_none=True)
+    for field in dataclasses.fields(TurbomindModelConfig):
+        setattr(config, field.name, None)
 
     if model_format == 'meta_llama':
         session_len = 2048
