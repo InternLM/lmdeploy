@@ -289,7 +289,7 @@ def test_backend_config_session_len(config, model, backend, worker_id):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(session_len=10, tp=2)
         pipe = pipeline(model_path, backend_config=backend_config)
-        response = pipe(['Hi, pls intro yourself' * 3, 'Shanghai is' * 10])
+        response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 
         result = True
         for i in range(2):
