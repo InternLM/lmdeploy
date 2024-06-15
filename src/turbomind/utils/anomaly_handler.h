@@ -3,16 +3,19 @@
 
 #pragma once
 
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <functional>
 #include <memory>
+#include <string>
 
 namespace turbomind {
 
 class AnomalyHandler {
 public:
     static constexpr size_t max_entries = 65536;
-    using size_type                     = unsigned long long;
+
+    using size_type = unsigned long long;
 
     ~AnomalyHandler();
 
