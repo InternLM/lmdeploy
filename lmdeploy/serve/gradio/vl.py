@@ -141,7 +141,7 @@ def run_local(model_path: str,
                     step=step,
                     gen_config=gen_config,
                     stream_output=True):
-                _, res, tokens = outputs
+                res, tokens = outputs.token_ids, outputs.num_token
                 response, state = engine.tokenizer.detokenize_incrementally(
                     res,
                     state,

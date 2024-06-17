@@ -18,7 +18,8 @@ from lmdeploy.model import MODELS, best_match_model
      ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
      ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
      ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
-     ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek', 'deepseek-chat']),
+     ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
+     ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
      ('tiiuae/falcon-7b', ['falcon']), ('workspace', [None])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
@@ -102,6 +103,42 @@ def test_internlm_chat():
 
     model = MODELS.get('internlm-chat-7b-8k')()
     assert model.session_len == 8192
+
+
+def test_messages2prompt4internlm2_chat():
+    model = MODELS.get('internlm2-chat-7b')()
+    # Test with a single message
+    messages = [
+        {
+            'role': 'system',
+            'name': 'interpreter',
+            'content': 'You have access to python environment.'
+        },
+        {
+            'role': 'user',
+            'content': 'use python drwa a line'
+        },
+        {
+            'role': 'assistant',
+            'content': '<|action_start|><|interpreter|>\ncode<|action_end|>\n'
+        },
+        {
+            'role': 'environment',
+            'name': 'interpreter',
+            'content': "[{'type': 'image', 'content': 'image url'}]"
+        },
+    ]
+    expected_prompt = (
+        model.system.strip() +
+        ' name=<|interpreter|>\nYou have access to python environment.' +
+        model.eosys + model.user + 'use python drwa a line' + model.eoh +
+        model.assistant +
+        '<|action_start|><|interpreter|>\ncode<|action_end|>\n' + model.eoa +
+        model.separator + model.environment.strip() +
+        " name=<|interpreter|>\n[{'type': 'image', 'content': 'image url'}]" +
+        model.eoenv + model.assistant)
+    actual_prompt = model.messages2prompt(messages)
+    assert actual_prompt == expected_prompt
 
 
 def test_baichuan():

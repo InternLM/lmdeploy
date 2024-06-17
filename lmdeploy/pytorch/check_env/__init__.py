@@ -63,6 +63,10 @@ def check_env():
     check_env_triton()
 
 
+MIN_TRANSFORMERS_VERSION = '4.33.0'
+MAX_TRANSFORMERS_VERSION = '4.38.2'
+
+
 def check_transformers_version(model_path: str,
                                trust_remote_code: bool = True):
     """check transformers version."""
@@ -76,6 +80,14 @@ def check_transformers_version(model_path: str,
         try:
             import transformers
             trans_version = version.parse(transformers.__version__)
+            min_version = version.parse(MIN_TRANSFORMERS_VERSION)
+            max_version = version.parse(MAX_TRANSFORMERS_VERSION)
+            if trans_version < min_version or trans_version > max_version:
+                logger.warning('LMDeploy requires transformers version: '
+                               f'[{MIN_TRANSFORMERS_VERSION} ~ '
+                               f'{MAX_TRANSFORMERS_VERSION}], '
+                               'but found version: '
+                               f'{transformers.__version__}')
         except Exception as e:
             _handle_exception(e, 'transformers', logger)
         return transformers, trans_version
@@ -99,9 +111,11 @@ def check_transformers_version(model_path: str,
         """check model transformers version."""
         logger.debug('Checking <Model> required transformers version.')
         try:
-            model_trans_version = getattr(config, 'transformers_version')
-            model_trans_version = version.parse(model_trans_version)
-            assert trans_version >= model_trans_version, 'Version mismatch.'
+            model_trans_version = getattr(config, 'transformers_version', None)
+            if model_trans_version is not None:
+                model_trans_version = version.parse(model_trans_version)
+                assert trans_version >= model_trans_version, \
+                    'Version mismatch.'
         except Exception as e:
             message = (f'model `{model_path}` requires '
                        f'transformers version {model_trans_version} '

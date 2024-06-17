@@ -3,7 +3,7 @@ import os
 import random
 
 from lmdeploy.messages import EngineGenerationConfig, TurbomindEngineConfig
-from lmdeploy.model import MODELS, ChatTemplateConfig
+from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.async_engine import deduce_a_name
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _stop_words
@@ -37,10 +37,12 @@ def main(model_path: str,
          cache_max_entry_count: float = 0.8,
          cache_block_seq_len: int = 64,
          rope_scaling_factor: float = 0.0,
+         enable_prefix_caching: bool = False,
          session_len: int = None,
          stream_output: bool = True,
          request_output_len: int = 1024,
          chat_template: str = None,
+         chat_template_cfg: ChatTemplateConfig = None,
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -61,21 +63,33 @@ def main(model_path: str,
         cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
         cache_block_seq_len (int): the length of the token sequence in a k/v block, default to 64
         rope_scaling_factor (float): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
+        enable_prefix_caching (bool): whether enable prefix caching
         session_len (int): the length input output tokens
         stream_output (bool): indicator for streaming output or not
         request_output_len (int): output token nums
         chat_template (str): user defined chat template
+        chat_template_cfg (ChatTemplateConfig): chat template config
         kwargs (dict): unused args
     """ # noqa: E 501
-    print('unused kwargs', kwargs, sep='')
+    if len(kwargs):
+        print('unused kwargs', kwargs, sep='')
 
     # chat template
     if chat_template is not None:
-        chat_template_config = ChatTemplateConfig.from_json(chat_template)
-        model = chat_template_config.chat_template
+        chat_template_cfg = ChatTemplateConfig.from_json(chat_template)
+    model_name = deduce_a_name(model_path, model_name, None, chat_template_cfg)
+    if model_name in MODELS.module_dict.keys():
+        chat_template_name = model_name
     else:
-        model_name = deduce_a_name(model_path, model_name, None, None)
-        model = MODELS.get(model_name)(capability=cap)
+        chat_template_name = best_match_model(model_path)
+    if chat_template_cfg is None:
+        chat_template_cfg = ChatTemplateConfig(chat_template_name)
+    elif chat_template_cfg.model_name is None:
+        chat_template_cfg.model_name = chat_template_name
+    elif chat_template.capability is None:
+        chat_template.capability = cap
+    print(f'match template: <{chat_template_cfg.model_name}>')
+    model = chat_template_cfg.chat_template
 
     # engine
     if session_len is None:
@@ -88,6 +102,7 @@ def main(model_path: str,
         session_len=session_len,
         cache_max_entry_count=cache_max_entry_count,
         cache_block_seq_len=cache_block_seq_len,
+        enable_prefix_caching=enable_prefix_caching,
         quant_policy=quant_policy,
         rope_scaling_factor=rope_scaling_factor,
         tp=tp)
@@ -125,7 +140,6 @@ def main(model_path: str,
             seed = random.getrandbits(64)
         else:
             prompt = model.get_prompt(prompt, nth_round == 1)
-            print(f'{prompt} ', end='', flush=True)
             input_ids = tokenizer.encode(prompt, nth_round == 1)
             gen_config.random_seed = seed
 
@@ -144,6 +158,7 @@ def main(model_path: str,
                       ' Please end the session.')
                 continue
 
+            print(f'{prompt} ', end='', flush=True)
             state = DetokenizeState()
             for outputs in generator.stream_infer(
                     session_id=session_id,
@@ -153,7 +168,7 @@ def main(model_path: str,
                     sequence_end=sequence_end,
                     step=step,
                     stream_output=stream_output):
-                _, res, tokens = outputs
+                res, tokens = outputs.token_ids, outputs.num_token
                 # decode res
                 response, state = tokenizer.detokenize_incrementally(
                     res, state=state)

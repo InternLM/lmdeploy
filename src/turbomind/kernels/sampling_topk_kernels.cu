@@ -26,6 +26,7 @@
 
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
+#include "src/turbomind/utils/constant.h"
 
 namespace turbomind {
 
@@ -117,7 +118,7 @@ template void invokeAddBiasEndMask(float*       logits,
                                    const int    vocab_size,
                                    const int    vocab_size_padded,
                                    cudaStream_t stream);
-
+#if 0
 template void invokeAddBiasEndMask(half*        logits,
                                    const half*  bias,
                                    const int*   end_ids,
@@ -126,7 +127,7 @@ template void invokeAddBiasEndMask(half*        logits,
                                    const int    vocab_size,
                                    const int    vocab_size_padded,
                                    cudaStream_t stream);
-
+#endif
 template<typename T, int BLOCK_SIZE_, int BLOCKS_PER_BEAM_>
 __global__ void topk_stage1(const T* __restrict log_probs,
                             T*          tmp_log_probs,
@@ -210,6 +211,9 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                      bool*          finished,
                                      float*         cum_log_probs,
                                      float*         output_log_probs,
+                                     float*         sampled_logprobs,
+                                     uint32_t*      sampled_indexes,
+                                     uint32_t*      sampled_nums,
                                      const int      max_top_k,
                                      const int*     top_ks,
                                      const float    top_p,
@@ -279,6 +283,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
         __syncthreads();
     }
 
+    int selected_i;
     if (tid == 0) {
         rand_num = (float)curand_uniform(curandstate + blockIdx.x) * prob_threshold * s_sum;
         for (int i = 0; i < k; i++) {
@@ -301,12 +306,41 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                         output_log_probs[batch_id] = log_prob - logf(s_sum);
                     }
                 }
+                selected_i = i;
                 break;
             }
         }
         if (sequence_length != nullptr && finished != nullptr) {
             sequence_length[batch_id] = finished[batch_id] ? sequence_length[batch_id] : sequence_length[batch_id] + 1;
             finished[batch_id]        = ids[batch_id] == end_ids[batch_id] ? true : false;
+        }
+    }
+
+    if (sampled_logprobs != nullptr && sampled_indexes != nullptr && sampled_nums != nullptr) {
+        __shared__ int   sampled_n;
+        __shared__ float cum_probs;
+
+        if (tid == 0) {
+            float _cum_probs = 0.0f;
+            sampled_n        = k;
+            cum_probs        = s_sum;
+            for (int i = 0; i < k; i++) {
+                _cum_probs += s_val2[i] / s_sum;
+                if (_cum_probs > prob_threshold && i >= selected_i) {
+                    cum_probs = _cum_probs * s_sum;
+                    sampled_n = i + 1;
+                    break;
+                }
+            }
+            sampled_nums[batch_id] = sampled_n;
+        }
+        __syncthreads();
+
+        int   local_sampled_n = sampled_n;
+        float local_cum_probs = cum_probs;
+        for (int ite = tid; ite < local_sampled_n; ite += BLOCK_SIZE_) {
+            sampled_logprobs[batch_id * kMaxLogProb + ite] = logf(s_val2[ite]) - logf(local_cum_probs);
+            sampled_indexes[batch_id * kMaxLogProb + ite] = topk_tmp_id_buf[batch_id * stride + s_id[ite]] % vocab_size;
         }
     }
 }
@@ -333,6 +367,9 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                                                                                  finished,             \
                                                                                                  cum_log_probs,        \
                                                                                                  output_log_probs,     \
+                                                                                                 sampled_logprobs,     \
+                                                                                                 sampled_indexes,      \
+                                                                                                 sampled_nums,         \
                                                                                                  max_top_k,            \
                                                                                                  top_ks,               \
                                                                                                  top_p,                \
@@ -365,6 +402,9 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                                                                                  finished,             \
                                                                                                  cum_log_probs,        \
                                                                                                  output_log_probs,     \
+                                                                                                 sampled_logprobs,     \
+                                                                                                 sampled_indexes,      \
+                                                                                                 sampled_nums,         \
                                                                                                  max_top_k,            \
                                                                                                  top_ks,               \
                                                                                                  top_p,                \
@@ -385,6 +425,9 @@ void invokeBatchTopKSampling(void*          workspace,
                              bool*          finished,
                              float*         cum_log_probs,
                              float*         output_log_probs,
+                             float*         sampled_logprobs,
+                             uint32_t*      sampled_indexes,
+                             uint32_t*      sampled_nums,
                              curandState_t* curandstate,
                              const int      max_top_k,
                              const int*     top_ks,
@@ -449,6 +492,9 @@ template void invokeBatchTopKSampling(void*          workspace,
                                       bool*          finished_buf,
                                       float*         cum_log_probs,
                                       float*         output_log_probs,
+                                      float*         sampled_logprobs,
+                                      uint32_t*      sampled_indexes,
+                                      uint32_t*      sampled_nums,
                                       curandState_t* curandstate,
                                       const int      max_top_k,
                                       const int*     top_ks,
@@ -459,7 +505,7 @@ template void invokeBatchTopKSampling(void*          workspace,
                                       cudaStream_t   stream,
                                       const int      batch_size,
                                       const bool*    skip_decode);
-
+#if 0
 template void invokeBatchTopKSampling(void*          workspace,
                                       size_t&        workspace_size,
                                       const half*    log_probs,
@@ -468,6 +514,9 @@ template void invokeBatchTopKSampling(void*          workspace,
                                       bool*          finished_buf,
                                       float*         cum_log_probs,
                                       float*         output_log_probs,
+                                      float*         sampled_logprobs,
+                                      uint32_t*      sampled_indexes,
+                                      uint32_t*      sampled_nums,
                                       curandState_t* curandstate,
                                       const int      max_top_k,
                                       const int*     top_ks,
@@ -478,7 +527,7 @@ template void invokeBatchTopKSampling(void*          workspace,
                                       cudaStream_t   stream,
                                       const int      batch_size,
                                       const bool*    skip_decode);
-
+#endif
 template<typename T>
 void invokeTopKSampling(void*          workspace,
                         size_t&        workspace_size,
@@ -505,6 +554,9 @@ void invokeTopKSampling(void*          workspace,
                             finished_buf,
                             cum_log_probs,
                             output_log_probs,
+                            nullptr,
+                            nullptr,
+                            nullptr,
                             curandstate,
                             top_k,
                             nullptr,
@@ -533,7 +585,7 @@ template void invokeTopKSampling(void*          workspace,
                                  cudaStream_t   stream,
                                  const int      batch_size,
                                  const bool*    skip_decode);
-
+#if 0
 template void invokeTopKSampling(void*          workspace,
                                  size_t&        workspace_size,
                                  const half*    log_probs,
@@ -550,7 +602,7 @@ template void invokeTopKSampling(void*          workspace,
                                  cudaStream_t   stream,
                                  const int      batch_size,
                                  const bool*    skip_decode);
-
+#endif
 template<typename T>
 void invokeTopKTopPSampling(void*          workspace,
                             size_t&        workspace_size,
@@ -586,7 +638,7 @@ void invokeTopKTopPSampling(void*          workspace,
                        batch_size,
                        nullptr);
 }
-
+#if 0
 template void invokeTopKTopPSampling(void*          workspace,
                                      size_t&        workspace_size,
                                      int*           output_ids,
@@ -618,5 +670,5 @@ template void invokeTopKTopPSampling(void*          workspace,
                                      const int      vocab_size_padded,
                                      const int*     end_ids,
                                      cudaStream_t   stream);
-
+#endif
 }  // namespace turbomind

@@ -303,6 +303,25 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
                                                                   local_batch_size * beam_width},
                                                                  step_offset + local_batch_offset)});
         }
+        if (output_tensors->isExist("sampled_logprobs")) {
+            Tensor sampled_logprobs = output_tensors->at("sampled_logprobs");
+            decode_output_tensors.insert(
+                {"sampled_logprobs",
+                 sampled_logprobs.slice({local_batch_size, beam_width, sampled_logprobs.shape[2]},
+                                        local_batch_offset * sampled_logprobs.shape[2])});
+        }
+        if (output_tensors->isExist("sampled_indexes")) {
+            Tensor sampled_indexes = output_tensors->at("sampled_indexes");
+            decode_output_tensors.insert(
+                {"sampled_indexes",
+                 sampled_indexes.slice({local_batch_size, beam_width, sampled_indexes.shape[2]},
+                                       local_batch_offset * sampled_indexes.shape[2])});
+        }
+        if (output_tensors->isExist("sampled_nums")) {
+            Tensor sampled_nums = output_tensors->at("sampled_nums");
+            decode_output_tensors.insert(
+                {"sampled_nums", sampled_nums.slice({local_batch_size, beam_width}, local_batch_offset)});
+        }
 
         // Run topk / topp decode layers.
         // Currently, we support batch sampling. If the runtime arguments are like
@@ -384,6 +403,6 @@ bool DynamicDecodeLayer<T>::hasDiffRuntimeArgs(TensorMap* input_tensors)
 }
 
 template class DynamicDecodeLayer<float>;
-template class DynamicDecodeLayer<half>;
+// template class DynamicDecodeLayer<half>;
 
 }  // namespace turbomind

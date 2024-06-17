@@ -23,6 +23,7 @@
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/triton_backend/triton_utils.hpp"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <algorithm>
 #include <functional>
@@ -43,10 +44,10 @@ void triton_stream_callback(std::unordered_map<std::string, ft::Tensor>* output_
 }
 
 template<typename T>
-LlamaTritonModelInstance<T>::LlamaTritonModelInstance(
-    std::shared_ptr<LlamaTritonSharedModelInstance<T>>      instance,
-    std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator):
-    instance_(std::move(instance)), allocator_(std::move(allocator))
+LlamaTritonModelInstance<T>::LlamaTritonModelInstance(std::shared_ptr<LlamaTritonSharedModelInstance<T>>      instance,
+                                                      std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator,
+                                                      int device_id):
+    device_id_{device_id}, instance_(std::move(instance)), allocator_(std::move(allocator))
 {
 }
 
@@ -55,9 +56,6 @@ std::unordered_map<std::string, ft::Tensor> LlamaTritonModelInstance<T>::convert
     std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-    move_tensor_H2D(input_tensors->at("input_ids"), d_input_ids_, &allocator_);
-    move_tensor_H2D(input_tensors->at("input_lengths"), d_input_lengths_, &allocator_);
 
     const size_t request_batch_size = input_tensors->at("input_ids").shape[0];
     const size_t input_data_len     = input_tensors->at("input_ids").shape[1];
@@ -126,9 +124,9 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
                                      ft::AbstractInstanceComm*                                        instance_comm)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    // for (const auto& kv : *input_tensors) {
-    //     TM_LOG_INFO("%s: %s", kv.first.c_str(), format_vector(kv.second.shape).c_str());
-    // }
+
+    // In some cases, this is needed to trigger the creation of CUDA context, or later `cudaMallocAsync` will die
+    ft::check_cuda_error(cudaSetDevice(device_id_));
 
     FT_CHECK_WITH_INFO(input_tensors->at("input_ids").shape.size() == 2,
                        "input_tensors->at(\"input_ids\").shape.size() == 2");
@@ -177,6 +175,37 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
                                           ft::TYPE_FP32,
                                           std::vector<size_t>{request_batch_size, beam_width},
                                           d_cum_log_probs_}});
+    }
+
+    if (input_tensors->count("logprobs")) {
+        size_t max_logprob_length = std::min((int)max_request_output_len, instance_->session_len) + 1;
+        h_logprob_vals_           = (float*)std::realloc(
+            h_logprob_vals_, sizeof(float) * request_batch_size * beam_width * max_logprob_length * ft::kMaxLogProb);
+        h_logprob_indexes_ = (uint32_t*)std::realloc(h_logprob_indexes_,
+                                                     sizeof(uint32_t) * request_batch_size * beam_width
+                                                         * max_logprob_length * ft::kMaxLogProb);
+        h_logprob_nums_    = (uint32_t*)std::realloc(
+            h_logprob_nums_, sizeof(uint32_t) * request_batch_size * beam_width * max_logprob_length);
+
+        output_tensors.insert(
+            {{"logprob_vals",
+              ft::Tensor{ft::MEMORY_CPU,
+                         ft::TYPE_FP32,
+                         std::vector<size_t>{request_batch_size, beam_width, max_logprob_length, ft::kMaxLogProb},
+                         h_logprob_vals_}}});
+
+        output_tensors.insert(
+            {{"logprob_indexes",
+              ft::Tensor{ft::MEMORY_CPU,
+                         ft::TYPE_UINT32,
+                         std::vector<size_t>{request_batch_size, beam_width, max_logprob_length, ft::kMaxLogProb},
+                         h_logprob_indexes_}}});
+
+        output_tensors.insert({{"logprob_nums",
+                                ft::Tensor{ft::MEMORY_CPU,
+                                           ft::TYPE_UINT32,
+                                           std::vector<size_t>{request_batch_size, beam_width, max_logprob_length},
+                                           h_logprob_nums_}}});
     }
 
     if (is_return_logits) {
@@ -240,9 +269,14 @@ void LlamaTritonModelInstance<T>::freeBuffer()
     allocator_->free((void**)(&d_output_log_probs_));
     allocator_->free((void**)(&d_cum_log_probs_));
     std::free(h_total_output_lengths_);
+    std::free(h_logprob_vals_);
+    std::free(h_logprob_indexes_);
+    std::free(h_logprob_nums_);
 }
 
+#ifdef ENABLE_FP32
 template struct LlamaTritonModelInstance<float>;
+#endif
 template struct LlamaTritonModelInstance<half>;
 #ifdef ENABLE_BF16
 template struct LlamaTritonModelInstance<__nv_bfloat16>;

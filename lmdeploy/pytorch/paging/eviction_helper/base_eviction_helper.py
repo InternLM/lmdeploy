@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
+from typing import List
 
 from ...messages import SchedulerSequence
-from ..block_manager import BaseBlockManager
+from ..scheduler import Scheduler
 
 SeqList = List[SchedulerSequence]
 
@@ -10,33 +10,17 @@ SeqList = List[SchedulerSequence]
 class BaseEvictionHelper:
     """Base eviction helper."""
 
-    def __init__(self, block_manager: BaseBlockManager):
-        self.block_manager: BaseBlockManager = block_manager
+    def __init__(self, scheduler: Scheduler):
+        self.scheduler = scheduler
+        self.block_manager = scheduler.block_manager
+        self.block_trie = scheduler.block_trie
 
     def need_swap_in(self, seq: SchedulerSequence):
         """sequence need swap in."""
         raise NotImplementedError('Not implemented.')
 
-    def try_swap_out(self, seq: SchedulerSequence, swap_out_map: Dict[int,
-                                                                      int]):
-        """try swap out."""
+    def evict_for_seq(self, seq: SchedulerSequence,
+                      evictable_seqs: List[SchedulerSequence],
+                      prealloc_size: int):
+        """evict seqs."""
         raise NotImplementedError('Not implemented.')
-
-    def try_swap_in(self, seq: SchedulerSequence, swap_in_map: Dict[int, int]):
-        """try swap in."""
-        raise NotImplementedError('Not implemented.')
-
-    def try_swap_out_seqs(self, seqs: SeqList, swap_out_map: Dict[int, int]):
-        """try swap sequence out."""
-        for seq in reversed(seqs):
-            if self.try_swap_out(seq, swap_out_map):
-                return True
-        return False
-
-    def try_swap_out_unused(self, hanging: SeqList, waiting: SeqList,
-                            swap_out_map: Dict[int, int]):
-        """try swap out hanging and waiting sequence."""
-        if self.try_swap_out_seqs(hanging, swap_out_map):
-            return True
-        else:
-            return self.try_swap_out_seqs(waiting, swap_out_map)

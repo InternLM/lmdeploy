@@ -1,7 +1,7 @@
 allure-pytest
 coverage
 pynvml
-pytest==8.0.2
+pytest
 pytest-assume
 pytest-order
 pytest-rerunfailures

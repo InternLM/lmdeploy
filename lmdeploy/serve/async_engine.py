@@ -3,7 +3,6 @@ import asyncio
 import dataclasses
 import os
 import random
-from argparse import ArgumentError
 from contextlib import asynccontextmanager
 from itertools import count
 from queue import Empty, Queue
@@ -15,7 +14,7 @@ from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.tokenizer import DetokenizeState
-from lmdeploy.utils import _stop_words, get_logger
+from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
 
 logger = get_logger('lmdeploy')
 
@@ -49,18 +48,13 @@ def deduce_a_name(
 
     backend_config_model_name = _config_model_name(backend_config)
     chat_template_config_model_name = _config_model_name(chat_template_config)
-    model_name = model_name or chat_template_config_model_name or backend_config_model_name  # noqa
+    model_name = model_name or backend_config_model_name or chat_template_config_model_name  # noqa
     if model_name is None:
         # model maybe from workspace for turbomind
         model_name = get_model_name_from_workspace_model(model_path)
     # may get a model name from model_path
     if model_name is None:
-        model_name = best_match_model(model_path)
-        if model_name is None:
-            raise ArgumentError(None,
-                                f'Please set model_name for {model_path}')
-        else:
-            logger.info(f'matched chat template name: {model_name}')
+        model_name = model_path
     return model_name
 
 
@@ -72,6 +66,8 @@ class GenOut:
     input_token_len: int
     generate_token_len: int
     finish_reason: Optional[Literal['stop', 'length']] = None
+    token_ids: List[int] = None
+    logprobs: List[Dict[int, float]] = None
 
 
 class Session:
@@ -123,6 +119,18 @@ class Session:
         return res
 
 
+def _get_event_loop():
+    """get event loop."""
+    try:
+        event_loop = asyncio.get_event_loop()
+    except Exception:
+        logger.warning('Can not found event loop in current thread.'
+                       ' Create a new event loop.')
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
+    return event_loop
+
+
 class AsyncEngine:
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
@@ -168,10 +176,14 @@ class AsyncEngine:
         self.model_name = deduce_a_name(model_path, model_name, backend_config,
                                         chat_template_config)
         # build chat template config
+        if self.model_name in MODELS.module_dict.keys():
+            chat_template_name = self.model_name
+        else:
+            chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(self.model_name)
+            chat_template_config = ChatTemplateConfig(chat_template_name)
         elif chat_template_config.model_name is None:
-            chat_template_config.model_name = self.model_name
+            chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
 
         # prevent bc
@@ -199,7 +211,8 @@ class AsyncEngine:
         logger.info(f'updated backend_config={self.backend_config}')
 
         # parameters for member functions
-        self.session_len = self.backend_config.session_len
+        self.session_len = _get_and_verify_max_len(
+            self.hf_tm_cfg, self.backend_config.session_len)
         self.stop_words = _stop_words(self.chat_template.stop_words,
                                       self.engine.tokenizer)
         if self.stop_words is not None:
@@ -209,7 +222,6 @@ class AsyncEngine:
         self.tokenizer = self.engine.tokenizer
         self.id2step = {}
         self.id2generator = {}
-        self.loop = asyncio.get_event_loop()
         self.running_session_ids = set()
         self.gens_set = set()
         for i in range(self.instance_num):
@@ -229,12 +241,11 @@ class AsyncEngine:
         assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
             ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
             'turbomind backend'
-        if backend_config.session_len is None:
-            backend_config.session_len = self.chat_template.session_len
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
             model_path, engine_config=backend_config, **kwargs)
         self.backend_config = backend_config
+        self.hf_tm_cfg = self.engine.config
 
     def _build_pytorch(
             self,
@@ -249,11 +260,10 @@ class AsyncEngine:
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
             'use PytorchEngineConfig imported from lmdeploy.messages for ' \
             'pytorch backend'
-        if backend_config.session_len is None:
-            backend_config.session_len = self.chat_template.session_len
         self.engine = Engine(model_path=model_path,
                              engine_config=backend_config)
         self.backend_config = backend_config
+        self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
@@ -265,6 +275,8 @@ class AsyncEngine:
                  repetition_penalty: float = 1.0,
                  ignore_eos: bool = False,
                  do_preprocess: bool = True,
+                 adapter_name: Optional[str] = None,
+                 use_tqdm: bool = False,
                  **kwargs):
         """Inference a batch of prompts.
 
@@ -288,6 +300,9 @@ class AsyncEngine:
             ignore_eos (bool): indicator for ignoring eos
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
+            adapter_name (str): the adapter name of slora for pytorch backend.
+                Pick one from adapters. Default to None, using the base model.
+            use_tqdm (bool): Whether use the progress bar. Default to False
         """
         if gen_config is None:
             gen_config = GenerationConfig(
@@ -300,6 +315,8 @@ class AsyncEngine:
         return self.batch_infer(prompts,
                                 gen_config=gen_config,
                                 do_preprocess=do_preprocess,
+                                adapter_name=adapter_name,
+                                use_tqdm=use_tqdm,
                                 **kwargs)
 
     async def stop_session(self, session_id: int):
@@ -343,24 +360,30 @@ class AsyncEngine:
         self.running_session_ids.add(session_id)
         return generator
 
-    def batch_infer(self,
-                    prompts: Union[List[str], str, List[Dict],
-                                   List[List[Dict]]],
-                    gen_config: Optional[Union[GenerationConfig,
-                                               EngineGenerationConfig]] = None,
-                    do_preprocess: bool = True,
-                    adapter_name: Optional[str] = None,
-                    **kwargs):
+    def batch_infer(
+            self,
+            prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+            gen_config: Optional[Union[GenerationConfig,
+                                       List[GenerationConfig],
+                                       EngineGenerationConfig,
+                                       List[EngineGenerationConfig]]] = None,
+            do_preprocess: bool = True,
+            adapter_name: Optional[str] = None,
+            use_tqdm: bool = False,
+            **kwargs):
         """Inference a batch of prompts.
 
         Args:
             prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
                 prompts. It accepts: string prompt, a list of string prompts,
                 a chat history in OpenAI format or a list of chat history.
-            gen_config (GenerationConfig | None): a instance of
+            gen_config (GenerationConfig | None): a instance of or a list of
                 GenerationConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
+            adapter_name (str): the adapter name of slora for pytorch backend.
+                Pick one from adapters. Default to None, using the base model.
+            use_tqdm (bool): Whether use the progress bar. Default to False
         """
         need_list_wrap = isinstance(prompts, str) or isinstance(
             prompts[0], Dict)
@@ -368,43 +391,51 @@ class AsyncEngine:
         assert isinstance(prompts, List), 'prompts should be a list'
         if gen_config is None:
             gen_config = GenerationConfig()
-        if type(gen_config) is GenerationConfig:
-            gen_config = EngineGenerationConfig.From(gen_config,
-                                                     self.tokenizer)
         # set random if it is not set
-        if gen_config.random_seed is None:
+        if not isinstance(gen_config, List) and gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
+        if not isinstance(gen_config, List):
+            gen_config = [gen_config] * len(prompts)
+        assert len(prompts) == len(gen_config),\
+                'input gen_confg length differs from the length of prompts' # noqa
         prompt_num = len(prompts)
         outputs = [Response('', 0, 0, i) for i in range(prompt_num)]
-        for j in range(0, prompt_num, self.instance_num):
-            batch_prompts = prompts[j:j + self.instance_num]
-            generators = []
-            for i, prompt in enumerate(batch_prompts):
-                generators.append(
-                    self.generate(prompt,
-                                  i,
-                                  gen_config=gen_config,
-                                  stream_response=True,
-                                  sequence_start=True,
-                                  sequence_end=True,
-                                  do_preprocess=do_preprocess,
-                                  adapter_name=adapter_name,
-                                  **kwargs))
+        generators = []
+        if use_tqdm:
+            import tqdm
+            pbar = tqdm.tqdm(total=len(prompts))
+        for i, prompt in enumerate(prompts):
+            generators.append(
+                self.generate(prompt,
+                              i,
+                              gen_config=gen_config[i],
+                              stream_response=True,
+                              sequence_start=True,
+                              sequence_end=True,
+                              do_preprocess=do_preprocess,
+                              adapter_name=adapter_name,
+                              **kwargs))
 
-            async def _inner_call(i, generator):
-                async for out in generator:
-                    outputs[i + j].text += out.response
-                    outputs[i + j].generate_token_len = out.generate_token_len
-                    outputs[i + j].input_token_len = out.input_token_len
-                    outputs[i + j].finish_reason = out.finish_reason
+        async def _inner_call(i, generator):
+            async for out in generator:
+                outputs[i].text += out.response
+                outputs[i].generate_token_len = out.generate_token_len
+                outputs[i].input_token_len = out.input_token_len
+                outputs[i].finish_reason = out.finish_reason
+                if out.token_ids:
+                    outputs[i].token_ids.extend(out.token_ids)
+                if out.logprobs:
+                    if outputs[i].logprobs is None:
+                        outputs[i].logprobs = []
+                    outputs[i].logprobs.extend(out.logprobs)
+                if use_tqdm and out.finish_reason is not None:
+                    pbar.update(1)
 
-            async def gather():
-                await asyncio.gather(*[
-                    _inner_call(i, generators[i])
-                    for i in range(len(batch_prompts))
-                ])
+        async def gather():
+            await asyncio.gather(
+                *[_inner_call(i, generators[i]) for i in range(len(prompts))])
 
-            self.loop.run_until_complete(gather())
+        _get_event_loop().run_until_complete(gather())
         outputs = outputs[0] if need_list_wrap else outputs
         return outputs
 
@@ -412,7 +443,9 @@ class AsyncEngine:
             self,
             prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
             gen_config: Optional[Union[GenerationConfig,
-                                       EngineGenerationConfig]] = None,
+                                       List[GenerationConfig],
+                                       EngineGenerationConfig,
+                                       List[EngineGenerationConfig]]] = None,
             do_preprocess: bool = True,
             adapter_name: Optional[str] = None,
             **kwargs):
@@ -422,10 +455,12 @@ class AsyncEngine:
             prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
                 prompts. It accepts: string prompt, a list of string prompts,
                 a chat history in OpenAI format or a list of chat history.
-            gen_config (GenerationConfig | None): a instance of
+            gen_config (GenerationConfig | None): a instance of or a list of
                 GenerationConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
+            adapter_name (str): the adapter name of slora for pytorch backend.
+                Pick one from adapters. Default to None, using the base model.
         """
         need_list_wrap = isinstance(prompts, str) or isinstance(
             prompts[0], Dict)
@@ -433,58 +468,53 @@ class AsyncEngine:
         assert isinstance(prompts, List), 'prompts should be a list'
         if gen_config is None:
             gen_config = GenerationConfig()
-        if type(gen_config) is GenerationConfig:
-            gen_config = EngineGenerationConfig.From(gen_config,
-                                                     self.tokenizer)
         # set random if it is not set
-        if gen_config.random_seed is None:
+        if not isinstance(gen_config, List) and gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
-        prompt_num = len(prompts)
+        if not isinstance(gen_config, List):
+            gen_config = [gen_config] * len(prompts)
+        assert len(prompts) == len(gen_config),\
+                'input gen_confg length differs from the length of prompts' # noqa
         outputs = Queue()
         generators = []
-        for j in range(0, prompt_num, self.instance_num):
-            batch_prompts = prompts[j:j + self.instance_num]
-            generators = []
-            for i, prompt in enumerate(batch_prompts):
-                generators.append(
-                    self.generate(prompt,
-                                  i,
-                                  gen_config=gen_config,
-                                  stream_response=True,
-                                  sequence_start=True,
-                                  sequence_end=True,
-                                  do_preprocess=do_preprocess,
-                                  adapter_name=adapter_name,
-                                  **kwargs))
+        for i, prompt in enumerate(prompts):
+            generators.append(
+                self.generate(prompt,
+                              i,
+                              gen_config=gen_config[i],
+                              stream_response=True,
+                              sequence_start=True,
+                              sequence_end=True,
+                              do_preprocess=do_preprocess,
+                              adapter_name=adapter_name,
+                              **kwargs))
 
-            async def _inner_call(i, generator):
-                async for out in generator:
-                    outputs.put(
-                        Response(out.response, out.generate_token_len,
-                                 out.input_token_len, i + j,
-                                 out.finish_reason))
+        async def _inner_call(i, generator):
+            async for out in generator:
+                outputs.put(
+                    Response(out.response, out.generate_token_len,
+                             out.input_token_len, i, out.finish_reason,
+                             out.token_ids, out.logprobs))
 
-            async def gather():
-                await asyncio.gather(*[
-                    _inner_call(i, generators[i])
-                    for i in range(len(batch_prompts))
-                ])
-                outputs.put(None)
+        async def gather():
+            await asyncio.gather(
+                *[_inner_call(i, generators[i]) for i in range(len(prompts))])
+            outputs.put(None)
 
-            proc = Thread(
-                target=lambda: self.loop.run_until_complete(gather()))
-            proc.start()
+        loop = _get_event_loop()
+        proc = Thread(target=lambda: loop.run_until_complete(gather()))
+        proc.start()
 
-            while True:
-                try:
-                    out = outputs.get(timeout=0.001)
-                    if out is None:
-                        break
-                    yield out
-                except Empty:
-                    pass
+        while True:
+            try:
+                out = outputs.get(timeout=0.001)
+                if out is None:
+                    break
+                yield out
+            except Empty:
+                pass
 
-            proc.join()
+        proc.join()
 
     async def _get_prompt_input(self, prompt: str, do_preprocess: bool,
                                 sequence_start: bool, adapter_name: str):
@@ -545,11 +575,6 @@ class AsyncEngine:
                                                     adapter_name)
         prompt = prompt_input['prompt']
         input_ids = prompt_input['input_ids']
-        if gen_config.max_new_tokens is None:
-            # for interactive endpoint, will try maximum possible token num
-            gen_config.max_new_tokens = max(
-                128, self.session_len - self.id2step[str(session_id)] -
-                len(input_ids))
         finish_reason = None
         logger.info(f'prompt={prompt!r}, '
                     f'gen_config={gen_config}, '
@@ -561,18 +586,31 @@ class AsyncEngine:
                     f'max_new_tokens={gen_config.max_new_tokens}, '
                     f'seq_start={sequence_start}, seq_end={sequence_end}, '
                     f'step={step}, prep={do_preprocess}')
+
+        if gen_config.max_new_tokens is None:
+            # for interactive endpoint, will try maximum possible token num
+            gen_config.max_new_tokens = max(
+                128, self.session_len - self.id2step[str(session_id)] -
+                len(input_ids))
+        elif self.id2step[str(session_id)] + len(
+                input_ids) + gen_config.max_new_tokens > self.session_len:
+            gen_config.max_new_tokens = max(
+                self.session_len - self.id2step[str(session_id)] -
+                len(input_ids), 128)
+            logger.error(
+                f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
         if self.id2step[str(session_id)] + len(
                 input_ids) + gen_config.max_new_tokens > self.session_len:
-            logger.warning(f'run out of tokens. session_id={session_id}')
-            finish_reason = 'length'
+            logger.error(f'run out of tokens. session_id={session_id}.')
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
-                         finish_reason)
+                         'length')
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
         else:
             generator = await self.get_generator(False, session_id)
             async with self.safe_run(session_id):
                 state = DetokenizeState()
+                response = ''
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
                         **prompt_input,
@@ -582,16 +620,27 @@ class AsyncEngine:
                         sequence_start=sequence_start,
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
-                    _, res, tokens = outputs
                     # decode res
+                    res, tokens = outputs.token_ids, outputs.num_token
+                    if len(res) <= state.ids_offset:
+                        continue
+
+                    ids_offset = state.ids_offset
                     response, state = self.tokenizer.detokenize_incrementally(
                         res,
                         state,
                         skip_special_tokens=gen_config.skip_special_tokens)
+
+                    res = res[ids_offset:]
+                    logprobs = None
+                    if outputs.logprobs:
+                        logprobs = outputs.logprobs[ids_offset:]
+
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.id2step[str(session_id)],
-                                 len(input_ids), tokens, finish_reason)
+                                 len(input_ids), tokens, finish_reason, res,
+                                 logprobs)
 
                 finish_reason = 'length' \
                     if tokens >= gen_config.max_new_tokens else 'stop'

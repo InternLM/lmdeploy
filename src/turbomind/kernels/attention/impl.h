@@ -6,27 +6,19 @@ namespace turbomind {
 
 namespace attention {
 
-template<int Begin, int End = -1>
-struct Arch {
-    static constexpr bool is_compatible(int x)
-    {
-        return Begin <= x && (End == -1 || x < End);
-    }
+struct MMA_16816 {
 };
 
-struct Sm80_16816: Arch<80> {
+struct MMA_81616 {
+};  // MMA_16816 transposed
+
+struct MMA_1688 {
 };
 
-struct Sm80_81616: Arch<80> {
+struct MMA_884 {
 };
 
-struct Sm75_1688: Arch<75, 80> {
-};
-
-struct Sm70_884: Arch<70, 75> {
-};
-
-struct Sm70_Simt: Arch<70> {
+struct MMA_SIMT {
 };
 
 template<class Tag,

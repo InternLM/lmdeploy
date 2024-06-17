@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: internlm2-chat-7b
+  name: internlm2-chat-7b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: internlm2-chat-7b
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: internlm2-chat-7b
+    spec:
+      containers:
+      - name: internlm2-chat-7b
+        image: openmmlab/lmdeploy:latest
+        command:
+        - /bin/sh
+        - -c
+        args:
+        - "lmdeploy serve api_server internlm/internlm2-chat-7b --server-port 23333"
+        env:
+        - name: NCCL_LAUNCH_MODE
+          value: GROUP
+        - name: HUGGING_FACE_HUB_TOKEN
+          value: "{{HUGGING_FACE_HUB_TOKEN}}"
+        ports:
+        - containerPort: 23333
+          protocol: TCP
+          name: main
+        resources:
+          limits:
+            cpu: "16"
+            memory: 64Gi
+            nvidia.com/gpu: "1"
+          requests:
+            cpu: "16"
+            memory: 64Gi
+            nvidia.com/gpu: "1"
+        readinessProbe:
+          failureThreshold: 3
+          initialDelaySeconds: 400
+          periodSeconds: 10
+          successThreshold: 1
+          tcpSocket:
+            port: main
+          timeoutSeconds: 1
+        livenessProbe:
+          failureThreshold: 3
+          initialDelaySeconds: 900
+          periodSeconds: 20
+          successThreshold: 1
+          tcpSocket:
+            port: main
+          timeoutSeconds: 1
+        volumeMounts:
+        - mountPath: /root/.cache/huggingface
+          name: model-data
+        - mountPath: /dev/shm
+          name: dshm
+      volumes:
+      - name: model-data
+        hostPath:
+          path: /root/.cache/huggingface
+          type: DirectoryOrCreate
+      - emptyDir:
+          medium: Memory
+        name: dshm

@@ -1,44 +1,43 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from transformers import AutoConfig
-
+from lmdeploy.archs import get_model_arch
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
-_SUPPORTED_ARCHS = dict(
+SUPPORTED_ARCHS = dict(
     # baichuan-7b
-    BaiChuanForCausalLM=True,
+    BaiChuanForCausalLM='baichuan',
     # baichuan2-7b, baichuan-13b, baichuan2-13b
-    BaichuanForCausalLM=True,
-    # chatglm2-6b, chatglm3-6b
-    ChatGLMModel=False,
-    # deepseek-moe
-    DeepseekForCausalLM=False,
-    # falcon-7b
-    FalconForCausalLM=False,
-    # gemma-7b
-    GemmaForCausalLM=False,
+    BaichuanForCausalLM='baichuan2',
     # internlm
-    InternLMForCausalLM=True,
+    InternLMForCausalLM='llama',
     # internlm2
-    InternLM2ForCausalLM=True,
+    InternLM2ForCausalLM='internlm2',
     # internlm-xcomposer
-    InternLMXComposerForCausalLM=True,
-    # internlm2-xcomposer
-    InternLM2XComposerForCausalLM=False,
+    InternLMXComposerForCausalLM='llama',
     # llama, llama2, alpaca, vicuna, codellama, ultracm, yi,
     # deepseek-coder, deepseek-llm
-    LlamaForCausalLM=True,
-    # Mistral-7B
-    MistralForCausalLM=False,
-    # Mixtral-8x7B
-    MixtralForCausalLM=False,
+    LlamaForCausalLM='llama',
     # Qwen 7B-72B, Qwen-VL-7B
-    QWenLMHeadModel=True,
-    # Qwen1.5 7B-72B
-    Qwen2ForCausalLM=False,
+    QWenLMHeadModel='qwen',
+    # Qwen2
+    Qwen2ForCausalLM='qwen2',
+    # mistral
+    MistralForCausalLM='llama',
     # llava
-    LlavaLlamaForCausalLM=True)
+    LlavaLlamaForCausalLM='llama',
+    LlavaMistralForCausalLM='llama',
+    # xcomposer2
+    InternLMXComposer2ForCausalLM='xcomposer2',
+    # internvl
+    InternVLChatModel='internvl',
+    # deepseek-vl
+    MultiModalityCausalLM='deepseekvl',
+    # MiniCPMV
+    MiniCPMV='minicpmv',
+    # mini gemini
+    MGMLlamaForCausalLM='llama',
+    MiniGeminiLlamaForCausalLM='llama')
 
 
 def is_supported(model_path: str):
@@ -68,23 +67,21 @@ def is_supported(model_path: str):
     if os.path.exists(triton_model_path):
         support_by_turbomind = True
     else:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        arch, cfg = get_model_arch(model_path)
 
-        if hasattr(cfg, 'architectures'):
-            arch = cfg.architectures[0]
-        elif hasattr(cfg,
-                     'auto_map') and 'AutoModelForCausalLM' in cfg.auto_map:
-            arch = cfg.auto_map['AutoModelForCausalLM'].split('.')[-1]
-        else:
-            raise RuntimeError(
-                f'Could not find model architecture from config: {cfg}')
-
-        if arch in _SUPPORTED_ARCHS:
-            support_by_turbomind = _SUPPORTED_ARCHS[arch]
+        if arch in SUPPORTED_ARCHS.keys():
+            support_by_turbomind = True
             # special cases
             if arch == 'BaichuanForCausalLM':
                 num_attn_head = cfg.num_attention_heads
                 if num_attn_head == 40:
                     # baichuan-13B, baichuan2-13B not supported by turbomind
+                    support_by_turbomind = False
+            elif arch == 'Qwen2ForCausalLM':
+                num_attn_head = cfg.num_attention_heads
+                hidden_size = cfg.hidden_size
+                # qwen2 0.5b size_per_head is 64, which hasn't been supported
+                # by turbomind yet
+                if hidden_size // num_attn_head != 128:
                     support_by_turbomind = False
     return support_by_turbomind

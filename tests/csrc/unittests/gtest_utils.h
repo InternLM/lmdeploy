@@ -156,7 +156,7 @@ inline T fma(T a, T b, T c)
     return static_cast<T>((float)a * (float)b + (float)c);
 }
 }
-
+typedef testing::Types<float> FloatType;
 typedef testing::Types<float, half> FloatAndHalfTypes;
 #ifndef ENABLE_BF16
 typedef FloatAndHalfTypes SupportTypes;

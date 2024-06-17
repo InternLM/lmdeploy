@@ -319,7 +319,7 @@ public:
     }
 };
 
-TYPED_TEST_SUITE(SamplingDecodeTest, FloatAndHalfTypes);
+TYPED_TEST_SUITE(SamplingDecodeTest, FloatType);
 
 TYPED_TEST(SamplingDecodeTest, TopK)
 {
@@ -1212,7 +1212,7 @@ protected:
     }
 };
 
-TYPED_TEST_SUITE(SamplingDecodeTest2, FloatAndHalfTypes);
+TYPED_TEST_SUITE(SamplingDecodeTest2, FloatType);
 
 TYPED_TEST(SamplingDecodeTest2, CorrectnessSingleRandTopK)
 {

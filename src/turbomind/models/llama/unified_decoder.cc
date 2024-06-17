@@ -1,7 +1,7 @@
 
 #include "src/turbomind/models/llama/unified_decoder.h"
-#include "src/turbomind/kernels/bert_preprocess_kernels.h"
-#include "src/turbomind/kernels/gpt_kernels.h"
+// #include "src/turbomind/kernels/bert_preprocess_kernels.h"
+// #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
@@ -41,6 +41,7 @@ void UnifiedDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
                                                size_per_head_,
                                                attn_params,
                                                tensor_para_,
+                                               lora_params_,
                                                stream_,
                                                cublas_wrapper_,
                                                allocator_,
@@ -183,6 +184,10 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
         /// feed-forward network
         TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
         TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
+        if (inputs->isExist("lora_mask")) {
+            ffn_inputs.insert({"lora_mask", inputs->at("lora_mask")});
+        }
+
         ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &weights->at(layer)->ffn_weights);
 
         const bool is_last_layer = layer == num_layer_ - 1;
@@ -223,7 +228,9 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     }
 }
 
+#ifdef ENABLE_FP32
 template class UnifiedDecoder<float>;
+#endif
 template class UnifiedDecoder<half>;
 #ifdef ENABLE_BF16
 template class UnifiedDecoder<__nv_bfloat16>;

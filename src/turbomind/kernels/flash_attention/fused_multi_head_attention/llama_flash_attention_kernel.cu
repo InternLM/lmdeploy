@@ -925,7 +925,9 @@ void FlashAttentionOpImpl<T, 1>::operator()(Params& params, cudaStream_t st) con
     pimpl->operator()(params, st);
 }
 
+#ifdef ENABLE_FP32
 template class FlashAttentionOpImpl<float, 1>;
+#endif
 template class FlashAttentionOpImpl<half, 1>;
 #ifdef ENABLE_BF16
 template class FlashAttentionOpImpl<__nv_bfloat16, 1>;

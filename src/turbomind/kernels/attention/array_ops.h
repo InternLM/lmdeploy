@@ -328,6 +328,7 @@ inline __device__ void Store(T* __restrict__ dst, const Array<T, N>& src)
         *(uint1*)dst = (const uint1&)src;
     }
     else if constexpr (sizeof(Array<T, N>) % sizeof(uint4) == 0) {  //  uncoalesced
+        static_assert(bitsof<T> % 8 == 0, "raw pointer arithmetic of sub-byte types");
         constexpr int M = sizeof(Array<T, N>) / sizeof(uint4);
         PRAGMA_UNROLL
         for (int i = 0; i < M; ++i) {
@@ -380,8 +381,6 @@ inline __device__ void Ldg(Array<T, N>& dst, const T* src)
 template<typename T, int N>
 inline __device__ void Load(Array<T, N>& dst, const T* src)
 {
-    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
-
     if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
         (uint4&)dst = *(const uint4*)src;
     }
@@ -390,6 +389,14 @@ inline __device__ void Load(Array<T, N>& dst, const T* src)
     }
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
         (uint1&)dst = *(const uint1*)src;
+    }
+    else if constexpr (sizeof(Array<T, N>) % sizeof(uint4) == 0) {  //  uncoalesced
+        static_assert(bitsof<T> % 8 == 0, "raw pointer arithmetic of sub-byte types");
+        constexpr int M = sizeof(Array<T, N>) / sizeof(uint4);
+        PRAGMA_UNROLL
+        for (int i = 0; i < M; ++i) {
+            *((uint4*)&dst + i) = *((uint4*)src + i);
+        }
     }
     else {
         static_assert(!std::is_same_v<T, T>);
@@ -423,91 +430,6 @@ inline __device__ void LdShared(Array<T, N>& dst, uint32_t uintptr)
     else {
         static_assert(!std::is_same_v<T, T>);
     }
-}
-
-template<typename Accum, typename Compute, int kThreadGroupSize, typename Tq, typename Tk, int N, int V>
-inline __device__ Accum qk_dot(const Array<Tq, N> (&q)[V], const Array<Tk, N> (&k)[V])
-{
-    Accum accum{};
-
-    PRAGMA_UNROLL
-    for (int vi = 0; vi < V; ++vi) {
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; ++i) {
-            accum += Accum(Compute(q[vi][i]) * Compute(k[vi][i]));
-        }
-    }
-
-    PRAGMA_UNROLL
-    for (int mask = kThreadGroupSize / 2; mask >= 1; mask /= 2) {
-        accum += __shfl_xor_sync((uint32_t)-1, accum, mask);
-    }
-
-    return accum;
-}
-
-template<typename Accum, typename Compute, int kThreadGroupSize, typename Tq, typename Tk, int N>
-inline __device__ Accum qk_dot(const Array<Tq, N>& q, const Array<Tk, N>& k)
-{
-    Accum accum{};
-
-    PRAGMA_UNROLL
-    for (int i = 0; i < N; ++i) {
-        accum += Accum(Compute(q[i]) * Compute(k[i]));
-    }
-
-    PRAGMA_UNROLL
-    for (int mask = kThreadGroupSize / 2; mask >= 1; mask /= 2) {
-        accum += __shfl_xor_sync((uint32_t)-1, accum, mask);
-    }
-
-    return accum;
-}
-
-template<typename ComputeType, typename Tp, typename Tv, typename To, int N, int M>
-inline __device__ void fma_pv(Tp pr, const Array<Tv, N> (&v)[M], Array<To, N> (&o)[M])
-{
-    PRAGMA_UNROLL
-    for (int m = 0; m < M; ++m) {
-        PRAGMA_UNROLL
-        for (int n = 0; n < N; ++n) {
-            o[m][n] += To(ComputeType(v[m][n]) * ComputeType(pr));
-        }
-    }
-}
-
-template<typename ThreadMap, typename T, int N>
-inline __device__ Array<T, N> qk_max(Array<T, N> val, T* smem_red, int warp_id, int lane_id)
-{
-    constexpr int kWarpCount = ThreadMap::kWarpCount;
-
-    // warp maximum
-    PRAGMA_UNROLL
-    for (int i = 0; i < N; ++i) {
-        PRAGMA_UNROLL
-        for (int mask = WARP_SIZE / 2; mask >= ThreadMap::kWarpThreadC; mask /= 2) {
-            val[i] = fmaxf(val[i], __shfl_xor_sync((uint32_t)-1, val[i], mask));
-        }
-        if (lane_id == 0) {
-            smem_red[i * kWarpCount + warp_id] = val[i];
-        }
-    }
-
-    __syncthreads();
-
-    // block maximum
-    PRAGMA_UNROLL
-    for (int i = 0; i < N; ++i) {
-        val[i] = lane_id < kWarpCount ? smem_red[i * kWarpCount + lane_id] : -FLT_MAX;
-        PRAGMA_UNROLL
-        for (int mask = kWarpCount >> 1; mask >= 1; mask >>= 1) {
-            val[i] = fmaxf(val[i], __shfl_xor_sync((uint32_t)-1, val[i], mask));
-        }
-        // braodcast to all threads
-        val[i] = __shfl_sync((uint32_t)-1, val[i], 0);
-    }
-
-    return val;
 }
 
 template<int kWarpCount, typename T, int N>
@@ -546,7 +468,7 @@ template<typename Ti, typename To, typename = void>
 struct ConvertKvCache {
     __device__ __host__ ConvertKvCache(float, float) {}
     template<int N>
-    inline __device__ auto operator()(const Array<Ti, N>& vi) const -> Array<To, N>
+    __device__ static auto convert(const Array<Ti, N>& vi)
     {
         Array<To, N> vo;
         PRAGMA_UNROLL
@@ -555,6 +477,11 @@ struct ConvertKvCache {
         }
         return vo;
     }
+    template<int N>
+    inline __device__ auto operator()(const Array<Ti, N>& vi) const -> Array<To, N>
+    {
+        return convert(vi);
+    }
 };
 
 // generic case for converting to same type, bypass
@@ -562,162 +489,15 @@ template<typename T>
 struct ConvertKvCache<T, T> {
     __device__ __host__ ConvertKvCache(float, float) {}
     template<int N>
-    inline __device__ auto operator()(const Array<T, N>& v) const -> Array<T, N>
+    __device__ static auto convert(const Array<T, N>& v)
     {
         return v;
     }
-};
-
-template<typename Ti>
-struct ConvertKvCache<Ti, int8_t> {
-
-    float scale_;
-    float zero_;
-
-    __device__ __host__ ConvertKvCache(float scale, float zero): scale_(scale), zero_(zero) {}
-
-    inline __device__ uint8_t round(float x) const
-    {
-        uint32_t y;
-        asm("cvt.rni.sat.u8.f32 %0, %1;\n" : "=r"(y) : "f"(x));
-        return y;
-    }
-
     template<int N>
-    inline __device__ auto operator()(const Array<Ti, N>& vi) const -> Array<int8_t, N>
+    inline __device__ auto operator()(const Array<T, N>& v) const -> Array<T, N>
     {
-        Array<int8_t, N> vo;
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; ++i) {
-            // convert to unsigned int by offsetting +128
-            (uint8_t&)vo[i] = round(((float)vi[i] - zero_) / scale_ + 128.f);
-        }
-        return vo;
+        return convert(v);
     }
 };
 
-inline __device__ Array<float, 4> fast_i2f_f32_s8(const Array<int8_t, 4>& x)
-{
-    union {
-        Array<float, 4>    f32x4;
-        Array<uint32_t, 4> u32x4;
-    };
-
-    auto& i8s = (const uint32_t&)x;
-
-    // 00000000111111112222222233333333
-    // 01234567012345670123456701234567
-    // SEEEEEEEEMMMMMMMMMMMMMMMMMMMMMMM
-    // 0????????_______XXXXXXXX________
-    // (1 + x / 2^15) * 2^(e - 127) -> e - 127 == 15 -> e = 142
-    //                                       7 6 5 4
-    static constexpr uint32_t f32_magic = 0x47000000;  // 2^15 = 32768
-    static constexpr uint32_t m0        = 0x7604;
-    static constexpr uint32_t m1        = 0x7614;
-    static constexpr uint32_t m2        = 0x7624;
-    static constexpr uint32_t m3        = 0x7634;
-
-    asm("prmt.b32 %0,%1,%2,%3;\n" : "=r"(u32x4[0]) : "r"(i8s), "n"(f32_magic), "n"(m0));
-    asm("prmt.b32 %0,%1,%2,%3;\n" : "=r"(u32x4[1]) : "r"(i8s), "n"(f32_magic), "n"(m1));
-    asm("prmt.b32 %0,%1,%2,%3;\n" : "=r"(u32x4[2]) : "r"(i8s), "n"(f32_magic), "n"(m2));
-    asm("prmt.b32 %0,%1,%2,%3;\n" : "=r"(u32x4[3]) : "r"(i8s), "n"(f32_magic), "n"(m3));
-
-    if (0) {  // fused with dequantization
-        PRAGMA_UNROLL
-        for (int i = 0; i < 4; ++i) {
-            f32x4[i] -= 32896.f;  // 32768 + 128
-        }
-    }
-
-    return f32x4;
-}
-
-template<>
-struct ConvertKvCache<int8_t, float> {
-
-    float scale_;
-    float zero_;
-
-    __device__ __host__ ConvertKvCache(float scale, float zero): scale_(scale), zero_(zero)
-    {
-        zero_ = zero_ - 32896.f * scale_;
-    }
-
-    template<int N>
-    inline __device__ auto operator()(const Array<int8_t, N>& vi) const -> Array<float, N>
-    {
-        Array<float, N> vo;
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 4) {
-            auto& vec = (Array<float, 4>&)vo[i];
-            vec       = fast_i2f_f32_s8((const Array<int8_t, 4>&)vi[i]);
-            PRAGMA_UNROLL
-            for (int j = 0; j < 4; ++j) {
-                vec[j] = vec[j] * scale_ + zero_;
-                // vec[j] = vec[j] * scale_ + (zero_ - 32896.f * scale_);
-            }
-        }
-        return vo;
-    }
-};
-
-template<>
-struct ConvertKvCache<int8_t, half> {
-
-    float scale_;
-    float zero_;
-
-    __device__ __host__ ConvertKvCache(float scale, float zero): scale_(scale), zero_(zero)
-    {
-        zero_ = zero_ - 32896.f * scale_;
-    }
-
-    template<int N>
-    inline __device__ auto operator()(const Array<int8_t, N>& vi) const -> Array<half, N>
-    {
-        Array<half, N> vo;
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 4) {
-            auto& vec = (Array<half, 4>&)vo[i];
-            auto  tmp = fast_i2f_f32_s8((const Array<int8_t, 4>&)vi[i]);
-            PRAGMA_UNROLL
-            for (int j = 0; j < 4; ++j) {
-                vec[j] = half(tmp[j] * scale_ + zero_);
-                // vec[j] = half(tmp[j] * scale_ + (zero_ - 32896.f * scale_));
-            }
-        }
-        return vo;
-    }
-};
-
-#ifdef ENABLE_BF16
-template<>
-struct ConvertKvCache<int8_t, __nv_bfloat16> {
-
-    float scale_;
-    float zero_;
-
-    __device__ __host__ ConvertKvCache(float scale, float zero): scale_(scale), zero_(zero)
-    {
-        zero_ = zero_ - 32896.f * scale_;
-    }
-
-    template<int N>
-    inline __device__ auto operator()(const Array<int8_t, N>& vi) const -> Array<__nv_bfloat16, N>
-    {
-        Array<__nv_bfloat16, N> vo;
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 4) {
-            auto& vec = (Array<__nv_bfloat16, 4>&)vo[i];
-            auto  tmp = fast_i2f_f32_s8((const Array<int8_t, 4>&)vi[i]);
-            PRAGMA_UNROLL
-            for (int j = 0; j < 4; ++j) {
-                vec[j] = __nv_bfloat16(tmp[j] * scale_ + zero_);
-                // vec[j] = half(tmp[j] * scale_ + (zero_ - 32896.f * scale_));
-            }
-        }
-        return vo;
-    }
-};
-#endif  // ENABLE_BF16
 }  // namespace turbomind

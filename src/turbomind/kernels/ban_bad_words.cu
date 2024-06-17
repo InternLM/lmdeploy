@@ -119,6 +119,7 @@ void invokeBanBadWords(T*           logits,
     sync_check_cuda_error();
 }
 
+#if 0
 template void invokeBanBadWords(half*        logits,
                                 const int*   output_ids_buf,
                                 const int*   parent_ids_buf,
@@ -146,6 +147,7 @@ template void invokeBanBadWords(__nv_bfloat16* logits,
                                 int            vocab_size_padded,
                                 size_t         step,
                                 cudaStream_t   stream);
+#endif
 #endif
 template void invokeBanBadWords(float*       logits,
                                 const int*   output_ids_buf,

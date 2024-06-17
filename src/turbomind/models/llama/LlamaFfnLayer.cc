@@ -27,10 +27,15 @@
 namespace turbomind {
 
 template<typename T>
-void LlamaFfnLayer<T>::allocateBuffer(size_t token_num)
+void LlamaFfnLayer<T>::allocateBuffer(size_t                     token_num,
+                                      const LlamaDenseWeight<T>* gating,
+                                      const LlamaDenseWeight<T>* inter)
 {
-    inter_buf_          = (T*)allocator_->reMalloc(inter_buf_, sizeof(T) * token_num * inter_size_, false);
-    gating_buf_         = (T*)allocator_->reMalloc(gating_buf_, sizeof(T) * token_num * inter_size_, false);
+    size_t sz           = sizeof(T) * token_num * inter_size_;
+    size_t sz_gate      = (gating->lora.r > 0) ? sz + sz / inter_size_ * gating->lora.r : sz;
+    size_t sz_inter     = (inter->lora.r > 0) ? sz + sz / inter_size_ * inter->lora.r : sz;
+    inter_buf_          = (T*)allocator_->reMalloc(inter_buf_, sz_inter, false);
+    gating_buf_         = (T*)allocator_->reMalloc(gating_buf_, sz_gate, false);
     is_allocate_buffer_ = true;
 }
 
@@ -83,10 +88,11 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     const size_t num_token = input_tensors->at("ffn_input").shape[0];
     // LOG(WARNING);
 
-    allocateBuffer(num_token);
+    allocateBuffer(num_token, &weights->gating, &weights->intermediate);
 
     const T* ffn_input_data  = input_tensors->at("ffn_input").getPtr<T>();
     T*       ffn_output_data = output_tensors->at("ffn_output").getPtr<T>();
+    int*     lora_mask = input_tensors->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
 
     if (weights->fused_gating_intermediate.kernel) {
         NvtxScope scope("fused_silu_ffn");
@@ -96,11 +102,12 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     else {
         {  // w1(x)
             NvtxScope scope("w1");
-            linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating);
+            linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating, LlamaLinear<T>::kGemm, lora_mask);
         }
         {  // w3(x)
             NvtxScope scope("w3");
-            linear_.forward(inter_buf_, ffn_input_data, num_token, weights->intermediate);
+            linear_.forward(
+                inter_buf_, ffn_input_data, num_token, weights->intermediate, LlamaLinear<T>::kGemm, lora_mask);
         }
         // silu(w1(x)) * w3(x)
         activation(num_token);
@@ -108,7 +115,7 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
 
     {  // w2(x)
         NvtxScope scope("w2");
-        linear_.forward(ffn_output_data, gating_buf_, num_token, weights->output);
+        linear_.forward(ffn_output_data, gating_buf_, num_token, weights->output, LlamaLinear<T>::kGemm, lora_mask);
     }
 
     if (tensor_para_.world_size_ > 1) {
@@ -123,7 +130,9 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     // LOG(WARNING);
 }
 
+#ifdef ENABLE_FP32
 template class LlamaFfnLayer<float>;
+#endif
 template class LlamaFfnLayer<half>;
 #ifdef ENABLE_BF16
 template class LlamaFfnLayer<__nv_bfloat16>;

@@ -158,8 +158,8 @@ struct Impl_m16k8 {
         }
     }
 
-    template<class FragP>
-    __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, T* smem_P)
+    template<class FragP, class Storage>
+    __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, Storage&)
     {
         FragS_<T>& frag_Ps = (FragS_<T>&)frag_P;
         PRAGMA_UNROLL
@@ -175,48 +175,6 @@ struct Impl_m16k8 {
                 }
             }
         }
-
-#if 0
-        if (!smem_P) {
-            FragS_<T>& frag_Ps = (FragS_<T>&)frag_P;
-            PRAGMA_UNROLL
-            for (int m = 0; m < K_M; ++m) {
-                PRAGMA_UNROLL
-                for (int n = 0; n < K_N; ++n) {
-                    PRAGMA_UNROLL
-                    for (int q = 0; q < 2; ++q) {
-                        PRAGMA_UNROLL
-                        for (int s = 0; s < 2; ++s) {
-                            frag_Ps[m][n][q * 2 + s] = static_cast<T>(frag_S[m][n][q * 2 + s]);
-                        }
-                    }
-                }
-            }
-        }
-        else {
-            PRAGMA_UNROLL
-            for (int m = 0; m < K_M; ++m) {
-                PRAGMA_UNROLL
-                for (int n = 0; n < K_N; n += 2) {
-                    Array<T, 8> tmp_P;
-                    PRAGMA_UNROLL
-                    for (int s1 = 0; s1 < 2; ++s1) {
-                        PRAGMA_UNROLL
-                        for (int q = 0; q < 2; ++q) {
-                            PRAGMA_UNROLL
-                            for (int s = 0; s < 2; ++s) {
-                                tmp_P[s1 * 4 + q * 2 + s] = static_cast<T>(frag_S[m][n + s1][q * 2 + s]);
-                            }
-                        }
-                    }
-                    const int     k        = n / 2;
-                    constexpr int kThreads = kWarpCntQ * WARP_SIZE;
-                    Store(&smem_P[(k * V_M * kThreads + m * kThreads + threadIdx.x) * 8], tmp_P);
-                }
-            }
-            __syncwarp();  // really?
-        }
-#endif
     }
 
     template<class Storage>

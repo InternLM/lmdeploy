@@ -62,6 +62,7 @@ class ActivationObserver(GlobalAvailMixin):
 
     Also keeps track of the number of batches observed.
     """
+    observed = False
 
     def __init__(self, dim: int) -> None:
         """Constructor for ActivationObserver.
@@ -76,16 +77,32 @@ class ActivationObserver(GlobalAvailMixin):
         self.absmean_val = torch.full((dim, ), 0, dtype=torch.float16)
         self.mean_val = torch.full((dim, ), 0, dtype=torch.float16)
         self.num_batches_tracked = 0
+        self.value = None
+        self.ratio = None
+        self.num_ratio_tracked = 0
+
+    @classmethod
+    def disable(cls):
+        """To avoid recomputation in search scale process."""
+        cls.observed = True
+
+    @classmethod
+    def enable(cls):
+        """To avoid recomputation in search scale process."""
+        cls.observed = False
 
     @torch.no_grad()
-    def observe(self, x: torch.Tensor) -> None:
+    def observe(self, x: torch.Tensor, save_input: bool = False) -> None:
         """Function to observe the input tensor and update the max, min, mean,
         absolute max, absolute mean values and number of batches tracked.
 
         Args:
             x : Input tensor
         """
-        assert len(x.shape) == 3
+        if self.observed:
+            return
+        if len(x.shape) != 3:
+            return
         assert x.size(2) == self.dim
         cur_val = x.flatten(0, 1)
         cur_max = cur_val.max(0)[0].cpu()
@@ -99,6 +116,8 @@ class ActivationObserver(GlobalAvailMixin):
         self.max_val = torch.maximum(self.max_val, cur_max)
         self.min_val = torch.minimum(self.min_val, cur_min)
         self.absmax_val = torch.maximum(self.absmax_val, cur_absmax)
+        if save_input:
+            self.value = x
 
         # Update mean and absmean value with accumulated sum divided
         # by total number of batches
@@ -111,3 +130,11 @@ class ActivationObserver(GlobalAvailMixin):
 
         # Increment the count of batches tracked
         self.num_batches_tracked += 1
+
+    @torch.no_grad()
+    def save_ratio(self, ratio: float) -> None:
+        if self.ratio is None:
+            self.ratio = 0
+        self.ratio = (self.ratio * self.num_ratio_tracked +
+                      ratio) / (self.num_ratio_tracked + 1)
+        self.num_ratio_tracked += 1

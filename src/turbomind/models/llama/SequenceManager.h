@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/BlockManager.h"
+#include "src/turbomind/models/llama/BlockTrie.h"
 #include <functional>
 
 namespace turbomind {
@@ -23,6 +24,8 @@ struct Sequence {
     UniqueIds block_unique_ids;
 
     int input_length = 0;
+
+    mutable std::vector<int> prompt;
 
     mutable std::vector<int> tokens;  // update by user
 
@@ -54,16 +57,29 @@ inline std::ostream& operator<<(std::ostream& os, const Sequence& seq)
 
 class SequenceManager {
 public:
-    explicit SequenceManager(size_t         layer_num,
-                             size_t         head_num,
-                             size_t         head_dim,
-                             size_t         block_seq_len,
-                             double         block_count,
-                             int            chunk_size,
-                             size_t         elem_bits,
-                             int            rank,
-                             IAllocator*    allocator,
-                             GetFreeMemSize get_free_size);
+    // clang-format off
+    struct BlockConfig {
+        int head_dim_;
+        int head_num_;
+        int block_len_;
+        int t_bits_;
+        int q_bits_;
+        int t_bits() const { return t_bits_; }
+        int q_bits() const { return q_bits_; }
+        int head_dim() const { return head_dim_; }
+        int head_num() const { return head_num_; }
+        int block_len() const { return block_len_; }
+    };
+    // clang-format on
+
+    explicit SequenceManager(size_t             layer_num,
+                             const BlockConfig& block_config,
+                             double             block_count,
+                             int                chunk_size,
+                             bool               enable_prefix_caching,
+                             int                rank,
+                             IAllocator*        allocator,
+                             GetFreeMemSize     get_free_size);
 
     SequenceManager(const SequenceManager&)     = delete;
     SequenceManager(SequenceManager&&) noexcept = default;
@@ -92,14 +108,11 @@ public:
                                       int                          step_length,
                                       AdjustInputCount             adjust);
 
-    [[nodiscard]] void* GetKeyPtr(int block_id)
+    void CacheIfEnabled(const Sequences& sequences, int active_size);
+
+    [[nodiscard]] void* GetBlockPtr(int block_id)
     {
         return block_manager_->block(block_id).data;
-    }
-
-    [[nodiscard]] void* GetValPtr(int block_id)
-    {
-        return (std::byte*)GetKeyPtr(block_id) + val_offset_;
     }
 
     int max_block_count() const noexcept
@@ -128,14 +141,14 @@ private:
                                   const UniqueIds&        unique_ids);
 
 private:
-    int    block_seq_len_;
-    int    rank_;
-    size_t val_offset_{};
+    int block_seq_len_;
+    int rank_;
 
     // Use `std::map` to avoid reference invalidation
     std::map<uint64_t, Sequence> sequences_;
 
-    std::unique_ptr<BlockManager> block_manager_;
+    std::shared_ptr<BlockManager> block_manager_;
+    std::shared_ptr<BlockTrie>    block_trie_;
 
     BlockIds unlocked_;
     BlockIds freed_;

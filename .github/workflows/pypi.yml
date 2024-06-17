@@ -13,13 +13,13 @@ jobs:
   linux-build:
     strategy:
       matrix:
-        pyver: [py38, py39, py310, py311]
+        pyver: [py38, py39, py310, py311, py312]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda11.8
-      OUTPUT_FOLDER: cuda11.8_dist
+      DOCKER_TAG: cuda12.1
+      OUTPUT_FOLDER: cuda12.1_dist
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -54,7 +54,7 @@ jobs:
   windows-build:
     strategy:
       matrix:
-        pyver: ['3.8', '3.9', '3.10', '3.11']
+        pyver: ['3.8', '3.9', '3.10', '3.11', '3.12']
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -69,7 +69,7 @@ jobs:
       - uses: Jimver/cuda-toolkit@v0.2.11
         id: cuda-toolkit
         with:
-          cuda: '11.8.0'
+          cuda: '12.1.0'
           use-github-cache: false
       - name: Build wheel
         run: |

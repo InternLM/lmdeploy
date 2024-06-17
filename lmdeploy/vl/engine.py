@@ -8,6 +8,7 @@ from typing import List, Union
 import torch
 from PIL.Image import Image
 
+from lmdeploy.messages import VisionConfig
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.builder import load_vl_model
 
@@ -64,9 +65,10 @@ class Record:
 class ImageEncoder:
     """Image encoder."""
 
-    def __init__(self, model_path: str, max_batch_size: int = 16):
+    def __init__(self, model_path: str, vision_config: VisionConfig = None):
         self.model = load_vl_model(model_path)
-        self.max_batch_size = max_batch_size
+        self.max_batch_size = (1 if vision_config is None else
+                               vision_config.max_batch_size)
         self.loop = asyncio.new_event_loop()
         self.work_thread = self._start_work_thread()
         torch.cuda.empty_cache()

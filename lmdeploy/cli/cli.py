@@ -62,6 +62,9 @@ class CLI(object):
             default=0,
             help='A parameter used in awq to quantize fp16 weights '
             'to 4 bits')
+        parser.add_argument('--trust-remote-code',
+                            action='store_true',
+                            help='trust remote code from huggingface')
 
         parser.set_defaults(run=CLI.convert)
 
@@ -103,6 +106,7 @@ class CLI(object):
         # # chat template args
         ArgumentHelper.meta_instruction(parser)
         ArgumentHelper.cap(parser)
+        ArgumentHelper.chat_template(parser)
         #
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -114,6 +118,7 @@ class CLI(object):
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
+        prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -123,6 +128,7 @@ class CLI(object):
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
+        tb_group._group_actions.append(prefix_caching_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
@@ -222,10 +228,20 @@ class CLI(object):
     def chat(args):
         """Chat with pytorch or turbomind engine."""
         from lmdeploy.archs import autoget_backend
+        from lmdeploy.model import ChatTemplateConfig
         backend = args.backend
         if backend != 'pytorch':
             # set auto backend mode
             backend = autoget_backend(args.model_path)
+
+        chat_template_config = ChatTemplateConfig(
+            model_name=args.model_name,
+            meta_instruction=args.meta_instruction,
+            capability=args.cap)
+        if args.chat_template:
+            chat_template_config = ChatTemplateConfig.from_json(
+                args.chat_template)
+
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             from lmdeploy.pytorch.chat import run_chat
@@ -236,13 +252,21 @@ class CLI(object):
                 tp=args.tp,
                 session_len=args.session_len,
                 cache_max_entry_count=args.cache_max_entry_count,
-                adapters=adapters)
+                adapters=adapters,
+                enable_prefix_caching=args.enable_prefix_caching,
+            )
             run_chat(args.model_path,
                      engine_config,
-                     trust_remote_code=args.trust_remote_code)
+                     trust_remote_code=args.trust_remote_code,
+                     chat_template_config=chat_template_config)
         else:
             from lmdeploy.turbomind.chat import main as run_chat
             kwargs = convert_args(args)
+            kwargs.pop('chat_template')
+            kwargs.pop('meta_instruction')
+            kwargs.pop('trust_remote_code')
+            kwargs.pop('backend')
+            kwargs['chat_template_cfg'] = chat_template_config
             run_chat(**kwargs)
 
     @staticmethod

@@ -52,7 +52,7 @@ DLDevice getDLDevice(triton::Tensor& tensor)
     return device;
 }
 
-std::unique_ptr<DLManagedTensor> TritonTensorToDLManagedTensor(triton::Tensor& tensor)
+DLManagedTensor* TritonTensorToDLManagedTensor(triton::Tensor& tensor)
 {
     DLDevice device = getDLDevice(tensor);
 
@@ -121,8 +121,7 @@ std::unique_ptr<DLManagedTensor> TritonTensorToDLManagedTensor(triton::Tensor& t
                        reinterpret_cast<int64_t*>(const_cast<size_t*>(tensor.shape.data())),
                        (int64_t*)(nullptr),
                        0};
-
-    return std::unique_ptr<DLManagedTensor>(new DLManagedTensor{dl_tensor, nullptr, [](DLManagedTensor*) {}});
+    return new DLManagedTensor{dl_tensor, nullptr, [](DLManagedTensor* dlmt) { delete dlmt; }};
 }
 
 triton::MemoryType getMemoryType(DLDevice device)
@@ -305,8 +304,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "__dlpack__",
             [](triton::Tensor* self, long stream) {
-                auto tensor_ptr = TritonTensorToDLManagedTensor(*self);
-                return py::capsule(tensor_ptr.release(), kDlTensorCapsuleName, [](PyObject* obj) {
+                DLManagedTensor* dlmt = TritonTensorToDLManagedTensor(*self);
+                return py::capsule(dlmt, kDlTensorCapsuleName, [](PyObject* obj) {
                     DLManagedTensor* dlmt =
                         static_cast<DLManagedTensor*>(PyCapsule_GetPointer(obj, kDlTensorCapsuleName));
                     if (dlmt) {
@@ -390,10 +389,14 @@ PYBIND11_MODULE(_turbomind, m)
 #endif
                 }
                 else {
+#ifdef ENABLE_FP32
                     auto model = std::make_shared<LlamaTritonModel<float>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
                     model->setFfiLock(gil_control);
                     return model;
+#else
+                    throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
+#endif
                 }
             },
             "model_dir"_a,

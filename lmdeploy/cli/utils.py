@@ -123,13 +123,15 @@ class ArgumentHelper:
                                    help='Maximum batch size')
 
     @staticmethod
-    def quant_policy(parser):
+    def quant_policy(parser, default: int = 0):
         """Add argument quant_policy to parser."""
 
-        return parser.add_argument('--quant-policy',
-                                   type=int,
-                                   default=0,
-                                   help='Whether to use kv int8')
+        return parser.add_argument(
+            '--quant-policy',
+            type=int,
+            default=0,
+            choices=[0, 4, 8],
+            help='Quantize kv or not. 0: no quant; 4: 4bit kv; 8: 8bit kv')
 
     @staticmethod
     def rope_scaling_factor(parser):
@@ -293,6 +295,30 @@ class ArgumentHelper:
                                    help='The sequence length for calibration')
 
     @staticmethod
+    def calib_batchsize(parser):
+        """Add argument batch_size to parser."""
+
+        return parser.add_argument(
+            '--batch-size',
+            type=int,
+            default=1,
+            help=\
+            'The batch size for running the calib samples. Low GPU mem requires small batch_size. Large batch_size reduces the calibration time while costs more VRAM'  # noqa
+        )
+
+    @staticmethod
+    def calib_search_scale(parser):
+        """Add argument batch_size to parser."""
+
+        return parser.add_argument(
+            '--search-scale',
+            type=bool,
+            default=False,
+            help=\
+            'Whether search scale ratio. Default to False, which means only smooth quant with 0.5 ratio will be applied'  # noqa
+        )
+
+    @staticmethod
     def device(parser):
         """Add argument device to parser."""
 
@@ -383,3 +409,35 @@ class ArgumentHelper:
             'it should be a multiple of 64. For Pytorch Engine, '
             'if Lora Adapter is specified, this parameter will '
             'be ignored')
+
+    @staticmethod
+    def enable_prefix_caching(parser):
+        """Add argument enable_prefix_caching to parser."""
+
+        return parser.add_argument('--enable-prefix-caching',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable cache and match prefix')
+
+    @staticmethod
+    def num_tokens_per_iter(parser):
+        return parser.add_argument(
+            '--num-tokens-per-iter',
+            type=int,
+            default=0,
+            help='the number of tokens processed in a forward pass')
+
+    @staticmethod
+    def max_prefill_iters(parser):
+        return parser.add_argument(
+            '--max-prefill-iters',
+            type=int,
+            default=1,
+            help='the max number of forward passes in prefill stage')
+
+    @staticmethod
+    def vision_max_batch_size(parser):
+        return parser.add_argument('--vision-max-batch-size',
+                                   type=int,
+                                   default=1,
+                                   help='the vision model batch size')

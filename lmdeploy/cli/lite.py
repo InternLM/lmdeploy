@@ -33,6 +33,8 @@ class SubCliLite(object):
         ArgumentHelper.calib_dataset(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)
+        ArgumentHelper.calib_batchsize(parser)
+        ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.device(parser)
         parser.add_argument('--w-bits',
                             type=int,
@@ -63,6 +65,8 @@ class SubCliLite(object):
         ArgumentHelper.calib_dataset(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)
+        ArgumentHelper.calib_batchsize(parser)
+        ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.device(parser)
 
     @staticmethod
@@ -85,6 +89,8 @@ class SubCliLite(object):
         ArgumentHelper.calib_dataset(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)
+        ArgumentHelper.calib_batchsize(parser)
+        ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.device(parser)
 
     @staticmethod

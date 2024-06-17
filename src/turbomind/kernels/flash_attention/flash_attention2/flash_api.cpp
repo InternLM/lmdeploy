@@ -166,7 +166,9 @@ void FlashAttentionOpImpl<T, FMHA_VERSION>::operator()(Params& params, cudaStrea
     pimpl->operator()(params, st);
 }
 
+#ifdef ENABLE_FP32
 template class FlashAttentionOpImpl<float, FMHA_VERSION>;
+#endif
 template class FlashAttentionOpImpl<half, FMHA_VERSION>;
 #ifdef ENABLE_BF16
 template class FlashAttentionOpImpl<__nv_bfloat16, FMHA_VERSION>;

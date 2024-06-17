@@ -9,6 +9,7 @@ from .llama_awq import ensure_fp16orint32
 class InternLM2Reader(LlamaReader):
     """InternLM2 model reader."""
 
+    attn_layer_prefix = 'model.layers'
     attn_layer_patten = r'model.layers.([0-9]+).'
     tok_embeddings_key = 'model.tok_embeddings.weight'
     norm_weight_key = 'model.norm.weight'
@@ -22,14 +23,16 @@ class InternLM2Reader(LlamaReader):
         """Get q, k, v, o kind for layer i."""
         kv_head_num = self.model_cfg['kv_head_num']
         gs = int(self.model_cfg['attn_head_num'] / kv_head_num)
-        qkv = self.params[f'model.layers.{i}.attention.wqkv.{kind}']
+        qkv = self.params[
+            f'{self.attn_layer_prefix}.{i}.attention.wqkv.{kind}']
         qkv = qkv.view(kv_head_num, gs + 2, 128, -1)
         hidden_dim = qkv.shape[-1]
         q, k, v = torch.split(qkv, [gs, 1, 1], dim=1)
         q = q.reshape(-1, hidden_dim)
         k = k.reshape(-1, hidden_dim)
         v = v.reshape(-1, hidden_dim)
-        o = self.params.get(f'model.layers.{i}.attention.wo.{kind}')
+        o = self.params.get(
+            f'{self.attn_layer_prefix}.{i}.attention.wo.{kind}')
         return q, k, v, o
 
     def attn(self, i: int):
@@ -49,13 +52,15 @@ class InternLM2Reader(LlamaReader):
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
-        return self.params[f'model.layers.{i}.attention_norm.weight']
+        return self.params[
+            f'{self.attn_layer_prefix}.{i}.attention_norm.weight']
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         result = []
         for key in ['w1', 'w2', 'w3']:
-            tensor = self.params[f'model.layers.{i}.feed_forward.{key}.{kind}']
+            tensor = self.params[
+                f'{self.attn_layer_prefix}.{i}.feed_forward.{key}.{kind}']
             result.append(tensor)
         return (*result, )
 
@@ -73,7 +78,7 @@ class InternLM2Reader(LlamaReader):
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
-        return self.params[f'model.layers.{i}.ffn_norm.weight']
+        return self.params[f'{self.attn_layer_prefix}.{i}.ffn_norm.weight']
 
 
 @INPUT_MODELS.register_module(name='internlm2')
@@ -97,14 +102,16 @@ class InternLM2AwqReader(InternLM2Reader):
         """Get q, k, v, o qweight for layer i."""
         kv_head_num = self.model_cfg['kv_head_num']
         gs = int(self.model_cfg['attn_head_num'] / kv_head_num)
-        qkv = self.params[f'model.layers.{i}.attention.wqkv.{kind}']
+        qkv = self.params[
+            f'{self.attn_layer_prefix}.{i}.attention.wqkv.{kind}']
         hidden_dim = qkv.shape[0]
         qkv = qkv.view(hidden_dim, kv_head_num, gs + 2, -1)
         q, k, v = torch.split(qkv, [gs, 1, 1], dim=-2)
         q = q.reshape(hidden_dim, -1)
         k = k.reshape(hidden_dim, -1)
         v = v.reshape(hidden_dim, -1)
-        o = self.params.get(f'model.layers.{i}.attention.wo.{kind}')
+        o = self.params.get(
+            f'{self.attn_layer_prefix}.{i}.attention.wo.{kind}')
         return ensure_fp16orint32((q, k, v, o))
 
     def attn(self, i: int):

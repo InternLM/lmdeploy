@@ -21,6 +21,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
@@ -37,6 +38,7 @@ struct LlamaWeight {
                 bool       attn_bias,
                 WeightType weight_type,
                 int        group_size,
+                LoraParams lora_params,
                 size_t     tensor_para_size,
                 size_t     tensor_para_rank);
 

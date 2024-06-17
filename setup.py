@@ -39,12 +39,12 @@ def get_cuda_pkgs():
     if arg_value == '11':
         cuda_pkgs = [
             'nvidia-nccl-cu11', 'nvidia-cuda-runtime-cu11',
-            'nvidia-cublas-cu11'
+            'nvidia-cublas-cu11', 'nvidia-curand-cu11'
         ]
     elif arg_value == '12':
         cuda_pkgs = [
             'nvidia-nccl-cu12', 'nvidia-cuda-runtime-cu12',
-            'nvidia-cublas-cu12'
+            'nvidia-cublas-cu12', 'nvidia-curand-cu12'
         ]
     return cuda_pkgs
 

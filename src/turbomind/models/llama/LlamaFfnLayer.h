@@ -59,7 +59,7 @@ public:
     void forward(TensorMap* output_tensors, const TensorMap* input_tensors, const LlamaFfnWeight<T>* weights);
 
 private:
-    void allocateBuffer(size_t token_num);
+    void allocateBuffer(size_t token_num, const LlamaDenseWeight<T>*, const LlamaDenseWeight<T>*);
 
     void freeBuffer();
 

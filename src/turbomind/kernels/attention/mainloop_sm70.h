@@ -16,24 +16,23 @@ struct Mainloop<arch::Sm70, Impl_> {
     using T   = typename Impl::T;
     using Tkv = typename Impl::Tkv;
 
-    using SmemIterQ = typename Impl::SmemIterQ;
-    using SmemIterK = typename Impl::SmemIterK;
-    using SmemIterP = typename Impl::SmemIterP;
-    using SmemIterV = typename Impl::SmemIterV;
-
     using ThreadMapKV = typename Impl::ThreadMapKV;
-    using GmemIterK   = Sm70GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutK, 0>;
-    using GmemIterV   = Sm70GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutV, 1>;
 
-    using TransformK = typename Impl::TransformK;
-    using TransformV = typename Impl::TransformV;
+    using GmemIterK_ = Sm70GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutK, 0>;
+    using GmemIterV_ = Sm70GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutV, 1>;
+
+    /// TODO: hide this behind a SFINAE gate so that `*KVp` stuff won't be needed for non-quantized impls
+    using CombinedIterK =
+        CombinedIterator<GmemIterK_, Sm70GmemIterator<T, typename Impl::ThreadMapKVp, typename Impl::SmemLayoutKVp, 2>>;
+    using CombinedIterV =
+        CombinedIterator<GmemIterV_, Sm70GmemIterator<T, typename Impl::ThreadMapKVp, typename Impl::SmemLayoutKVp, 3>>;
+
+    using GmemIterK = std::conditional_t<std::is_same_v<T, Tkv>, GmemIterK_, CombinedIterK>;
+    using GmemIterV = std::conditional_t<std::is_same_v<T, Tkv>, GmemIterV_, CombinedIterV>;
 
     using FragQ = typename Impl::FragQ;
-    using FragK = typename Impl::FragK;
-    using FragV = typename Impl::FragV;
     using FragS = typename Impl::FragS;
     using FragO = typename Impl::FragO;
-    using FragP = typename Impl::FragP;
     using FragM = typename Impl::FragM;
     using FragL = typename Impl::FragL;
 
@@ -41,13 +40,9 @@ struct Mainloop<arch::Sm70, Impl_> {
 
     static constexpr int CTA_S = Impl::CTA_S;
 
-    template<class GmemIterK, class GmemIterV, class BlockIter, class StoreS>
+    template<class CacheIter, class StoreS>
     __device__ void operator()(FragQ&         frag_Q,
-                               GmemIterK&     gmem_K,
-                               GmemIterV&     gmem_V,
-                               TransformK&    transform_K,
-                               TransformV&    transform_V,
-                               BlockIter&     block_iter,
+                               CacheIter&     cache_iter,
                                FragO&         frag_O,
                                FragM&         frag_M,
                                FragL&         frag_L,
@@ -59,24 +54,19 @@ struct Mainloop<arch::Sm70, Impl_> {
                                SharedStorage& storage,
                                const StoreS&  store_S)
     {
-        gmem_K.SetSmem(Impl::GetSmemK(storage));
-        gmem_V.SetSmem(Impl::GetSmemV(storage));
+        GmemIterK gmem_K{};
+        GmemIterV gmem_V{};
 
-        SmemIterQ smem_Q{storage.Q};
-        SmemIterP smem_P{storage.P};
-        SmemIterK smem_K{Impl::GetSmemK(storage)};
-        SmemIterV smem_V{Impl::GetSmemV(storage)};
+        Impl::SetSmemKV(gmem_K, gmem_V, storage, true);
 
         typename GmemIterK::Fragment tmp_K;
 
-        block_iter.SetTile(tile_iter);
-
-        FragK frag_K;
-        FragV frag_V;
+        typename Impl::StateQK state_QK{storage, frag_Q};
+        typename Impl::StatePV state_PV{storage, true};
 
         Impl::Sync();
 
-        gmem_K.Load<true>(block_iter, tmp_K, max_step - tile_iter * CTA_S);
+        gmem_K.Load<true>(cache_iter, tmp_K, max_step - tile_iter * CTA_S);
         gmem_K.Save(tmp_K);
 
         constexpr auto nop = [](int) {};
@@ -86,20 +76,20 @@ struct Mainloop<arch::Sm70, Impl_> {
 
             typename GmemIterV::Fragment tmp_V;
 
-            gmem_V.Load<is_residue>(block_iter, tmp_V, is_residue ? max_step - offset_K : CTA_S);
-            block_iter.Advance();
+            gmem_V.Load<is_residue>(cache_iter, tmp_V, is_residue ? max_step - offset_K : CTA_S);
+            cache_iter.Advance();
 
             FragS frag_S{};
 
             Impl::Sync();
-            smem_K.Load(frag_K[0], 0, 0);
+            state_QK.Load(0, 0);
 
-            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, transform_K, 0, nop, [&] {});
+            Impl::ComputeQK(state_QK, frag_S, 0, nop, [&] {});
 
             gmem_V.Save(tmp_V);
 
             if (tile_iter > 0) {
-                gmem_K.Load<false>(block_iter, tmp_K, CTA_S);
+                gmem_K.Load<false>(cache_iter, tmp_K, CTA_S);
             }
 
             if constexpr (is_mask) {
@@ -108,13 +98,12 @@ struct Mainloop<arch::Sm70, Impl_> {
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
-            FragP frag_P;
-            Impl::ConvertStoP(frag_S, frag_P, storage.P);
+            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage);
 
             Impl::Sync();
-            smem_V.Load(frag_V[0], 0, 0);
+            state_PV.Load(0, 0);
 
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, transform_V, 0, nop, [&] {});
+            Impl::ComputePV(state_PV, frag_O, 0, nop, [&] {});
 
             gmem_K.Save(tmp_K);
         };

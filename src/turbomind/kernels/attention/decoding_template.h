@@ -4,21 +4,22 @@
 
 #include "attention_params.h"
 #include "attention_universal.h"
-#include "reduce_template.h"
+#include "reduce.h"
 #include "src/turbomind/kernels/attention/thread_map.h"
 #include "utils.h"
 namespace turbomind {
 
 template<class Kernel>
-void invokeDecoding(const typename Kernel::ParamType& params)
+bool invokeDecoding(const typename Kernel::ParamType& params)
 {
     static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
-    if constexpr (0) {
+    if constexpr (1) {
         [[maybe_unused]] static const int _ = [&] {
-            std::cout << "GmemMap:\n";
-            Print(typename Kernel::Impl::ThreadMapKV{});
-            std::cout << "\nDynamic smem size: " << kSmemSize << "\n";
+            // std::cout << __PRETTY_FUNCTION__ << std::endl;
+            // std::cout << "GmemMap:\n";
+            // Print(typename Kernel::Impl::ThreadMapKV{});
+            // std::cout << "\nDynamic smem size: " << kSmemSize << "\n";
             return 0;
         }();
     }
@@ -33,6 +34,11 @@ void invokeDecoding(const typename Kernel::ParamType& params)
     auto kernel_func = &attention_kernel<Kernel>;
 
     thread_local const int2 caps = [&] {
+        auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
+        if (err) {
+            std::cout << cudaGetErrorString(err) << "\n";
+            std::abort();
+        }
         int device_id{};
         cudaGetDevice(&device_id);
         int sm_count{};
@@ -42,12 +48,21 @@ void invokeDecoding(const typename Kernel::ParamType& params)
         return int2{sm_count, max_active_ctas};
     }();
 
-    dim3 grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, 1, Kernel::CTA_H);
+    const int q_group_size   = params.num_heads / params.num_kv_heads;
+    const int q_head_per_cta = std::min(q_group_size, Kernel::CTA_H);
+
+    // cta needed to process one query group
+    const int cta_per_q_group = (q_group_size + q_head_per_cta - 1) / q_head_per_cta;
+
+    // std::cout << "CTA_H: " << Kernel::CTA_H << ", head_per_cta: " << q_head_per_cta
+    //           << ", cta_per_q_group: " << cta_per_q_group << "\n";
+
+    dim3 grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, 1, cta_per_q_group);
 
     const int grid_size = grid.x * grid.y * grid.z;
     const int split_cnt = GetSplitCount(max_split_count, grid_size, caps.y, caps.x, 4);
 
-    grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, split_cnt, Kernel::CTA_H);
+    grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, split_cnt, cta_per_q_group);
 
     auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
     if (err) {
@@ -55,7 +70,12 @@ void invokeDecoding(const typename Kernel::ParamType& params)
         std::abort();
     }
 
-    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, CtaMap{});
+    // Print(typename Kernel::Impl::ThreadMapKVp{});
+
+    auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
+
+    kernel_func<<<grid, block, kSmemSize, params.stream>>>(
+        params, cache_iter_factory, CtaMap{}, q_group_size, q_head_per_cta, cta_per_q_group);
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
         std::cout << cudaGetErrorString(err) << "\n";
@@ -63,18 +83,20 @@ void invokeDecoding(const typename Kernel::ParamType& params)
     }
 
     if (Kernel::need_separate_reduce(split_cnt)) {
-        attention::dispatchReduce<Kernel::kHeadDim>(params.out,
-                                                    params.partial_M,
-                                                    params.partial_L,
-                                                    params.partial_O,
-                                                    params.split_cnt,
-                                                    params.max_split_k,
-                                                    split_cnt,
-                                                    params.token_num,
-                                                    params.num_heads,
-                                                    params.inv_sqrt_dh,
-                                                    params.stream);
+        attention::invokeReduce<Kernel::kHeadDim>(params.out,
+                                                  params.partial_M,
+                                                  params.partial_L,
+                                                  params.partial_O,
+                                                  params.split_cnt,
+                                                  params.max_split_k,
+                                                  split_cnt,
+                                                  params.token_num,
+                                                  params.num_heads,
+                                                  params.inv_sqrt_dh,
+                                                  params.stream);
     }
+
+    return true;
 }
 
 }  // namespace turbomind

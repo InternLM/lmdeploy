@@ -311,20 +311,10 @@ void invokeGenericActivation(T*           out,
                                                              const int    seq_len,                                     \
                                                              cudaStream_t stream);
 
-// INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, float, float);
-// INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, half, half);
-// #ifdef ENABLE_BF16
-// INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, __nv_bfloat16, __nv_bfloat16);
-// #endif
-
-// INSTANTIATE_GENERIC_ACTIVATION(ReluActivation, float, float);
-// INSTANTIATE_GENERIC_ACTIVATION(ReluActivation, half, half);
-// #ifdef ENABLE_BF16
-// INSTANTIATE_GENERIC_ACTIVATION(ReluActivation, __nv_bfloat16, __nv_bfloat16);
-// #endif
-
-INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, float, float);
 INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, half, half);
+#ifdef ENABLE_FP32
+INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, float, float);
+#endif
 #ifdef ENABLE_BF16
 INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
 #endif

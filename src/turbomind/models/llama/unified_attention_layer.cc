@@ -22,7 +22,7 @@
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/attention/decoding.h"
-#include "src/turbomind/kernels/attention/kv_cache_utils.h"
+#include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -38,23 +38,60 @@ namespace turbomind {
 
 template<typename T>
 
-void UnifiedAttentionLayer<T>::allocateBuffer(size_t q_count, size_t k_count, size_t batch_size)
+void UnifiedAttentionLayer<T>::allocateBuffer(size_t            q_count,
+                                              size_t            k_count,
+                                              size_t            batch_size,
+                                              const WeightType* weights)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
-    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
+    if (weights->qkv.lora.r) {
+        size_t sz = sizeof(T) * q_count * (local_q_kv_head_num * size_per_head_ + weights->qkv.lora.r);
+        qkv_buf_  = (T*)allocator_->reMalloc(qkv_buf_, sz, false);
+    }
+    else {
+        qkv_buf_ =
+            (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
+    }
 
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * q_count * local_head_num_ * size_per_head_, false);
 
-    tmp_kv_buf_ =
-        (T*)allocator_->reMalloc(tmp_kv_buf_, sizeof(T) * local_kv_head_num_ * 2 * k_count * size_per_head_, false);
-
-    dc_workspace_ = (float*)allocator_->reMalloc(
-        dc_workspace_, sizeof(float) * batch_size * local_head_num_ * kDecodeMaxSplits * (size_per_head_ + 2), false);
+    // Pad the tmp buffer for linear KV cache by `MAX_CTA_S` to avoid illegal accesses
+    tmp_kv_buf_ = (T*)allocator_->reMalloc(
+        tmp_kv_buf_, sizeof(T) * local_kv_head_num_ * 2 * (k_count + MAX_CTA_S) * size_per_head_, false);
 
     is_allocate_buffer_ = true;
+}
+
+template<typename T>
+void UnifiedAttentionLayer<T>::allocateWorkspace()
+{
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+    FT_CHECK(!is_allocate_workspace_);
+    partial_M_ = (float*)allocator_->malloc(sizeof(float) * kMaxWorkspaceTokens * local_head_num_);
+    partial_L_ = (float*)allocator_->malloc(sizeof(float) * kMaxWorkspaceTokens * local_head_num_);
+    partial_O_ = (float*)allocator_->malloc(sizeof(float) * kMaxWorkspaceTokens * local_head_num_ * size_per_head_);
+    split_cnt_ = (int*)allocator_->malloc(sizeof(int) * kMaxWorkspaceTokens);
+    barriers_  = (int*)allocator_->malloc(sizeof(int) * kMaxWorkspaceTokens * local_head_num_, true, false);
+    is_allocate_workspace_ = true;
+}
+
+template<typename T>
+void UnifiedAttentionLayer<T>::freeWorkspace()
+{
+    if (is_allocate_workspace_) {
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
+        allocator_->free((void**)&partial_M_);
+        allocator_->free((void**)&partial_L_);
+        allocator_->free((void**)&partial_O_);
+        allocator_->free((void**)&split_cnt_);
+        allocator_->free((void**)&barriers_);
+
+        is_allocate_workspace_ = false;
+    }
 }
 
 template<typename T>
@@ -66,8 +103,6 @@ void UnifiedAttentionLayer<T>::freeBuffer()
         allocator_->free((void**)&qkv_buf_);
         allocator_->free((void**)&qkv_buf_3_);
         allocator_->free((void**)&tmp_kv_buf_);
-
-        allocator_->free((void**)&dc_workspace_);
 
         is_allocate_buffer_ = false;
     }
@@ -128,7 +163,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     /// allocate buffers
     allocateBuffer(token_num,                                           // shared
                    h_cu_k_len[batch_size] - h_cu_k_len[dc_batch_size],  // prefill
-                   batch_size);
+                   batch_size,
+                   weights);
 
     // [L, 2, H, s, D]
     const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
@@ -139,10 +175,11 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     //     Compare(attention_input, num_token * weights->qkv.input_dims, "qkv_input", kCmpRead, stream_);
     // }
 
+    int* lora_mask = inputs->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
     //////////////////////////////////////////////
     /// qkv gemm
     // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
-    linear_.forward(qkv_buf_, attention_input, token_num, weights->qkv);
+    linear_.forward(qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
 
     // if (layer_id == 0 && count == 0) {
     //     Compare(qkv_buf_, num_token * weights->qkv.output_dims, "qkv_buf", kCmpRead, stream_);
@@ -150,9 +187,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     auto stream_ptr = streams_.data();
 
-    auto CreateParams = [&](int offset, int batch_size, cudaStream_t stream) {
+    auto CreateParams = [&](int offset, int batch_size, int max_kv_splits, cudaStream_t stream) {
         AttentionParams<T> params{};
-
+#if 1
         params.out    = qkv_buf_3_;
         params.q      = (T*)qkv_buf_;
         params.k      = params.q + local_head_num_ * size_per_head_;
@@ -165,24 +202,25 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             params.v_bias = params.k_bias + local_kv_head_num_ * size_per_head_;
         }
 
-        params.kv = tmp_kv_buf_;
-
         params.token_num  = h_cu_q_len[offset + batch_size] - h_cu_q_len[offset];
         params.batch_size = batch_size;
         params.max_q_len  = *std::max_element(h_q_len + offset, h_q_len + offset + batch_size);
         params.max_k_len  = *std::max_element(h_k_len + offset, h_k_len + offset + batch_size);
 
-        params.k_cache_block_ptrs  = (void**)block_ptrs;
-        params.cu_block_cnts       = (int*)cu_block_count + offset;
-        params.kv_cache_block_size = kv_cache_block_len_;
+        params.block_iter_params = BlockIteratorParams{(char**)block_ptrs,  //
+                                                       (int*)cu_block_count + offset,
+                                                       layer_id,
+                                                       (int)kv_cache_block_len_};
+
+        const int sum_k_len       = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
+        params.linear_iter_params = LinearIteratorParams{tmp_kv_buf_,  //
+                                                         int(2 * sum_k_len * size_per_head_),
+                                                         int(sum_k_len * size_per_head_)};
 
         params.finished   = is_finished + offset;
         params.cu_q_len   = cu_q_len + offset;
         params.cu_k_len   = cu_k_len + offset;
         params.rope_theta = rope_theta + offset;
-
-        params.key_offset = layer_offset;
-        params.val_offset = params.key_offset + local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
 
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
@@ -200,15 +238,19 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
         params.use_logn_attn = params_.use_logn_attn;
 
-        params.max_split_k = 1;
+        FT_CHECK(barriers_);
+        params.split_cnt   = split_cnt_;
+        params.partial_L   = partial_L_;
+        params.partial_M   = partial_M_;
+        params.partial_O   = partial_O_;
+        params.locks       = barriers_;
+        params.max_split_k = std::min(std::max(1, kMaxWorkspaceTokens / params.token_num), max_kv_splits);
 
         params.arch   = arch_;
         params.stream = stream;
 
         params.quant_policy = quant_policy_;
-        FT_CHECK(std::size(weights->past_kv_scale) == std::size(params.kv_quant_params));
-        std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
-
+#endif
         return params;
     };
 
@@ -224,16 +266,19 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     if (pf_batch_size) {
         const int offset    = dc_batch_size;
         const int sum_k_len = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
-        auto      params    = CreateParams(offset, pf_batch_size, pf_stream);
+        // We are executing prefill & decoding kernels concurrently, but only have 1 workspace
+        // disable split kv for prefill for now
+        auto params = CreateParams(offset, pf_batch_size, 1, pf_stream);
         if constexpr (sizeof(T) == 2) {
-            invokeProcessKV_(params);
-            invokeFlattenKV_(params, sum_k_len);
+            invokeProcessKV_v2_(params);
+            /// TODO: skip flattening for `sm_80`
+            invokeFlattenKV_v2_(params, sum_k_len);
             dispatchAttention(params);
         }
     }
 
     if (dc_batch_size) {
-        auto params = CreateParams(0, dc_batch_size, dc_stream);
+        auto params = CreateParams(0, dc_batch_size, kMaxKVSplits, dc_stream);
         if constexpr (sizeof(T) == 2) {
             dispatchDecoding<T>(params);
         }
@@ -252,7 +297,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    linear_.forward(attention_out, qkv_buf_3_, token_num, weights->output);
+    linear_.forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
 
     ++count;
 
@@ -268,7 +313,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     sync_check_cuda_error();
 }
 
+#ifdef ENABLE_FP32
 template class UnifiedAttentionLayer<float>;
+#endif
 template class UnifiedAttentionLayer<half>;
 #ifdef ENABLE_BF16
 template class UnifiedAttentionLayer<__nv_bfloat16>;

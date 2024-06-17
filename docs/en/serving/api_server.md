@@ -37,6 +37,17 @@ docker run --runtime nvidia --gpus all \
 
 The parameters of `api_server` are the same with that mentioned in "[option 1](#option-1-launching-with-lmdeploy-cli)" section
 
+### Option 3: Deploying to Kubernetes cluster
+
+Connect to a running Kubernetes cluster and deploy the internlm2-chat-7b model service with [kubectl](https://kubernetes.io/docs/reference/kubectl/) command-line tool (replace `<your token>` with your huggingface hub token):
+
+```shell
+sed 's/{{HUGGING_FACE_HUB_TOKEN}}/<your token>/' k8s/deployment.yaml | kubectl create -f - \
+    && kubectl create -f k8s/service.yaml
+```
+
+In the example above the model data is placed on the local disk of the node (hostPath). Consider replacing it with high-availability shared storage if multiple replicas are desired, and the storage can be mounted into container using [PersistentVolume](https://kubernetes.io/docs/concepts/storage/persistent-volumes/).
+
 ## RESTful API
 
 LMDeploy's RESTful API is compatible with the following three OpenAI interfaces:
@@ -82,6 +93,35 @@ response = client.chat.completions.create(
     top_p=0.8
 )
 print(response)
+```
+
+If you want to use async functions, may try the following example:
+
+```python
+import asyncio
+from openai import AsyncOpenAI
+
+async def main():
+    client = AsyncOpenAI(api_key='YOUR_API_KEY',
+                         base_url='http://0.0.0.0:23333/v1')
+    model_cards = await client.models.list()._get_page()
+    response = await client.chat.completions.create(
+        model=model_cards.data[0].id,
+        messages=[
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant.'
+            },
+            {
+                'role': 'user',
+                'content': ' provide three suggestions about time management'
+            },
+        ],
+        temperature=0.8,
+        top_p=0.8)
+    print(response)
+
+asyncio.run(main())
 ```
 
 You can invoke other OpenAI interfaces using similar methods. For more detailed information, please refer to the [OpenAI API guide](https://platform.openai.com/docs/guides/text-generation)

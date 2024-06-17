@@ -230,7 +230,9 @@ void invokeEmbeddingLookupPosEncodingPadCount(T*                    from_tensor,
                                                            const int             ite,                                  \
                                                            const int             seq_len,                              \
                                                            cudaStream_t          stream)
+#ifdef ENABLE_FP32
 INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(float);
+#endif
 INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(half);
 #ifdef ENABLE_BF16
 INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(__nv_bfloat16);

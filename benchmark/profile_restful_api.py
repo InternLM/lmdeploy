@@ -4,20 +4,20 @@ import random
 import time
 from queue import Queue
 from threading import Thread
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import fire
 import numpy as np
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from lmdeploy.serve.openai.api_client import APIClient
-from lmdeploy.tokenizer import Tokenizer
 
 
 def sample_requests(
     dataset_path: str,
     num_requests: int,
-    tokenizer: Tokenizer,
+    tokenizer: AutoTokenizer,
 ) -> List[Tuple[str, int, int]]:
     # Load the dataset.
     with open(dataset_path) as f:
@@ -66,21 +66,29 @@ class Engine:
                  temperature: float = 0.8,
                  top_p: float = 1.0,
                  csv: str = '',
+                 api_key: Optional[str] = None,
+                 model_name: Optional[str] = None,
                  **kwargs):
-        self.tokenizer = Tokenizer(tokenzier_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenzier_path,
+                                                       trust_remote_code=True)
         self.server_addr = server_addr
         self.temperature = temperature
         self.top_p = top_p
         self.csv = csv
-        client = APIClient(self.server_addr)
-        self.model_name = client.available_models[0]
+        self.api_key = api_key
+        client = APIClient(self.server_addr, api_key=self.api_key)
+        if model_name is None:
+            self.model_name = client.available_models[0]
+            print(f'using model: {self.model_name}\n')
+        else:
+            self.model_name = model_name
         self.pbar = None
 
     def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
                    stream_output: bool):
 
         stats = []
-        client = APIClient(self.server_addr)
+        client = APIClient(self.server_addr, api_key=self.api_key)
 
         for prompt, input_seqlen, output_seqlen in iter(
                 req_queue.get, [None, None, None]):
@@ -207,6 +215,8 @@ class Engine:
 def main(server_addr: str,
          tokenizer_path: str,
          dataset: str,
+         api_key: Optional[str] = None,
+         model_name: Optional[str] = None,
          concurrency: int = 128,
          num_prompts: int = 5000,
          top_p: float = 1.0,
@@ -243,7 +253,9 @@ def main(server_addr: str,
                     tokenizer_path,
                     top_p=top_p,
                     temperature=temperature,
-                    csv=csv)
+                    csv=csv,
+                    api_key=api_key,
+                    model_name=model_name)
 
     requests = sample_requests(dataset, num_prompts, engine.tokenizer)
 

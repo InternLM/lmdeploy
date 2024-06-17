@@ -32,6 +32,7 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
                             bool       attn_bias,
                             WeightType weight_type,
                             int        group_size,
+                            LoraParams lora_params,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank):
     hidden_units_(head_num * size_per_head),
@@ -49,12 +50,14 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
     }
     decoder_layer_weights.reserve(num_layer_);
     for (unsigned l = 0; l < num_layer_; ++l) {
-        decoder_layer_weights.push_back(new LlamaDecoderLayerWeight<T>(head_num,
+        decoder_layer_weights.push_back(new LlamaDecoderLayerWeight<T>(l,
+                                                                       head_num,
                                                                        kv_head_num,
                                                                        size_per_head,
                                                                        inter_size_,
                                                                        weight_type_,
                                                                        group_size,
+                                                                       lora_params,
                                                                        attn_bias,
                                                                        tensor_para_size_,
                                                                        tensor_para_rank_));
@@ -90,7 +93,7 @@ template<typename T>
 void LlamaWeight<T>::loadModel(std::string dir_path)
 {
     FtCudaDataType model_file_type = FtCudaDataType::FP16;
-    if(weight_type_ == WeightType::kBF16){
+    if (weight_type_ == WeightType::kBF16) {
         model_file_type = FtCudaDataType::BF16;
     }
     dir_path += '/';
@@ -117,17 +120,20 @@ TensorMap LlamaWeight<T>::getParams()
 {
     TensorMap output;
 
-    output.insert(
-        "tok_embeddings.weight",
-        Tensor{MEMORY_GPU, getTensorType<T>(), {vocab_size_ * hidden_units_ * sizeof(T)}, pre_decoder_embedding_table});
+    output.insert("tok_embeddings.weight",
+                  Tensor{MEMORY_GPU,
+                         getTensorType<T>(),
+                         {vocab_size_padded_ * hidden_units_ * sizeof(T)},
+                         pre_decoder_embedding_table});
 
     output.insert("norm.weight",
                   Tensor{MEMORY_GPU, getTensorType<T>(), {hidden_units_ * sizeof(T)}, output_norm_weight});
 
-    output.insert(
-        "output.weight",
-        Tensor{
-            MEMORY_GPU, getTensorType<T>(), {hidden_units_ * vocab_size_ * sizeof(T)}, post_decoder_embedding_kernel});
+    output.insert("output.weight",
+                  Tensor{MEMORY_GPU,
+                         getTensorType<T>(),
+                         {hidden_units_ * vocab_size_padded_ * sizeof(T)},
+                         post_decoder_embedding_kernel});
 
     // transformer layers
     for (size_t i = 0; i < num_layer_; i++) {
@@ -141,7 +147,9 @@ TensorMap LlamaWeight<T>::getParams()
     return output;
 }
 
+#ifdef ENABLE_FP32
 template struct LlamaWeight<float>;
+#endif
 template struct LlamaWeight<half>;
 #ifdef ENABLE_BF16
 template struct LlamaWeight<__nv_bfloat16>;

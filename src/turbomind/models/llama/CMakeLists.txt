@@ -9,6 +9,7 @@ add_library(Llama STATIC
         LlamaV2.cc
         LlamaBatch.cc
         BlockManager.cc
+        BlockTrie.cc
         SequenceManager.cc
         LlamaWeight.cc
         LlamaDecoderLayerWeight.cc
@@ -26,7 +27,6 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         DynamicDecodeLayer
         activation_kernels
         attention
-        bert_preprocess_kernels
         decoding_kernels
         unfused_attention_kernels
         custom_ar_kernels
@@ -36,8 +36,7 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         memory_utils
         nccl_utils
         cuda_utils
-        logger
-        llama_fmha)
+        logger)
 
 
 add_executable(llama_gemm llama_gemm.cc)
