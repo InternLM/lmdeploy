@@ -266,7 +266,7 @@ class CLI(object):
             kwargs.pop('meta_instruction')
             kwargs.pop('trust_remote_code')
             kwargs.pop('backend')
-            kwargs['chat_template_cfg'] = chat_template_config
+            kwargs['chat_template_config'] = chat_template_config
             run_chat(**kwargs)
 
     @staticmethod

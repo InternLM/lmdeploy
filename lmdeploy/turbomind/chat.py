@@ -42,7 +42,7 @@ def main(model_path: str,
          stream_output: bool = True,
          request_output_len: int = 1024,
          chat_template: str = None,
-         chat_template_cfg: ChatTemplateConfig = None,
+         chat_template_config: ChatTemplateConfig = None,
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -68,26 +68,27 @@ def main(model_path: str,
         stream_output (bool): indicator for streaming output or not
         request_output_len (int): output token nums
         chat_template (str): user defined chat template
-        chat_template_cfg (ChatTemplateConfig): chat template config
+        chat_template_config (ChatTemplateConfig): chat template config
         kwargs (dict): unused args
     """ # noqa: E 501
 
     # chat template
     if chat_template is not None:
-        chat_template_cfg = ChatTemplateConfig.from_json(chat_template)
-    model_name = deduce_a_name(model_path, model_name, None, chat_template_cfg)
+        chat_template_config = ChatTemplateConfig.from_json(chat_template)
+    model_name = deduce_a_name(model_path, model_name, None,
+                               chat_template_config)
     if model_name in MODELS.module_dict.keys():
         chat_template_name = model_name
     else:
         chat_template_name = best_match_model(model_path)
-    if chat_template_cfg is None:
-        chat_template_cfg = ChatTemplateConfig(chat_template_name)
-    elif chat_template_cfg.model_name is None:
-        chat_template_cfg.model_name = chat_template_name
-    elif chat_template.capability is None:
-        chat_template.capability = cap
-    print('chat_template_cfg:\n', chat_template_cfg, sep='', flush=True)
-    model = chat_template_cfg.chat_template
+    if chat_template_config is None:
+        chat_template_config = ChatTemplateConfig(chat_template_name)
+    elif chat_template_config.model_name is None:
+        chat_template_config.model_name = chat_template_name
+    if chat_template_config.capability is None:
+        chat_template_config.capability = cap
+    print('chat_template_config:\n', chat_template_config, sep='', flush=True)
+    model = chat_template_config.chat_template
 
     # engine
     if session_len is None:
