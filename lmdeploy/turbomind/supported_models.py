@@ -88,6 +88,6 @@ def is_supported(model_path: str):
                     support_by_turbomind = False
             elif arch == 'ChatGLMModel':
                 # chatglm1/2/3 is not working yet
-                support_by_turbomind = cfg.get('rope_ratio', 1) > 1
+                support_by_turbomind = cfg.num_layers == 40
 
     return support_by_turbomind
