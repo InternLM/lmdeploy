@@ -76,7 +76,7 @@ def test_hf_pytorch_chat_pr(config, model, cli_case_config):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model', ['Qwen/Qwen-7B-Chat'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen2-0.5B-Chat'])
 def test_modelscope_pytorch_chat_tp1(config, model, cli_case_config,
                                      worker_id):
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'

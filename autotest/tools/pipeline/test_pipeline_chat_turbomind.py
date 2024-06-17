@@ -111,7 +111,7 @@ def test_pipeline_chat_pr(config, common_case_config, model):
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', ['Qwen/Qwen-7B-Chat'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen2-0.5B-Chat'])
 def test_modelscope_pipeline_chat_tp1(config, common_case_config, model,
                                       worker_id):
     if 'gw' in worker_id:
