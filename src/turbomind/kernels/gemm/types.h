@@ -24,6 +24,7 @@ typedef enum MMA_Tag {
     HMMA_16816 = 0x100,
     HMMA_1688  = 0x200,
     HMMA_884   = 0x300,
+    HMMA_SIMT  = 0x400,
 } MMA_Tag;
 
 typedef enum Op_Tag {

@@ -5,6 +5,8 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
 
+#include <iostream>
+
 namespace turbomind::gemm {
 
 template<int M_, int N_, int K_, int TM, int TN, int TK, int GM, int GN, int GK>
@@ -43,6 +45,23 @@ struct RakedThreadGroupMap {
         return {m * kFootprintM, n * kFootprintN, k * kFootprintK};
     }
 };
+
+namespace {
+
+template<class TMap>
+void Print_(TMap)
+{
+    std::cout << "M, N, K = " << TMap::M << " " << TMap::N << " " << TMap::K << "\n";
+    std::cout << "TM, TN, TK = " << TMap::TileM << " " << TMap::TileN << " " << TMap::TileK << "\n";
+    std::cout << "group count = " << TMap::kGroupCount << "\n";
+    std::cout << "M1, N1, K1 = " << TMap::M1 << " " << TMap::N1 << " " << TMap::K1 << "\n";
+    std::cout << "itM, itN, itK = " << TMap::kIterM << " " << TMap::kIterN << " " << TMap::kIterK << "\n";
+    std::cout << "fpM, fpN, fpK = " << TMap::kFootprintM << " " << TMap::kFootprintN << " " << TMap::kFootprintK
+              << "\n";
+    std::cout << "dM, dN, dK = " << TMap::kDeltaM << " " << TMap::kDeltaN << " " << TMap::kDeltaK << "\n";
+}
+
+}  // namespace
 
 /// TODO: Striped partition?
 

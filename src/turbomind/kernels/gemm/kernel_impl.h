@@ -9,6 +9,7 @@
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
+#include "src/turbomind/kernels/gemm/thread_group_map.h"
 
 namespace turbomind::gemm {
 
@@ -138,6 +139,7 @@ public:
                     Print(typename Gemm::OperandV::GmemIter::ThreadMap{});
                 }
                 printf("warp count: %d\n", Impl::WARPS);
+                Print_(typename Gemm::Impl::MMA_Map{});
                 return 0;
             }();
         }

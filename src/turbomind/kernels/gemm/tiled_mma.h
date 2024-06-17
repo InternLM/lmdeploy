@@ -42,6 +42,43 @@ struct SM80_MMA_16x8x16_F32_F16_F16_F32_TN {
     }
 };
 
+template<class T>
+struct SM70_MMA_SIMT {
+    static constexpr int M = 2;
+    static constexpr int N = 16;
+    static constexpr int K = 4;
+
+    static constexpr int kThreadCount = 32;
+
+    using FragA = Array<T, K>;
+    using FragB = Array<T, K>;
+    using FragC = Array<float, 1>;
+
+    __device__ static void fma(FragC& d, const FragA& a, const FragB& b, const FragC& c)
+    {
+        PRAGMA_UNROLL
+        for (int k = 0; k < K; ++k) {
+            d[0] = c[0] + float(a[k]) * float(b[k]);
+        }
+    }
+
+    template<class Func>
+    __device__ static void foreach_C(FragC& c, Func&& func)
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+
+        const int mi = lane_id / N;
+        const int ni = lane_id % N;
+
+        ((Func&&)func)(c, mi, ni);
+    }
+
+    __device__ static int get_group_id(int thread_idx)
+    {
+        return thread_idx / WARP_SIZE;
+    }
+};
+
 template<class MMA_Atom_, class ThreadGroupMap>
 struct Tiled_MMA_v2 {
     using Atom = MMA_Atom_;
