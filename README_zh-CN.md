@@ -137,6 +137,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>MiniGeminiLlama (7B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
+  <li>MiniCPM-Llama3-V-2_5</li>
 </ul>
 </td>
 </tr>
@@ -205,6 +206,7 @@ print(response)
 # 社区项目
 
 - 使用LMDeploy在英伟达Jetson系列板卡部署大模型：[LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
+- 使用 LMDeploy 和 BentoML 部署大模型的示例项目：[BentoLMDeploy](https://github.com/bentoml/BentoLMDeploy)
 
 # 贡献指南
 

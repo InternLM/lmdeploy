@@ -52,7 +52,7 @@ class LlamaAwqReader(LlamaReader):
         return ensure_fp16orint32(self._ffn(i, 'scales'))
 
 
-@INPUT_MODELS.register_module(name='hf-awq')
+@INPUT_MODELS.register_module(name='llama-awq')
 class LlamaAwqModel(LlamaModel):
     """Llama Awq model in hf format."""
 

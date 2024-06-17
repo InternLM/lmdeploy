@@ -14,7 +14,6 @@ from mmengine import Registry
 from pydantic.dataclasses import dataclass
 
 from lmdeploy.messages import TurbomindEngineConfig
-from lmdeploy.model import MODELS
 
 from ..source_model.base import BaseInputModel, BaseReader
 
@@ -35,7 +34,9 @@ def tprint(*args, **kwargs):
 @dataclass
 class TurbomindModelConfig:
     """Config for turbomind model."""
-    model_name: str = None
+
+    model_name: str = ''
+    model_arch: str = None
     tensor_para_size: int = None
     head_num: int = None
     kv_head_num: int = None
@@ -47,7 +48,7 @@ class TurbomindModelConfig:
     start_id: int = None
     end_id: int = None
     session_len: int = None
-    weight_type: str = 'fp16'
+    weight_type: str = None
     rotary_embedding: int = 128
     rope_theta: float = 10000.0
     size_per_head: int = 128
@@ -90,15 +91,24 @@ class TurbomindModelConfig:
             default.update(used)
             return cls(**default)
 
-    @classmethod
-    def from_engine_config(cls, config: TurbomindEngineConfig):
-        env = copy.deepcopy(config.__dict__)
-        env['tensor_para_size'] = env['tp']
-        ret = TurbomindModelConfig.from_dict(env, allow_none=True)
-        ret.rotary_embedding = ret.size_per_head
-        return ret
+    def update_from_engine_config(self, config: TurbomindEngineConfig):
+        """Update the attributes of this instance with the attributes from
+        TurbomindEngineConfig.
 
-    def update_prefill_conifg(self, config: TurbomindEngineConfig):
+        Args:
+            config (TurbomindEngineConfig): The turbomind engine config
+        """
+        if config is None:
+            return
+        # Iterate over the fields of 'self'
+        for field_name, _ in self.__dataclass_fields__.items():
+            # If the field value in 'other' is not None,
+            # update the corresponding field in 'self'
+            if hasattr(config, field_name) and getattr(config,
+                                                       field_name) is not None:
+                setattr(self, field_name, getattr(config, field_name))
+
+        self.tensor_para_size = config.tp
         assert self.session_len is not None
         if config.max_prefill_token_num is not None and \
                 config.num_tokens_per_iter == 0:
@@ -165,12 +175,9 @@ class BaseOutputModel(ABC):
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
         """Generate turbomind model config (config.ini)."""
         _, bos_id, eos_id = self.input_model.tokenizer_info()
-        model_info = self.input_model.model_info()
-        session_len = model_info.get('max_position_embeddings',
-                                     MODELS.get(cfg.model_name)().session_len)
+
         final_cfg = cfg.__dict__
-        final_cfg.update(
-            dict(start_id=bos_id, end_id=eos_id, session_len=session_len + 8))
+        final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model.model_info())
 
         # head_num, vocab_size

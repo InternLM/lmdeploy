@@ -124,9 +124,9 @@ class LlavaVisionModel(VisonModel):
                 no_split_module_classes=['CLIPEncoderLayer'],
                 dtype=torch.half)
 
-        self.model = model.model
-        self.vision_tower = model.model.vision_tower.half()
-        self.mm_projector = model.model.mm_projector.half()
+        self.model = model.model.eval()
+        self.vision_tower = model.model.vision_tower.half().eval()
+        self.mm_projector = model.model.mm_projector.half().eval()
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """encode images."""

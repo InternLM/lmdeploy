@@ -2,6 +2,8 @@
 import os
 from typing import Literal, Optional, Union
 
+from transformers import AutoConfig
+
 from lmdeploy.utils import get_hf_config_content
 
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
@@ -128,6 +130,8 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return True
+    elif arch == 'MiniCPMV':
+        return True
     return False
 
 
@@ -145,3 +149,43 @@ def get_task(model_path: str):
 
     # default task, pipeline_class
     return 'llm', AsyncEngine
+
+
+def get_model_arch(model_path: str):
+    """get a model's architecture and configuration.
+
+    Args:
+        model_path(str): the model path
+    """
+    if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
+        # the turbomind model
+        import configparser
+        config_file = os.path.join(model_path, 'triton_models', 'weights',
+                                   'config.ini')
+        config = configparser.ConfigParser()
+        config.read(config_file)
+        model_arch = config['llama']['model_arch']
+        return model_arch, None
+    else:
+        # transformers model
+        try:
+            cfg = AutoConfig.from_pretrained(model_path,
+                                             trust_remote_code=True)
+        except Exception as e:  # noqa
+            from transformers import PretrainedConfig
+            cfg = PretrainedConfig.from_pretrained(model_path)
+
+        _cfg = cfg.to_dict()
+        if _cfg.get('architectures', None):
+            arch = _cfg['architectures'][0]
+            if _cfg.get('auto_map'):
+                for _, v in _cfg['auto_map'].items():
+                    if 'InternLMXComposer2ForCausalLM' in v:
+                        arch = 'InternLMXComposer2ForCausalLM'
+        elif _cfg.get('auto_map',
+                      None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
+            arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
+        else:
+            raise RuntimeError(
+                f'Could not find model architecture from config: {_cfg}')
+        return arch, cfg
