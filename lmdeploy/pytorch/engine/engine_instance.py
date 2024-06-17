@@ -501,7 +501,7 @@ class EngineInstance:
             sampling_param = SamplingParam(max_new_tokens=0)
             for session_id, token_id, adapter_name in zip(
                     session_ids, input_ids, adapter_names):
-                if token_id > self.max_input_len:
+                if len(token_id) > self.max_input_len:
                     raise RuntimeError(
                         f'Expect input length<={self.max_input_len} '
                         f'but get {len(token_id)}')
