@@ -55,6 +55,7 @@ pytorch_chat_model:
     - 01-ai/Yi-6B-Chat
     - Qwen/Qwen1.5-7B-Chat
     - Qwen/Qwen1.5-MoE-A2.7B-Chat
+    - Qwen/Qwen2-0.5B-Instruct
     - mistralai/Mistral-7B-Instruct-v0.1
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-7b-it

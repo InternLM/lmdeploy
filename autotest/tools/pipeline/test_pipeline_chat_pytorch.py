@@ -76,7 +76,7 @@ def test_pipeline_chat_pytorch_pr(config, common_case_config, model):
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', ['Qwen/Qwen2-0.5B-Chat'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen2-1.5B-Chat'])
 def test_modelscope_pipeline_chat_pytorch_tp1(config, common_case_config,
                                               model, worker_id):
     if 'gw' in worker_id:

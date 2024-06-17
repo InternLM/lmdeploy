@@ -134,7 +134,7 @@ def test_restful_chat_pr(config, common_case_config):
 @pytest.mark.gpu_num_1
 @pytest.mark.tmp
 @pytest.mark.parametrize('prepare_environment', [{
-    'model': 'Qwen/Qwen2-0.5B-Chat',
+    'model': 'Qwen/Qwen2-1.5B-Chat',
     'cuda_prefix': None,
     'tp_num': 1,
     'modelscope': True
