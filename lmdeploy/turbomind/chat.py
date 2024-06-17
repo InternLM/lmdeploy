@@ -86,7 +86,7 @@ def main(model_path: str,
         chat_template_cfg.model_name = chat_template_name
     elif chat_template.capability is None:
         chat_template.capability = cap
-    print(f'chat_template_cfg:\n', chat_template_cfg, sep='', flush=True)
+    print('chat_template_cfg:\n', chat_template_cfg, sep='', flush=True)
     model = chat_template_cfg.chat_template
 
     # engine
