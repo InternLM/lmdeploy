@@ -8,7 +8,7 @@ import PIL.Image
 from lmdeploy.model import BaseModel
 from lmdeploy.utils import get_hf_config_content, get_logger
 from lmdeploy.vl.constants import IMAGE_TOKEN
-from lmdeploy.vl.utils import encode_file_base64, load_image
+from lmdeploy.vl.utils import encode_image_base64, load_image
 
 logger = get_logger('lmdeploy')
 
@@ -42,7 +42,7 @@ class VLChatTemplateWrapper:
                 # 'image_url': means url or local path to image.
                 # 'image_data': means PIL.Image.Image object.
                 if isinstance(image, str):
-                    image_base64_data = encode_file_base64(image)
+                    image_base64_data = encode_image_base64(image)
                     if image_base64_data == '':
                         logger.error(f'failed to load file {image}')
                         continue
