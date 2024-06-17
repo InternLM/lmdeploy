@@ -26,6 +26,8 @@ struct SmemCopy_MMA_16816_A {
     static constexpr int M = 16;
     static constexpr int K = 16;
 
+    static constexpr int kFragNum = 1;
+
     using Frag = Array<T, 8>;
 
     __device__ static int2 get_offset(int thread_idx)  // -> (m, k)
@@ -50,6 +52,8 @@ struct SmemCopy_MMA_16816_B {
     static constexpr int M = 16;
     static constexpr int K = 16;
 
+    static constexpr int kFragNum = 1;
+
     using Frag = Array<T, 8>;
 
     __device__ static int2 get_offset(int thread_idx)
@@ -73,6 +77,8 @@ template<class T>
 struct SmemCopy_MMA_16816_U {  // (M, K)
     static constexpr int M = 16;
     static constexpr int K = 1;
+
+    static constexpr int kFragNum = 1;
 
     using Frag = Array<T, 2>;
 

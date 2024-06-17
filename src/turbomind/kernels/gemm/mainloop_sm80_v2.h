@@ -117,10 +117,10 @@ struct MainloopSm80_v2 {
     using SmemLayoutU = typename OperandU::SmemLayout;
     using SmemLayoutV = typename OperandV::SmemLayout;
 
-    using SmemCopyA = SmemCopy<OperandA, MMA_Map::kFootprintM, MMA_Map::TileK, MMA_Map::kDeltaM, MMA_Map::kDeltaK>;
-    using SmemCopyU = SmemCopy<OperandU, MMA_Map::kFootprintM, MMA_Map::TileK, MMA_Map::kDeltaM, MMA_Map::kDeltaK>;
-    using SmemCopyB = SmemCopy<OperandB, MMA_Map::kFootprintN, MMA_Map::TileK, MMA_Map::kDeltaN, MMA_Map::kDeltaK>;
-    using SmemCopyV = SmemCopy<OperandV, MMA_Map::kFootprintN, MMA_Map::TileK, MMA_Map::kDeltaN, MMA_Map::kDeltaK>;
+    using SmemCopyA = SmemCopy<OperandA, MMA_Map::kFootprintM, MMA_Map::kDeltaM>;
+    using SmemCopyU = SmemCopy<OperandU, MMA_Map::kFootprintM, MMA_Map::kDeltaM>;
+    using SmemCopyB = SmemCopy<OperandB, MMA_Map::kFootprintN, MMA_Map::kDeltaN>;
+    using SmemCopyV = SmemCopy<OperandV, MMA_Map::kFootprintN, MMA_Map::kDeltaN>;
 
     using SmemAccessorA = SmemAccessor<Ta, SmemLayoutA>;
     using SmemAccessorB = SmemAccessor<Tb, SmemLayoutB>;

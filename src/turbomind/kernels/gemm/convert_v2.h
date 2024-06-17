@@ -36,9 +36,7 @@ struct ConvertOperand {
 
     using Atom = typename Operand::SmemCopyAtom;
 
-    using SmemCopy = std::conditional_t<!is_UV,
-                                        SmemCopy<Operand, M_, 16, 16, 16>,  // AB
-                                        SmemCopy<Operand, M_, 1, 16, 1>>;   // UV
+    using SmemCopy = SmemCopy<Operand, M_, 16>;
 
     static constexpr int kRepeatC = !is_UV ? 1 : 4;
 

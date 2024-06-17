@@ -17,6 +17,8 @@ struct VoidSmemCopyAtom {
     static constexpr int M = 1;
     static constexpr int K = 1;
 
+    static constexpr int kFragNum = 1;
+
     using Frag = Array<int, 1>;
 
     template<class S, class D>
@@ -49,12 +51,14 @@ struct SmemAccessorV2<T, Layout, kColMajor> {
     }
 };
 
-template<class T, Order order, int M_, int K_, int FragSize, int FragNum, int RepeatC = 1>
+template<class T, Order order, int M_, int K_, int FragSize, int FragNum_, int RepeatC = 1>
 struct SmemCopyAtom_Pack_v2 {
     static constexpr int M = M_;
     static constexpr int K = K_;
 
-    using Frag = Array<T, FragSize * FragNum>;
+    static constexpr int kFragNum = FragNum_;
+
+    using Frag = Array<T, FragSize * kFragNum>;
 
     __device__ static int2 get_offset(int thread_idx)  // -> (m, k)
     {
@@ -75,11 +79,12 @@ struct SmemCopyAtom_Pack_v2 {
     }
 };
 
-template<class Operand, int M, int K, int dM, int dK>
+template<class Operand, int M, int dM>
 struct SmemCopy {
     using Atom = typename Operand::SmemCopyAtom;
 
-    static constexpr int ITER_M = M / Atom::M;
+    static constexpr int ITER_M   = M / Atom::M;
+    static constexpr int kFragNum = Atom::kFragNum;
 
     using Frag = typename Atom::Frag[ITER_M];
     using Pack = Packing_v2<Operand::kPack, Operand::kOrder>;
@@ -96,7 +101,7 @@ struct SmemCopy {
 
         PRAGMA_UNROLL
         for (int m = 0; m < ITER_M; ++m) {
-            const int  mm = offset.x + m * dM;
+            const int  mm = offset.x + m * dM * kFragNum;
             const int2 mk = Pack::apply(int2{mm, kk});
             Atom::copy(&smem(mk.x + thr.x, mk.y + thr.y), dst[m].data(), mask);
         }

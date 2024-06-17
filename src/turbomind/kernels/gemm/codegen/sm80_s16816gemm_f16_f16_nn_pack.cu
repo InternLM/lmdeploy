@@ -44,7 +44,7 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
             typename GetOperand<HMMA_16816, OPERAND_A, uint4_t, kColMajor, true>::Operand,
             Transform_HMMA_16816<0, 1>,
             typename GetOperand<HMMA_16816, OPERAND_U, uint32_t, kColMajor, true>::Operand,
-            typename GetOperand<HMMA_16816, OPERAND_B, half, kRowMajor, true>::Operand,
+            typename GetOperand<HMMA_16816, OPERAND_B, half, kRowMajor, false>::Operand,  // non-packed
             Transform_Default,
             VoidOperand,
             half>;
@@ -57,9 +57,11 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
 
         Add(std::make_unique<KernelImpl<Config::Type<256, 128, 32, 8, 1, 1, 3, false, 0, 0, 128, 1>::Kernel>>());
 
+        // Add(std::make_unique<KernelImpl<Config::Type<256, 128, 32, 4, 2, 1, 3, false, 0, 0, 128, 1>::Kernel>>());
+
         // Add(std::make_unique<KernelImpl<Config::Type<128, 128, 32, 2, 2, 1, 3, false, 0, 0, 128, 1>::Kernel>>());
 
-        // Add(std::make_unique<KernelImpl<Config::Type<32, 16, 32, 1, 1, 1, 3, false, 0, 0, 128, 1>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<64, 16, 32, 1, 1, 1, 3, false, 0, 0, 128, 1>::Kernel>>());
     }
 
     {

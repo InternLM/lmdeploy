@@ -47,8 +47,9 @@ template<class T, class Tb>
 void Run(int m, int n, int k, int g = 128)
 {
     constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 2;
-    constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
     constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 2;
+
+    constexpr Pack kPackB = 0;  // HMMA_16816 | OPERAND_B | 1;
     constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
     auto& test = gTestbed<gemm::Testbed<uint4_t, half, half, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
 
@@ -91,7 +92,7 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(1024, 1024, 1024);
 
-    // Run<T, Tb>(256, 256, 256);
+    // Run<T, Tb>(32, 32, 128);
 
     // Run<T, Tb>(32, 16, 128);
 }

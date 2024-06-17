@@ -39,7 +39,7 @@ constexpr bool is_UV(Op_Tag op)
 
 template<MMA_Tag MMA, Op_Tag Op, Order Ord, class Stype_, class Dtype_, int PackNum>
 struct Config {
-    static constexpr int CTA_M = 32;
+    static constexpr int CTA_M = 64;
     static constexpr int CTA_K = !is_UV(Op) ? 32 : 8;
 
     static constexpr int BLOCK_SIZE = 32;
@@ -59,7 +59,7 @@ void Convert_v2_Impl(const void* S, const MatrixLayout& Sdesc, void* D, const Ma
     using Stype  = typename Config::Stype;
     using Dtype  = typename Config::Dtype;
 
-    constexpr int CTA_M = 32;
+    constexpr int CTA_M = Config::CTA_M;
 
     static constexpr int kSmemSize = sizeof(typename Kernel::SharedStorage);
 

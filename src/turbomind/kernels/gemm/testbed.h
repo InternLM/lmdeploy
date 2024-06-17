@@ -172,7 +172,7 @@ public:
         }
         else {
             cudaMemcpyAsync(
-                (Tb*)b_pack_.data().get(), b_.data().get(), sizeof(Ta) * b_.size(), cudaMemcpyDefault, stream);
+                (Tb*)b_pack_.data().get(), b_.data().get(), sizeof(Tb) * b_.size(), cudaMemcpyDefault, stream);
         }
     }
 
