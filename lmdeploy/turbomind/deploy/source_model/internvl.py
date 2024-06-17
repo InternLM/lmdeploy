@@ -29,8 +29,8 @@ class InternVL2Reader(InternLM2Reader):
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict):
+        model_cfg = model_cfg.get('llm_config')
         super().__init__(new_params, unused_params, last_bin, model_cfg)
-        self.model_cfg = self.model_cfg.get('llm_config')
 
 
 @INPUT_MODELS.register_module(name='internvl')
@@ -101,8 +101,8 @@ class InternVL2AwqReader(InternLM2AwqReader):
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict):
+        model_cfg = model_cfg.get('llm_config')
         super().__init__(new_params, unused_params, last_bin, model_cfg)
-        self.model_cfg = self.model_cfg.get('llm_config')
 
 
 @INPUT_MODELS.register_module(name='internvl-awq')
