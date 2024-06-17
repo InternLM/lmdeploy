@@ -29,7 +29,7 @@ template<class T>
 struct Operand_A_N {
     using Dtype = T;
 
-    static constexpr int Pack_M = 2;
+    static constexpr int Pack_M = 1;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | Pack_M;
     static constexpr Order kOrder = Order::kColMajor;
@@ -59,7 +59,7 @@ template<class T>
 struct Operand_U {
     using Dtype = T;
 
-    static constexpr int Pack_M = 2;
+    static constexpr int Pack_M = 1;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_U | Pack_M;
     static constexpr Order kOrder = Order::kColMajor;
