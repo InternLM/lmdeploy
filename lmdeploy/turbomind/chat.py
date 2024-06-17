@@ -31,7 +31,7 @@ def main(model_path: str,
          repetition_penalty: float = 1.0,
          cap: str = 'chat',
          tp: int = 1,
-         max_batch_size: int = 128,
+         max_batch_size: int = 1,
          model_format: str = None,
          quant_policy: int = 0,
          cache_max_entry_count: float = 0.8,
@@ -71,8 +71,6 @@ def main(model_path: str,
         chat_template_cfg (ChatTemplateConfig): chat template config
         kwargs (dict): unused args
     """ # noqa: E 501
-    if len(kwargs):
-        print('unused kwargs', kwargs, sep='')
 
     # chat template
     if chat_template is not None:
@@ -88,7 +86,7 @@ def main(model_path: str,
         chat_template_cfg.model_name = chat_template_name
     elif chat_template.capability is None:
         chat_template.capability = cap
-    print(f'match template: <{chat_template_cfg.model_name}>')
+    print(f'chat_template_cfg:\n', chat_template_cfg, sep='', flush=True)
     model = chat_template_cfg.chat_template
 
     # engine
