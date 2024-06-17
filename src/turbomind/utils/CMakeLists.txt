@@ -109,3 +109,8 @@ add_library(tensor STATIC Tensor.cc)
 set_property(TARGET tensor PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET tensor PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(tensor PUBLIC cuda_utils logger)
+
+add_library(anomaly_handler STATIC anomaly_handler.cu)
+set_property(TARGET anomaly_handler PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET anomaly_handler PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(anomaly_handler PUBLIC cuda_utils logger)
