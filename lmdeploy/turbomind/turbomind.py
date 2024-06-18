@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import json
 import os.path as osp
 import sys
 from configparser import ConfigParser
@@ -217,6 +218,15 @@ class TurboMind:
         if osp.exists(osp.join(model_path, 'outputs_stats.pth')) and \
                 engine_config.model_format is None:
             engine_config.model_format = 'awq'
+        # update model_format if config.json contains awq quantization config
+        if engine_config.model_format is None:
+            params_path = osp.join(model_path, 'config.json')
+            with open(params_path) as f:
+                model_arg = json.load(f)
+                if model_arg.get('quantization_config', None) is not None:
+                    if model_arg['quantization_config'][
+                            'quant_method'] == 'awq':
+                        engine_config.model_format = 'awq'
 
         assert is_supported(model_path), (
             f'turbomind does not support {model_path}. '
