@@ -42,8 +42,10 @@ class VLChatTemplateWrapper:
                 # 'image_url': means url or local path to image.
                 # 'image_data': means PIL.Image.Image object.
                 if isinstance(image, str):
-                    image = load_image(image)
                     image_base64_data = encode_image_base64(image)
+                    if image_base64_data == '':
+                        logger.error(f'failed to load file {image}')
+                        continue
                     item = {
                         'type': 'image_url',
                         'image_url': {
