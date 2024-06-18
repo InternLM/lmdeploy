@@ -149,15 +149,17 @@ def get_output_model_registered_name_and_config(model_path: str,
             group_size = 128 if group_size == 0 else group_size
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
+            TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16', torch.float16: 'fp16'}
+            weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'fp16')
+
             # Qwen-1 didn't set torch_dtype. It used bf16 as default
             if model_arch == 'QWenLMHeadModel':
-                torch_dtype = 'bfloat16'
+                weight_type = 'bf16'
             if not torch.cuda.is_bf16_supported():
                 print(
                     'Device does not support bfloat16. Set float16 forcefully')
-                torch_dtype = 'float16'
+                weight_type = 'fp16'
 
-            weight_type = 'bf16' if torch_dtype == 'bfloat16' else 'fp16'
             register_name = weight_type
             if turbomind_model_arch == 'xcomposer2':
                 register_name = 'plora'
