@@ -59,7 +59,7 @@ struct MakeOperand {
 };
 
 // CPO for getting specific operand templates
-template<MMA_Tag mma, Op_Tag optag, class T, Order order, bool is_pack>
+template<MMA_Tag mma, Op_Tag optag, class T, Order order, bool is_pack, class SFINAE = void>
 struct GetOperand: std::false_type {};
 
 }  // namespace turbomind::gemm

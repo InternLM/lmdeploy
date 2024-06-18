@@ -109,6 +109,12 @@ public:
         rng_.GenerateUniform(a_.data().get(), a_.size(), 1, -.5f);
         rng_.GenerateUniform(b_.data().get(), b_.size(), 1, -.5f);
 
+        // for (int i = 0; i < n; ++i) {
+        //     for (int j = 0; j < k; ++j) {
+        //         b_[i * k + j] = i * k + j;
+        //     }
+        // }
+
         a_f_ = a_;
         b_f_ = b_;
 
@@ -169,6 +175,19 @@ public:
             b_pack_desc_.pack = pack_b;
             const auto b_data = is_quant_b ? (void*)b_q_.data().get() : (void*)b_.data().get();
             CHECK(!Convert(b_data, b_desc_, b_pack_.data().get(), b_pack_desc_, stream_));
+
+            // {
+            //     cudaDeviceSynchronize();
+            //     for (int i = 0; i < n; ++i) {
+            //         for (int j = 0; j < k; ++j) {
+            //             int index = (int)((Tb*)b_pack_.data().get())[i * k + j];
+            //             int row   = index / k;
+            //             int col   = index % k;
+            //             printf("(%2d,%2d) ", row, col);
+            //         }
+            //         printf("\n");
+            //     }
+            // }
         }
         else {
             cudaMemcpyAsync(

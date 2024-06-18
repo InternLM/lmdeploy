@@ -3,6 +3,7 @@
 #include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/kernels/gemm/config/sm70_mma_simt.h"
 #include "src/turbomind/kernels/gemm/config/sm80_hmma_16816.h"
 #include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/format.h"
@@ -127,7 +128,6 @@ int Convert(const void*         S,  //
     };
 
     auto dispatch_3 = [&](auto mma, auto operand, auto order) -> bool {
-        /// TODO: add U8, U4
         if constexpr (is_AB(operand)) {
             switch (Ddesc.type) {
                 case DataType::F16:
@@ -135,7 +135,7 @@ int Convert(const void*         S,  //
                 case DataType::U8:
                     return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint8_t>);
                 case DataType::U4:
-                    return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint4_t>);
+                    // return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint4_t>);
                 default:
                     return false;
             }
@@ -183,6 +183,8 @@ int Convert(const void*         S,  //
         switch (get_mma_tag(Ddesc.pack)) {
             case HMMA_16816:
                 return dispatch_1(constant<HMMA_16816>{});
+            case HMMA_SIMT:
+                return dispatch_1(constant<HMMA_SIMT>{});
             default:
                 return false;
         }

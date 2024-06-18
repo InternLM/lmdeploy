@@ -45,6 +45,11 @@ struct SmemCopy_MMA_16816_A {
     {
         LDSM_x4<trans>::apply((S&&)src_ptr, (D&&)dst_ptr);
     }
+
+    __device__ static int2 unique(int thread_idx, int pack_idx)
+    {
+        return {pack_idx * WARP_SIZE + thread_idx % WARP_SIZE, 0};
+    }
 };
 
 template<class T, bool trans>
@@ -71,6 +76,11 @@ struct SmemCopy_MMA_16816_B {
     {
         LDSM_x4<trans>::apply((S&&)src_ptr, (D&&)dst_ptr);
     }
+
+    __device__ static int2 unique(int thread_idx, int pack_idx)
+    {
+        return {pack_idx * WARP_SIZE + thread_idx % WARP_SIZE, 0};
+    }
 };
 
 template<class T>
@@ -95,6 +105,12 @@ struct SmemCopy_MMA_16816_U {  // (M, K)
         for (int i = 0; i < 2; ++i) {
             Lds(*((Array<T, 1>*)dst_ptr + i), src_ptr + i * 8);
         }
+    }
+
+    __device__ static int2 unique(int thread_idx, int pack_idx)
+    {
+        const int lane_id = thread_idx % WARP_SIZE;
+        return {pack_idx * 8 + lane_id / 4, lane_id % 4};
     }
 };
 

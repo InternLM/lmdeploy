@@ -7,10 +7,12 @@
 #include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
 #include "src/turbomind/kernels/gemm/impl.h"
+#include "src/turbomind/kernels/gemm/impl_simt.h"
 #include "src/turbomind/kernels/gemm/iterator.h"
 #include "src/turbomind/kernels/gemm/kernel_impl.h"
 #include "src/turbomind/kernels/gemm/mainloop_sm80_v2.h"
 #include "src/turbomind/kernels/gemm/operand.h"
+#include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/smem_copy_simt.h"
 #include "src/turbomind/kernels/gemm/thread_group_map.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
@@ -55,6 +57,27 @@ struct OperandB {
     using GetGmemIter   = GetGmemIter;
 };
 
+struct GetSmemLayout_Pack {
+    template<int M, int K>
+    static constexpr auto apply(pair<M, K>)
+    {
+        return SmemLayoutV2<M, K>{};
+    }
+};
+
+template<class T, int K>
+struct Operand_B_Pack {
+    using Dtype = T;
+
+    static constexpr int Pack_M = 1;
+
+    static constexpr Pack  kPack  = HMMA_SIMT | OPERAND_B | Pack_M;
+    static constexpr Order kOrder = kRowMajor;
+
+    using SmemCopyAtom  = SmemCopyAtom_Pack_v3<T, typename OperandB<T, K>::SmemCopyAtom, kRowMajor, Pack_M>;
+    using GetSmemLayout = GetSmemLayout_Pack;
+    using GetGmemIter   = GetGmemIter;
+};
 
 template<class A, class TransformA, class U, class B, class TransformB, class V, class Tc>
 struct SM70_MMA_F32 {
@@ -111,6 +134,11 @@ struct GetOperand<HMMA_SIMT, OPERAND_A, T, kRowMajor, false>: std::true_type {
 template<class T>
 struct GetOperand<HMMA_SIMT, OPERAND_B, T, kRowMajor, false>: std::true_type {
     using Operand = sm70_mma_simt::OperandB<T, 4>;
+};
+
+template<class T>
+struct GetOperand<HMMA_SIMT, OPERAND_B, T, kRowMajor, true>: std::true_type {
+    using Operand = sm70_mma_simt::Operand_B_Pack<T, 4>;
 };
 
 }  // namespace turbomind::gemm

@@ -95,4 +95,20 @@ struct PackingImpl<HMMA_16816, OPERAND_A, num, kColMajor> {
 template<int num, Order order>
 struct PackingImpl<HMMA_16816, OPERAND_B, num, order>: PackingImpl<HMMA_16816, OPERAND_A, num, order> {};
 
+template<int num>
+struct PackingImpl<HMMA_SIMT, OPERAND_A, num, kRowMajor> {
+    __host__ __device__ static constexpr int2 apply(int2 mk)
+    {
+        return {mk.x / 2, mk.y * 2};
+    }
+};
+
+template<int num>
+struct PackingImpl<HMMA_SIMT, OPERAND_B, num, kRowMajor> {
+    __host__ __device__ static constexpr int2 apply(int2 mk)
+    {
+        return {mk.x / 16, mk.y * 16};
+    }
+};
+
 }  // namespace turbomind::gemm

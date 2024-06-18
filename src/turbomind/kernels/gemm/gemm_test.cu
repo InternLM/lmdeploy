@@ -54,7 +54,7 @@ void Run(int m, int n, int k, int g = 128)
 
     constexpr Pack kPackA = 0;
     constexpr Pack kPackU = 0;
-    constexpr Pack kPackB = 0;
+    constexpr Pack kPackB = HMMA_SIMT | OPERAND_B | 1;
     constexpr Pack kPackV = 0;
     auto& test = gTestbed<gemm::Testbed<half, half, half, kRowMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
 
@@ -103,6 +103,8 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(32, 32, 128);
 
+    // Run<T, Tb>(16, 16, 16);
+
     // Run<T, Tb>(16, 16, 128);
 }
 
@@ -130,9 +132,9 @@ int main(int argc, char* argv[])
     // Test<half, uint4_t>(4096, 1);
     // Test<half, uint4_t>(8192, 1);
 
-    const int M = 32;
+    const int M = 16;
     const int N = 16;
-    const int K = 32;
+    const int K = 16;
 
     universal_vector<half> a(M * K);
     universal_vector<half> p(M * K);
@@ -160,37 +162,37 @@ int main(int argc, char* argv[])
         printf("\n");
     }
 
-    universal_vector<half> b(N * K);
-    thrust::fill_n(b.begin(), b.size(), 1);
+    // universal_vector<half> b(N * K);
+    // thrust::fill_n(b.begin(), b.size(), 1);
 
-    universal_vector<half> c(M * N);
+    // universal_vector<half> c(M * N);
 
-    Workspace workspace{};
+    // Workspace workspace{};
 
-    const float alpha = 1.f;
-    const float beta  = 0.f;
+    // const float alpha = 1.f;
+    // const float beta  = 0.f;
 
-    const MatrixLayout c_desc{DataType::F16, Order::kRowMajor, M, N, N};
+    // const MatrixLayout c_desc{DataType::F16, Order::kRowMajor, M, N, N};
 
-    (void)Gemm{}.Run({},
-                     &alpha,
-                     p.data().get(),
-                     p_desc,
-                     nullptr,
-                     MatrixLayout{},
-                     b.data().get(),
-                     MatrixLayout{DataType::F16, Order::kColMajor, K, N, K},
-                     nullptr,
-                     MatrixLayout{},
-                     &beta,
-                     c.data().get(),
-                     c_desc,
-                     c.data().get(),
-                     c_desc,
-                     workspace,
-                     0);
+    // (void)Gemm{}.Run({},
+    //                  &alpha,
+    //                  p.data().get(),
+    //                  p_desc,
+    //                  nullptr,
+    //                  MatrixLayout{},
+    //                  b.data().get(),
+    //                  MatrixLayout{DataType::F16, Order::kColMajor, K, N, K},
+    //                  nullptr,
+    //                  MatrixLayout{},
+    //                  &beta,
+    //                  c.data().get(),
+    //                  c_desc,
+    //                  c.data().get(),
+    //                  c_desc,
+    //                  workspace,
+    //                  0);
 
-    cudaDeviceSynchronize();
+    // cudaDeviceSynchronize();
 
     // for (int i = 0; i < M; ++i) {
     //     for (int j = 0; j < N; ++j) {

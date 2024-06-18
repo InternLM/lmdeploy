@@ -30,6 +30,11 @@ struct VoidSmemCopyAtom {
     {
         return {};
     }
+
+    __device__ static int2 unique(int thread_idx, int pack_idx)
+    {
+        return {};
+    }
 };
 
 template<class T, class Layout, Order order>
@@ -74,6 +79,32 @@ struct SmemCopyAtom_Pack_v2 {
     {
         auto dst_raw_ptr = (T*)dst_ptr;  // SubBytePtr<T> -> T*
         if (mask) {
+            Lds(*(Frag*)dst_raw_ptr, src_ptr);
+        }
+    }
+};
+
+template<class T, class CopyAtom, Order order, int FragNum_>
+struct SmemCopyAtom_Pack_v3 {
+    static constexpr int M = CopyAtom::M * FragNum_;
+    static constexpr int K = CopyAtom::K;
+
+    static constexpr int kFragNum = FragNum_;
+
+    using Frag = Array<T, CopyAtom::Frag::size() * kFragNum>;
+
+    __device__ static int2 get_offset(int thread_idx)  // -> (m, k)
+    {
+        const int c = CopyAtom::unique(thread_idx, 0).x * Frag::size();
+
+        return order == kRowMajor ? int2{0, c} : int2{c, 0};
+    }
+
+    template<class S, class D>
+    __device__ static void copy(S src_ptr, D dst_ptr, bool mask)
+    {
+        if (mask) {
+            auto dst_raw_ptr = (T*)dst_ptr;  // SubBytePtr<T> -> T*
             Lds(*(Frag*)dst_raw_ptr, src_ptr);
         }
     }
