@@ -33,8 +33,24 @@ void Registry::reigster_sm70_sgemm_f16_f16_f16_tn()
                                         VoidOperand,
                                         half>;
 
-        Add(std::make_unique<KernelImpl<Config::Type<128, 128, 16, 4, 2, 1, 3, false, 0, 0>::Kernel>>());
+        Add(std::make_unique<KernelImpl<Config::Type<128, 128, 32, 8, 1, 1, 3, false, 0, 0>::Kernel>>());
+
         // Add(std::make_unique<KernelImpl<Config::Type<16, 16, 16, 1, 1, 1, 3, false, 0, 0>::Kernel>>());
+    }
+
+    {  // quant B
+        using Config =
+            sm70_mma_simt::SM70_MMA_F32<typename GetOperand<HMMA_SIMT, OPERAND_A, half, kRowMajor, false>::Operand,
+                                        Transform_Default,
+                                        VoidOperand,
+                                        typename GetOperand<HMMA_SIMT, OPERAND_B, uint8_t, kRowMajor, true>::Operand,
+                                        Transform_HMMA_SIMT_B,
+                                        typename GetOperand<HMMA_SIMT, OPERAND_V, uint32_t, kColMajor, true>::Operand,
+                                        half>;
+
+        Add(std::make_unique<KernelImpl<Config::Type<128, 128, 16, 8, 1, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
+
+        // Add(std::make_unique<KernelImpl<Config::Type<16, 16, 16, 1, 1, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
     }
 }
 

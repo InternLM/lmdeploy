@@ -65,4 +65,31 @@ struct SmemCopy_MMA_SIMT_B {
     }
 };
 
+template<class T, int K_>
+struct SmemCopy_MMA_SIMT_V {
+    static constexpr int M = 16;
+    static constexpr int K = K_;
+
+    static constexpr int kFragNum = 1;
+
+    using Frag = Array<T, 1>;
+
+    __device__ static int2 unique(int thread_idx, int pack_idx)
+    {
+        const int lane_id = thread_idx % WARP_SIZE;
+        return {pack_idx * 16 + lane_id % 16, lane_id / 16};
+    }
+
+    __device__ static int2 get_offset(int thread_idx)  // -> (m, k)
+    {
+        return {unique(thread_idx, 0).x, 0};
+    }
+
+    template<class S, class D>
+    __device__ static void copy(S&& src_ptr, D&& dst_ptr, bool mask)
+    {
+        Lds(*(Frag*)dst_ptr, src_ptr);
+    }
+};
+
 }  // namespace turbomind::gemm

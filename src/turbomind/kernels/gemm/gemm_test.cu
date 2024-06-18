@@ -55,8 +55,8 @@ void Run(int m, int n, int k, int g = 128)
     constexpr Pack kPackA = 0;
     constexpr Pack kPackU = 0;
     constexpr Pack kPackB = HMMA_SIMT | OPERAND_B | 1;
-    constexpr Pack kPackV = 0;
-    auto& test = gTestbed<gemm::Testbed<half, half, half, kRowMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
+    constexpr Pack kPackV = HMMA_SIMT | OPERAND_V | 1;
+    auto& test = gTestbed<gemm::Testbed<half, uint8_t, half, kRowMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
 
     test.Initialize(m, n, k, g, 0);
     for (int i = 0; i < 10; ++i) {

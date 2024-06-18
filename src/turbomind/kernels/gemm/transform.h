@@ -75,9 +75,44 @@ struct Transform_HMMA_16816 {
     __device__ static void dequant(Array<F, 2>& x, Array<uint32_t, 1> s)
     {
         Array<F, 2>& _s = (Array<F, 2>&)s;
-        // if (threadIdx.x % 4 == 0) {
-        //     printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)_s[0], (float)_s[1]);
-        // }
+        // printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)_s[0], (float)_s[1]);
+        // printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)x[0], (float)x[1]);
+        x[0] = __hfma(x[0], _s[0], _s[1]);
+        x[1] = __hfma(x[1], _s[0], _s[1]);
+    }
+};
+
+struct Transform_HMMA_SIMT_B {
+    template<class F, int Nf, int Mf, int K, class D, int Nd, int Md, class S, int Ns, int Ms>
+    __device__ static void
+    apply(Array<F, Nf> (&frag)[K][Mf], int k, Array<D, Nd> (&data)[K][Md], Array<S, Ns> (&stat)[K][Ms])
+    {
+        static_assert(Nf * Mf == Nd * Md);
+        static_assert(Nd % Nf == 0 && Mf % Md == 0);
+
+        auto& frag_k = reinterpret_cast<Array<F, Nd>(&)[Md]>(frag[k]);
+        auto& stat_k = reinterpret_cast<Array<S, 1>(&)[Ns * Ms]>(stat[k]);
+        auto& data_k = data[k];
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < Md; ++m) {
+            // if (threadIdx.x == 0) {
+            //     printf("m = %d\n", m);
+            // }
+            auto tmp = ConvertKvCache<D, F>::convert(data_k[m]);
+            PRAGMA_UNROLL
+            for (int i = 0; i < Nd; i += 2) {
+                dequant((Array<F, 2>&)tmp[i], stat_k[(m * Nd + i) / Nf]);
+            }
+            frag_k[m] = tmp;
+        }
+    }
+
+    template<class F>
+    __device__ static void dequant(Array<F, 2>& x, Array<uint32_t, 1> s)
+    {
+        Array<F, 2>& _s = (Array<F, 2>&)s;
+        // printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)_s[0], (float)_s[1]);
         // printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)x[0], (float)x[1]);
         x[0] = __hfma(x[0], _s[0], _s[1]);
         x[1] = __hfma(x[1], _s[0], _s[1]);

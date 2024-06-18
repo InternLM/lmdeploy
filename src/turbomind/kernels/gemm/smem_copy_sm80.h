@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 
 namespace turbomind::gemm {
@@ -92,8 +93,9 @@ struct SmemCopy_MMA_16816_U {  // (M, K)
 
     using Frag = Array<T, 2>;
 
-    __device__ static int2 get_offset(int lane_id)
+    __device__ static int2 get_offset(int thread_idx)
     {
+        const int lane_id = thread_idx % WARP_SIZE;
         // Note: this forbids sub-tile group sizes
         return {lane_id / 4, 0};
     }

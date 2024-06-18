@@ -57,6 +57,26 @@ struct OperandB {
     using GetGmemIter   = GetGmemIter;
 };
 
+template<class T>
+struct Operand_V {
+    using Dtype = T;
+
+    static constexpr Pack  kPack  = 0;
+    static constexpr Order kOrder = kColMajor;
+
+    using SmemCopyAtom = SmemCopy_MMA_SIMT_V<T, 1>;
+
+    struct GetSmemLayout {  // m-major
+        template<int M, int K>
+        static constexpr auto apply(pair<M, K>)
+        {
+            return SmemLayoutV2<K, M>{};
+        }
+    };
+
+    using GetGmemIter = GetGmemIter;
+};
+
 struct GetSmemLayout_Pack {
     template<int M, int K>
     static constexpr auto apply(pair<M, K>)
@@ -77,6 +97,29 @@ struct Operand_B_Pack {
     using SmemCopyAtom  = SmemCopyAtom_Pack_v3<T, typename OperandB<T, K>::SmemCopyAtom, kRowMajor, Pack_M>;
     using GetSmemLayout = GetSmemLayout_Pack;
     using GetGmemIter   = GetGmemIter;
+};
+
+template<class T>
+struct Operand_V_Pack {
+    using Dtype = T;
+
+    static constexpr int Pack_M = 1;
+
+    static constexpr Pack  kPack  = HMMA_SIMT | OPERAND_V | Pack_M;
+    static constexpr Order kOrder = kColMajor;
+
+    /// FIXME: fix the `4`
+    using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, SmemCopy_MMA_SIMT_V<T, 4>, kColMajor, Pack_M>;
+
+    struct GetSmemLayout {  // m-major
+        template<int M, int K>
+        static constexpr auto apply(pair<M, K>)
+        {
+            return SmemLayoutV2<K, M>{};
+        }
+    };
+
+    using GetGmemIter = GetGmemIter;
 };
 
 template<class A, class TransformA, class U, class B, class TransformB, class V, class Tc>
@@ -137,8 +180,18 @@ struct GetOperand<HMMA_SIMT, OPERAND_B, T, kRowMajor, false>: std::true_type {
 };
 
 template<class T>
+struct GetOperand<HMMA_SIMT, OPERAND_V, T, kColMajor, false>: std::true_type {
+    using Operand = sm70_mma_simt::Operand_V<T>;
+};
+
+template<class T>
 struct GetOperand<HMMA_SIMT, OPERAND_B, T, kRowMajor, true>: std::true_type {
     using Operand = sm70_mma_simt::Operand_B_Pack<T, 4>;
+};
+
+template<class T>
+struct GetOperand<HMMA_SIMT, OPERAND_V, T, kColMajor, true>: std::true_type {
+    using Operand = sm70_mma_simt::Operand_V_Pack<T>;
 };
 
 }  // namespace turbomind::gemm
