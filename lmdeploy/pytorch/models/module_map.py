@@ -89,6 +89,8 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'modeling_internlm2.InternLM2Attention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Attention',
+    'modeling_internlm2.InternLM2FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Attention',
     'modeling_internlm2.InternLM2Model':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Model',
     'modeling_internlm2.InternLM2MLP':
@@ -295,4 +297,10 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaForConditionalGeneration',  # noqa: E501
     'transformers.models.llava_next.modeling_llava_next.LlavaNextForConditionalGeneration':  # noqa: E501
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaForConditionalGeneration'
+})
+
+# internvl
+MODULE_MAP.update({
+    'modeling_internvl_chat.InternVLChatModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.PatchedInternVLChatModel'
 })

@@ -56,6 +56,8 @@ _SUPPORTED_ARCHS = dict(
     LlavaForConditionalGeneration=True,
     # llava_next hf
     LlavaNextForConditionalGeneration=True,
+    # internvl
+    InternVLChatModel=True,
 )
 
 

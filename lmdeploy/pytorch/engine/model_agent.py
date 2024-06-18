@@ -9,7 +9,6 @@ from typing import Any, Callable, Dict, List
 import torch
 import torch.distributed as dist
 from torch import multiprocessing as mp
-from transformers import AutoModelForCausalLM
 
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.utils import get_logger
@@ -655,7 +654,7 @@ class BaseModelAgent(AutoModelAgent):
             model_init_kwargs = dict(torch_dtype=torch_dtype,
                                      device_map=device)
             model_init_kwargs.update(self.model_config.init_kwargs)
-            if self.model_config.auto_model_cls is AutoModelForCausalLM:
+            if hasattr(self.model_config.auto_model_cls, 'from_config'):
                 model_init_kwargs['trust_remote_code'] = trust_remote_code
             hf_model = self.model_config.auto_model_cls.from_pretrained(
                 model_path, **model_init_kwargs)
@@ -818,9 +817,9 @@ def _tp_build_model(
         model_init_kwargs = dict(torch_dtype=torch_dtype)
         model_init_kwargs.update(model_config.init_kwargs)
         # deal with AutoModel or Non-AutoModel
-        if model_config.auto_model_cls is AutoModelForCausalLM:
+        if hasattr(model_config.auto_model_cls, 'from_config'):
             model_init_kwargs['trust_remote_code'] = trust_remote_code
-            from_config_func = AutoModelForCausalLM.from_config
+            from_config_func = model_config.auto_model_cls.from_config
         else:
             from_config_func = model_config.auto_model_cls._from_config
 

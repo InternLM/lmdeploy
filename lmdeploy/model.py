@@ -562,7 +562,7 @@ class InternVLInternLM2Chat(InternLM2Chat7B):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'internvl' in path and 'v1-5' in path:
+        if 'internvl' in path and 'v1-5' in path and '4b' not in path:
             return 'internvl-internlm2'
 
 
@@ -1456,6 +1456,45 @@ class Phi3Instruct(BaseChatTemplate):
         path = model_path.lower()
         if all([c in path for c in ['phi-3', 'instruct']]):
             return 'phi-3'
+
+
+@MODELS.register_module(name='internvl-phi3')
+class InternVLPhi3(BaseChatTemplate):
+    """Chat template of InternLM model."""
+
+    def __init__(
+            self,
+            system='<|system|>\n',
+            meta_instruction='You are an AI assistant whose name is Phi-3.',
+            eosys='<|end|>',
+            user='<|user|>\n',
+            eoh='<|end|>',
+            assistant='<|assistant|>\n',
+            eoa='<|end|>',
+            separator='',
+            stop_words=['<|end|>', '<|endoftext|>'],
+            **kwargs):
+        super().__init__(system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if all([c in path for c in ['internvl-chat', '4b', 'v1-5']]):
+            return 'internvl-phi3'
 
 
 def best_match_model(query: str) -> Optional[str]:
