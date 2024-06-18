@@ -430,14 +430,21 @@ class RequestManager:
 
         async def __req_loop():
             """req loop."""
+            event_loop = asyncio.get_event_loop()
             while True:
                 # get reqs
                 reqs = __get_thread_reqs()
-
-                if len(reqs) > 0:
-                    await self.requests.put(reqs)
-                else:
-                    await asyncio.sleep(0.02)
+                if len(reqs) == 0:
+                    reqs = None
+                    while reqs is None:
+                        try:
+                            reqs = await event_loop.run_in_executor(
+                                None, self.thread_requests.get, True, 1.0)
+                        except Empty:
+                            pass
+                    if isinstance(reqs, Request):
+                        reqs = [reqs]
+                await self.requests.put(reqs)
 
         def __put_thread_resps(resps: List[Response]):
             """put thread resps."""
@@ -451,18 +458,21 @@ class RequestManager:
             """resp loop."""
             while True:
                 num_resps = self.responses.qsize()
-                resps = []
-                for _ in range(num_resps):
-                    resps.append(self.responses.get_nowait())
-                if len(resps) > 0:
-                    __put_thread_resps(resps)
+
+                if num_resps == 0:
+                    resps = [await self.responses.get()]
                 else:
-                    await asyncio.sleep(0.02)
+                    resps = []
+                    for _ in range(num_resps):
+                        resps.append(self.responses.get_nowait())
+                __put_thread_resps(resps)
+                await asyncio.sleep(0)
 
         def __run_forever(event_loop: asyncio.BaseEventLoop):
             """run forever."""
             logger.debug('start thread run forever.')
             asyncio.set_event_loop(event_loop)
+            self.responses = asyncio.Queue()
             self.create_loop_task()
             req_loop = event_loop.create_task(__req_loop(),
                                               name='RunForeverReqLoop')
@@ -474,7 +484,6 @@ class RequestManager:
 
         if self.is_thread_safe():
             event_loop = asyncio.new_event_loop()
-            self.responses = asyncio.Queue()
             self._loop_thread = Thread(target=__run_forever,
                                        args=(event_loop, ),
                                        daemon=True)

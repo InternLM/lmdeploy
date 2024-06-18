@@ -347,7 +347,7 @@ class AsyncEngine:
         try:
             yield
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            await self.stop_session(session_id)
+            _get_event_loop().create_task(self.stop_session(session_id))
             raise e
         if str(session_id) in self.id2generator:
             self.gens_set.add(self.id2generator[str(session_id)])
