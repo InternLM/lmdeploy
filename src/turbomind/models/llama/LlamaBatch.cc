@@ -1313,7 +1313,15 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
                     // Create signals by copying the request handles for non-finished streaming requests
                     signals.push_back([this, r = state_->requests[i]] {
                         if (rank_ == 0) {
-                            r->stream_cb(&r->outputs[rank_].get());
+                            try {
+                                r->stream_cb(&r->outputs[rank_].get());
+                            }
+                            catch (const std::bad_function_call& e) {
+                                TM_LOG_ERROR("Null stream callback for (%s)", std::to_string(r->id).c_str());
+                            }
+                            catch (...) {
+                                TM_LOG_ERROR("Unknown exception invoking stream callback for (%s)", std::to_string(r->id).c_str());
+                            }
                         }
                     });
                 }
