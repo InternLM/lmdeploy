@@ -3,9 +3,37 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
+
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
+@wrap_jit_func(type_hint=dict(
+    Q=Tensor,
+    K=Tensor,
+    COS=Tensor,
+    SIN=Tensor,
+    POS=Tensor,
+    Q_EMB=Tensor,
+    K_EMB=Tensor,
+    seq_len=int,
+    stride_qs=int,
+    stride_qh=int,
+    stride_qd=int,
+    stride_ks=int,
+    stride_kh=int,
+    stride_kd=int,
+    stride_qes=int,
+    stride_qeh=int,
+    stride_qed=int,
+    stride_kes=int,
+    stride_keh=int,
+    stride_ked=int,
+    half_size=torch.int32,
+    BLOCK=torch.int32,
+    BLOCK_QH=torch.int32,
+    BLOCK_KH=torch.int32,
+    BLOCK_N=torch.int32,
+))
 @triton.jit
 def apply_rotary_pos_emb_qk_kernel(
     Q,
@@ -138,10 +166,7 @@ def apply_rotary_pos_emb(q: Tensor,
     num_warps = 4
     num_stages = 2
 
-    device = q.device
-    device_idx = device.index
-    device_type = device.type
-    stream = get_cuda_stream(device_idx)
+    kernel_meta = get_kernel_meta(q)
     grid = [triton.cdiv(seq_len, BLOCK)]
     apply_rotary_pos_emb_qk_kernel[grid](q,
                                          k,
@@ -170,8 +195,6 @@ def apply_rotary_pos_emb(q: Tensor,
                                          BLOCK_N=BLOCK_N,
                                          num_warps=num_warps,
                                          num_stages=num_stages,
-                                         stream=stream,
-                                         device=device_idx,
-                                         device_type=device_type)
+                                         **kernel_meta)
 
     return q_embed, k_embed

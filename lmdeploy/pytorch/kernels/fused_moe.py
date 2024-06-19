@@ -4,26 +4,8 @@ import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
-from packaging import version
 
-if version.parse(triton.__version__) <= version.parse('2.2.0'):
-
-    def get_kernel_meta(tensor: torch.Tensor):
-        """kernel meta."""
-        from triton.runtime.jit import get_cuda_stream
-
-        device = tensor.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-else:
-
-    KERNEL_META = dict()
-
-    def get_kernel_meta(tensor: torch.Tensor):
-        """kernel meta."""
-        return KERNEL_META
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
 def get_cuda_autotune_config():
@@ -99,6 +81,32 @@ def get_cuda_autotune_config():
     configs=get_cuda_autotune_config(),
     key=['N', 'K'],
 )
+@wrap_jit_func(type_hint=dict(
+    A=torch.Tensor,
+    B=torch.Tensor,
+    C=torch.Tensor,
+    SortedIdx=torch.Tensor,
+    ExpStart=torch.Tensor,
+    ExpEnd=torch.Tensor,
+    Weights=torch.Tensor,
+    N=int,
+    K=int,
+    stride_am=int,
+    stride_ak=int,
+    stride_be=int,
+    stride_bn=int,
+    stride_bk=int,
+    stride_cm=int,
+    stride_cn=int,
+    BLOCK_SIZE_M=torch.int32,
+    BLOCK_SIZE_N=torch.int32,
+    BLOCK_SIZE_K=torch.int32,
+    GROUP_SIZE_M=torch.int32,
+    ENABLE_WEIGHTS=bool,
+    top_k=torch.int32,
+    reindex_a=bool,
+    reindex_c=bool,
+))
 @triton.jit
 def fused_moe_kernel(
     A,
@@ -258,6 +266,13 @@ def fused_moe_kernel_launcher(
     )
 
 
+@wrap_jit_func(type_hint=dict(TopkIdx=torch.Tensor,
+                              SortedIdx=torch.Tensor,
+                              ExpStart=torch.Tensor,
+                              ExpEnd=torch.Tensor,
+                              len_sorted_idx=int,
+                              num_experts=torch.int32,
+                              BLOCK=torch.int32))
 @triton.jit
 def _start_end_kernel(TopkIdx, SortedIdx, ExpStart, ExpEnd,
                       len_sorted_idx: int, num_experts: tl.constexpr,

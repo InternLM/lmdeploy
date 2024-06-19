@@ -6,7 +6,8 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
+
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 assert triton.__version__ >= '2.1.0'
 
@@ -65,6 +66,7 @@ def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
         return tl.load(offset_ptr + block_id) * BLOCK + offs_n
 
 
+@wrap_jit_func
 @triton.jit
 def _fwd_split_kernel(
     Q,
@@ -205,6 +207,7 @@ def _fwd_split_kernel(
     tl.store(Acc_out + off_meta + 1 + tl.arange(0, 1), l_i)
 
 
+@wrap_jit_func
 @triton.jit
 def _reduce_split_kernel(
     Acc,
@@ -250,6 +253,7 @@ def _reduce_split_kernel(
     tl.store(Out + out_offs, acc)
 
 
+@wrap_jit_func
 @triton.jit
 def _fwd_kernel(
     Q,
@@ -383,7 +387,6 @@ def _fwd_kernel(
     tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 
 
-@torch.no_grad()
 def alibi_paged_attention_fwd(q: Tensor,
                               k: Tensor,
                               v: Tensor,
@@ -415,13 +418,6 @@ def alibi_paged_attention_fwd(q: Tensor,
         BLOCK (int): The kernel block size.
     """
 
-    def _kernel_meta():
-        device = q.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
@@ -439,7 +435,7 @@ def alibi_paged_attention_fwd(q: Tensor,
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
 
     num_warps = 4 if Lk <= 64 else 8
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(q)
     is_decoding = q.shape[-3] == b_seq_len.size(0)
     if not is_decoding:
         _fwd_kernel[grid](q,

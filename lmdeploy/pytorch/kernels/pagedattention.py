@@ -5,9 +5,10 @@ import triton
 import triton.language as tl
 from packaging import version
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
 
 from lmdeploy.utils import get_logger
+
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 logger = get_logger('lmdeploy')
 
@@ -29,6 +30,38 @@ def _load_block_offsets(offset_ptr, block_id, BLOCK: tl.constexpr):
     triton.Config({}, num_stages=1, num_warps=4),
 ],
                  key=['BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
+@wrap_jit_func(type_hint=dict(
+    Q=torch.Tensor,
+    K=torch.Tensor,
+    V=torch.Tensor,
+    sm_scale=float,
+    KV_seqlens=torch.Tensor,
+    Block_offsets=torch.Tensor,
+    Acc_out=torch.Tensor,
+    stride_qbs=int,
+    stride_qh=int,
+    stride_qd=int,
+    stride_kbs=int,
+    stride_kh=int,
+    stride_kd=int,
+    stride_vbs=int,
+    stride_vh=int,
+    stride_vd=int,
+    stride_ok=int,
+    stride_obs=int,
+    stride_oh=int,
+    stride_od=int,
+    stride_boffb=int,
+    kv_group_num=torch.int32,
+    block_per_cta=torch.int32,
+    window_size=torch.int32,
+    head_size=torch.int32,
+    head_size_v=torch.int32,
+    shared_kv=bool,
+    BLOCK_DMODEL=torch.int32,
+    BLOCK_DV=torch.int32,
+    BLOCK_N=torch.int32,
+))
 @triton.jit
 def _fwd_split_kernel(
     Q,
@@ -183,6 +216,40 @@ def _fwd_split_kernel(
     triton.Config({}, num_stages=1, num_warps=4),
 ],
                  key=['BLOCK_H', 'BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
+@wrap_jit_func(type_hint=dict(
+    Q=torch.Tensor,
+    K=torch.Tensor,
+    V=torch.Tensor,
+    sm_scale=float,
+    KV_seqlens=torch.Tensor,
+    Block_offsets=torch.Tensor,
+    Acc_out=torch.Tensor,
+    stride_qbs=int,
+    stride_qh=int,
+    stride_qd=int,
+    stride_kbs=int,
+    stride_kh=int,
+    stride_kd=int,
+    stride_vbs=int,
+    stride_vh=int,
+    stride_vd=int,
+    stride_ok=int,
+    stride_obs=int,
+    stride_oh=int,
+    stride_od=int,
+    stride_boffb=int,
+    kv_group_num=torch.int32,
+    block_per_cta=torch.int32,
+    window_size=torch.int32,
+    head_size=torch.int32,
+    head_size_v=torch.int32,
+    shared_kv=bool,
+    BLOCK_DMODEL=torch.int32,
+    BLOCK_DV=torch.int32,
+    BLOCK_N=torch.int32,
+    BLOCK_H=torch.int32,
+    BLOCK_DMODEL1=torch.int32,
+))
 @triton.jit
 def _fwd_grouped_split_kernel(
     Q,
@@ -357,6 +424,20 @@ def _fwd_grouped_split_kernel(
     tl.store(Acc_out + off_meta + 1, l_i, mask=mask_h)
 
 
+@wrap_jit_func(type_hint=dict(
+    Acc=torch.Tensor,
+    Out=torch.Tensor,
+    stride_ak=int,
+    stride_abs=int,
+    stride_ah=int,
+    stride_ad=int,
+    stride_obs=int,
+    stride_oh=int,
+    stride_od=int,
+    head_size_v=torch.int32,
+    SPLIT_K=torch.int32,
+    BLOCK_DV=torch.int32,
+))
 @triton.jit
 def _reduce_split_kernel(
     Acc,
@@ -434,6 +515,7 @@ _convert_pv = None
 #     triton.Config({}, num_stages=1, num_warps=4),
 # ],
 #                  key=['BLOCK_M', 'BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
+@wrap_jit_func
 @triton.jit
 def _fwd_kernel(
     Q,
@@ -637,14 +719,6 @@ def paged_attention_fwd(
     if window_size is None:
         window_size = -1
 
-    def _kernel_meta():
-        """kernel meta."""
-        device = q.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     def _get_block_d(Lk):
         """get block d."""
         BLOCK_DMODEL = triton.next_power_of_2(Lk)
@@ -674,7 +748,7 @@ def paged_attention_fwd(
                        'might leads to bad performance. '
                        'Please reduce `block_size`.')
 
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(q)
     is_decoding = q.shape[-3] == q_seqlens.size(0)
     if not is_decoding:
         BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lk)

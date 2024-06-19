@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal
 
 import torch
+from transformers import AutoModelForCausalLM
 
 
 def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
@@ -83,6 +84,7 @@ class ModelConfig:
     model_arch: str = None
     unused_modules: List[str] = None
     task_type: Literal['llm', 'vlm'] = 'llm'
+    auto_model_cls: Any = AutoModelForCausalLM
 
     def get_head_size(self):
         """get head size."""
@@ -104,7 +106,7 @@ class ModelConfig:
         from lmdeploy.archs import check_vl_llm
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 
-        model_config = AutoModelConfigBuilder.build(hf_config)
+        model_config = AutoModelConfigBuilder.build(hf_config, model_path)
 
         if model_config.k_head_dim is None:
             assert model_config.head_dim is not None
@@ -113,14 +115,12 @@ class ModelConfig:
             assert model_config.head_dim is not None
             model_config.v_head_dim = model_config.head_dim
 
-        model_arch = getattr(hf_config, 'architectures', [None])[0]
-        model_config.hf_config = hf_config
+        model_arch = model_config.hf_config.architectures[0]
         model_config.model_arch = model_arch
-
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config)
 
-        if check_vl_llm(hf_config.to_dict()):
+        if check_vl_llm(model_config.hf_config.to_dict()):
             model_config.task_type = 'vlm'
 
         # update eos_token_id to list

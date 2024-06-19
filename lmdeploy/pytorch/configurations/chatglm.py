@@ -12,7 +12,7 @@ class ChatGLMModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.model_type == 'chatglm'
 
     @classmethod
-    def build(cls, hf_config):
+    def build(cls, hf_config, model_path: str = None):
         """build."""
         head_dim = hf_config.hidden_size // hf_config.num_attention_heads
         bos_token_id = hf_config.bos_token_id

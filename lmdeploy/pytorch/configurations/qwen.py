@@ -11,7 +11,7 @@ class QwenModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.model_type == 'qwen'
 
     @classmethod
-    def build(cls, hf_config):
+    def build(cls, hf_config, model_path: str = None):
         """build."""
         import torch
         cfg = DefaultModelConfigBuilder.build(hf_config)

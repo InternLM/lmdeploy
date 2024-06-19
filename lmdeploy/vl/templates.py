@@ -303,7 +303,11 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
     arch = config['architectures'][0]
     if arch == 'QWenLMHeadModel':
         return QwenVLChatTemplateWrapper(chat_template)
-    elif arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
+    elif arch in [
+            'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM',
+            'LlavaForConditionalGeneration',
+            'LlavaNextForConditionalGeneration'
+    ]:
         return LlavaVLChatTemplateWrapper(chat_template)
     elif arch == 'MultiModalityCausalLM':  # deepseek-vl
         return DeepSeekVLChatTemplateWrapper(chat_template)

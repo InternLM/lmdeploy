@@ -506,7 +506,6 @@ class TurboMindInstance:
     async def async_end(self, session_id: int):
         """End the given session."""
         self.end(session_id)
-        await asyncio.sleep(0.002)
 
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
@@ -523,7 +522,6 @@ class TurboMindInstance:
     async def async_cancel(self, session_id: int):
         """End the given session."""
         self.cancel(session_id)
-        await asyncio.sleep(0.002)
 
     def prepare_inputs(self,
                        session_id,
