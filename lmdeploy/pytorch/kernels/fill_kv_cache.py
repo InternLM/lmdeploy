@@ -40,6 +40,7 @@ def _div_up(val, other):
     stride_boff=int,
     BLOCK=torch.int32,
     BLOCK_D=torch.int32,
+    BLOCK_DV=torch.int32,
     BLOCK_H=torch.int32,
 ))
 @triton.jit

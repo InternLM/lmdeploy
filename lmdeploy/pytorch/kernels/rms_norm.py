@@ -12,7 +12,6 @@ from .triton_utils import get_kernel_meta, wrap_jit_func
     weight=Tensor,
     output=Tensor,
     input_row_stride=int,
-    n_cols=torch.int32,
     eps=float,
     N_COLS=torch.int32,
     BLOCK_N=torch.int32,

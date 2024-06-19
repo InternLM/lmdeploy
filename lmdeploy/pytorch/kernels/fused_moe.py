@@ -104,6 +104,7 @@ def get_cuda_autotune_config():
     GROUP_SIZE_M=torch.int32,
     ENABLE_WEIGHTS=bool,
     top_k=torch.int32,
+    expert_offset=torch.int32,
     reindex_a=bool,
     reindex_c=bool,
 ))
