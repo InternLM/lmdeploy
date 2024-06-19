@@ -25,8 +25,10 @@ class Glm4Reader(LlamaReader):
         """Get q, k, v, o kind for layer i."""
         qkv = self.params[f'transformer.encoder.layers.{i}'
                           f'.self_attention.query_key_value.{kind}']
-        attn_head_num = self.model_cfg['attn_head_num']
-        kv_head_num = self.model_cfg['kv_head_num']
+        attn_head_num = self.model_cfg['num_attention_heads']
+        kv_head_num = attn_head_num
+        if self.model_cfg.get('multi_query_attention', False):
+            kv_head_num = self.model_cfg['multi_query_group_num']
         HEAD_DIM = 128
         q, k, v = torch.split(qkv, [
             attn_head_num * HEAD_DIM, kv_head_num * HEAD_DIM,
