@@ -14,6 +14,7 @@
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/debug_utils.h"
@@ -60,6 +61,7 @@ void ClearState(BatchState& s)
 {
     std::fill_n(s.requests.begin(), s.size, nullptr);
     std::fill_n(s.sequences.begin(), s.size, nullptr);
+    std::fill_n(s.errors.begin(), s.size, 0);
     s.size = s.active_size = 0;
 }
 
@@ -237,7 +239,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         FT_CHECK(!state.requests[idx]);
 
         if (rank_ == 0) {
-            TM_LOG_WARNING("[ProcessInferRequests] Request for %ld received.", (long)r->id);
+            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
         }
 
         state.requests[idx] = r;
@@ -984,6 +986,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
         s.requests.resize(max_batch_size_);
         s.sequences.resize(max_batch_size_);
         s.seq_len_limit.resize(max_batch_size_);
+        s.errors.resize(max_batch_size_);
     }
 
     state_    = &states_[0];
@@ -1373,10 +1376,12 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
 
     state_->sequences[index] = nullptr;
 
+    auto ec = std::exchange(state_->errors[index], 0);
+
     // move the request handle into the signal
-    return [this, r = std::move(state_->requests[index])] {
+    return [this, ec, r = std::move(state_->requests[index])] {
         if (rank_ == 0) {
-            r->signal.set_value(0);
+            r->signal.set_value(ec);
         }
     };
 }
@@ -1386,6 +1391,9 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
 {
     // TM_LOG_INFO("[InternalThreadEntry] %d", (int)rank_);
     check_cuda_error(cudaSetDevice(device_id));
+
+    // Initialize `AnomalyHandler`
+    AnomalyHandler::instance().Init(rank_, model_->vocab_size_padded_, model_->end_id_, max_batch_size_, stream_);
 
     auto& shared_state = model_->shared_state_;
 
@@ -1666,6 +1674,10 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
     if (active_size > g.partial) {
         model_->postDecodeEmbedding(logits_buf_, local_logits_buf_, decoder_output_buf_, active_size - g.partial);
 
+        AnomalyHandler::instance().FixLogits(logits_buf_, active_size - g.partial, 1);
+
+        // count_and_fix(logits_buf_, (active_size - g.partial) * model_->vocab_size_padded_, "logits", 1);
+
         FT_CHECK(g.step >= 0);
 
         // TM_LOG_INFO("dyn decode bsz %d, partial %d", active_size, g.partial);
@@ -1689,6 +1701,17 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
                               session_len_ * 2,
                               active_size - g.partial);
     }
+
+    AnomalyHandler::instance().Summarize([&](const int* is_anomaly, int batch_size) {
+        for (int i = 0; i < batch_size; ++i) {
+            if (is_anomaly[i]) {
+                TM_LOG_WARNING("[Forward] Abnormal logits detected for request (%s)",
+                               std::to_string(state_->sequences[i]->id).c_str());
+                state_->errors[i] = Request::kFail;
+            }
+        }
+    });
+    AnomalyHandler::instance().Reset();
 
     if (debug_ && rank_ == 0) {
         std::vector<int> curr(active_size);

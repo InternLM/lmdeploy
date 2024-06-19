@@ -29,13 +29,14 @@ struct Request {
 
     enum
     {
-        kInvalid  = 1,
-        kConflict = 2,
-        kBusy     = 3,
-        kInactive = 4,
-        kFail     = 5,
-        kTooLong  = 6
+        kInvalid  = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
+        kConflict = 2,  // Concurrent requests to the same sequence
+        kBusy     = 3,  // Sequence is already running
+        kInactive = 4,  // Sequence to `stop` is not active
+        kFail     = 5,  // Can't find sequence for `stop` request or internal error during inference
+        kTooLong  = 6   // history + prompt > session_len
     };
+
     std::promise<int> signal;
 };
 
