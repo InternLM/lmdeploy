@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/config/sm70_mma_simt.h"
+#include "src/turbomind/kernels/gemm/config/sm70_mma_884.h"
 #include "src/turbomind/kernels/gemm/config/sm80_hmma_16816.h"
 #include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/format.h"
@@ -201,6 +202,8 @@ int Convert(const void*         S,  //
                 return dispatch_1(constant<HMMA_16816>{});
             case HMMA_SIMT:
                 return dispatch_1(constant<HMMA_SIMT>{});
+            case HMMA_884:
+                return dispatch_1(constant<HMMA_884>{});
             default:
                 return false;
         }

@@ -107,7 +107,7 @@ public:
         partials_.resize(kMaxSplits * m_ * n_);
 
         rng_.GenerateUniform(a_.data().get(), a_.size(), 1, -.5f);
-        // rng_.GenerateUniform(b_.data().get(), b_.size(), 1, -.5f);
+        rng_.GenerateUniform(b_.data().get(), b_.size(), 1, -.5f);
 
         for (int i = 0; i < n; ++i) {
             // for (int j = 0; j < k; ++j) {

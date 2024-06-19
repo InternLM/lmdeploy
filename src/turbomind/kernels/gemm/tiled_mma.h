@@ -81,6 +81,43 @@ struct SM70_MMA_SIMT {
     }
 };
 
+struct SM70_MMA_884 {
+    static constexpr int M = 16;
+    static constexpr int N = 16;
+    static constexpr int K = 4;
+
+    static constexpr int kThreadCount = 32;
+
+    using FragA = Array<half, 4>;
+    using FragB = Array<half, 4>;
+    using FragC = Array<float, 8>;
+
+    __device__ static void fma(FragC& d, const FragA& a, const FragB& b, const FragC& c)
+    {
+        mma_m8n8k4_row_col(d, a, b, (FragC&)c);
+    }
+
+    template<class Func>
+    __device__ static void foreach_C(FragC& c, Func&& func)
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int nn = 0; nn < 2; ++nn) {
+            PRAGMA_UNROLL
+            for (int mm = 0; mm < 2; ++mm) {
+                const int mi = (lane_id & 8) + (lane_id & 1) + lane_id / 16 * 4 + mm * 2;
+                const int ni = (lane_id & 4) * 2 + (lane_id & 2) + nn * 4;
+                ((Func&&)func)((Array<float, 2>&)c[nn * 4 + mm * 2], mi, ni);
+            }
+        }
+    }
+
+    __device__ static int get_group_id(int thread_idx)
+    {
+        return thread_idx / WARP_SIZE;
+    }
+};
+
 template<class MMA_Atom_, class ThreadGroupMap>
 struct Tiled_MMA_v2 {
     using Atom = MMA_Atom_;

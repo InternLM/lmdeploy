@@ -112,4 +112,12 @@ struct PackingImpl<HMMA_SIMT, OPERAND_B, num, kRowMajor> {
     }
 };
 
+template<Op_Tag Op, int num>
+struct PackingImpl<HMMA_884, Op, num, kRowMajor> {
+    __host__ __device__ static constexpr int2 apply(int2 mk)
+    {
+        return {mk.x / (16 * num), mk.y * 16 * num};
+    }
+};
+
 }  // namespace turbomind::gemm

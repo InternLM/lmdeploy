@@ -25,6 +25,7 @@ public:
 
 
         reigster_sm70_sgemm_f16_f16_f16_tn();
+        register_sm70_s884gemm_f16_f16_f16_tn();
     }
 
     [[maybe_unused]] bool Add(std::unique_ptr<Kernel> kernel)
@@ -61,6 +62,7 @@ private:
 
     void reigster_sm80_s16816gemm_f16_f16_nn_packed();
 
+    void register_sm70_s884gemm_f16_f16_f16_tn();
     void reigster_sm70_sgemm_f16_f16_f16_tn();
 
 private:

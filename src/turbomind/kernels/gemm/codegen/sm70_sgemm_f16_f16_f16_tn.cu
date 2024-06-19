@@ -7,7 +7,7 @@
 
 namespace turbomind::gemm {
 
-void Registry::reigster_sm70_sgemm_f16_f16_f16_tn()
+void Registry::register_sm70_s884gemm_f16_f16_f16_tn()
 {
     {
         using Config =

@@ -52,10 +52,17 @@ void Run(int m, int n, int k, int g = 128)
     // constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
     // auto& test = gTestbed<gemm::Testbed<half, half, half, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
 
+    // constexpr Pack kPackA = 0;
+    // constexpr Pack kPackU = 0;
+    // constexpr Pack kPackB = HMMA_SIMT | OPERAND_B | 2;
+    // constexpr Pack kPackV = HMMA_SIMT | OPERAND_V | 2;
+    // auto& test = gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kPackA, kPackB, kPackU,
+    // kPackV>>();
+
     constexpr Pack kPackA = 0;
     constexpr Pack kPackU = 0;
-    constexpr Pack kPackB = HMMA_SIMT | OPERAND_B | 2;
-    constexpr Pack kPackV = HMMA_SIMT | OPERAND_V | 2;
+    constexpr Pack kPackB = HMMA_884 | OPERAND_B | 2;
+    constexpr Pack kPackV = HMMA_884 | OPERAND_V | 2;
     auto& test = gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
 
     test.Initialize(m, n, k, g, 0);
@@ -95,9 +102,9 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(16384, 16384, 16384);
 
-    Run<T, Tb>(8192, 8192, 8192);
+    // Run<T, Tb>(8192, 8192, 8192);
 
-    // Run<T, Tb>(4096, 4096, 4096);
+    Run<T, Tb>(4096, 4096, 4096);
 
     // Run<T, Tb>(1024, 1024, 1024);
 
