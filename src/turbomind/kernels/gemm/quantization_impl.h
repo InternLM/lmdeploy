@@ -25,21 +25,23 @@ __global__ void find_stats(Array<T, 2>* minmax, const T* src, int N, int K, int 
         return;
     }
 
-    float min = std::numeric_limits<float>::infinity();
-    float max = -min;
+    float minval = std::numeric_limits<float>::infinity();
+    float maxval = -minval;
 
-    for (int k = 0; k < G; k += 8) {
+    const int L = min(K, G);
+
+    for (int k = 0; k < L; k += 8) {
         Array<T, 8> vec;
         Load(vec, &src[n_idx * K + k_idx * G + k]);
         PRAGMA_UNROLL
         for (int i = 0; i < vec.size(); ++i) {
-            min = __hmin(min, vec[i]);
-            max = __hmax(max, vec[i]);
+            minval = __hmin(minval, vec[i]);
+            maxval = __hmax(maxval, vec[i]);
         }
     }
 
     // store in n-major
-    Store(minmax[k_idx * N + n_idx].data(), Array<T, 2>{min, max});
+    Store(minmax[k_idx * N + n_idx].data(), Array<T, 2>{minval, maxval});
 }
 
 template<class Q, bool asym, class T>
@@ -49,12 +51,19 @@ __global__ void find_params(T* param, const Array<T, 2>* minmax, int count)
     if (global_idx >= count) {
         return;
     }
-    const auto  stats     = minmax[global_idx];
+    auto        stats     = minmax[global_idx];
     const float inv_q_max = fdividef(1.f, (1 << bitsof<Q>)-1);
 
     static_assert(asym);
 
     float scale = (T)(((float)stats[1] - (float)stats[0]) * inv_q_max);
+
+    // force trivial scale / zero for debugging
+    if constexpr (0) {
+        stats[0] = 0;
+        scale    = 1.f;
+    }
+
     Store(param + global_idx * 2, Array<T, 2>{scale, stats[0]});
 }
 
@@ -76,7 +85,9 @@ __global__ void quantize(uint16_t* dst, T* pseudo, const T* src, const T* stats,
 
     float inv_scale = fdividef(1.f, param[0]);
 
-    for (int k = 0; k < G; k += 8) {
+    const int L = min(K, G);
+
+    for (int k = 0; k < L; k += 8) {
         Array<T, 8>        vi;
         Array<uint16_t, 8> vo;
         Load(vi, &src[n_idx * K + k_idx * G + k]);

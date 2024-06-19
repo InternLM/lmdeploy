@@ -30,6 +30,22 @@ constexpr bool is_UV(Op_Tag op)
     return !is_AB(op);
 }
 
+template<class Dtype>
+constexpr int unit_size(basic_type<Dtype>)
+{
+    return 1;
+}
+
+constexpr int unit_size(basic_type<uint8_t>)
+{
+    return 4;
+}
+
+constexpr int unit_size(basic_type<uint4_t>)
+{
+    return 8;
+}
+
 }  // namespace
 
 // MMA     : H_16816, H_1688, H_884, H_SIMT
@@ -38,17 +54,15 @@ constexpr bool is_UV(Op_Tag op)
 // Dtype   : u16, u8, u4 (u6, u3)
 // PackNum : 1, 2, 4
 
-template<MMA_Tag MMA, Op_Tag Op, Order Ord, class Stype_, class Dtype_, int PackNum>
+template<class Operand, class Dtype_, int PackNum>
 struct Config {
     static constexpr int CTA_M = 64;
-    static constexpr int CTA_K = !is_UV(Op) ? 32 : 8;
+    static constexpr int CTA_K = 32;
 
     static constexpr int BLOCK_SIZE = 32;
 
-    using Stype = Stype_;
+    using Stype = typename Operand::Dtype;
     using Dtype = Dtype_;
-
-    using Operand = typename GetOperand<MMA, Op, Stype, Ord, false>::Operand;
 
     using Kernel = ConvertOperand<CTA_M, CTA_K, PackNum, Operand, Dtype, Converter<Stype, Dtype>>;
 };
@@ -100,15 +114,17 @@ int Convert(const void*         S,  //
         if constexpr (GetOperand<mma, operand, Stype, order, false>::value) {  // is operand exist?
 
             // Make args constexpr explictly, some compilers failed to see const-ness of the args
-            constexpr MMA_Tag mma_tag      = mma;
-            constexpr Op_Tag  op_tag       = operand;
-            constexpr Order   order_tag    = order;
-            constexpr int     pack_num_tag = pack_num;
+            constexpr int pack_num_tag = pack_num;
 
-            using Config = Config<mma_tag, op_tag, order_tag, Stype, Dtype, pack_num_tag>;
-            Convert_v2_Impl<Config>(S, Sdesc, D, Ddesc, stream);
+            using Operand = typename GetOperand<mma, operand, Stype, order, false>::Operand;
 
-            return true;
+            static constexpr int  kPackSize = Operand::SmemCopyAtom::Frag::size() * pack_num_tag;
+            static constexpr bool kIsValid  = kPackSize % unit_size(type_c<Dtype>) == 0;
+
+            if constexpr (kIsValid) {
+                Convert_v2_Impl<Config<Operand, Dtype, pack_num_tag>>(S, Sdesc, D, Ddesc, stream);
+                return true;
+            }
         }
 
         return false;
@@ -135,7 +151,7 @@ int Convert(const void*         S,  //
                 case DataType::U8:
                     return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint8_t>);
                 case DataType::U4:
-                    // return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint4_t>);
+                    return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint4_t>);
                 default:
                     return false;
             }

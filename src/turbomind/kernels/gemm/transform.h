@@ -94,6 +94,8 @@ struct Transform_HMMA_SIMT_B {
         auto& stat_k = reinterpret_cast<Array<S, 1>(&)[Ns * Ms]>(stat[k]);
         auto& data_k = data[k];
 
+        // static_assert(Nf != Nf);
+
         PRAGMA_UNROLL
         for (int m = 0; m < Md; ++m) {
             // if (threadIdx.x == 0) {

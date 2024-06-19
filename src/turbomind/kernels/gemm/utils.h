@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/gemm/simt.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
@@ -99,7 +100,7 @@ template<int num>
 struct PackingImpl<HMMA_SIMT, OPERAND_A, num, kRowMajor> {
     __host__ __device__ static constexpr int2 apply(int2 mk)
     {
-        return {mk.x / 2, mk.y * 2};
+        return {mk.x / (sm70_mma_simt::OP_M * num), mk.y * sm70_mma_simt::OP_M * num};
     }
 };
 
@@ -107,7 +108,7 @@ template<int num>
 struct PackingImpl<HMMA_SIMT, OPERAND_B, num, kRowMajor> {
     __host__ __device__ static constexpr int2 apply(int2 mk)
     {
-        return {mk.x / 16, mk.y * 16};
+        return {mk.x / (sm70_mma_simt::OP_N * num), mk.y * sm70_mma_simt::OP_N * num};
     }
 };
 

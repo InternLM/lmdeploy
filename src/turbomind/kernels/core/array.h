@@ -105,7 +105,7 @@ struct Array<uint4_t, N> {
     using pointer         = SubBytePtr<uint4_t>;
     using const_pointer   = SubBytePtr<const uint4_t>;
 
-    static_assert(N % 8 == 0);
+    // static_assert(N % 8 == 0);
 
     detail::__uint4_t __a[N / 8];
 

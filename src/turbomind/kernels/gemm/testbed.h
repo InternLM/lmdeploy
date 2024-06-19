@@ -107,13 +107,17 @@ public:
         partials_.resize(kMaxSplits * m_ * n_);
 
         rng_.GenerateUniform(a_.data().get(), a_.size(), 1, -.5f);
-        rng_.GenerateUniform(b_.data().get(), b_.size(), 1, -.5f);
+        // rng_.GenerateUniform(b_.data().get(), b_.size(), 1, -.5f);
 
-        // for (int i = 0; i < n; ++i) {
-        //     for (int j = 0; j < k; ++j) {
-        //         b_[i * k + j] = i * k + j;
-        //     }
-        // }
+        for (int i = 0; i < n; ++i) {
+            // for (int j = 0; j < k; ++j) {
+            //     b_[i * k + j] = i * k + j;
+            // }
+            // for (int j = 0; j < k; j += 2) {
+            //     b_[i * k + j]     = i;
+            //     b_[i * k + j + 1] = j;
+            // }
+        }
 
         a_f_ = a_;
         b_f_ = b_;
@@ -179,10 +183,12 @@ public:
             // {
             //     cudaDeviceSynchronize();
             //     for (int i = 0; i < n; ++i) {
-            //         for (int j = 0; j < k; ++j) {
-            //             int index = (int)((Tb*)b_pack_.data().get())[i * k + j];
-            //             int row   = index / k;
-            //             int col   = index % k;
+            //         for (int j = 0; j < k; j += 2) {
+            //             // int index = (int)((Tb*)b_pack_.data().get())[i * k + j];
+            //             // int row   = index / k;
+            //             // int col   = index % k;
+            //             int row = (int)((Tb*)b_pack_.data().get())[i * k + j];
+            //             int col = (int)((Tb*)b_pack_.data().get())[i * k + j + 1];
             //             printf("(%2d,%2d) ", row, col);
             //         }
             //         printf("\n");

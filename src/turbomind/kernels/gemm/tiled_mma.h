@@ -6,6 +6,8 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/mma.h"
 
+#include "src/turbomind/kernels/gemm/simt.h"
+
 namespace turbomind::gemm {
 
 struct SM80_MMA_16x8x16_F32_F16_F16_F32_TN {
@@ -44,9 +46,9 @@ struct SM80_MMA_16x8x16_F32_F16_F16_F32_TN {
 
 template<class T>
 struct SM70_MMA_SIMT {
-    static constexpr int M = 2;
-    static constexpr int N = 16;
-    static constexpr int K = 4;
+    static constexpr int M = sm70_mma_simt::OP_M;
+    static constexpr int N = sm70_mma_simt::OP_N;
+    static constexpr int K = sm70_mma_simt::OP_K;
 
     static constexpr int kThreadCount = 32;
 

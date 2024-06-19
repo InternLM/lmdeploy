@@ -12,6 +12,7 @@
 #include "src/turbomind/kernels/gemm/kernel_impl.h"
 #include "src/turbomind/kernels/gemm/mainloop_sm80_v2.h"
 #include "src/turbomind/kernels/gemm/operand.h"
+#include "src/turbomind/kernels/gemm/simt.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/smem_copy_simt.h"
 #include "src/turbomind/kernels/gemm/thread_group_map.h"
@@ -89,7 +90,7 @@ template<class T, int K>
 struct Operand_B_Pack {
     using Dtype = T;
 
-    static constexpr int Pack_M = 1;
+    static constexpr int Pack_M = 2;
 
     static constexpr Pack  kPack  = HMMA_SIMT | OPERAND_B | Pack_M;
     static constexpr Order kOrder = kRowMajor;
@@ -103,13 +104,12 @@ template<class T>
 struct Operand_V_Pack {
     using Dtype = T;
 
-    static constexpr int Pack_M = 1;
+    static constexpr int Pack_M = 2;
 
     static constexpr Pack  kPack  = HMMA_SIMT | OPERAND_V | Pack_M;
     static constexpr Order kOrder = kColMajor;
 
-    /// FIXME: fix the `4`
-    using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, SmemCopy_MMA_SIMT_V<T, 4>, kColMajor, Pack_M>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, SmemCopy_MMA_SIMT_V<T, OP_K>, kColMajor, Pack_M>;
 
     struct GetSmemLayout {  // m-major
         template<int M, int K>
@@ -171,12 +171,12 @@ struct SM70_MMA_F32 {
 
 template<class T>
 struct GetOperand<HMMA_SIMT, OPERAND_A, T, kRowMajor, false>: std::true_type {
-    using Operand = sm70_mma_simt::OperandA<T, 4>;
+    using Operand = sm70_mma_simt::OperandA<T, sm70_mma_simt::OP_K>;
 };
 
 template<class T>
 struct GetOperand<HMMA_SIMT, OPERAND_B, T, kRowMajor, false>: std::true_type {
-    using Operand = sm70_mma_simt::OperandB<T, 4>;
+    using Operand = sm70_mma_simt::OperandB<T, sm70_mma_simt::OP_K>;
 };
 
 template<class T>
@@ -186,7 +186,7 @@ struct GetOperand<HMMA_SIMT, OPERAND_V, T, kColMajor, false>: std::true_type {
 
 template<class T>
 struct GetOperand<HMMA_SIMT, OPERAND_B, T, kRowMajor, true>: std::true_type {
-    using Operand = sm70_mma_simt::Operand_B_Pack<T, 4>;
+    using Operand = sm70_mma_simt::Operand_B_Pack<T, sm70_mma_simt::OP_K>;
 };
 
 template<class T>

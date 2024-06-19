@@ -32,13 +32,9 @@ struct ConvertOperand {
     using SmemLayout = typename Operand::SmemLayout;
     using GmemIter   = typename Operand::GmemIter;
 
-    static constexpr bool is_UV = K_ < 16;
-
     using Atom = typename Operand::SmemCopyAtom;
 
-    using SmemCopy = SmemCopy<Operand, M_, 16>;
-
-    // static constexpr int kRepeatC = !is_UV ? 1 : 4;
+    using SmemCopy = SmemCopy<Operand, M_, Atom::M>;
 
     using Accessor = SmemAccessor<Ts, SmemLayout>;
 
@@ -91,7 +87,6 @@ struct ConvertOperand {
         const int cta_offset_m = cta_idx_m * M;
 
         const int warp_id = threadIdx.x / WARP_SIZE;
-        // const int lane_id = threadIdx.x % WARP_SIZE;
 
         const int warp_offset_m = 0;
 
@@ -128,11 +123,8 @@ struct ConvertOperand {
                 ITER_K,
                 pack_cnt_m,
                 pack_cnt_k);
+            printf("frag_size=%d, frag_num=%d, pack_size=%d\n", kFragSize, kFragNum, kPackSize);
         }
-
-        // if (is_UV) {
-        //     print_type(Array<Td, kPackSize>{});
-        // }
 
         for (int cta_idx_k = 0; cta_idx_k < cta_cnt_k; ++cta_idx_k) {
 
@@ -145,11 +137,6 @@ struct ConvertOperand {
 
             PRAGMA_UNROLL
             for (int k = 0; k < ITER_K; ++k) {
-
-                // if (is_UV && threadIdx.x == 0) {
-                //     printf("k = %d\n", k);
-                // }
-
                 // Assuming `SmemCopy` is a warp-level operation
                 // Load from smem as we are doing GEMMs
                 SmemCopy::copy(smem, data, int2{warp_offset_m, k * Atom::K});
@@ -167,18 +154,9 @@ struct ConvertOperand {
                     const int pack_index = cs2idx(_mk2cs(pack_idx_m, pack_idx_k),  //
                                                   _mk2cs(pack_cnt_m, pack_cnt_k).x);
 
-                    // Store in [pack_id, lane_id], static cast is needed to decay SubBytePtr<T> to T*
-                    // auto dst_ptr = [&] {
-                    //     if constexpr (!is_UV) {
-                    //         return static_cast<Td*>(param.dst + (pack_index * WARP_SIZE + lane_id) * kPackSize);
-                    //     }
-                    //     else {
-                    //         return static_cast<Td*>(param.dst + (pack_index * 8 + lane_id / 4) * kPackSize);
-                    //     }
-                    // }();
-
                     auto [unique_id, repeat_id] = Atom::unique(threadIdx.x, pack_index);
 
+                    // Store in [pack_id, lane_id], static cast is needed to decay SubBytePtr<T> to T*
                     auto dst_ptr = static_cast<Td*>(param.dst + unique_id * kPackSize);
 
                     if (pack_idx_m < pack_cnt_m && pack_idx_k < pack_cnt_k && repeat_id == 0) {

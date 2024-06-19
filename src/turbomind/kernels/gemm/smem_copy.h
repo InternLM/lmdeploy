@@ -134,6 +134,9 @@ struct SmemCopy {
         for (int m = 0; m < ITER_M; ++m) {
             const int  mm = offset.x + m * dM * kFragNum;
             const int2 mk = Pack::apply(int2{mm, kk});
+            // if (threadIdx.x == 0 && kFragNum == 2 && Operand::kOrder == kRowMajor) {
+            //     printf("mk=(%d,%d)\n", mm, kk);
+            // }
             Atom::copy(&smem(mk.x + thr.x, mk.y + thr.y), dst[m].data(), mask);
         }
     }
