@@ -353,6 +353,8 @@ class Llavav1(Vicuna):
         if 'llava' in path and 'v1' in path and 'v1.6-34b' not in path \
             and 'mistral' not in path:
             return 'llava-v1'
+        elif 'llava-1.5' in path:
+            return 'llava-v1'
 
 
 @MODELS.register_module(name='mini-gemini-vicuna')
