@@ -7,9 +7,12 @@ import random
 import time
 from queue import Queue
 from threading import Thread
+from time import sleep
 from typing import List, Tuple, Union
 
 import numpy as np
+from prometheus_client import Gauge, start_http_server
+from prometheus_summary import Summary
 from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
@@ -136,7 +139,8 @@ class Engine:
             # skip the first token latency
             per_token_latency_stats.append(_per_token_latency_stats[1:])
             self.pbar.update(1)
-        res_queue.put((session_id, stats, per_token_latency_stats))
+
+            res_queue.put((session_id, stats, per_token_latency_stats))
 
     def process_request(self, requests, concurrency, temperature, top_p, top_k,
                         stream_output):
@@ -171,6 +175,7 @@ class Engine:
 
         stats = []
         per_token_latency_stats = []
+        per_token_latency_stats_list = []
         while not res_queue.empty():
             session_id, _stats, _per_token_latency_stats = res_queue.get()
             stats.append(np.array(_stats))
@@ -178,6 +183,7 @@ class Engine:
                 item for sublist in _per_token_latency_stats
                 for item in sublist
             ]
+            per_token_latency_stats_list.append(_per_token_latency_stats)
         stats = np.concatenate(stats).reshape(-1, 4)
 
         first_token_latency_min = np.min(stats[:, 0], axis=0)
@@ -216,6 +222,11 @@ class Engine:
             f'RPS (request per second): {rps:.3f} req/s\n'
             f'RPM (request per minute): {rpm:.3f} req/min\n'
             f'{"-" * 50}\n')
+
+        print(stats)
+        print(per_token_latency_stats_list)
+        calculate_stats(stats, per_token_latency_stats_list, '0.0.0.0', 18080,
+                        True, 'test_model', 10.0)
 
         if self.csv:
             with open(self.csv, 'w') as csvfile:
@@ -340,6 +351,66 @@ def main():
                            top_k=args.top_k,
                            concurrency=args.concurrency,
                            stream_output=True)
+
+
+def calculate_stats(
+    dataList: list,
+    per_token_latency_stats: list,
+    metrics_host: str,
+    metrics_port: int,
+    stream: bool,
+    model_name: str,
+    reqeust_rate: float,
+):
+    TOTAL_RESPONES = Gauge('total_responses', 'Total number of responses')
+    TOTAL_OUTPUT_TOKENS = Gauge('total_output_tokens',
+                                'Total number of output tokens')
+    TOTAL_INPUT_TOKENS = Gauge('total_input_tokens',
+                               'Total number of input tokens')
+    REQUEST_LATENCIES = Summary('request_latencies',
+                                'Latencies of requests, in microseconds',
+                                max_age_seconds=10,
+                                age_buckets=2)
+    TOKEN_LATENCY = Summary(
+        'token_latencies',
+        'Latencies of requests per output token, in microseconds',
+        max_age_seconds=10,
+        age_buckets=2)
+    if stream:
+        TIME_TO_FIRST_TOKENS = Summary('time_to_first_tokens',
+                                       'Time to first token',
+                                       max_age_seconds=10,
+                                       age_buckets=2)
+        TIME_PER_OUT_TOKENS = Summary('time_per_output_tokens',
+                                      'Time per output token',
+                                      max_age_seconds=10,
+                                      age_buckets=2)
+    EXP_INFO = Gauge('experiment_info', 'Request rate')
+
+    start_http_server(port=metrics_port, addr=metrics_host)
+    EXP_INFO.set(reqeust_rate)
+
+    #    for data in dataList:
+    #        TOTAL_RESPONES.inc()
+    #        TOTAL_OUTPUT_TOKENS.inc(data.get("completion_tokens"))
+    #        TOTAL_INPUT_TOKENS.inc(data.get("input_seqlen"))
+    #        REQUEST_LATENCIES.observe(np.sum(data.get("per_token_latency_stats")))
+    #        TOKEN_LATENCY.observe(np.average(data.get("per_token_latency_stats")))
+    #        if stream:
+    #            TIME_PER_OUT_TOKENS.observe(np.average(data.get("per_token_latency_stats")[1:]))
+    #            TIME_TO_FIRST_TOKENS.observe(data.get("first_token_latency"))
+
+    for i in range(len(dataList)):
+        TOTAL_RESPONES.inc()
+        TOTAL_OUTPUT_TOKENS.inc(dataList[i][1])
+        TOTAL_INPUT_TOKENS.inc(dataList[i][3] - dataList[i][2])
+        REQUEST_LATENCIES.observe(np.sum(per_token_latency_stats[i]))
+        TOKEN_LATENCY.observe(np.average(per_token_latency_stats[i]))
+        if stream:
+            TIME_PER_OUT_TOKENS.observe(np.average(per_token_latency_stats[i]))
+            TIME_TO_FIRST_TOKENS.observe(dataList[i][0])
+
+    sleep(10000)
 
 
 if __name__ == '__main__':
