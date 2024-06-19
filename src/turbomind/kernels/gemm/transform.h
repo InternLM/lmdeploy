@@ -13,7 +13,7 @@ namespace turbomind::gemm {
 
 struct Transform_Default {
     template<class T, int Nf, int Mf, int K, int Nd, int Md, class S>
-    __device__ static void apply(Array<T, Nf> (&frag)[K][Mf], int k, Array<T, Nd> (&data)[K][Md], S&)
+    __device__ static void apply(Array<T, Nf> (&frag)[K][Mf], int k, Array<T, Nd> (&data)[K][Md], S&, int div)
     {
         static_assert(Nf * Mf == Nd * Md);
         static_assert(Nd % Nf == 0 && Mf % Md == 0);
@@ -32,9 +32,9 @@ struct Transform_Default {
 
 template<int StatStepS, int StatStepC>
 struct Transform_HMMA_16816 {
-    template<class F, int Nf, int Mf, int K, class D, int Nd, int Md, class S, int Ns, int Ms>
+    template<class F, int Nf, int Mf, int K, class D, int Nd, int Md, class S, int Ns, int Ms, int Ks>
     __device__ static void
-    apply(Array<F, Nf> (&frag)[K][Mf], int k, Array<D, Nd> (&data)[K][Md], Array<S, Ns> (&stat)[K][Ms])
+    apply(Array<F, Nf> (&frag)[K][Mf], int k, Array<D, Nd> (&data)[K][Md], Array<S, Ns> (&stat)[Ks][Ms], int div)
     {
         static_assert(Nf * Mf == Nd * Md);
         static_assert(Nd % Nf == 0 && Mf % Md == 0);
@@ -43,7 +43,7 @@ struct Transform_HMMA_16816 {
         // static_assert(Nf != Nf);
 
         auto& frag_k = reinterpret_cast<Array<F, Nd>(&)[Md]>(frag[k]);
-        auto& stat_k = reinterpret_cast<Array<S, 1>(&)[Ns * Ms]>(stat[k]);
+        auto& stat_k = reinterpret_cast<Array<S, 1>(&)[Ns * Ms]>(stat[k / div]);
         auto& data_k = data[k];
 
         PRAGMA_UNROLL
@@ -83,15 +83,15 @@ struct Transform_HMMA_16816 {
 };
 
 struct Transform_HMMA_SIMT_B {
-    template<class F, int Nf, int Mf, int K, class D, int Nd, int Md, class S, int Ns, int Ms>
+    template<class F, int Nf, int Mf, int K, class D, int Nd, int Md, class S, int Ns, int Ms, int Ks>
     __device__ static void
-    apply(Array<F, Nf> (&frag)[K][Mf], int k, Array<D, Nd> (&data)[K][Md], Array<S, Ns> (&stat)[K][Ms])
+    apply(Array<F, Nf> (&frag)[K][Mf], int k, Array<D, Nd> (&data)[K][Md], Array<S, Ns> (&stat)[Ks][Ms], int div)
     {
         static_assert(Nf * Mf == Nd * Md);
         static_assert(Nd % Nf == 0 && Mf % Md == 0);
 
         auto& frag_k = reinterpret_cast<Array<F, Nd>(&)[Md]>(frag[k]);
-        auto& stat_k = reinterpret_cast<Array<S, 1>(&)[Ns * Ms]>(stat[k]);
+        auto& stat_k = reinterpret_cast<Array<S, 1>(&)[Ns * Ms]>(stat[k / div]);
         auto& data_k = data[k];
 
         // static_assert(Nf != Nf);

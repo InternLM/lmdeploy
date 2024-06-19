@@ -229,14 +229,17 @@ struct MainloopSm80_v2 {
     {
         static_assert(MMA::kAtomK == 1);
 
+        static constexpr int UU = 1;  // ceil_div(GroupSizeU_, MMA_Map::TileK);
+        static constexpr int VV = 1;  // ceil_div(GroupSizeV_, MMA_Map::TileK);
+
         // mma_iter_x = tile_iter_x * atom_x
         typename MMA_Atom::FragA frag_A[MMA::kTileIterK][MMA::kMmaIterM];
         typename MMA_Atom::FragB frag_B[MMA::kTileIterK][MMA::kMmaIterN];
 
         typename SmemCopyA::Frag data_A[MMA::kTileIterK];
         typename SmemCopyB::Frag data_B[MMA::kTileIterK];
-        typename SmemCopyU::Frag data_U[MMA::kTileIterK];
-        typename SmemCopyV::Frag data_V[MMA::kTileIterK];
+        typename SmemCopyU::Frag data_U[ceil_div(MMA::kTileIterK, UU)];
+        typename SmemCopyV::Frag data_V[ceil_div(MMA::kTileIterK, VV)];
 
         SmemIter<get_pointer_type<Ta>, SmemLayoutA::kSize, Stages> smem_A{storage.A.data()};
         SmemIter<get_pointer_type<Tb>, SmemLayoutB::kSize, Stages> smem_B{storage.B.data()};
@@ -311,11 +314,18 @@ struct MainloopSm80_v2 {
             //     printf("k = %d\n", k);
             // }
             // __syncthreads();
-            const int current_k = offset_k + k * MMA_Atom::K;
-            SmemCopyA::copy(smem_A.pointer, data_A[k], {offset_m, current_k});
-            SmemCopyU::copy(smem_U.pointer, data_U[k], {offset_m, current_k}, (bool)smem_group_iter_U);
-            SmemCopyB::copy(smem_B.pointer, data_B[k], {offset_n, current_k});
-            SmemCopyV::copy(smem_V.pointer, data_V[k], {offset_n, current_k}, (bool)smem_group_iter_V);
+            const int curr_k = offset_k + k * MMA_Atom::K;
+
+            const int curr_k_U = curr_k / GroupSizeU_;
+            const int curr_k_V = curr_k / GroupSizeV_;
+
+            SmemCopyA::copy(smem_A.pointer, data_A[k], {offset_m, curr_k});
+            SmemCopyU::copy(
+                smem_U.pointer, data_U[k / UU], int2{offset_m, curr_k_U}, k % UU == 0 && (bool)smem_group_iter_U);
+
+            SmemCopyB::copy(smem_B.pointer, data_B[k], {offset_n, curr_k});
+            SmemCopyV::copy(
+                smem_V.pointer, data_V[k / VV], int2{offset_n, curr_k_V}, k % VV == 0 && (bool)smem_group_iter_V);
         };
 
         PRAGMA_UNROLL
@@ -330,8 +340,8 @@ struct MainloopSm80_v2 {
 
         preload(0);
         // Transform(frag_A, frag_B, 0, data_A, data_B, data_U, data_V);
-        TransformA::apply(frag_A, 0, data_A, data_U);
-        TransformB::apply(frag_B, 0, data_B, data_V);
+        TransformA::apply(frag_A, 0, data_A, data_U, UU);
+        TransformB::apply(frag_B, 0, data_B, data_V, VV);
 
         if constexpr (kFusePrefetch) {
             prefetch_batch(0);
@@ -364,8 +374,8 @@ struct MainloopSm80_v2 {
                     smem_group_iter_U.Advance();
                     smem_group_iter_V.Advance();
                 }
-                TransformA::apply(frag_A, (k + 1) % ITER_K, data_A, data_U);
-                TransformB::apply(frag_B, (k + 1) % ITER_K, data_B, data_V);
+                TransformA::apply(frag_A, (k + 1) % ITER_K, data_A, data_U, UU);
+                TransformB::apply(frag_B, (k + 1) % ITER_K, data_B, data_V, VV);
             }
         }
 
