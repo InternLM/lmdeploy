@@ -225,7 +225,9 @@ class TurboMind:
             if quant_config:
                 quant_method = quant_config.get('quant_method')
                 group_size = int(quant_config.get('group_size', 0))
-                if quant_method == 'awq' and group_size == 128:
+                version = quant_config.get('version')
+                if quant_method == 'awq' and group_size == 128 and \
+                        version == 'gemm':
                     engine_config.model_format = 'awq'
 
         assert is_supported(model_path), (
