@@ -2,7 +2,8 @@
 import triton
 import triton.language as tl
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
+
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
 def _next_pow_of_2(x):
@@ -10,6 +11,7 @@ def _next_pow_of_2(x):
     return 1 << (x - 1).bit_length()
 
 
+@wrap_jit_func
 @triton.jit
 def _x_a_mm_kernel(
     X,
@@ -88,6 +90,7 @@ def _x_a_mm_kernel(
              mask=xa_mask)
 
 
+@wrap_jit_func
 @triton.jit
 def _acc_b_mm_kernel(
     XA,
@@ -178,13 +181,6 @@ def mbgmm_a(x: Tensor,
             rank_step: int = 1):
     """mbgmm_a."""
 
-    def _kernel_meta():
-        device = x.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     head_size = x.size(-1)
     batch_size = len(q_seqlens)
     max_rank = max_rank // rank_step
@@ -199,7 +195,7 @@ def mbgmm_a(x: Tensor,
     num_warps = 4
     grid = [batch_size, triton.cdiv(max_seq_len, BLOCK_M)]
     xa = x.new_empty((x.size(0), max_rank))
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(x)
     _x_a_mm_kernel[grid](x,
                          lora_a,
                          xa,
@@ -238,13 +234,6 @@ def mbgmm_b(xa: Tensor,
             out_size: int = None):
     """mbgmm_b."""
 
-    def _kernel_meta():
-        device = xa.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     if out_size is None:
         out_size = lora_b.size(-1)
     batch_size = len(q_seqlens)
@@ -259,7 +248,7 @@ def mbgmm_b(xa: Tensor,
     num_warps = 4
     grid = [batch_size, triton.cdiv(max_seq_len, BLOCK_M)]
     output = xa.new_empty((xa.size(0), BLOCK_HO))
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(xa)
     _acc_b_mm_kernel[grid](xa,
                            lora_b,
                            output,

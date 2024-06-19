@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import torch
 import triton
 import triton.language as tl
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
+
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
 @triton.jit
@@ -10,6 +12,36 @@ def _div_up(val, other):
     return (val + other - 1) // other
 
 
+@wrap_jit_func(type_hint=dict(
+    KStates=Tensor,
+    VStates=Tensor,
+    KCaches=Tensor,
+    VCaches=Tensor,
+    QStartLoc=Tensor,
+    QSeqLens=Tensor,
+    KVSeqLens=Tensor,
+    BlockOffsets=Tensor,
+    num_heads=torch.int32,
+    head_dim=torch.int32,
+    stride_kss=int,
+    stride_ksh=int,
+    stride_ksd=int,
+    stride_vss=int,
+    stride_vsh=int,
+    stride_vsd=int,
+    stride_kcn=int,
+    stride_kcb=int,
+    stride_kch=int,
+    stride_kcd=int,
+    stride_vcn=int,
+    stride_vcb=int,
+    stride_vch=int,
+    stride_vcd=int,
+    stride_boff=int,
+    BLOCK=torch.int32,
+    BLOCK_D=torch.int32,
+    BLOCK_H=torch.int32,
+))
 @triton.jit
 def _fill_kv_cache_kernel(
     KStates,
@@ -101,13 +133,6 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
                   block_offsets: Tensor):
     """fill key/value state to cache for paged attention."""
 
-    def _kernel_meta():
-        device = k_states.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     block_offsets = block_offsets.contiguous()
     batch_size = block_offsets.size(0)
     block_size, num_heads, head_dim = k_caches.size()[1:]
@@ -117,7 +142,7 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
     BLOCK_H = triton.next_power_of_2(num_heads)
     BLOCK_D = triton.next_power_of_2(head_dim)
     grid = [batch_size, max_num_blocks]
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(k_states)
     _fill_kv_cache_kernel[grid](
         k_states,
         v_states,
@@ -147,5 +172,7 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
         BLOCK=BLOCK,
         BLOCK_D=BLOCK_D,
         BLOCK_H=BLOCK_H,
+        num_warps=4,
+        num_stages=3,
         **kernel_meta,
     )
