@@ -17,7 +17,8 @@ from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
 from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
                             best_match_model)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import _stop_words, get_logger, get_model
+from lmdeploy.utils import (_stop_words, get_hf_config_content, get_logger,
+                            get_model)
 
 from .deploy.converter import (SUPPORTED_FORMATS,
                                get_input_model_registered_name,
@@ -217,6 +218,17 @@ class TurboMind:
         if osp.exists(osp.join(model_path, 'outputs_stats.pth')) and \
                 engine_config.model_format is None:
             engine_config.model_format = 'awq'
+
+        if engine_config.model_format is None:
+            cfg = get_hf_config_content(model_path)
+            quant_config = cfg.get('quantization_config')
+            if quant_config:
+                quant_method = quant_config.get('quant_method')
+                group_size = int(quant_config.get('group_size', 0))
+                version = quant_config.get('version')
+                if quant_method == 'awq' and group_size == 128 and \
+                        version == 'gemm':
+                    engine_config.model_format = 'awq'
 
         assert is_supported(model_path), (
             f'turbomind does not support {model_path}. '
