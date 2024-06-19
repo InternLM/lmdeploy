@@ -33,8 +33,7 @@ def _clip_vision_tower_load_model(self, **kwargs):
                               CLIPVisionModel)
     self.image_processor = CLIPImageProcessor.from_pretrained(
         self.vision_tower_name)
-    config = CLIPVisionConfig.from_pretrained(self.vision_tower_name,
-                                              trust_remote_code=True)
+    config = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
     self.vision_tower = CLIPVisionModel._from_config(config=config)
     self.vision_tower.requires_grad_(False)
     self.is_loaded = True
@@ -124,9 +123,9 @@ class LlavaVisionModel(VisonModel):
                 no_split_module_classes=['CLIPEncoderLayer'],
                 dtype=torch.half)
 
-        self.model = model.model
-        self.vision_tower = model.model.vision_tower.half()
-        self.mm_projector = model.model.mm_projector.half()
+        self.model = model.model.eval()
+        self.vision_tower = model.model.vision_tower.half().eval()
+        self.mm_projector = model.model.mm_projector.half().eval()
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """encode images."""

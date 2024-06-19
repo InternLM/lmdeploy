@@ -4,32 +4,34 @@ from typing import Optional, Tuple
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
 
-from ..dist_utils import (colwise_parallelize_linear_fn,
-                          rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb
 from ..kernels.fill_kv_cache import fill_kv_cache
 from ..kernels.pagedattention import paged_attention_fwd
+from ..weight_loader.dist_utils import (colwise_parallelize_linear,
+                                        rowwise_parallelize_linear)
 
 
 class MistralFlashAttention2(nn.Module):
 
-    @classmethod
-    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['q_proj', 'k_proj', 'v_proj']:
-            colwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
-        elif mod_name in ['o_proj']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        for mod_name in ['q_proj', 'k_proj', 'v_proj']:
+            colwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
+        for mod_name in ['o_proj']:
+            rowwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs
@@ -72,8 +74,14 @@ class MistralFlashAttention2(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             if hasattr(self, 'rotary_emb'):
-                cos, sin = self.rotary_emb(value_states,
-                                           seq_len=max_kv_seq_length)
+                if not hasattr(context, '_cos'):
+                    cos, sin = self.rotary_emb(value_states,
+                                               seq_len=max_kv_seq_length)
+                    context._cos = cos
+                    context._sin = sin
+                else:
+                    cos = context._cos
+                    sin = context._sin
                 query_states, key_states = apply_rotary_pos_emb(
                     query_states, key_states, cos, sin, position_ids,
                     context.position_ids_1d)

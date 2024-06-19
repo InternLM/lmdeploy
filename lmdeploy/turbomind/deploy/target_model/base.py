@@ -91,18 +91,24 @@ class TurbomindModelConfig:
             default.update(used)
             return cls(**default)
 
-    @classmethod
-    def from_engine_config(cls, config: TurbomindEngineConfig):
-        env = copy.deepcopy(config.__dict__)
-        env['tensor_para_size'] = env['tp']
-        ret = TurbomindModelConfig.from_dict(env, allow_none=True)
-        ret.rotary_embedding = ret.size_per_head
-        return ret
+    def update_from_engine_config(self, config: TurbomindEngineConfig):
+        """Update the attributes of this instance with the attributes from
+        TurbomindEngineConfig.
 
-    def update_prefill_config(self, config: TurbomindEngineConfig):
-        """Update the attributes related to split&fuse."""
-        if config.session_len is not None:
-            self.session_len = config.session_len
+        Args:
+            config (TurbomindEngineConfig): The turbomind engine config
+        """
+        if config is None:
+            return
+        # Iterate over the fields of 'self'
+        for field_name, _ in self.__dataclass_fields__.items():
+            # If the field value in 'other' is not None,
+            # update the corresponding field in 'self'
+            if hasattr(config, field_name) and getattr(config,
+                                                       field_name) is not None:
+                setattr(self, field_name, getattr(config, field_name))
+
+        self.tensor_para_size = config.tp
         assert self.session_len is not None
         if config.max_prefill_token_num is not None and \
                 config.num_tokens_per_iter == 0:
@@ -131,21 +137,6 @@ class TurbomindModelConfig:
             if v is None:
                 return False
         return True
-
-    def update(self, other: 'TurbomindModelConfig') -> None:
-        """Update the attributes of this instance with the attributes from
-        another instance.
-
-        Args:
-            other (TurbomindModelConfig): The instance from which to copy
-                attributes.
-        """
-        # Iterate over the fields of 'self'
-        for field_name, _ in self.__dataclass_fields__.items():
-            # If the field value in 'other' is not None,
-            # update the corresponding field in 'self'
-            if getattr(other, field_name) is not None:
-                setattr(self, field_name, getattr(other, field_name))
 
 
 def _weight_dtype_map(weight_type: str, default=None):

@@ -3,7 +3,7 @@ einops
 fastapi
 fire
 mmengine-lite
-numpy
+numpy<2.0.0
 peft<=0.11.1
 pillow
 protobuf

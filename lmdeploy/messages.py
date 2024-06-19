@@ -234,6 +234,7 @@ class ResponseType(enum.Enum):
     SESSION_REPEAT = enum.auto()
     SESSION_NOT_EXIST = enum.auto()
     HANDLER_NOT_EXIST = enum.auto()
+    INPUT_LENGTH_ERROR = enum.auto()
 
 
 @dataclass

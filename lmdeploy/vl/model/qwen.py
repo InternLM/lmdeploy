@@ -60,7 +60,7 @@ class QwenVisionModel(VisonModel):
                 no_split_module_classes=['VisualAttentionBlock'],
                 dtype=torch.half)
 
-        self.model = model.transformer.visual
+        self.model = model.transformer.visual.eval()
 
     @torch.no_grad()
     def forward(self, images: List[Image]) -> List[torch.Tensor]:

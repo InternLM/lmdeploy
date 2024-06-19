@@ -15,8 +15,8 @@ class Xcomposer2AwqReader(Xcomposer2Reader):
 
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o qweight for layer i."""
-        kv_head_num = self.model_cfg['kv_head_num']
-        gs = int(self.model_cfg['attn_head_num'] / kv_head_num)
+        kv_head_num = self.model_cfg['num_key_value_heads']
+        gs = int(self.model_cfg['num_attention_heads'] / kv_head_num)
         qkv = self.params[f'model.layers.{i}.attention.wqkv.{kind}']
         hidden_dim = qkv.shape[0]
         qkv = qkv.view(hidden_dim, kv_head_num, gs + 2, -1)
