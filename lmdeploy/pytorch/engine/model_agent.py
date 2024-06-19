@@ -17,8 +17,9 @@ from ..adapter.adapter import (AdapterWeightMap, SchedulerAdapter,
                                get_indexed_lora_linears, get_loralinear_info,
                                update_lora_linears)
 from ..config import CacheConfig, ModelConfig
-from ..models import patch
+from ..models.patch import patch, update_model
 from ..utils import get_gpu_memory
+from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
 
 logger = get_logger('lmdeploy')
@@ -162,6 +163,67 @@ class AdapterInfo:
 
 
 @dataclass
+class VisionModelInputs:
+    """Vision model inputs."""
+    history_lengths: torch.LongTensor = None
+    history_image_nums: torch.LongTensor = None
+    history_image_token_lengths: torch.LongTensor = None
+    input_embeddings: List[List[torch.Tensor]] = None
+    input_embedding_ranges: List[torch.LongTensor] = None
+    input_embedding_indexing: torch.BoolTensor = None
+
+    def to_device(self, device: str):
+        """to device."""
+        out_dict = dict()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if isinstance(v, torch.Tensor):
+                v = v.to(device)
+            elif k == 'input_embedding_ranges' and v is not None:
+                v = [e.to(device) for e in v]
+            elif k == 'input_embeddings' and v is not None:
+                v = [[e.to(device) for e in li] for li in v]
+            out_dict[k] = v
+
+        return VisionModelInputs(**out_dict)
+
+    def get_inputs(self, history_lengths: torch.Tensor,
+                   seq_lengths: torch.Tensor):
+        """get vision embedding inputs."""
+        input_embeddings = None
+        input_embedding_indexing = None
+        if self.input_embeddings is not None and len(
+                self.input_embeddings) > 0:
+            input_embedding_li = []
+            for (his_len, seq_len, embeddings,
+                 emb_ranges) in zip(history_lengths, seq_lengths,
+                                    self.input_embeddings,
+                                    self.input_embedding_ranges):
+                for emb, (emb_start, emb_end) in zip(embeddings, emb_ranges):
+                    start = max(emb_start, his_len) - emb_start
+                    end = min(emb_end, his_len + seq_len) - emb_start
+                    if 0 <= start < end:
+                        input_embedding_li.append(emb[start:end])
+            # has embeddings
+            if len(input_embedding_li) > 0:
+                input_embeddings = torch.cat(input_embedding_li, dim=0)
+                device = input_embeddings.device
+                starts = history_lengths - self.history_lengths
+                ends = starts + seq_lengths
+                input_embedding_indexing = torch.cat([
+                    indexing[s:e] for indexing, s, e in zip(
+                        self.input_embedding_indexing, starts, ends)
+                ],
+                                                     dim=0)
+                index_ranges = torch.arange(input_embedding_indexing.numel(),
+                                            device=device)
+                input_embedding_indexing = index_ranges[
+                    input_embedding_indexing]
+        return input_embeddings, input_embedding_indexing
+
+
+@dataclass
 class ModelInputs:
     """Input of the model."""
     input_ids: torch.LongTensor
@@ -175,6 +237,7 @@ class ModelInputs:
     local_adapter_ids: torch.LongTensor = None
     adapter_info: AdapterInfo = None
     meta: Any = None
+    vision_inputs: VisionModelInputs = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -222,6 +285,7 @@ class ModelInputs:
                 local_adapter_ids=self.local_adapter_ids,
                 adapter_info=self.adapter_info,
                 meta=self.meta,
+                vision_inputs=self.vision_inputs,
             )
             ret.append(inp)
             block_start += num_blocks
@@ -236,6 +300,8 @@ class ModelInputs:
             v = getattr(self, k)
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
+            elif isinstance(v, VisionModelInputs):
+                v = v.to_device(device)
             elif isinstance(v, AdapterInfo):
                 v = v.to_device(device)
             out_dict[k] = v
@@ -264,9 +330,10 @@ class StepContext:
     kv_caches: List
     is_decoding: bool
     world_size: int = 1
-    json_config: Dict = None
     local_adapter_ids: torch.LongTensor = None
     adapter_params: Dict[str, AdapterInfo] = None
+    input_embeddings: torch.Tensor = None
+    input_embedding_indexing: torch.Tensor = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -276,7 +343,6 @@ class StepContext:
         inputs: ModelInputs,
         world_size: int = 1,
         device: str = 'cuda',
-        json_config: dict = None,
         kv_caches: List = None,
         cache_config: CacheConfig = None,
     ):
@@ -290,6 +356,13 @@ class StepContext:
         q_seq_length = inputs.seq_length
         max_q_seq_length = inputs.max_q_seq_length
         history_lengths = inputs.history_lengths
+
+        # for vlm
+        input_embeddings, input_embedding_indexing = None, None
+        if inputs.vision_inputs is not None:
+            input_embeddings, input_embedding_indexing = \
+                inputs.vision_inputs.get_inputs(history_lengths, q_seq_length)
+
         batch_size = len(q_seq_length)
         device = q_seq_length.device
 
@@ -308,7 +381,6 @@ class StepContext:
         # position ids 1d
         position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
                                                   device)
-
         # seq_len + history_length
         kv_seq_length = q_seq_length + history_lengths
         max_kv_seq_length = max_q_seq_length + inputs.max_history_length
@@ -325,6 +397,8 @@ class StepContext:
                           block_offsets=inputs.block_offsets,
                           position_ids=position_ids,
                           position_ids_1d=position_ids_1d,
+                          input_embeddings=input_embeddings,
+                          input_embedding_indexing=input_embedding_indexing,
                           attention_mask=attention_mask,
                           q_start_loc=q_start_loc,
                           history_lengths=inputs.history_lengths,
@@ -335,7 +409,6 @@ class StepContext:
                           kv_caches=kv_caches,
                           is_decoding=inputs.is_decoding,
                           world_size=world_size,
-                          json_config=json_config,
                           local_adapter_ids=inputs.local_adapter_ids,
                           adapter_params=adapter_params)
         return ret
@@ -346,7 +419,7 @@ class StepContext:
                             seq_length: torch.LongTensor,
                             device: str = 'cuda'):
         """get 1d position_ids."""
-        if position_ids.size(1) == 1:
+        if position_ids.size(0) == 1 or position_ids.size(1) == 1:
             position_ids_1d = position_ids.flatten()
         else:
             position_ids_1d = [
@@ -387,7 +460,6 @@ def model_forward(
     patched_model: torch.nn.Module,
     inputs: ModelInputs,
     cache_engine: CacheEngine,
-    json_config: dict = None,
     world_size: int = 1,
     stream: torch.cuda.Stream = None,
 ):
@@ -399,7 +471,6 @@ def model_forward(
         context = StepContext.new(
             inputs=inputs,
             world_size=world_size,
-            json_config=json_config,
             kv_caches=cache_engine.gpu_cache,
             cache_config=cache_engine.cache_config,
         )
@@ -436,6 +507,25 @@ def _add_adapters(hf_model: torch.nn.Module, adapters: Dict[str, str]):
     for name, path in adapters.items():
         config = PeftConfig.from_pretrained(path)
         inject_adapter_in_model(config, model=hf_model, adapter_name=name)
+
+
+def _remove_unused_modules(hf_model: torch.nn.Module, model_cfg: ModelConfig):
+    """remove unused modules."""
+    if model_cfg.unused_modules is not None and len(
+            model_cfg.unused_modules) > 0:
+        for mod in model_cfg.unused_modules:
+            has_mod = True
+            parts = mod.split('.')
+            mod_path = 'hf_model'
+            for p in parts:
+                if eval(f'hasattr({mod_path}, "{p}")'):
+                    mod_path = f'{mod_path}.{p}'
+                else:
+                    has_mod = False
+                    break
+            if has_mod:
+                exec(f'del {mod_path}')
+    return hf_model
 
 
 def _unparam_lora_weight(model: torch.nn.Module):
@@ -568,11 +658,14 @@ class BaseModelAgent(AutoModelAgent):
                 **self.model_config.init_kwargs)
             hf_model.eval()
             hf_model.config.use_cache = True
+            # build for vlm model
+            _remove_unused_modules(hf_model, self.model_config)
 
         if adapters:
             _load_adapters(hf_model, adapters)
 
         patched_model = patch(hf_model, _PATCH_ARG_NAMES)
+        update_model(patched_model)
 
         if adapters:
             _unparam_lora_weight(patched_model)
@@ -610,7 +703,6 @@ class BaseModelAgent(AutoModelAgent):
             self.patched_model,
             inputs,
             self.cache_engine,
-            self.model_config.json_config,
             world_size=1,
             stream=self.stream,
         )
@@ -693,35 +785,6 @@ def _tp_build_model(
     patched_model = None
     cache_engine = None
 
-    def __get_device_map(model, device_map=None):
-        """get device map of model."""
-        import psutil
-        model_size = _get_model_memory_usage(model)
-        if psutil.virtual_memory().available < model_size:
-            logger.debug('Preload model on GPU.')
-            return device_map
-        else:
-            logger.debug('Preload model on CPU.')
-            return 'cpu'
-
-    def __load_params_and_buffers(param_mod, mod):
-        """load param and buffer."""
-        for name, param in param_mod.named_parameters(recurse=False):
-            mod.register_parameter(name, param)
-        for name, buffer in param_mod.named_buffers(recurse=False):
-            mod.register_buffer(name, buffer)
-
-    def __load_state_dict_assign(param_model, model):
-        """load state dict assign."""
-        try:
-            model.load_state_dict(param_model.state_dict(), assign=True)
-        except Exception:
-            __load_params_and_buffers(param_model, model)
-            mods = dict(model.named_modules())
-            for mod_name, param_mod in param_model.named_modules():
-                mod = mods[mod_name]
-                __load_params_and_buffers(param_mod, mod)
-
     def _broadcast_config(cache_config):
         """broadcast cache config, use minimum cache."""
         if rank == 0:
@@ -755,6 +818,8 @@ def _tp_build_model(
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code,
                 **model_config.init_kwargs)
+            # build for vlm model
+            _remove_unused_modules(model, model_config)
             if rank == 0:
                 device_map = _create_device_map(model, world_size)
             _add_adapters(model, adapters)
@@ -764,26 +829,21 @@ def _tp_build_model(
         model.eval()
         model.config.use_cache = True
 
-        if rank == 0:
-            with LoadNoInit():
-                device_map = __get_device_map(model, device_map)
-                param_model = AutoModelForCausalLM.from_pretrained(
-                    model_path,
-                    torch_dtype=torch_dtype,
-                    device_map=device_map,
-                    trust_remote_code=trust_remote_code,
-                    **model_config.init_kwargs)
-                _load_adapters(param_model, adapters, device_map=device_map)
-                __load_state_dict_assign(param_model, model)
-                param_model = param_model.to('meta')
-                del param_model
-
         patched_model = patch(
             model,
             extra_args=_PATCH_ARG_NAMES,
             rank=rank,
             world_size=world_size,
         )
+        load_model_weights(patched_model,
+                           model_path,
+                           adapters,
+                           rank=rank,
+                           world_size=world_size,
+                           device='cuda')
+        if rank == 0:
+            logger.debug('Updating model.')
+        update_model(patched_model)
 
         _update_cache_config(model_config,
                              cache_config,
@@ -899,7 +959,6 @@ def _tp_model_loop(
             patched_model,
             inputs,
             cache_engine,
-            model_config.json_config,
             world_size=world_size,
             stream=stream,
         )
@@ -1122,7 +1181,6 @@ class TPModelAgent(AutoModelAgent):
             self.patched_model,
             inputs,
             self.cache_engine,
-            self.model_config.json_config,
             world_size=1,
             stream=self.stream,
         )

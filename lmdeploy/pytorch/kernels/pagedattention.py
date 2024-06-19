@@ -211,6 +211,7 @@ def _fwd_grouped_split_kernel(
     window_size: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
+    num_heads_q: tl.constexpr,
     shared_kv: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_DV: tl.constexpr,
@@ -225,6 +226,7 @@ def _fwd_grouped_split_kernel(
     heads_per_cta = min(BLOCK_H, kv_group_num)
     cur_head = cur_kv_head * heads_per_cta + tl.arange(0, BLOCK_H)
     mask_h = cur_head < cur_kv_head * heads_per_cta + heads_per_cta
+    mask_h = mask_h & (cur_head < num_heads_q)
 
     q_seqlen = 1
     kv_seqlen = tl.load(KV_seqlens + cur_batch)
@@ -704,8 +706,10 @@ def paged_attention_fwd(
                                     BLOCK_N=BLOCK,
                                     **kernel_meta)
         else:
-            BLOCK_H = max(16, min(BLOCK, kv_group_num))
-            grid = (batch, head // min(BLOCK_H, kv_group_num), SPLIT_K)
+            p2_kv_group_num = triton.next_power_of_2(kv_group_num)
+            BLOCK_H = max(16, min(BLOCK, p2_kv_group_num))
+            grid_1 = triton.cdiv(head, min(BLOCK_H, kv_group_num))
+            grid = (batch, grid_1, SPLIT_K)
             _fwd_grouped_split_kernel[grid](
                 q,
                 k,
@@ -733,6 +737,7 @@ def paged_attention_fwd(
                 window_size=window_size,
                 head_size=Lk,
                 head_size_v=Lv,
+                num_heads_q=head,
                 shared_kv=shared_kv,
                 BLOCK_DMODEL=BLOCK_DMODEL,
                 BLOCK_DV=BLOCK_DV,

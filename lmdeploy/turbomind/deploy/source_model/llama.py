@@ -7,6 +7,7 @@ from glob import glob
 import torch
 from safetensors.torch import load_file
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.tokenizer import Tokenizer
 
 from .base import INPUT_MODELS, BaseInputModel, BaseReader
@@ -28,6 +29,9 @@ class LlamaReader(BaseReader):
         self.params.update(new_params)
         self.last_bin = last_bin
         self.model_cfg = model_cfg
+        tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
+        if tie_word_embeddings:
+            self.output_weight_key = self.tok_embeddings_key
         self.init_layer_id()
 
     def init_layer_id(self):
@@ -119,7 +123,7 @@ class LlamaReader(BaseReader):
             f'{self.attn_layer_prefix}.{i}.post_attention_layernorm.weight']
 
 
-@INPUT_MODELS.register_module(name='hf')
+@INPUT_MODELS.register_module(name='llama')
 class LlamaModel(BaseInputModel):
     """Llama model in hf format."""
 
@@ -132,6 +136,8 @@ class LlamaModel(BaseInputModel):
             ckpt_path = model_path
         self.ckpt_path = ckpt_path
         self.ckpt_files = self.get_ckpt()
+        _, self.model_config = get_model_arch(model_path)
+        self.model_config = self.model_config.to_dict()
 
     def get_ckpt(self):
         """Get weight files."""
@@ -164,7 +170,7 @@ class LlamaModel(BaseInputModel):
                 else:
                     new_params = load_file(osp.join(self.ckpt_path, ckpt))
                 ret = self.Reader(new_params, unused_params,
-                                  i == self.nmgrs - 1, self.model_info())
+                                  i == self.nmgrs - 1, self.model_config)
                 yield ret
                 ret.clean_up(is_last_bin)
         except GeneratorExit:

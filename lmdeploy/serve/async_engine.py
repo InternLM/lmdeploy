@@ -3,7 +3,6 @@ import asyncio
 import dataclasses
 import os
 import random
-from argparse import ArgumentError
 from contextlib import asynccontextmanager
 from itertools import count
 from queue import Empty, Queue
@@ -55,12 +54,7 @@ def deduce_a_name(
         model_name = get_model_name_from_workspace_model(model_path)
     # may get a model name from model_path
     if model_name is None:
-        model_name = best_match_model(model_path)
-        if model_name is None:
-            raise ArgumentError(None,
-                                f'Please set model_name for {model_path}')
-        else:
-            logger.info(f'matched chat template name: {model_name}')
+        model_name = model_path
     return model_name
 
 
@@ -352,7 +346,7 @@ class AsyncEngine:
         """A context manager to make sure server's safe running."""
         try:
             yield
-        except (Exception, asyncio.CancelledError) as e:  # noqa
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             await self.stop_session(session_id)
             raise e
         if str(session_id) in self.id2generator:
@@ -586,11 +580,6 @@ class AsyncEngine:
                                                     adapter_name)
         prompt = prompt_input['prompt']
         input_ids = prompt_input['input_ids']
-        if gen_config.max_new_tokens is None:
-            # for interactive endpoint, will try maximum possible token num
-            gen_config.max_new_tokens = max(
-                128, self.session_len - self.id2step[str(session_id)] -
-                len(input_ids))
         finish_reason = None
         logger.info(f'prompt={prompt!r}, '
                     f'gen_config={gen_config}, '
@@ -602,12 +591,24 @@ class AsyncEngine:
                     f'max_new_tokens={gen_config.max_new_tokens}, '
                     f'seq_start={sequence_start}, seq_end={sequence_end}, '
                     f'step={step}, prep={do_preprocess}')
+
+        if gen_config.max_new_tokens is None:
+            # for interactive endpoint, will try maximum possible token num
+            gen_config.max_new_tokens = max(
+                128, self.session_len - self.id2step[str(session_id)] -
+                len(input_ids))
+        elif self.id2step[str(session_id)] + len(
+                input_ids) + gen_config.max_new_tokens > self.session_len:
+            gen_config.max_new_tokens = max(
+                self.session_len - self.id2step[str(session_id)] -
+                len(input_ids), 128)
+            logger.error(
+                f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
         if self.id2step[str(session_id)] + len(
                 input_ids) + gen_config.max_new_tokens > self.session_len:
-            logger.warning(f'run out of tokens. session_id={session_id}')
-            finish_reason = 'length'
+            logger.error(f'run out of tokens. session_id={session_id}.')
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
-                         finish_reason)
+                         'length')
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
         else:

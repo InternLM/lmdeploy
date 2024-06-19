@@ -8,7 +8,8 @@ from utils.get_run_config import get_tp_num
 from utils.pipeline_chat import (assert_pipeline_common_log,
                                  save_pipeline_common_log)
 
-from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
+from lmdeploy import (GenerationConfig, PytorchEngineConfig,
+                      TurbomindEngineConfig, pipeline)
 
 SESSION_LEN = 198000
 SESSION_LEN_PASSKEY = 168000
@@ -79,12 +80,14 @@ def stream_infer_basic(config, model, log_name):
 
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize(
-    'model', ['internlm/internlm2-chat-7b', 'internlm/internlm2-chat-1_8b'])
-def test_long_test_passkey_tp1(config, model, worker_id):
+    'model', ['internlm/internlm2-chat-7b', 'Qwen/Qwen2-7B-Instruct'])
+@pytest.mark.parametrize('backend', ['turbomind'])
+def test_long_test_passkey_tp1(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    p = Process(target=passkey_retrival, args=(config, model, log_name))
+    p = Process(target=passkey_retrival,
+                args=(config, model, backend, log_name))
     p.start()
     p.join()
 
@@ -92,28 +95,35 @@ def test_long_test_passkey_tp1(config, model, worker_id):
 
 
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize(
-    'model',
-    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
-def test_long_test_passkey_tp2(config, model, worker_id):
+@pytest.mark.parametrize('model', [
+    'internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits',
+    'Qwen/Qwen2-7B-Instruct'
+])
+@pytest.mark.parametrize('backend', ['turbomind'])
+def test_long_test_passkey_tp2(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
-    p = Process(target=passkey_retrival, args=(config, model, log_name))
+    p = Process(target=passkey_retrival,
+                args=(config, model, backend, log_name))
     p.start()
     p.join()
 
     assert_pipeline_common_log(config, log_name)
 
 
-def passkey_retrival(config, model, log_name):
+def passkey_retrival(config, model, backend, log_name):
     tp_num = get_tp_num(config, model)
     model_path = '/'.join([config.get('model_path'), model])
-    backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
-                                           session_len=SESSION_LEN_PASSKEY,
-                                           use_logn_attn=True,
-                                           tp=tp_num)
+    if backend == 'turbomind':
+        backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
+                                               session_len=SESSION_LEN_PASSKEY,
+                                               use_logn_attn=True,
+                                               tp=tp_num)
+    else:
+        backend_config = PytorchEngineConfig(session_len=SESSION_LEN_PASSKEY,
+                                             tp=tp_num)
 
     pipe = pipeline(model_path, backend_config=backend_config)
 
