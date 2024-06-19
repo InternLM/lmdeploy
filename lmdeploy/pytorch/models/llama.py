@@ -15,6 +15,7 @@ from ..weight_loader.dist_utils import (colwise_parallelize_linear,
                                         rowwise_parallelize_linear)
 
 TRANSFORMERS_VERSION = version.parse(transformers.__version__)
+VERSION_4_38_0 = version.parse('4.38.0')
 
 
 class LlamaRMSNorm(nn.Module):
@@ -156,7 +157,7 @@ class LlamaAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding."""
-            if TRANSFORMERS_VERSION >= version.parse('4.38.0'):
+            if TRANSFORMERS_VERSION >= VERSION_4_38_0:
                 return __rotary_emb_fn_438(query_states, key_states,
                                            value_states)
             else:

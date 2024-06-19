@@ -132,6 +132,10 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch == 'MiniCPMV':
         return True
+    elif arch == 'LlavaForConditionalGeneration':
+        return True
+    elif arch == 'LlavaNextForConditionalGeneration':
+        return True
     return False
 
 

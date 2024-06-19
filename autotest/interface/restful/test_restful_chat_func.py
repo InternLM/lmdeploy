@@ -523,16 +523,16 @@ class TestRestfulInterfaceChatCompletions:
             continue
         assert output.get('code') == 400
         assert output.get(
-            'message') == 'The temperature `-0.01` must be in [0, 1]'
+            'message') == 'The temperature `-0.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
         for output in api_client.chat_completions_v1(model=model_name,
                                                      messages='Hi',
-                                                     temperature=1.01):
+                                                     temperature=2.01):
             continue
         assert output.get('code') == 400
         assert output.get(
-            'message') == 'The temperature `1.01` must be in [0, 1]'
+            'message') == 'The temperature `2.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
         for output in api_client.chat_completions_v1(model=model_name,
@@ -595,17 +595,17 @@ class TestRestfulInterfaceChatCompletions:
             continue
         assert output.get('code') == 400
         assert output.get(
-            'message') == 'The temperature `-0.01` must be in [0, 1]'
+            'message') == 'The temperature `-0.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
         for output in api_client.chat_completions_v1(model=model_name,
                                                      messages='Hi',
                                                      stream=True,
-                                                     temperature=1.01):
+                                                     temperature=2.01):
             continue
         assert output.get('code') == 400
         assert output.get(
-            'message') == 'The temperature `1.01` must be in [0, 1]'
+            'message') == 'The temperature `2.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
         for output in api_client.chat_completions_v1(model=model_name,
@@ -1147,15 +1147,15 @@ class TestRestfulInterfaceChatInteractive:
             continue
         assert output.get('code') == 400
         assert output.get(
-            'message') == 'The temperature `-0.01` must be in [0, 1]'
+            'message') == 'The temperature `-0.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
         for output in api_client.chat_interactive_v1(prompt='Hi',
-                                                     temperature=1.01):
+                                                     temperature=2.01):
             continue
         assert output.get('code') == 400
         assert output.get(
-            'message') == 'The temperature `1.01` must be in [0, 1]'
+            'message') == 'The temperature `2.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
         for output in api_client.chat_interactive_v1(prompt='Hi',
@@ -1208,16 +1208,16 @@ class TestRestfulInterfaceChatInteractive:
             continue
         assert output.get('code') == 400
         assert output.get(
-            'message') == 'The temperature `-0.01` must be in [0, 1]'
+            'message') == 'The temperature `-0.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
         for output in api_client.chat_interactive_v1(prompt='Hi',
                                                      stream=True,
-                                                     temperature=1.01):
+                                                     temperature=2.01):
             continue
         assert output.get('code') == 400
         assert output.get(
-            'message') == 'The temperature `1.01` must be in [0, 1]'
+            'message') == 'The temperature `2.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
         for output in api_client.chat_interactive_v1(prompt='Hi',

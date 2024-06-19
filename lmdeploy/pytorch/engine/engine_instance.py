@@ -93,8 +93,21 @@ class EngineInstance:
     """
 
     def __init__(self, engine: Engine):
+
+        def __get_max_input_len(engine):
+            """get max input len."""
+            cache_config = engine.cache_config
+            max_input_len = (cache_config.block_size *
+                             cache_config.num_gpu_blocks)
+            window_size = cache_config.window_size
+            if window_size > 0 and window_size <= max_input_len:
+                max_input_len = (1 << 63) - 1
+            return max_input_len
+
         self.engine = engine
         self.req_sender = engine.req_manager.build_sender()
+
+        self.max_input_len = __get_max_input_len(self.engine)
 
     def __del__(self):
         """Destructor."""
@@ -138,6 +151,9 @@ class EngineInstance:
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
+        if len(input_ids) > self.max_input_len:
+            yield EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
+            return
         gen_config = gen_config or EngineGenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         await async_try_add_session(self.req_sender, session_id)
@@ -229,6 +245,9 @@ class EngineInstance:
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
+        if len(input_ids) > self.max_input_len:
+            yield EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
+            return
 
         def __call_async():
             """call async."""
@@ -482,6 +501,10 @@ class EngineInstance:
             sampling_param = SamplingParam(max_new_tokens=0)
             for session_id, token_id, adapter_name in zip(
                     session_ids, input_ids, adapter_names):
+                if len(token_id) > self.max_input_len:
+                    raise RuntimeError(
+                        f'Expect input length<={self.max_input_len} '
+                        f'but get {len(token_id)}')
                 msg = dict(token_ids=token_id,
                            session_id=session_id,
                            sampling_param=sampling_param,

@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import copy
 import os.path as osp
 import sys
 from configparser import ConfigParser
@@ -78,21 +77,6 @@ def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
         logger.warning('model_name is deprecated in TurbomindEngineConfig '
                        'and has no effect')
     return config
-
-
-def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
-    if src.max_prefill_token_num is not None and \
-            src.session_len is not None and src.num_tokens_per_iter == 0:
-        dst.num_tokens_per_iter = src.max_prefill_token_num
-        dst.max_prefill_iters = (src.session_len + src.max_prefill_token_num -
-                                 1) // src.max_prefill_token_num
-    dst_dict = copy.deepcopy(dst.__dict__)
-    src_dict = copy.deepcopy(src.__dict__)
-    src_dict['tensor_para_size'] = src_dict['tp']
-    for k, v in src_dict.items():
-        if v is not None and k in dst_dict:
-            dst_dict[k] = v
-    return TurbomindModelConfig.from_dict(dst_dict)
 
 
 class TurboMind:
@@ -249,16 +233,11 @@ class TurboMind:
             model_path=model_path,
             model_format=engine_config.model_format,
             group_size=0)
-        self.config = TurbomindModelConfig.from_engine_config(engine_config)
-        self.config.update(cfg)
+        cfg.update_from_engine_config(engine_config)
         output_model = OUTPUT_MODELS.get(output_model_name)(
-            input_model=input_model,
-            cfg=self.config,
-            to_file=False,
-            out_dir='')
+            input_model=input_model, cfg=cfg, to_file=False, out_dir='')
 
         self.config = output_model.cfg
-        self.config.update_prefill_config(engine_config)
         self.config.model_name = match_name \
             if match_name is not None else 'base'
         self.model_name = self.config.model_name
@@ -307,11 +286,9 @@ class TurboMind:
             logger.info(f'found tp={cfg.tensor_para_size} in config.ini.')
             self.gpu_count = cfg.tensor_para_size
 
-        # update cfg
         if engine_config is not None:
             engine_config.tp = cfg.tensor_para_size
-            _cfg = _update_tm_config(cfg, engine_config)
-            cfg.update(_cfg)
+            cfg.update_from_engine_config(engine_config)
 
         # update cls
         self.config = cfg
@@ -529,7 +506,6 @@ class TurboMindInstance:
     async def async_end(self, session_id: int):
         """End the given session."""
         self.end(session_id)
-        await asyncio.sleep(0.002)
 
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
@@ -546,7 +522,6 @@ class TurboMindInstance:
     async def async_cancel(self, session_id: int):
         """End the given session."""
         self.cancel(session_id)
-        await asyncio.sleep(0.002)
 
     def prepare_inputs(self,
                        session_id,
