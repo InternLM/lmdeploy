@@ -41,7 +41,6 @@ def main(model_path: str,
          session_len: int = None,
          stream_output: bool = True,
          request_output_len: int = 1024,
-         chat_template: str = None,
          chat_template_config: ChatTemplateConfig = None,
          **kwargs):
     """An example to perform model inference through the command line
@@ -67,14 +66,11 @@ def main(model_path: str,
         session_len (int): the length input output tokens
         stream_output (bool): indicator for streaming output or not
         request_output_len (int): output token nums
-        chat_template (str): user defined chat template
         chat_template_config (ChatTemplateConfig): chat template config
         kwargs (dict): unused args
     """ # noqa: E 501
 
     # chat template
-    if chat_template is not None:
-        chat_template_config = ChatTemplateConfig.from_json(chat_template)
     model_name = deduce_a_name(model_path, model_name, None,
                                chat_template_config)
     if model_name in MODELS.module_dict.keys():

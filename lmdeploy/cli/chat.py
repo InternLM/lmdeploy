@@ -72,9 +72,6 @@ class SubCliChat(object):
         ArgumentHelper.cache_block_seq_len(engine_group)
         ArgumentHelper.rope_scaling_factor(engine_group)
         ArgumentHelper.session_len(engine_group)
-        # other arguments
-        ArgumentHelper.cap(parser)
-        ArgumentHelper.chat_template(parser)
 
     @staticmethod
     def torch(args):
