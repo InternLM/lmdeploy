@@ -132,4 +132,5 @@ class Glm4Model(LlamaModel):
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,
                     max_position_embeddings=seq_length,
+                    rotary_embedding=64,
                     permute_qk=False)  # head layout is same as TM
