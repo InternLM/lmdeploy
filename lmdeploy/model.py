@@ -1463,18 +1463,9 @@ def best_match_model(query: str) -> Optional[str]:
         query (str): the input query. Could be a model path.
 
     Return:
-        str | None: the possible model name or none.
+        str: the possible model name.
     """
     for name, model in MODELS.module_dict.items():
         if model.match(query):
             return model.match(query)
-    try:
-        from transformers import AutoTokenizer
-        tokenizer_config = AutoTokenizer.from_pretrained(
-            query, trust_remote_code=True)
-        if getattr('tokenizer_config', 'chat_template', None) is None:
-            return 'base'
-        if tokenizer_config.chat_template is None:
-            return 'base'
-    except Exception as e:
-        assert type(e) == OSError
+    return 'base'
