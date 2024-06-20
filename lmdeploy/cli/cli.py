@@ -107,6 +107,9 @@ class CLI(object):
         ArgumentHelper.meta_instruction(parser)
         ArgumentHelper.cap(parser)
         ArgumentHelper.chat_template(parser)
+        # model args
+        ArgumentHelper.revision(parser)
+        ArgumentHelper.download_dir(parser)
         #
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
