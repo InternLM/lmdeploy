@@ -56,6 +56,16 @@ def check_env_triton():
         b = a.new_tensor([3, 4], device='cuda')
         c = custom_add(a, b)
         torch.testing.assert_close(c, a + b)
+    except RuntimeError as e:
+        ptxas_error = 'device kernel image is invalid'
+        if len(e.args) > 0 and ptxas_error in e.args[0]:
+            msg = (
+                'This Error might caused by mismatching between NVIDIA Driver and compiler. \n'  # noqa: E501
+                'Try solution https://github.com/triton-lang/triton/issues/1955#issuecomment-1929908209'  # noqa: E501
+                ' or reinstall the driver.')
+        else:
+            msg = None
+        _handle_exception(e, 'Triton', logger, msg)
     except Exception as e:
         _handle_exception(e, 'Triton', logger)
 
