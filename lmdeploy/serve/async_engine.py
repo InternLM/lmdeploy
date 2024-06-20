@@ -346,7 +346,7 @@ class AsyncEngine:
         """A context manager to make sure server's safe running."""
         try:
             yield
-        except (Exception, asyncio.CancelledError) as e:  # noqa
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             await self.stop_session(session_id)
             raise e
         if str(session_id) in self.id2generator:

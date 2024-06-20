@@ -12,7 +12,7 @@ class DBRXModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.model_type == 'dbrx'
 
     @classmethod
-    def build(cls, hf_config):
+    def build(cls, hf_config, model_path: str = None):
         """build."""
         hidden_size = hf_config.d_model
         num_heads = hf_config.n_heads

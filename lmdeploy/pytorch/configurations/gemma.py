@@ -12,7 +12,7 @@ class GemmaModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.model_type == 'gemma'
 
     @classmethod
-    def build(cls, hf_config):
+    def build(cls, hf_config, model_path: str = None):
         """build gemma."""
         return ModelConfig(hidden_size=hf_config.hidden_size,
                            num_layers=hf_config.num_hidden_layers,
