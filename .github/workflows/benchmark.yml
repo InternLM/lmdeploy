@@ -726,5 +726,5 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Get overview
         run: |
-          pip install pandas
+          pip install pandas fire
           python3 .github/scripts/action_tools.py generate_benchmark_report $REPORT_DIR
