@@ -60,7 +60,7 @@ def check_env_triton():
         ptxas_error = 'device kernel image is invalid'
         if len(e.args) > 0 and ptxas_error in e.args[0]:
             msg = (
-                'This Error might caused by mismatching between NVIDIA Driver and compiler. \n'  # noqa: E501
+                'This Error might caused by mismatching between NVIDIA Driver and nvcc compiler. \n'  # noqa: E501
                 'Try solution https://github.com/triton-lang/triton/issues/1955#issuecomment-1929908209'  # noqa: E501
                 ' or reinstall the driver.')
         else:
