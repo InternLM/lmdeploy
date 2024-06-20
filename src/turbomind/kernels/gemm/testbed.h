@@ -8,7 +8,6 @@
 #include "src/turbomind/kernels/gemm/quantization.h"
 #include "src/turbomind/kernels/gemm/reference.h"
 #include "src/turbomind/kernels/gemm/test_utils.h"
-#include "src/turbomind/kernels/gemm/transcript.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 #include <fstream>
