@@ -21,8 +21,8 @@
 #include "src/turbomind/kernels/activation_kernels.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/nvtx_utils.h"
-// #include <glog/logging.h>
 
 namespace turbomind {
 
@@ -86,6 +86,7 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     NvtxScope scope("ffn");
 
     const size_t num_token = input_tensors->at("ffn_input").shape[0];
+    const int    layer_id  = input_tensors->getVal<int>("layer_id");
     // LOG(WARNING);
 
     allocateBuffer(num_token, &weights->gating, &weights->intermediate);
@@ -98,25 +99,35 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
         NvtxScope scope("fused_silu_ffn");
         linear_.forward(
             gating_buf_, ffn_input_data, num_token, weights->fused_gating_intermediate, LlamaLinear<T>::kFusedSiluFfn);
+
+        count_and_fix(gating_buf_, num_token * weights->output.input_dims, Concat("w1_w3_silu", layer_id), 3);
     }
     else {
         {  // w1(x)
             NvtxScope scope("w1");
             linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating, LlamaLinear<T>::kGemm, lora_mask);
         }
+        count_and_fix(gating_buf_, num_token * weights->gating.output_dims, Concat("w1", layer_id), 3);
+
         {  // w3(x)
             NvtxScope scope("w3");
             linear_.forward(
                 inter_buf_, ffn_input_data, num_token, weights->intermediate, LlamaLinear<T>::kGemm, lora_mask);
         }
+        count_and_fix(inter_buf_, num_token * weights->intermediate.output_dims, Concat("w3", layer_id), 3);
+
         // silu(w1(x)) * w3(x)
         activation(num_token);
+
+        count_and_fix(gating_buf_, num_token * weights->output.input_dims, Concat("act", layer_id), 3);
     }
 
     {  // w2(x)
         NvtxScope scope("w2");
         linear_.forward(ffn_output_data, gating_buf_, num_token, weights->output, LlamaLinear<T>::kGemm, lora_mask);
     }
+
+    count_and_fix(ffn_output_data, num_token * weights->output.output_dims, Concat("w2", layer_id), 3);
 
     if (tensor_para_.world_size_ > 1) {
         NcclGuard nccl_guard(tensor_para_, stream_);

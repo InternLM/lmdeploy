@@ -27,7 +27,7 @@ class AutoModelConfigBuilder(ABC):
             f'`condition` of {cls.__name__} not implemented.')
 
     @classmethod
-    def build(cls, hf_config):
+    def build(cls, hf_config, model_path: str = None):
         """build."""
         from .default import DefaultModelConfigBuilder
 
@@ -46,4 +46,7 @@ class AutoModelConfigBuilder(ABC):
 
         logger.debug(f'build model config with {valid_builder.__name__}')
 
-        return valid_builder.build(hf_config)
+        cfg = valid_builder.build(hf_config, model_path)
+        if cfg.hf_config is None:
+            cfg.hf_config = hf_config
+        return cfg

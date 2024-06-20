@@ -42,8 +42,10 @@ class VLChatTemplateWrapper:
                 # 'image_url': means url or local path to image.
                 # 'image_data': means PIL.Image.Image object.
                 if isinstance(image, str):
-                    image = load_image(image)
                     image_base64_data = encode_image_base64(image)
+                    if image_base64_data == '':
+                        logger.error(f'failed to load file {image}')
+                        continue
                     item = {
                         'type': 'image_url',
                         'image_url': {
@@ -301,7 +303,11 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
     arch = config['architectures'][0]
     if arch == 'QWenLMHeadModel':
         return QwenVLChatTemplateWrapper(chat_template)
-    elif arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
+    elif arch in [
+            'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM',
+            'LlavaForConditionalGeneration',
+            'LlavaNextForConditionalGeneration'
+    ]:
         return LlavaVLChatTemplateWrapper(chat_template)
     elif arch == 'MultiModalityCausalLM':  # deepseek-vl
         return DeepSeekVLChatTemplateWrapper(chat_template)

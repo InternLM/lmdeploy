@@ -20,6 +20,6 @@ def custom_add(a, b):
     size = c.size(0)
     BLOCK = 16
 
-    grid = [triton.cdiv(size, BLOCK)]
+    grid = (triton.cdiv(size, BLOCK), )
     _add_kernel[grid](a, b, c, size, BLOCK=BLOCK)
     return c

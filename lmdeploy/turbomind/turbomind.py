@@ -16,7 +16,7 @@ from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
                                ResponseType, TurbomindEngineConfig)
 from lmdeploy.model import best_match_model
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger, get_model
+from lmdeploy.utils import get_hf_config_content, get_logger, get_model
 
 from .deploy.converter import (SUPPORTED_FORMATS,
                                get_input_model_registered_name,
@@ -206,6 +206,17 @@ class TurboMind:
         if osp.exists(osp.join(model_path, 'outputs_stats.pth')) and \
                 engine_config.model_format is None:
             engine_config.model_format = 'awq'
+
+        if engine_config.model_format is None:
+            cfg = get_hf_config_content(model_path)
+            quant_config = cfg.get('quantization_config')
+            if quant_config:
+                quant_method = quant_config.get('quant_method')
+                group_size = int(quant_config.get('group_size', 0))
+                version = quant_config.get('version')
+                if quant_method == 'awq' and group_size == 128 and \
+                        version == 'gemm':
+                    engine_config.model_format = 'awq'
 
         assert is_supported(model_path), (
             f'turbomind does not support {model_path}. '
@@ -487,7 +498,6 @@ class TurboMindInstance:
     async def async_end(self, session_id: int):
         """End the given session."""
         self.end(session_id)
-        await asyncio.sleep(0.002)
 
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
@@ -504,7 +514,6 @@ class TurboMindInstance:
     async def async_cancel(self, session_id: int):
         """End the given session."""
         self.cancel(session_id)
-        await asyncio.sleep(0.002)
 
     def prepare_inputs(self,
                        session_id,

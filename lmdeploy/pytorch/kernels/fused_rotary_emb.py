@@ -3,9 +3,32 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
-from triton.runtime.jit import get_cuda_stream
+
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
+@wrap_jit_func(type_hint=dict(Q=Tensor,
+                              K=Tensor,
+                              PostionIds=Tensor,
+                              InvFreq=Tensor,
+                              scaling_factor=float,
+                              OutQ=Tensor,
+                              OutK=Tensor,
+                              stride_bq=int,
+                              stride_sq=int,
+                              stride_hq=int,
+                              stride_dq=int,
+                              stride_bk=int,
+                              stride_sk=int,
+                              stride_hk=int,
+                              stride_dk=int,
+                              stride_bp=int,
+                              stride_sp=int,
+                              max_seq_len=int,
+                              BLOCK=torch.int32,
+                              BLOCK_HQ=torch.int32,
+                              BLOCK_HK=torch.int32,
+                              BLOCK_F=torch.int32))
 @triton.jit
 def _fused_rotary_emb_kernel(
         Q, K, PostionIds, InvFreq, scaling_factor, OutQ, OutK, stride_bq,
@@ -67,13 +90,6 @@ def fused_rotary_emb(q: Tensor,
                      out_k: Tensor = None):
     """Fuse `rotary_embedding` and `apply_rotary_pos_emb`."""
 
-    def _kernel_meta():
-        device = q.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     if out_q is None:
         out_q = torch.empty_like(q)
     else:
@@ -93,7 +109,7 @@ def fused_rotary_emb(q: Tensor,
     BLOCK_F = q.size(-1) // 2
     batch_size = q.size(0)
     max_seq_len = q.size(1)
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(q)
     num_warps = 4
 
     grid = (batch_size, triton.cdiv(max_seq_len, BLOCK))
