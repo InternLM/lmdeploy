@@ -87,7 +87,7 @@ def get_model_name(model):
         return 'vicuna'
     if ('yi-vl' in model_name):
         return 'yi-vl'
-    if ('qwen1.5' in model_name):
+    if ('qwen' in model_name):
         return 'qwen'
     if ('internvl') in model_name:
         return 'internvl-internlm2'

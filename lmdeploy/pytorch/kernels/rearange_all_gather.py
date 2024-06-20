@@ -2,9 +2,11 @@
 import torch
 import triton
 import triton.language as tl
-from triton.runtime.jit import get_cuda_stream
+
+from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
+@wrap_jit_func
 @triton.jit
 def _rearange_all_gather_kernel(X, StartLoc, SeqLen, AdapterIds, Ranks, Out,
                                 stride_x, stride_o, world_size,
@@ -39,6 +41,7 @@ def _rearange_all_gather_kernel(X, StartLoc, SeqLen, AdapterIds, Ranks, Out,
         tl.store(Out + o_off, x, mask=o_mask)
 
 
+@wrap_jit_func
 @triton.jit
 def _rearange_all_gather_decoding_kernel(X, AdapterIds, Ranks, Out, stride_x,
                                          stride_o, world_size, seq_len,
@@ -76,13 +79,6 @@ def rearange_all_gather(x: torch.Tensor,
                         output: torch.Tensor = None):
     """rearange all gather."""
 
-    def _kernel_meta():
-        device = x.device
-        device_idx = device.index
-        device_type = device.type
-        stream = get_cuda_stream(device_idx)
-        return dict(device=device, device_type=device_type, stream=stream)
-
     max_rank = x.size(1)
     batch_size = len(b_seq_lens)
     partition_size = max_rank // world_size
@@ -91,7 +87,7 @@ def rearange_all_gather(x: torch.Tensor,
         output = torch.empty_like(x)
 
     num_warps = 4
-    kernel_meta = _kernel_meta()
+    kernel_meta = get_kernel_meta(x)
 
     is_decoding = batch_size == x.size(0)
     if not is_decoding:
