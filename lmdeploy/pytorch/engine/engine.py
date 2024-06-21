@@ -462,13 +462,10 @@ class Engine:
                                  num_appendable_ids: torch.Tensor):
         """batched stopping criteria."""
         num_appendable_ids = num_appendable_ids - 1
-        # one more step to cache last token(stop word)
-        stopped = num_appendable_ids < 0
+        stopped = num_appendable_ids <= 0
         if stop_words is not None:
             sw_stopped = (token_ids[:, None] == stop_words).any(1)
-            one_ids = torch.clamp_max(num_appendable_ids, 0)
-            num_appendable_ids = torch.where(sw_stopped, one_ids,
-                                             num_appendable_ids)
+            stopped = stopped | sw_stopped
         return stopped, num_appendable_ids
 
     @logging_timer('SamplingLogits', logger)
@@ -589,8 +586,6 @@ class Engine:
                                 stopped: bool):
             """check if output is necessary."""
             if stopped:
-                return []
-            if token in msg.sampling_param.stop_words:
                 return []
             return [token]
 
