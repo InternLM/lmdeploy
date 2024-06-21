@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from lmdeploy.pytorch.config import ModelConfig
 
-from .builder import AutoModelConfigBuilder
+from .builder import AutoModelConfigBuilder, ProxyAutoModel
 
 
 class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
@@ -47,4 +47,5 @@ class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
             vocab_size=text_config.vocab_size,
             unused_modules=['vision_tower', 'multi_modal_projector'],
             hf_config=hf_config,
-            auto_model_cls=_LlavaModel)
+            auto_model_cls=ProxyAutoModel(_LlavaModel),
+        )

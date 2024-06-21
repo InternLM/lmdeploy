@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from lmdeploy.pytorch.config import ModelConfig
 
-from .builder import AutoModelConfigBuilder
+from .builder import AutoModelConfigBuilder, ProxyAutoModel
 
 
 class DefaultModelConfigBuilder(AutoModelConfigBuilder):
@@ -23,13 +23,16 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
         if use_sliding_window:
             sliding_window = getattr(hf_config, 'sliding_window',
                                      sliding_window) or -1
-        return ModelConfig(hidden_size=hf_config.hidden_size,
-                           num_layers=hf_config.num_hidden_layers,
-                           num_attention_heads=hf_config.num_attention_heads,
-                           num_key_value_heads=num_key_value_heads,
-                           bos_token_id=hf_config.bos_token_id,
-                           eos_token_id=hf_config.eos_token_id,
-                           sliding_window=sliding_window,
-                           head_dim=head_dim,
-                           vocab_size=hf_config.vocab_size,
-                           hf_config=hf_config)
+        return ModelConfig(
+            hidden_size=hf_config.hidden_size,
+            num_layers=hf_config.num_hidden_layers,
+            num_attention_heads=hf_config.num_attention_heads,
+            num_key_value_heads=num_key_value_heads,
+            bos_token_id=hf_config.bos_token_id,
+            eos_token_id=hf_config.eos_token_id,
+            sliding_window=sliding_window,
+            head_dim=head_dim,
+            vocab_size=hf_config.vocab_size,
+            hf_config=hf_config,
+            auto_model_cls=ProxyAutoModel(),
+        )

@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .builder import AutoModelConfigBuilder
-from .default import DefaultModelConfigBuilder
+from .default import DefaultModelConfigBuilder, ProxyAutoModel
 
 
 class InternVLModelConfigBuilder(AutoModelConfigBuilder):
@@ -17,5 +17,5 @@ class InternVLModelConfigBuilder(AutoModelConfigBuilder):
         cfg = DefaultModelConfigBuilder.build(hf_config.llm_config)
         cfg.unused_modules = ['InternVisionModel']
         cfg.hf_config = hf_config
-        cfg.auto_model_cls = AutoModel
+        cfg.auto_model_cls = ProxyAutoModel(AutoModel)
         return cfg

@@ -435,13 +435,15 @@ class Engine:
             (input_embeddings, input_embedding_indexing,
              input_embedding_ranges) = __get_vlm_embeddings()
 
-        vision_embedding_inputs = VisionModelInputs(
-            history_lengths=history_lengths,
-            history_image_nums=history_image_nums,
-            history_image_token_lengths=history_image_token_lengths,
-            input_embeddings=input_embeddings,
-            input_embedding_indexing=input_embedding_indexing,
-            input_embedding_ranges=input_embedding_ranges)
+        vision_embedding_inputs = None
+        if has_embedding or history_image_nums is not None:
+            vision_embedding_inputs = VisionModelInputs(
+                history_lengths=history_lengths,
+                history_image_nums=history_image_nums,
+                history_image_token_lengths=history_image_token_lengths,
+                input_embeddings=input_embeddings,
+                input_embedding_indexing=input_embedding_indexing,
+                input_embedding_ranges=input_embedding_ranges)
 
         return ModelInputs(input_ids=input_ids,
                            seq_length=seq_length,
