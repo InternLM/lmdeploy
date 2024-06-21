@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 import torch
+from transformers import AutoModelForCausalLM
 
 
 def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
@@ -80,7 +81,7 @@ class ModelConfig:
     init_kwargs: Dict[str, Any] = field(default_factory=dict)
     model_arch: str = None
     unused_modules: List[str] = None
-    auto_model_cls: Any = None
+    auto_model_cls: Any = AutoModelForCausalLM
 
     def get_head_size(self):
         """get head size."""

@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .builder import AutoModelConfigBuilder
-from .default import DefaultModelConfigBuilder, ProxyAutoModel
+from .builder import AutoModelConfigBuilder, ProxyAutoModel
+from .default import DefaultModelConfigBuilder
 
 
 class InternVLModelConfigBuilder(AutoModelConfigBuilder):

@@ -50,8 +50,6 @@ class AutoModelConfigBuilder(ABC):
         if cfg.hf_config is None:
             cfg.hf_config = hf_config
 
-        if cfg.auto_model_cls is None:
-            cfg.auto_model_cls = ProxyAutoModel()
         return cfg
 
 

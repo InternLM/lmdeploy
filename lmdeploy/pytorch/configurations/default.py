@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from lmdeploy.pytorch.config import ModelConfig
 
-from .builder import AutoModelConfigBuilder, ProxyAutoModel
+from .builder import AutoModelConfigBuilder
 
 
 class DefaultModelConfigBuilder(AutoModelConfigBuilder):
@@ -34,5 +34,4 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
             head_dim=head_dim,
             vocab_size=hf_config.vocab_size,
             hf_config=hf_config,
-            auto_model_cls=ProxyAutoModel(),
         )
