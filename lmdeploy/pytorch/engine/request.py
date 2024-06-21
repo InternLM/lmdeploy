@@ -427,7 +427,6 @@ class RequestManager:
 
         async def __async_get_req(event_loop):
             """async get request."""
-            event_loop = asyncio.get_event_loop()
             que = self.thread_requests
             not_empty = que.not_empty
             with not_empty:
@@ -440,6 +439,7 @@ class RequestManager:
 
         async def __req_loop():
             """req loop."""
+            event_loop = asyncio.get_event_loop()
             while True:
                 # get reqs
                 reqs = __get_thread_reqs()
