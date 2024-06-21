@@ -56,7 +56,7 @@ class PatchedInternLM2Attention(nn.Module):
         kv_seq_length = context.kv_seq_length
         block_offsets = context.block_offsets
         max_q_seq_length = context.max_q_seq_length
-        max_kv_seq_length = context.max_kv_seq_length
+        position_ids_1d = context.position_ids_1d
 
         def __qkv_proj(hidden_states):
             """qkv_proj."""
@@ -77,7 +77,7 @@ class PatchedInternLM2Attention(nn.Module):
             """rotary embedding func."""
             if not hasattr(context, '_cos'):
                 cos, sin = self.rotary_emb(value_states.transpose(0, 1),
-                                           seq_len=max_kv_seq_length)
+                                           position_ids=position_ids_1d[None])
                 context._cos = cos
                 context._sin = sin
             else:
@@ -89,7 +89,9 @@ class PatchedInternLM2Attention(nn.Module):
                 cos,
                 sin,
                 position_ids,
-                context.position_ids_1d,
+                torch.arange(0,
+                             len(position_ids_1d),
+                             device=query_states.device),
                 q_embed=query_states,
                 k_embed=key_states)
             return query_states, key_states, value_states
@@ -136,7 +138,7 @@ class PatchedInternLM2Attention(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: bool = False,
-        use_cache: bool = False,
+        **kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """forward."""
@@ -188,8 +190,6 @@ class PatchedInternLM2Model(nn.Module):
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite implementation of LlamaModel.forward."""
         context = self.context.context
@@ -241,8 +241,7 @@ class PatchedInternLM2Model(nn.Module):
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
+        **kwargs,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite of LlamaModel.forward."""
         return self._continuous_batching_forward(
@@ -253,6 +252,4 @@ class PatchedInternLM2Model(nn.Module):
             inputs_embeds,
             use_cache,
             output_attentions,
-            output_hidden_states,
-            return_dict,
         )
