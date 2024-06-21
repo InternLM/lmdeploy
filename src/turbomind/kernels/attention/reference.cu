@@ -22,7 +22,8 @@ __global__ void createCausalMasks(T* mask, const int* q_lens, const int* k_lens,
 
 // [B, H, S, D]
 template<class T>
-__global__ void applyRotaryEmbedding(T* k_cache, int max_k_len, int head_num, int head_dim, float rope_base)
+__global__ void
+applyRotaryEmbedding(T* k_cache, int max_k_len, int head_num, int head_dim, float rope_base, int rope_dim)
 {
     const int    ti = blockIdx.x;
     const size_t hi = blockIdx.y;
@@ -39,7 +40,7 @@ __global__ void applyRotaryEmbedding(T* k_cache, int max_k_len, int head_num, in
 
         Load(vec_K, &k_cache[idx]);
 
-        RotaryEmbedding<kVecSize> rope(rope_base, head_dim, history + ti, {d, 0});
+        RotaryEmbedding<kVecSize> rope(rope_base, rope_dim, history + ti, {d, 0});
 
         rope.apply(vec_K);
 
@@ -48,23 +49,36 @@ __global__ void applyRotaryEmbedding(T* k_cache, int max_k_len, int head_num, in
 }
 
 template<class T>
-void invokeApplyRotaryEmbedding(
-    T* k_cache, int max_k_len, int head_num, int head_dim, float rope_base, int batch_size, cudaStream_t stream)
+void invokeApplyRotaryEmbedding(T*           k_cache,
+                                int          max_k_len,
+                                int          head_num,
+                                int          head_dim,
+                                float        rope_base,
+                                int          rope_dim,
+                                int          batch_size,
+                                cudaStream_t stream)
 {
     int  threads = 128;
     dim3 blocks(max_k_len, head_num, batch_size);
 
-    applyRotaryEmbedding<<<blocks, threads, 0, stream>>>(k_cache, max_k_len, head_num, head_dim, rope_base);
+    applyRotaryEmbedding<<<blocks, threads, 0, stream>>>(k_cache, max_k_len, head_num, head_dim, rope_base, rope_dim);
 }
 
-template void invokeApplyRotaryEmbedding(
-    half* k_cache, int max_k_len, int head_num, int head_dim, float rope_base, int batch_size, cudaStream_t stream);
+template void invokeApplyRotaryEmbedding(half*        k_cache,
+                                         int          max_k_len,
+                                         int          head_num,
+                                         int          head_dim,
+                                         float        rope_base,
+                                         int          rope_dim,
+                                         int          batch_size,
+                                         cudaStream_t stream);
 #if ENABLE_BF16
 template void invokeApplyRotaryEmbedding(nv_bfloat16* k_cache,
                                          int          max_k_len,
                                          int          head_num,
                                          int          head_dim,
                                          float        rope_base,
+                                         int          rope_dim,
                                          int          batch_size,
                                          cudaStream_t stream);
 #endif
@@ -80,7 +94,8 @@ __global__ void processQKV(T*       q_out,     // [B, H, s, D]
                            int      head_num,
                            int      head_dim,
                            int      kv_head_num,
-                           float    rope_theta)
+                           float    rope_theta,
+                           int      rope_dim)
 {
     const int    ti = blockIdx.x;
     const size_t hi = blockIdx.y;
@@ -112,7 +127,7 @@ __global__ void processQKV(T*       q_out,     // [B, H, s, D]
             vec = vec + bias;
         }
         if (rope_theta) {
-            RotaryEmbedding<kVecSize> rope(rope_theta, head_dim, history + ti, {d, 0});
+            RotaryEmbedding<kVecSize> rope(rope_theta, rope_dim, history + ti, {d, 0});
             rope.apply(vec);
         }
 
@@ -139,7 +154,7 @@ __global__ void processQKV(T*       q_out,     // [B, H, s, D]
             vec_V = vec_V + bias_V;
         }
         if (rope_theta) {
-            RotaryEmbedding<kVecSize> rope(rope_theta, head_dim, history + ti, {d, 0});
+            RotaryEmbedding<kVecSize> rope(rope_theta, rope_dim, history + ti, {d, 0});
             rope.apply(vec_K);
         }
         Store(&k_cache[idx], vec_K);
@@ -197,7 +212,8 @@ void Reference<T>::Reshape(
 }
 
 template<class T>
-void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv, const T* qkv_bias)
+void Reference<T>::Execute(
+    T* output, T* k_cache, T* v_cache, const T* qkv, const T* qkv_bias, float rope_base, int rope_dim)
 {
     {
         int  threads = 128;
@@ -214,7 +230,8 @@ void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv, cons
                                                     head_num_,
                                                     head_dim_,
                                                     kv_head_num_,
-                                                    10000.f);
+                                                    rope_base,
+                                                    rope_dim);
 
         cudaDeviceSynchronize();
     }

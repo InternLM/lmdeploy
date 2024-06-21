@@ -24,6 +24,7 @@
 |    InternVL-Chat    |  v1.1- v1.5  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       MiniCPM       | Llama3-V-2_5 |    Yes    |   Yes   |   Yes   |  Yes  |
 |   MiniGeminiLlama   |      7B      |    Yes    |   No    |   No    |  Yes  |
+|        GLM4         |      9B      |    Yes    |   Yes   |   Yes   |  No   |
 
 "-" means not verified yet.
 

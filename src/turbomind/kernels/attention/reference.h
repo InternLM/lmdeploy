@@ -11,8 +11,14 @@
 namespace turbomind {
 
 template<class T>
-void invokeApplyRotaryEmbedding(
-    T* k_cache, int max_k_len, int head_num, int head_dim, float rope_base, int batch_size, cudaStream_t stream = {});
+void invokeApplyRotaryEmbedding(T*           k_cache,
+                                int          max_k_len,
+                                int          head_num,
+                                int          head_dim,
+                                float        rope_base,
+                                int          rope_dim,
+                                int          batch_size,
+                                cudaStream_t stream = {});
 
 template<class T>
 class Reference {
@@ -28,7 +34,7 @@ public:
     void Reshape(
         size_t max_q_len, size_t max_k_len, size_t head_num, size_t head_dim, size_t kv_head_num, size_t batch_size);
 
-    void Execute(T* output, T* k_cache, T* v_cache, const T* qkv, const T* qkv_bias);
+    void Execute(T* output, T* k_cache, T* v_cache, const T* qkv, const T* qkv_bias, float rope_base, int rope_dim);
 
     const float* qk() const
     {
