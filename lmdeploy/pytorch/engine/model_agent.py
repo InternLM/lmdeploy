@@ -660,6 +660,7 @@ class BaseModelAgent(AutoModelAgent):
                 model_path,
                 torch_dtype=torch_dtype,
                 device_map=device,
+                trust_remote_code=trust_remote_code,
                 **self.model_config.init_kwargs)
             hf_model.eval()
             hf_model.config.use_cache = True
