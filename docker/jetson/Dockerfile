@@ -26,9 +26,8 @@ RUN cd /workspace/lmdeploy &&\
     python3 -m pip install --no-cache-dir -r requirements/build.txt
 
 # proxy
-ENV http_proxy=$HTTP_PRO
-ENV https_proxy=$HTTPS_PRO
-ENV no_proxy=localhost,127.0.0.1
+ENV http_proxy=$HTTP_PROXY
+ENV https_proxy=$HTTPS_PROXY
 
 RUN mkdir -p build && cd build &&\
     cmake .. \

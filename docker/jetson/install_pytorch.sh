@@ -20,6 +20,6 @@ elif [ "$JETPACK_VERSION" = "36.3.0" ] ; then   # Jetpack 6.0
     wget https://developer.download.nvidia.cn/compute/redist/jp/v60/pytorch/torch-2.4.0a0+07cecf4168.nv24.05.14710581-cp310-cp310-linux_aarch64.whl -P /workspace/lmdeploy/torch-jetson
     python3 -m pip install "/workspace/lmdeploy/torch-jetson/torch-2.4.0a0+07cecf4168.nv24.05.14710581-cp310-cp310-linux_aarch64.whl"
 else
-    echo "We currently do not support Jetpack v$JETPACK_VERSION. Please try 35.2.1, 35.3.1, 35.4.1, or 36.2.0."
+    echo "We currently do not support Jetpack v$JETPACK_VERSION. Please try 35.2.1, 35.3.1, 35.4.1, 36.2.0, or 36.3.0"
     exit 1
 fi

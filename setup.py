@@ -129,15 +129,16 @@ def parse_requirements(fname='requirements.txt', with_version=True):
 
 
 def check_jetson_platform():
-    """
-    Assuming Linux/arch64 is the NVIDIA Jetson platform.
-    If support for other Linux/Arrch64 platforms is introduced in the future, please make appropriate modifications.
+    """Assuming Linux/arch64 is the NVIDIA Jetson platform.
+
+    If support for other Linux/Arrch64 platforms is introduced in the future,
+    please make appropriate modifications.
     """
     import platform
     current_system = platform.system().lower()
     current_arch = platform.machine().lower()
-    suspected_jetson = current_system == "linux" and current_arch == "aarch64"
-    if suspected_jetson: return True 
+    suspected_jetson = current_system == 'linux' and current_arch == 'aarch64'
+    if suspected_jetson: return True
     return False
 
 
@@ -159,7 +160,8 @@ if __name__ == '__main__':
         include_package_data=True,
         setup_requires=parse_requirements('requirements/build.txt'),
         tests_require=parse_requirements('requirements/test.txt'),
-        install_requires=parse_requirements('requirements/runtime.txt') if not jetson_support else parse_requirements('requirements/jetson.txt'),
+        install_requires=parse_requirements('requirements/runtime.txt') if
+        not jetson_support else parse_requirements('requirements/jetson.txt'),
         extras_require={
             'all': parse_requirements('requirements.txt'),
             'lite': parse_requirements('requirements/lite.txt'),
