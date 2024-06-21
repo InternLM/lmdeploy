@@ -20,7 +20,7 @@ from lmdeploy.model import MODELS, best_match_model
      ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
      ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
      ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
-     ('tiiuae/falcon-7b', ['falcon']), ('workspace', [None])])
+     ('tiiuae/falcon-7b', ['falcon']), ('workspace', ['base'])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
     if model_path_and_name[0] == 'internlm/internlm2-1_8b' and suffix:

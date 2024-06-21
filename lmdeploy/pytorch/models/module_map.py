@@ -304,3 +304,8 @@ MODULE_MAP.update({
     'modeling_internvl_chat.InternVLChatModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.PatchedInternVLChatModel'
 })
+
+# ascend module
+ASCEND_MODULE_MAP = dict()
+
+DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)
