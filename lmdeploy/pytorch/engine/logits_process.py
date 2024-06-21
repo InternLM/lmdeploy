@@ -1,11 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import asdict, dataclass
-from typing import List
+from typing import List, Optional, Tuple
 
 import torch
 from transformers.generation.logits_process import LogitsWarper
 
+from lmdeploy.tokenizer import Tokenizer
+
 from ..messages import SchedulerSequence
+from .guided_process import _get_cached_logits_processor
 
 
 def _process_temperature(scores: torch.Tensor,
@@ -105,6 +108,7 @@ class SamplingInputs:
     random_offsets: int = None
     max_top_k: int = 1
     min_top_p: float = 1.0
+    regex_strings: Tuple[str] = ()
 
     @classmethod
     def from_sampling_params(cls, seqs: List[SchedulerSequence]):
@@ -118,6 +122,7 @@ class SamplingInputs:
         stop_words = [None] * batch_size
         random_seeds = [torch.seed() & 0xffffffff] * batch_size
         random_offsets = [None] * batch_size
+        regex_strings = [None] * batch_size
 
         def __gather_params():
             """gather params."""
@@ -128,6 +133,7 @@ class SamplingInputs:
                 top_k[idx] = param.top_k
                 top_p[idx] = param.top_p
                 random_offsets[idx] = seq.random_offsets
+                regex_strings[idx] = param.regex_string
                 if param.random_seed is not None:
                     random_seeds[idx] = param.random_seed & 0xffffffff
 
@@ -197,6 +203,7 @@ class SamplingInputs:
             top_p=top_p,
             random_seeds=random_seeds,
             random_offsets=random_offsets,
+            regex_strings=tuple(regex_strings),
             max_top_k=max_top_k,
             min_top_p=min_top_p,
         )
@@ -217,12 +224,16 @@ class SamplingInputs:
 class FusedLogitsProcessor(LogitsWarper):
     """Custom logits processor."""
 
-    def __init__(self, sampling_inputs: SamplingInputs,
-                 ignore_eos: torch.Tensor):
+    def __init__(self,
+                 sampling_inputs: SamplingInputs,
+                 ignore_eos: torch.Tensor,
+                 tokenizer: Optional[Tokenizer] = None):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.ignore_eos = ignore_eos
+        self.tokenizer = tokenizer
 
     def __call__(self, input_ids: torch.LongTensor,
+                 guided_input_ids: torch.LongTensor,
                  scores: torch.FloatTensor) -> torch.FloatTensor:
         r"""
         Args:
@@ -259,6 +270,12 @@ class FusedLogitsProcessor(LogitsWarper):
             stop_words = stop_words * self.ignore_eos[:, None]
             scores = _process_bad_words(scores, stop_words)
 
+        for i in range(len(sampling_inputs.regex_strings)):
+            regex_string = sampling_inputs.regex_strings[i]
+            if regex_string is not None and self.tokenizer is not None:
+                processor = _get_cached_logits_processor(
+                    regex_string, self.tokenizer, None)
+                scores[i] = processor(guided_input_ids[i].tolist(), scores[i])
         return scores
 
     def sampling(self, logits: torch.Tensor):

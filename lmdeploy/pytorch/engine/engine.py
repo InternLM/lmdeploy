@@ -474,6 +474,7 @@ class Engine:
     @logging_timer('SamplingLogits', logger)
     def async_sampling_logits(self, logits: torch.Tensor,
                               history_ids: torch.Tensor,
+                              guided_input_ids: torch.Tensor,
                               sampling_inputs: SamplingInputs,
                               inputs: ModelInputs, ignore_eos: torch.Tensor):
         """sampling logits."""
@@ -488,10 +489,10 @@ class Engine:
             return logits[last_idx, :]
 
         split_logits = __get_last_logits().cuda()
-        logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos)
-        logits = logits_processor(history_ids, split_logits)
+        logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos,
+                                                self.tokenizer.model.model)
+        logits = logits_processor(history_ids, guided_input_ids, split_logits)
         next_token_ids = logits_processor.sampling(logits)
-        next_token_ids = next_token_ids
 
         return next_token_ids
 
@@ -639,18 +640,24 @@ class Engine:
 
     async def _async_step_background(
             self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-            history_ids: torch.Tensor, sampling_inputs: SamplingInputs,
+            history_ids: torch.Tensor, guided_input_ids: torch.Tensor,
+            sampling_inputs: SamplingInputs,
             num_appendable_ids: torch.LongTensor,
             num_ignore_eos: torch.LongTensor, output_que: asyncio.Queue):
         """asyc forward task."""
 
         def __update_inputs(next_token_ids):
             """update inputs."""
-            nonlocal history_ids
+            nonlocal history_ids, guided_input_ids
             inputs.update(next_token_ids)
             if history_ids is not None:
                 history_ids = torch.cat([
                     history_ids, next_token_ids[:, None].to(history_ids.device)
+                ], 1)
+            if guided_input_ids is not None:
+                guided_input_ids = torch.cat([
+                    guided_input_ids, next_token_ids[:, None].to(
+                        guided_input_ids.device)
                 ], 1)
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
@@ -661,6 +668,8 @@ class Engine:
         is_decoding = inputs.is_decoding
         if history_ids is not None:
             history_ids = history_ids.cuda()
+        if guided_input_ids is not None:
+            guided_input_ids = guided_input_ids.cuda()
         sampling_inputs = sampling_inputs.to_device('cuda')
         num_appendable_ids = num_appendable_ids.cuda()
         num_ignore_eos = num_ignore_eos.cuda()
@@ -678,7 +687,7 @@ class Engine:
 
             # sampling
             next_token_ids = self.async_sampling_logits(
-                logits, history_ids, sampling_inputs, inputs,
+                logits, history_ids, guided_input_ids, sampling_inputs, inputs,
                 num_ignore_eos > 0)
             num_ignore_eos = num_ignore_eos - 1
 
@@ -723,6 +732,24 @@ class Engine:
                 output[idx, -h_len:] = h_ids
             return output
 
+        def __gather_guided_input_ids(seqs: SeqList,
+                                      sampling_inputs: SamplingInputs):
+            """gather input ids for guided decode."""
+            if not any(sampling_inputs.regex_strings or ()):
+                return None
+            batch = len(seqs)
+            max_len = max(seq.num_new_tokens for seq in seqs)
+            pad_id = self.model_config.bos_token_id
+            pad_id = 0 if pad_id is None else pad_id
+            output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
+            for idx, seq in enumerate(seqs):
+                h_len = seq.num_new_tokens
+                if h_len == 0:
+                    continue
+                h_ids = torch.from_numpy(seq.all_ids[-seq.num_new_tokens:])
+                output[idx, -h_len:] = h_ids
+            return output
+
         def __get_num_appendable_ids(seqs: SeqList):
             """get num appendable ids."""
             ret = [
@@ -755,6 +782,8 @@ class Engine:
                                                   is_prefill)
                 sampling_inputs = SamplingInputs.from_sampling_params(running)
                 history_ids = __gather_history(running, sampling_inputs)
+                guided_input_ids = __gather_guided_input_ids(
+                    running, sampling_inputs)
                 num_appendable_ids = __get_num_appendable_ids(running)
                 num_ignore_eos = __get_num_ignore_eos(running)
 
@@ -767,6 +796,7 @@ class Engine:
                         swap_in_map=schedule_output.swap_in_map,
                         swap_out_map=schedule_output.swap_out_map,
                         history_ids=history_ids,
+                        guided_input_ids=guided_input_ids,
                         sampling_inputs=sampling_inputs,
                         num_appendable_ids=num_appendable_ids,
                         num_ignore_eos=num_ignore_eos,
