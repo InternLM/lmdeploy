@@ -10,12 +10,14 @@ from addict import Addict
 
 from lmdeploy.utils import get_logger
 
-from .module_map import MODULE_MAP
+from ..devices import get_device_manager
+from .module_map import DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP
 
 logger = get_logger('lmdeploy')
 
 
-def _get_rewrite_qualname(origin_qualname: str) -> str:
+def _get_rewrite_qualname(origin_qualname: str, module_map: Dict[str,
+                                                                 str]) -> str:
     """get rewrite module from origin module name.
 
     Args:
@@ -24,9 +26,9 @@ def _get_rewrite_qualname(origin_qualname: str) -> str:
     Returns:
         str: The rewrite qualname.
     """
-    if origin_qualname in MODULE_MAP:
-        return MODULE_MAP[origin_qualname]
-    for key, value in MODULE_MAP.items():
+    if origin_qualname in module_map:
+        return module_map[origin_qualname]
+    for key, value in module_map.items():
         if re.search(key, origin_qualname):
             return value
     return None
@@ -52,26 +54,26 @@ def _class_from_qualname(qualname: str) -> Any:
     return cls_type
 
 
-def _find_rewrite_module_qualname(model):
+def _find_rewrite_module_qualname(model, module_map: Dict[str, str]):
     """find rewrite module."""
     module_name = inspect.getmodule(model).__name__
     class_name = model.__class__.__name__
 
     def _find_fullname():
         origin_qualname = f'{module_name}.{class_name}'
-        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname, module_map)
         return rewrite_qualname
 
     def _find_classname():
         origin_qualname = class_name
-        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname, module_map)
         return rewrite_qualname
 
     def _find_submodulename():
         # name with first module
         mod_name = module_name[module_name.rfind('.') + 1:]
         origin_qualname = f'{mod_name}.{class_name}'
-        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname, module_map)
         return rewrite_qualname
 
     rewrite_qualname = _find_fullname()
@@ -110,7 +112,9 @@ def _update_module_type(model: Any, cls_type: type, custom_attrs: dict = None):
     return model
 
 
-def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
+def _patch(model: torch.nn.Module,
+           context: Addict,
+           module_map: Dict[str, str] = None) -> torch.nn.Module:
     """patch the model with rewrite module.
 
     Args:
@@ -121,15 +125,19 @@ def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
         Module: The patched model
     """
 
+    if module_map is None:
+        module_map = MODULE_MAP
+
     def _recursive_children(context, named_children):
         """recursive children."""
         for name, child in named_children:
-            patched_child = _patch(child, context)
+            patched_child = _patch(child, context, module_map=module_map)
             if patched_child != child:
                 model.register_module(name, patched_child)
 
     _recursive_children(context, model.named_children())
-    rewrite_qualname = _find_rewrite_module_qualname(model)
+    rewrite_qualname = _find_rewrite_module_qualname(model,
+                                                     module_map=module_map)
 
     if rewrite_qualname is not None:
         cls_type = _class_from_qualname(rewrite_qualname)
@@ -235,7 +243,13 @@ def patch(
 
     _patch_context = Addict()
 
-    model = _patch(model, _patch_context)
+    module_map = MODULE_MAP.copy()
+    device_type = get_device_manager().current_context().device_type
+    if device_type != 'cuda':
+        device_map = DEVICE_SPECIAL_MODULE_MAP.get(device_type, dict())
+        module_map.update(device_map)
+
+    model = _patch(model, _patch_context, module_map=module_map)
 
     if world_size > 1:
         model = _dist_model(model, rank)

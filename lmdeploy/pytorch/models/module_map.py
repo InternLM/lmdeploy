@@ -296,3 +296,8 @@ MODULE_MAP.update({
     'transformers.models.llava_next.modeling_llava_next.LlavaNextForConditionalGeneration':  # noqa: E501
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaForConditionalGeneration'
 })
+
+# ascend module
+ASCEND_MODULE_MAP = dict()
+
+DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)
