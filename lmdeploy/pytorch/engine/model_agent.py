@@ -18,10 +18,12 @@ from ..adapter.adapter import (AdapterWeightMap, SchedulerAdapter,
                                get_indexed_lora_linears, get_loralinear_info,
                                update_lora_linears)
 from ..config import CacheConfig, ModelConfig
+from ..devices import DeviceContext, get_device_manager
 from ..models.patch import patch, update_model
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
+from .devices import get_current_device_utils
 
 logger = get_logger('lmdeploy')
 
@@ -412,6 +414,8 @@ class StepContext:
                           world_size=world_size,
                           local_adapter_ids=inputs.local_adapter_ids,
                           adapter_params=adapter_params)
+
+        ret = get_current_device_utils().update_step_context(ret)
         return ret
 
     @classmethod
@@ -976,6 +980,7 @@ def _tp_model_loop(
 def _start_tp_process(proc_id: int,
                       world_size: int,
                       func: Callable,
+                      device_context: DeviceContext,
                       args: List = None,
                       kwargs: Dict = None):
     """Start the tensor parallel process.
@@ -993,7 +998,9 @@ def _start_tp_process(proc_id: int,
                                 rank=rank,
                                 world_size=world_size,
                                 timeout=timedelta(days=35600))
-        with torch.cuda.device(rank), torch.inference_mode():
+        torch.cuda.set_device(rank)
+        with get_device_manager().context(
+                device_context), torch.inference_mode():
             args = args or tuple()
             kwargs = kwargs or dict()
             func(rank, *args, **kwargs)
@@ -1101,11 +1108,13 @@ class TPModelAgent(AutoModelAgent):
         port = os.environ['MASTER_PORT']
         logger.info(f'MASTER_ADDR={addr}, MASTER_PORT={port}')
 
+        device_context = get_device_manager().current_context()
         self.mp_context = mp.spawn(
             _start_tp_process,
             args=(
                 world_size,
                 _tp_model_loop,
+                device_context,
                 (model_path, ),
                 dict(model_config=model_config,
                      cache_config=cache_config,
