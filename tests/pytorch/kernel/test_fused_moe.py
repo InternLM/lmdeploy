@@ -2,8 +2,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from lmdeploy.pytorch.kernels.fused_moe import (fused_moe,
-                                                fused_moe_kernel_launcher)
+from lmdeploy.pytorch.kernels.fused_moe import fused_moe
 
 
 def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):
@@ -114,6 +113,8 @@ class TestFusedMoEKernelLauncher:
     @torch.inference_mode()
     def test_launcher(self, A, B, sorted_idx, exp_start, exp_end, weights,
                       enable_weights, top_k, M, gt):
+        from lmdeploy.pytorch.kernels.cuda.fused_moe import \
+            fused_moe_kernel_launcher
         N = B.size(1)
         C = B.new_empty(M * top_k, N)
 
