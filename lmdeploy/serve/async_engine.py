@@ -615,7 +615,7 @@ class AsyncEngine:
         else:
             generator = await self.get_generator(False, session_id)
             async with self.safe_run(session_id):
-                state = DetokenizeState()
+                state = DetokenizeState(len(input_ids))
                 response = ''
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
@@ -627,7 +627,7 @@ class AsyncEngine:
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
                     # decode res
-                    res, tokens = outputs.token_ids, outputs.num_token
+                    res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
                     if len(res) <= state.ids_offset:
                         continue
 
