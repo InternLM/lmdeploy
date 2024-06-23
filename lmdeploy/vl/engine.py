@@ -41,7 +41,7 @@ class Record:
         self.log('process', len(inputs))
         return inputs
 
-    def nofify(self):
+    def notify(self):
         """set result if request i is finished."""
         if len(self.number) == 0 or self.number[0] > len(self.done):
             return False
@@ -92,7 +92,7 @@ class ImageEncoder:
             outputs = await asyncio.get_event_loop().run_in_executor(
                 None, self.forward, inputs)
             record.done.extend(outputs)
-            while record.nofify():
+            while record.notify():
                 pass
 
     def forward(self, inputs: List[Image]):
