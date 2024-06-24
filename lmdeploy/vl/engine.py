@@ -86,6 +86,8 @@ class ImageEncoder:
         while True:
             while record.total == 0 or (self._que.qsize() and
                                         record.total < self.max_batch_size):
+                while self._que.qsize() == 0:
+                    await asyncio.sleep(0)
                 item = await self._que.get()
                 record.enqueue(item[0], item[1])
             inputs = record.dequeue(self.max_batch_size)
