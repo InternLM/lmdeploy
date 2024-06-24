@@ -276,6 +276,11 @@ class FusedLogitsProcessor(LogitsWarper):
                 scores = _filter_topp_sorted(scores, top_p)
 
             softmax_scores = scores.softmax(1)
+
+            max_topk = sampling_inputs.max_top_k
+            softmax_scores = softmax_scores[:, :max_topk]
+            indices = indices[:, :max_topk]
+
             seeds = sampling_inputs.random_seeds
             offsets = sampling_inputs.random_offsets
             return _multinomial_sampling(softmax_scores, seeds, offsets,
@@ -284,5 +289,11 @@ class FusedLogitsProcessor(LogitsWarper):
         if sampling_inputs.max_top_k == 1:
             return logits.argmax(-1)
         else:
-            scores, indices = logits.sort(1, descending=True)
+            # sort logits is too slow. and we only need topk logits
+            max_topk = sampling_inputs.max_top_k
+            scores = torch.zeros_like(logits)
+            indices = torch.zeros_like(logits, dtype=torch.int64)
+            topk_scores, topk_indices = logits.topk(max_topk, dim=1)
+            scores[..., :max_topk] = topk_scores
+            indices[..., :max_topk] = topk_indices
             return __random_sampling(scores, indices)

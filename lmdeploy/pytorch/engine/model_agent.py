@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import asyncio
 import os
 import warnings
 from dataclasses import dataclass, field, fields
@@ -660,7 +659,6 @@ class BaseModelAgent(AutoModelAgent):
         _update_cache_config(model_config, cache_config)
 
         self.cache_engine = CacheEngine(cache_config, model_config)
-        self.stream = torch.cuda.Stream()
 
     def _build_model(self,
                      model_path: str,
@@ -725,7 +723,6 @@ class BaseModelAgent(AutoModelAgent):
             inputs,
             self.cache_engine,
             world_size=1,
-            stream=self.stream,
         )
         return output
 
@@ -741,34 +738,7 @@ class BaseModelAgent(AutoModelAgent):
         output = self._forward_impl(inputs,
                                     swap_in_map=swap_in_map,
                                     swap_out_map=swap_out_map)
-        self.stream.synchronize()
         return output
-
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
-                            swap_out_map: SwapMap):
-        """model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
-        """
-        output = self._forward_impl(inputs,
-                                    swap_in_map=swap_in_map,
-                                    swap_out_map=swap_out_map)
-        await asyncio.get_event_loop().run_in_executor(None,
-                                                       self.stream.synchronize)
-        return output
-
-
-def _get_model_memory_usage(model: torch.nn.Module) -> int:
-    """get model memory usage."""
-    size = 0
-    for _, param in model.named_parameters():
-        size += param.element_size() * param.numel()
-    for _, buf in model.named_buffers():
-        size += buf.element_size() * param.numel()
-    return size
 
 
 def _create_device_map(model: torch.nn.Module,
@@ -883,14 +853,13 @@ def _tp_build_model(
     return patched_model, cache_engine, cache_config
 
 
-def _broadcast_inputs(rank: int, inputs: Any, stream: torch.cuda.Stream):
+def _broadcast_inputs(rank: int, inputs: Any):
     """get input tensor parallel."""
     # broadcast meta info
     if rank != 0:
         inputs = [None, None, None]
 
-    with torch.cuda.stream(stream):
-        dist.broadcast_object_list(inputs)
+    dist.broadcast_object_list(inputs)
     return inputs
 
 
@@ -971,8 +940,8 @@ def _tp_model_loop(
                             weight_map=None)
 
     while True:
-        inputs, swap_in_map, swap_out_map = _broadcast_inputs(
-            rank, None, stream)
+        with torch.cuda.stream(stream):
+            inputs, swap_in_map, swap_out_map = _broadcast_inputs(rank, None)
 
         cache_swapping(cache_engine,
                        swap_in_map=swap_in_map,
@@ -1105,7 +1074,6 @@ class TPModelAgent(AutoModelAgent):
         self.patched_model = model
         self.cache_config = cache_config
         self.cache_engine = cache_engine
-        self.stream = torch.cuda.Stream()
 
     def _start_sub_process(self, model_path: str, model_config: ModelConfig,
                            cache_config: CacheConfig, adapters: Dict[str, str],
@@ -1200,8 +1168,7 @@ class TPModelAgent(AutoModelAgent):
         """forward impl."""
         _check_context_alive(self.mp_context)
         rank = 0
-        _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
-                          self.stream)
+        _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map])
         cache_swapping(self.cache_engine,
                        swap_in_map=swap_in_map,
                        swap_out_map=swap_out_map)
@@ -1210,7 +1177,6 @@ class TPModelAgent(AutoModelAgent):
             inputs,
             self.cache_engine,
             world_size=1,
-            stream=self.stream,
         )
         return output
 
@@ -1226,23 +1192,6 @@ class TPModelAgent(AutoModelAgent):
         output = self._forward_impl(inputs,
                                     swap_in_map=swap_in_map,
                                     swap_out_map=swap_out_map)
-        self.stream.synchronize()
-        return output
-
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
-                            swap_out_map: SwapMap):
-        """model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
-        """
-        output = self._forward_impl(inputs,
-                                    swap_in_map=swap_in_map,
-                                    swap_out_map=swap_out_map)
-        await asyncio.get_event_loop().run_in_executor(None,
-                                                       self.stream.synchronize)
         return output
 
 
