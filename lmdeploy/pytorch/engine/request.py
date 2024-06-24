@@ -2,7 +2,7 @@
 import asyncio
 import enum
 from dataclasses import dataclass, field
-from queue import Empty, Queue
+from queue import Queue
 from threading import Lock, Thread
 from typing import Any, Awaitable, Callable, Dict, List
 
@@ -27,7 +27,7 @@ def _ignore_exception_on_finish(task: asyncio.Task) -> None:
     except asyncio.CancelledError:
         return
     except Exception as exc:
-        logger.info(f'task: {task.get_name()} ended.')
+        logger.debug(f'task: {task.get_name()} ended.')
         logger.debug(f'task: {task.get_name()} exception: {exc}')
 
 
@@ -92,21 +92,26 @@ class RequestSender:
     _next_req_id: int = 0
     _resp_que: asyncio.Queue = None
     _resp_thread_que: Queue = None
+    _thread_safe: bool = False
 
     @classmethod
     def new(cls, sender_id: int, manager: 'RequestManager'):
         """new."""
-        return cls(sender_id=sender_id, manager=manager)
+        obj = cls(sender_id=sender_id, manager=manager)
+        obj._thread_safe = manager.is_thread_safe()
+        return obj
 
     @property
     def resp_que(self):
         """response queue."""
-        if self.is_thread_safe():
+        thread_safe = self.is_thread_safe()
+        if thread_safe:
             return self.manager.responses
-        if self.manager._loop_task is None and not self.is_thread_safe():
+        if self._resp_que is not None:
+            return self._resp_que
+        if self.manager._loop_task is None:
             self.manager.create_loop_task()
-        if self._resp_que is None:
-            self._resp_que = asyncio.Queue()
+        self._resp_que = asyncio.Queue()
         return self._resp_que
 
     @property
@@ -133,7 +138,7 @@ class RequestSender:
 
     def is_thread_safe(self):
         """is thread safe."""
-        return self.manager.is_thread_safe()
+        return self._thread_safe
 
     def is_loop_alive(self):
         """is loop alive."""
@@ -145,21 +150,13 @@ class RequestSender:
 
     def _resp_get(self):
         """resp_que.get."""
-        timeout = 1
-
-        while True:
-            try:
-                ret = self.resp_thread_que.get(timeout=timeout)
-                return ret
-            except Empty:
-                if not self.manager.is_loop_alive():
-                    logger.debug('Engine loop is not alive.')
-                    exit(1)
-                continue
-            except Exception as e:
-                logger.exception(
-                    f'sender[{self.sender_id}] get response failed: {e}')
-                raise e
+        timeout = 1.0
+        que = self.resp_thread_que
+        not_empty = que.not_empty
+        with not_empty:
+            while not que._qsize():
+                not_empty.wait(timeout)
+        return que.get_nowait()
 
     async def _async_resp_get(self):
         """get resp.
@@ -428,16 +425,27 @@ class RequestManager:
                 reqs += tmp_reqs
             return reqs
 
+        async def __async_get_req(event_loop):
+            """async get request."""
+            que = self.thread_requests
+            not_empty = que.not_empty
+            with not_empty:
+                while not que._qsize():
+                    await event_loop.run_in_executor(None, not_empty.wait, 1.0)
+            reqs = que.get_nowait()
+            if isinstance(reqs, Request):
+                reqs = [reqs]
+            return reqs
+
         async def __req_loop():
             """req loop."""
+            event_loop = asyncio.get_event_loop()
             while True:
                 # get reqs
                 reqs = __get_thread_reqs()
-
-                if len(reqs) > 0:
-                    await self.requests.put(reqs)
-                else:
-                    await asyncio.sleep(0.02)
+                if len(reqs) == 0:
+                    reqs = await __async_get_req(event_loop)
+                self.requests.put_nowait(reqs)
 
         def __put_thread_resps(resps: List[Response]):
             """put thread resps."""
@@ -451,18 +459,21 @@ class RequestManager:
             """resp loop."""
             while True:
                 num_resps = self.responses.qsize()
-                resps = []
-                for _ in range(num_resps):
-                    resps.append(self.responses.get_nowait())
-                if len(resps) > 0:
-                    __put_thread_resps(resps)
+
+                if num_resps == 0:
+                    resps = [await self.responses.get()]
                 else:
-                    await asyncio.sleep(0.02)
+                    resps = []
+                    for _ in range(num_resps):
+                        resps.append(self.responses.get_nowait())
+                __put_thread_resps(resps)
+                await asyncio.sleep(0)
 
         def __run_forever(event_loop: asyncio.BaseEventLoop):
             """run forever."""
             logger.debug('start thread run forever.')
             asyncio.set_event_loop(event_loop)
+            self.responses = asyncio.Queue()
             self.create_loop_task()
             req_loop = event_loop.create_task(__req_loop(),
                                               name='RunForeverReqLoop')
@@ -474,7 +485,6 @@ class RequestManager:
 
         if self.is_thread_safe():
             event_loop = asyncio.new_event_loop()
-            self.responses = asyncio.Queue()
             self._loop_thread = Thread(target=__run_forever,
                                        args=(event_loop, ),
                                        daemon=True)
