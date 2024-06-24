@@ -38,6 +38,9 @@ def check_env_torch():
         _handle_exception(e, 'PyTorch', logger)
 
 
+MAX_TRITON_VERSION = '2.2.0'
+
+
 def check_env_triton():
     """check OpenAI Triton environment."""
     from packaging import version
@@ -47,8 +50,9 @@ def check_env_triton():
         logger.debug('Checking <Triton> environment.')
         import torch
         import triton
-        if version.parse(triton.__version__) != version.parse('2.1.0'):
-            logger.warning('Install triton==2.1.0'
+        if version.parse(
+                triton.__version__) > version.parse(MAX_TRITON_VERSION):
+            logger.warning(f'Install triton<={MAX_TRITON_VERSION}'
                            ' if you want to get better performance.')
 
         from .triton_custom_add import custom_add
@@ -80,7 +84,7 @@ def check_env(device_type: str):
 
 
 MIN_TRANSFORMERS_VERSION = '4.33.0'
-MAX_TRANSFORMERS_VERSION = '4.38.2'
+MAX_TRANSFORMERS_VERSION = '4.41.2'
 
 
 def check_transformers_version(model_path: str,

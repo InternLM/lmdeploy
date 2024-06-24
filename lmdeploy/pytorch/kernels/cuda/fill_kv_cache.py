@@ -40,6 +40,7 @@ def _div_up(val, other):
     stride_boff=int,
     BLOCK=torch.int32,
     BLOCK_D=torch.int32,
+    BLOCK_DV=torch.int32,
     BLOCK_H=torch.int32,
 ))
 @triton.jit
@@ -71,6 +72,7 @@ def _fill_kv_cache_kernel(
     stride_boff,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
+    BLOCK_DV: tl.constexpr,
     BLOCK_H: tl.constexpr,
 ):
     """fill kv cache kernel."""
@@ -118,13 +120,17 @@ def _fill_kv_cache_kernel(
                  k,
                  mask=mask)
 
-        v = tl.load(vs_ptr + sidx * stride_vss + h_off[:, None] * stride_vsh +
-                    d_off[None, :] * stride_vsd,
-                    mask=mask)
-        tl.store(vc_ptr + bidx * stride_vcb + h_off[:, None] * stride_vch +
-                 d_off[None, :] * stride_vcd,
-                 v,
-                 mask=mask)
+        if BLOCK_DV > 0:
+            dv_off = tl.arange(0, BLOCK_DV)
+            maskv = (h_off[:, None] < num_heads) & (dv_off[None, :] < head_dim)
+            v = tl.load(vs_ptr + sidx * stride_vss +
+                        h_off[:, None] * stride_vsh +
+                        dv_off[None, :] * stride_vsd,
+                        mask=maskv)
+            tl.store(vc_ptr + bidx * stride_vcb + h_off[:, None] * stride_vch +
+                     dv_off[None, :] * stride_vcd,
+                     v,
+                     mask=maskv)
 
 
 def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
@@ -136,11 +142,13 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
     block_offsets = block_offsets.contiguous()
     batch_size = block_offsets.size(0)
     block_size, num_heads, head_dim = k_caches.size()[1:]
+    head_dim_v = v_states.size(-1)
     max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
 
     BLOCK = block_size
     BLOCK_H = triton.next_power_of_2(num_heads)
     BLOCK_D = triton.next_power_of_2(head_dim)
+    BLOCK_DV = triton.next_power_of_2(head_dim_v)
     grid = [batch_size, max_num_blocks]
     kernel_meta = get_kernel_meta(k_states)
     _fill_kv_cache_kernel[grid](
@@ -171,6 +179,7 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
         stride_boff=block_offsets.stride(0),
         BLOCK=BLOCK,
         BLOCK_D=BLOCK_D,
+        BLOCK_DV=BLOCK_DV,
         BLOCK_H=BLOCK_H,
         num_warps=4,
         num_stages=3,

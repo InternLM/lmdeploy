@@ -73,6 +73,8 @@ class ModelConfig:
     bos_token_id: int
     eos_token_id: List[int]
     head_dim: int
+    k_head_dim: int = None
+    v_head_dim: int = None
     sliding_window: int = -1
     dtype: torch.dtype = torch.float16
     multi_query_attention: bool = False
@@ -103,6 +105,13 @@ class ModelConfig:
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 
         model_config = AutoModelConfigBuilder.build(hf_config, model_path)
+
+        if model_config.k_head_dim is None:
+            assert model_config.head_dim is not None
+            model_config.k_head_dim = model_config.head_dim
+        if model_config.v_head_dim is None:
+            assert model_config.head_dim is not None
+            model_config.v_head_dim = model_config.head_dim
 
         model_arch = model_config.hf_config.architectures[0]
         model_config.model_arch = model_arch
