@@ -57,6 +57,7 @@ class PatchedInternLM2Attention(nn.Module):
         block_offsets = context.block_offsets
         max_q_seq_length = context.max_q_seq_length
         position_ids_1d = context.position_ids_1d
+        max_kv_seq_length = context.max_kv_seq_length
 
         def __qkv_proj(hidden_states):
             """qkv_proj."""
@@ -75,23 +76,39 @@ class PatchedInternLM2Attention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
+            # compat
+            if not hasattr(self, '_use_old_rotary_emb'):
+                import inspect
+                args = inspect.getargspec(self.rotary_emb.forward)[0]
+                self._use_old_rotary_emb = 'seq_len' in args
+
             if not hasattr(context, '_cos'):
+                if self._use_old_rotary_emb:
+                    kwargs = dict(seq_len=max_kv_seq_length)
+                else:
+                    kwargs = dict(position_ids=position_ids_1d[None])
+
                 cos, sin = self.rotary_emb(value_states.transpose(0, 1),
-                                           position_ids=position_ids_1d[None])
+                                           **kwargs)
                 context._cos = cos
                 context._sin = sin
             else:
                 cos = context._cos
                 sin = context._sin
+
+            if self._use_old_rotary_emb:
+                _position_ids_1d = position_ids_1d
+            else:
+                _position_ids_1d = torch.arange(0,
+                                                len(position_ids_1d),
+                                                device=query_states.device)
             query_states, key_states = apply_rotary_pos_emb(
                 query_states,
                 key_states,
                 cos,
                 sin,
                 position_ids,
-                torch.arange(0,
-                             len(position_ids_1d),
-                             device=query_states.device),
+                position_ids_1d=_position_ids_1d,
                 q_embed=query_states,
                 k_embed=key_states)
             return query_states, key_states, value_states
