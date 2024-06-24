@@ -695,6 +695,7 @@ class TurboMindInstance:
         _forward_callback = partial(self._async_forward_callback, que=que)
         _forward_thread = partial(self._async_forward_thread, que=que)
         if stream_output and not stop:
+            logger.info(f'Register stream callback for {session_id}')
             self.model_insts[0].register_callback(_forward_callback)
 
         gen_config = self._update_generation_config(gen_config, **kwargs)
@@ -775,6 +776,7 @@ class TurboMindInstance:
                 break
 
         if stream_output and not stop:
+            logger.info(f'UN-register stream callback for {session_id}')
             self.model_insts[0].unregister_callback()
 
     def stream_infer(self,
@@ -806,6 +808,7 @@ class TurboMindInstance:
             kwargs (dict): kwargs for backward compatibility
         """
         if stream_output and not stop:
+            logger.info(f'Register stream callback for {session_id}')
             self.model_insts[0].register_callback(self._forward_callback)
 
         gen_config = self._update_generation_config(gen_config, **kwargs)
@@ -887,6 +890,7 @@ class TurboMindInstance:
                 break
 
         if stream_output and not stop:
+            logger.info(f'UN-register stream callback for {session_id}')
             self.model_insts[0].unregister_callback()
 
     def decode(self,
