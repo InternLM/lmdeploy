@@ -43,6 +43,8 @@ class CLI(object):
         ArgumentHelper.model_format(parser)
         ArgumentHelper.tp(parser)
         # other args
+        ArgumentHelper.revision(parser)
+        ArgumentHelper.download_dir(parser)
         parser.add_argument('--tokenizer-path',
                             type=str,
                             default=None,

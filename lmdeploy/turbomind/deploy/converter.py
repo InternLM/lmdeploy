@@ -206,6 +206,8 @@ def main(model_name: str,
          quant_path: str = None,
          group_size: int = 0,
          trust_remote_code: bool = False,
+         revision: str = None,
+         download_dir: str = None,
          **kwargs):
     """deploy llama family models via turbomind.
 
@@ -226,6 +228,11 @@ def main(model_name: str,
             to 4 bits
         trust_remote_code (bool):  Whether or not to allow for custom models
             defined on the Hub in their own modeling files. Defaults to False
+        revision (str): The specific model version to use. It can be a branch
+            name, a tag name, or a commit id. If unspecified, will use
+            the default version.
+        download_dir (str): Directory to download and load the weights,
+            default to the default cache directory of huggingface.
         kwargs (dict): other params for convert
     """
 
@@ -245,7 +252,11 @@ def main(model_name: str,
     if not os.path.exists(model_path):
         print(f"can't find model from local_path {model_path}, "
               'try to download from huggingface')
-        model_path = get_model(model_path)
+        model_path = get_model(
+            model_path,
+            revision=revision,
+            download_dir=download_dir,
+        )
         print(f'load model from {model_path}')
 
     input_model_name = get_input_model_registered_name(model_path,
