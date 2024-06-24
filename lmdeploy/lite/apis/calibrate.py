@@ -107,6 +107,9 @@ def _prepare_for_calibrate(model: nn.Module,
 
         # Check if the child matches the head name
         is_head = name == head_name
+        # skip moving head layer to CPU when tie_word_embeddings is True
+        is_head = is_head and not getattr(model.config, 'tie_word_embeddings',
+                                          False)
 
         mod_name = f'{prefix}.{name}' if prefix else name
 
