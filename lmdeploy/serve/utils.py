@@ -163,7 +163,7 @@ class LogitsMixin:
                 ranges = [x[i] for x in input_embedding_ranges]
 
             _logits = generator.decode(_input_ids,
-                                       steps,
+                                       steps=steps,
                                        input_embeddings=embeddings,
                                        input_embedding_ranges=ranges,
                                        sequence_start=(i == 0),
@@ -215,7 +215,7 @@ class LogitsMixin:
                     input_ids, index_range_starts, index_range_ends)
             ]
             _logits = generator.decode(_input_ids,
-                                       steps,
+                                       steps=steps,
                                        sequence_start=(i == 0),
                                        sequence_end=(i == n_max_iter - 1))
             _logits = _logits.cpu()
