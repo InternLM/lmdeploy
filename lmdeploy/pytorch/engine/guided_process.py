@@ -8,20 +8,22 @@
 
 #     http://www.apache.org/licenses/LICENSE-2.0
 
+import copy
+import math
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import json
-import math
 from collections import defaultdict
-from typing import DefaultDict, Dict, List, Optional, Union
+from functools import lru_cache
+from typing import DefaultDict, Dict, List, Union
 
 import torch
 from outlines.fsm.fsm import RegexFSM
 from outlines.fsm.json_schema import build_regex_from_schema
 from pydantic import BaseModel
+from transformers import PreTrainedTokenizerBase
 
 
 class RegexLogitsProcessor:
@@ -29,14 +31,11 @@ class RegexLogitsProcessor:
     def __init__(self, regex_string: str, tokenizer):
         """Compile the FSM that drives the regex-structured generation.
 
-        Parameters
-        ----------
-        regex_string
-            A string that represents a regular expression
-        tokenizer
-            The model's tokenizer
+        Args:
+            regex_string: A string that represents a regular expression
+            tokenizer: The model's tokenizer
         """
-        tokenizer = self.adapt_tokenizer(tokenizer)
+        tokenizer = self.adapt_tokenizer(copy.deepcopy(tokenizer))
         fsm = RegexFSM(regex_string, tokenizer)
         self.fsm = fsm
 
@@ -75,67 +74,37 @@ class RegexLogitsProcessor:
         `transformers`. In addition we need to handle the missing spaces to
         Llama's tokenizer to be able to compile FSMs for this model.
         """
-        tokenizer.vocabulary = tokenizer.get_vocab()
-        tokenizer.special_tokens = set(tokenizer.all_special_tokens)
-
-        def convert_token_to_string(token: str) -> str:
-            from transformers.file_utils import SPIECE_UNDERLINE
-
-            string = tokenizer.convert_tokens_to_string([token])
-
-            # A hack to handle missing spaces to HF's Llama tokenizers
-            if token.startswith(SPIECE_UNDERLINE) or token == '<0x20>':
-                return ' ' + string
-
-            return string
-
-        tokenizer.convert_token_to_string = convert_token_to_string
-
-        return tokenizer
+        from outlines.integrations.utils import adapt_tokenizer
+        return adapt_tokenizer(tokenizer)
 
 
 class JSONLogitsProcessor(RegexLogitsProcessor):
 
-    def __init__(self,
-                 schema: Union[str, Dict, BaseModel],
-                 tokenizer,
-                 whitespace_pattern: Optional[str] = None):
+    def __init__(self, schema: Union[str, Dict, BaseModel], tokenizer):
         """Compile the FSM that drives the JSON-guided generation.
 
-        Parameters
-        ----------
-        schema
-            A JSON schema that encodes the structure we want the model to generate
-        tokenizer
-            The model's tokenizer
-        whitespace_pattern
-            Pattern to use for JSON syntactic whitespace (doesn't impact string literals)
-            Example: allow only a single space or newline with `whitespace_pattern=r"[\n ]?"`
+        Args:
+            schema: A str schema that encodes the structure we want the model
+                to generate
+            tokenizer: The model's tokenizer
         """
-        if isinstance(schema, type(BaseModel)):
-            schema_str = json.dumps(schema.model_json_schema())
-        elif isinstance(schema, Dict):
-            schema_str = json.dumps(schema)
-        elif isinstance(schema, str):
-            schema_str = schema
-        else:
-            raise ValueError(
-                f'Cannot parse schema {schema}. The schema must be either ' +
-                'a Pydantic object, a dictionary or a string that contains the JSON '
-                + 'Schema specification')
-        regex_string = build_regex_from_schema(schema_str, whitespace_pattern)
+        regex_string = build_regex_from_schema(schema)
         super().__init__(regex_string, tokenizer)
 
 
-from functools import lru_cache
-
-
 @lru_cache(maxsize=32)
-def _get_cached_logits_processor(guide: str, tokenizer, mode=None):
-    return RegexLogitsProcessor(guide, tokenizer)
-    if mode == GuidedDecodingMode.JSON:
-        return JSONLogitsProcessor(guide, tokenizer)
-    elif mode == GuidedDecodingMode.REGEX or mode == GuidedDecodingMode.CHOICE:
-        return RegexLogitsProcessor(guide, tokenizer)
-    else:
-        raise ValueError(f'Unknown guided decoding mode {mode}')
+def _get_guided_logits_processor(guide: str,
+                                 tokenizer: PreTrainedTokenizerBase,
+                                 type: str):
+    try:
+        if type == 'json_object':
+            return JSONLogitsProcessor(guide, tokenizer)
+        elif type == 'regex_object':
+            return RegexLogitsProcessor(guide, tokenizer)
+        else:
+            return None
+    except Exception as e:
+        from lmdeploy.utils import get_logger
+        logger = get_logger('lmdeploy')
+        logger.error(e)
+        return None

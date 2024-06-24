@@ -78,6 +78,12 @@ class ChatCompletionRequestQos(BaseModel):
     top_k: Optional[int] = 40
 
 
+class ResponseFormat(BaseModel):
+    """Response format."""
+    type: str
+    guide: Union[str, Dict]
+
+
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
@@ -95,6 +101,8 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
+    response_format: Optional[ResponseFormat] = Field(default=None,
+                                                      examples=[None])  # noqa
     # additional argument of lmdeploy
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1

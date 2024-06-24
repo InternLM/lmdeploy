@@ -46,7 +46,7 @@ class SamplingParam:
     bad_words: List[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
-    regex_string: Optional[str] = None
+    response_format: Optional[str] = None
 
     @classmethod
     def from_gen_config(self, gen_config: EngineGenerationConfig):
@@ -64,7 +64,7 @@ class SamplingParam:
         temperature = gen_config.temperature
         repetition_penalty = gen_config.repetition_penalty
         max_new_tokens = gen_config.max_new_tokens
-        regex_string = gen_config.regex_string
+        response_format = gen_config.response_format
 
         if top_k <= 0:
             logger.warning('`top_k` has to be a strictly'
@@ -99,7 +99,7 @@ class SamplingParam:
                              random_seed=gen_config.random_seed,
                              stop_words=stop_words,
                              bad_words=bad_words,
-                             regex_string=regex_string,
+                             response_format=response_format,
                              max_new_tokens=max_new_tokens,
                              min_new_tokens=min_new_tokens)
 

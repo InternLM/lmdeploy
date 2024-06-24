@@ -735,7 +735,7 @@ class Engine:
         def __gather_guided_input_ids(seqs: SeqList,
                                       sampling_inputs: SamplingInputs):
             """gather input ids for guided decode."""
-            if not any(sampling_inputs.regex_strings or ()):
+            if not any(sampling_inputs.response_formats or ()):
                 return None
             batch = len(seqs)
             max_len = max(seq.num_new_tokens for seq in seqs)
