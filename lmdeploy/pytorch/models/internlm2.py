@@ -209,9 +209,18 @@ class PatchedInternLM2Model(nn.Module):
         output_attentions: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite implementation of LlamaModel.forward."""
+        context = self.context.context
+        # get inputs from context
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
 
         if inputs_embeds is None:
             inputs_embeds = self.tok_embeddings(input_ids)
+
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
 
         # Attention mask is not necessary in continuous batching
         attention_mask = None

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .builder import AutoModelConfigBuilder
+from .builder import AutoModelConfigBuilder, ProxyAutoModel
 from .default import DefaultModelConfigBuilder
 
 
@@ -28,6 +28,6 @@ class LlavaModelConfigBuilder(AutoModelConfigBuilder):
             from llava.model.language_model.llava_mistral import \
                 LlavaMistralForCausalLM as LlavaModel
         cfg = DefaultModelConfigBuilder.build(hf_config)
-        cfg.auto_model_cls = LlavaModel
+        cfg.auto_model_cls = ProxyAutoModel(LlavaModel)
         cfg.unused_modules = ['model.vision_tower', 'model.mm_projector']
         return cfg

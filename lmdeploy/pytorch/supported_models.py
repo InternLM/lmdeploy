@@ -58,6 +58,8 @@ _SUPPORTED_ARCHS = dict(
     LlavaNextForConditionalGeneration=True,
     # deepseek-v2
     DeepseekV2ForCausalLM=True,
+    # internvl
+    InternVLChatModel=True,
 )
 
 
