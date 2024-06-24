@@ -136,6 +136,8 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch == 'LlavaNextForConditionalGeneration':
         return True
+    elif arch == 'Phi3VForCausalLM':
+        return True
     return False
 
 
