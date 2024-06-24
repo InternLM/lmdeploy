@@ -150,6 +150,8 @@ print(response)
 
 ### Calculate logits
 
+We support custom inputs, users can use `prepare_inputs` to get a understand how the inputs is organized.
+
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
 from lmdeploy.vl import load_image

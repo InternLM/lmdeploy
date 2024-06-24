@@ -150,6 +150,8 @@ print(response)
 
 ### 计算 logits
 
+LMDeploy 支持用户自定义输入，用户可以调用`prepare_inputs`，了解多模态的输入是如何组织的。
+
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
 from lmdeploy.vl import load_image

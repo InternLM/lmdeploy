@@ -119,15 +119,17 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
 - **计算 logits & ppl:**
 
 ```python
+from transformers import AutoTokenizer
 from lmdeploy import pipeline
 pipe = pipeline('internlm/internlm2-chat-7b')
+tokenizer = AutoTokenizer.from_pretrained('internlm/internlm2-chat-7b', trust_remote_code=True)
 
 # logits
-inputs = pipe.prepare_inputs(['Hi, pls intro yourself', 'Shanghai is'])
-input_ids = inputs['input_ids']
+chat = [
+   {"role": "user", "content": "Hello, how are you?"},
+]
+input_ids = tokenizer.apply_chat_template(chat)
 logits = pipe.get_logits(input_ids)
-logits1 = logits[0, :len(input_ids[0])]
-logits2 = logits[1, :len(input_ids[1])]
 
 # ppl
 ppl = pipe.get_ppl(input_ids)
