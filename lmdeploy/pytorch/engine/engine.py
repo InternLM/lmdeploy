@@ -14,6 +14,7 @@ from lmdeploy.utils import get_logger, get_model, logging_timer
 from ..adapter.adapter import AdapterManager, SchedulerAdapter
 from ..check_env import check_adapters, check_env, check_model
 from ..config import CacheConfig, SchedulerConfig
+from ..devices import DeviceContext, get_device_manager
 from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
 from ..paging import Scheduler
@@ -96,7 +97,7 @@ class Engine:
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
-        check_env()
+        check_env(engine_config.device_type)
         check_model(model_path, trust_remote_code)
         if engine_config is None:
             engine_config = PytorchEngineConfig()
@@ -109,6 +110,9 @@ class Engine:
 
         self.tp = tp
         self.model_name = model_name
+
+        self.device_context = DeviceContext(
+            device_type=engine_config.device_type)
 
         scheduler_config = SchedulerConfig(
             max_batches=engine_config.max_batch_size,
@@ -132,12 +136,13 @@ class Engine:
                                    engine_config.revision)
         self.model_path = model_path
 
-        self.model_agent = AutoModelAgent.from_pretrained(
-            model_path,
-            cache_config=cache_config,
-            trust_remote_code=trust_remote_code,
-            adapters=adapters,
-            tp=tp)
+        with get_device_manager().context(self.device_context):
+            self.model_agent = AutoModelAgent.from_pretrained(
+                model_path,
+                cache_config=cache_config,
+                trust_remote_code=trust_remote_code,
+                adapters=adapters,
+                tp=tp)
 
         cache_config = self.model_agent.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
@@ -398,6 +403,7 @@ class Engine:
         def __get_vlm_embeddings():
             """get vlm input embeddings and indexings."""
             input_embeddings = [[
+                emb.embeddings if isinstance(emb.embeddings, torch.Tensor) else
                 torch.from_numpy(emb.embeddings)
                 for emb in msg.input_embeddings
             ] for msg in messages]
@@ -417,25 +423,25 @@ class Engine:
             return (input_embeddings, input_embedding_indexing,
                     input_embedding_ranges)
 
-        # for vlm
+        # for inputs with embeddings
+        history_image_nums = None
+        history_image_token_lengths = None
+        # only for cogvlm
+        if self.model_config.model_arch == 'CogVLMForCausalLM':
+            (history_image_nums,
+             history_image_token_lengths) = __get_cogvlm_image_info()
+
+        input_embeddings = None
+        input_embedding_indexing = None
+        input_embedding_ranges = None
+        has_embedding = any(
+            [len(msg.input_embeddings) > 0 for msg in messages])
+        if has_embedding:
+            (input_embeddings, input_embedding_indexing,
+             input_embedding_ranges) = __get_vlm_embeddings()
+
         vision_embedding_inputs = None
-        if self.model_config.task_type == 'vlm':
-            history_image_nums = None
-            history_image_token_lengths = None
-            # only for cogvlm
-            if self.model_config.model_arch == 'CogVLMForCausalLM':
-                (history_image_nums,
-                 history_image_token_lengths) = __get_cogvlm_image_info()
-
-            input_embeddings = None
-            input_embedding_indexing = None
-            input_embedding_ranges = None
-            has_embedding = any(
-                [len(msg.input_embeddings) > 0 for msg in messages])
-            if has_embedding:
-                (input_embeddings, input_embedding_indexing,
-                 input_embedding_ranges) = __get_vlm_embeddings()
-
+        if has_embedding or history_image_nums is not None:
             vision_embedding_inputs = VisionModelInputs(
                 history_lengths=history_lengths,
                 history_image_nums=history_image_nums,
@@ -761,24 +767,23 @@ class Engine:
                 self._running = running
                 self._inputs = inputs
 
-                with torch.cuda.stream(self.stream):
-                    await self._async_step_background(
-                        inputs=inputs,
-                        swap_in_map=schedule_output.swap_in_map,
-                        swap_out_map=schedule_output.swap_out_map,
-                        history_ids=history_ids,
-                        sampling_inputs=sampling_inputs,
-                        num_appendable_ids=num_appendable_ids,
-                        num_ignore_eos=num_ignore_eos,
-                        output_que=out_que,
-                    )
+                await self._async_step_background(
+                    inputs=inputs,
+                    swap_in_map=schedule_output.swap_in_map,
+                    swap_out_map=schedule_output.swap_out_map,
+                    history_ids=history_ids,
+                    sampling_inputs=sampling_inputs,
+                    num_appendable_ids=num_appendable_ids,
+                    num_ignore_eos=num_ignore_eos,
+                    output_que=out_que,
+                )
             except Exception as e:
                 out_que.put_nowait((True, e))
             finally:
                 in_que.task_done()
 
     @torch.inference_mode()
-    async def async_loop(self):
+    async def _async_loop(self):
         """Main loop of the engine.
 
         Each engine instance would communicate with the engine by queue.
@@ -840,6 +845,12 @@ class Engine:
             # decoding
             if self.scheduler.has_running():
                 await __step(False)
+
+    async def async_loop(self):
+        device_manager = get_device_manager()
+        with device_manager.context(self.device_context), torch.cuda.stream(
+                self.stream):
+            await self._async_loop()
 
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.
@@ -929,16 +940,17 @@ class Engine:
 
     def decode(self,
                input_ids,
+               input_embeddings: List[InputEmbeddingType] = None,
+               input_embedding_ranges: List[InputEmbeddingRangeType] = None,
                steps: List[int] = None,
-               input_embeddings=None,
-               input_embedding_ranges=None,
                sequence_start: bool = True,
                sequence_end: bool = True,
                adapter_names: List[str] = None):
         """Perform context decode on input tokens.
 
         Args:
-            input_ids (numpy.ndarray): the batch of input token ids
+            input_ids (List[List[int]] | List[np.ndaray]): the batch of input
+                 token ids
             steps (List[int]): the offset of the k/v cache
             input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
                 embeddings features
@@ -950,9 +962,9 @@ class Engine:
         """
         return self.engine_instance.decode(
             input_ids,
-            steps=steps,
             input_embeddings=input_embeddings,
             input_embedding_ranges=input_embedding_ranges,
+            steps=steps,
             sequence_start=sequence_start,
             sequence_end=sequence_end,
             adapter_names=adapter_names)

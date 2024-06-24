@@ -235,7 +235,7 @@ class HuggingFaceTokenizer:
 
     @property
     def bos_token_id(self):
-        """begine of the sentence token id."""
+        """begin of the sentence token id."""
         return self.model.bos_token_id
 
     @property
@@ -290,14 +290,12 @@ class HuggingFaceTokenizer:
         if self.token2id == {}:
             # decode is slower than convert_ids_to_tokens
             if self.maybe_decode_bytes:
-                try:
-                    self.token2id = {
-                        self.model.decode(i): i
-                        for i in range(self.vocab_size)
-                    }
-                except Exception as e:
-                    # qwen-vl
-                    assert str(e) == 'Unclosed image token'
+                for i in range(self.vocab_size):
+                    try:
+                        self.token2id[self.model.decode(i)] = i
+                    except:  # noqa: E722
+                        # some tokens just can't be decoded by `decode`
+                        pass
             else:
                 self.token2id = {
                     self.model.convert_ids_to_tokens(i): i
@@ -324,15 +322,25 @@ class HuggingFaceTokenizer:
         self._indexes_tokens_deque.append((token, indexes))
         return indexes
 
-    def encode(self, s: str, add_bos: bool = True, **kwargs):
+    def encode(self,
+               s: str,
+               add_bos: bool = True,
+               add_special_tokens: bool = True,
+               **kwargs):
         """Tokenize a prompt.
 
         Args:
             s (str): a prompt
+            add_bos (bool): Whether to add `bos` token id when encoding
+                the prompt
+            add_special_tokens (bool): Whether or not to add special tokens
+                when encoding the prompt
         Returns:
             list[int]: token ids
         """
-        encoded = self.model.encode(s, **kwargs)
+        encoded = self.model.encode(s,
+                                    add_special_tokens=add_special_tokens,
+                                    **kwargs)
         if not add_bos:
             # in the middle of a session
             if len(encoded) and encoded[0] == self.bos_token_id:
@@ -349,6 +357,8 @@ class HuggingFaceTokenizer:
             t (List[int]): a list of token ids
             offset (int): for incrementally decoding. Default to None, which
                 means not applied.
+            skip_special_tokens (bool): Whether or not to remove special
+                tokens in the decoding.
         Returns:
             str: text of decoding tokens
         """
@@ -429,16 +439,16 @@ class HuggingFaceTokenizer:
             # Please notice that in VLLM, indexes are detokenized one by one
             # while in LMDeploy, every turn, the detokenized indexes length
             # can be different.
+            prev_tokens = tokenizer.convert_ids_to_tokens(
+                all_input_ids[:ids_offset],
+                skip_special_tokens=skip_special_tokens)
+            read_offset = len(prev_tokens)
             if skip_special_tokens and new_tokens and new_tokens[
                     0] in tokenizer.all_special_ids:
-                read_offset = 1  # skip special token
-            output_tokens = new_tokens
-            prev_tokens = new_tokens
-        else:
-            # Put new_token_id in a list so skip_special_tokens is respected
-            output_tokens = prev_tokens + new_tokens
-            prev_tokens += new_tokens
+                read_offset = read_offset + 1  # skip special token
 
+        output_tokens = prev_tokens + new_tokens
+        prev_tokens += new_tokens
         prefix_text = self._convert_tokens_to_string_with_added_encoders(
             tokenizer,
             output_tokens[prefix_offset:read_offset],
@@ -479,6 +489,26 @@ class HuggingFaceTokenizer:
         return self.model(s, add_special_tokens=add_special_tokens)
 
 
+class ChatGLM4Tokenizer(HuggingFaceTokenizer):
+    """tokenizer of GLM4."""
+
+    def __init__(self, model_path):
+        super(ChatGLM4Tokenizer, self).__init__(model_path)
+
+    def encode(self,
+               s: str,
+               add_bos: bool = True,
+               add_special_tokens: bool = True,
+               **kwargs):
+        """tokenize a prompt."""
+        # ChtGLM4Tokenizer hardcode `add_speical_tokens=False` when tokenizing
+        # a prompt. Refer to https://huggingface.co/THUDM/glm-4-9b-chat/blob/main/tokenization_chatglm.py#L227 # noqa E501
+        return super(ChatGLM4Tokenizer, self).encode(s,
+                                                     add_bos,
+                                                     add_special_tokens=False,
+                                                     **kwargs)
+
+
 class Tokenizer:
     """Tokenize prompts or de-tokenize tokens into texts.
 
@@ -501,7 +531,15 @@ class Tokenizer:
         if not use_hf_model:
             self.model = SentencePieceTokenizer(model_file)
         else:
-            self.model = HuggingFaceTokenizer(model_folder)
+            from transformers.models.auto.tokenization_auto import \
+                get_tokenizer_config
+            tokenizer_config = get_tokenizer_config(model_folder,
+                                                    trust_remote_code=True)
+            config_tokenizer_class = tokenizer_config.get('tokenizer_class')
+            if config_tokenizer_class == 'ChatGLM4Tokenizer':
+                self.model = ChatGLM4Tokenizer(model_folder)
+            else:
+                self.model = HuggingFaceTokenizer(model_folder)
 
     @property
     def vocab_size(self):
@@ -510,7 +548,7 @@ class Tokenizer:
 
     @property
     def bos_token_id(self):
-        """begine of the sentence token id."""
+        """begin of the sentence token id."""
         return self.model.bos_token_id
 
     @property
@@ -518,15 +556,23 @@ class Tokenizer:
         """end of the sentence token id."""
         return self.model.eos_token_id
 
-    def encode(self, s: str, add_bos: bool = True, **kwargs):
+    def encode(self,
+               s: str,
+               add_bos: bool = True,
+               add_special_tokens: bool = True,
+               **kwargs):
         """Tokenize a prompt.
 
         Args:
             s (str): a prompt
+            add_bos (bool): Whether to add `bos` token id when encoding
+                the prompt
+            add_special_tokens (bool): Whether or not to add special tokens
+                when encoding the prompt
         Returns:
             list[int]: token ids
         """
-        return self.model.encode(s, add_bos, **kwargs)
+        return self.model.encode(s, add_bos, add_special_tokens, **kwargs)
 
     def decode(
         self,
@@ -540,6 +586,8 @@ class Tokenizer:
             t (List[int]): a list of token ids
             offset (int): for incrementally decoding. Default to None, which
                 means not applied.
+            skip_special_tokens (bool): Whether or not to remove special
+                tokens in the decoding.
         Returns:
             str: text of decoding tokens
         """

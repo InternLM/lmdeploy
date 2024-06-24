@@ -528,7 +528,7 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
                 has_error = true;
             }
             if (!ec) {
-                TM_LOG_INFO("[forward] Request completed for %ld");
+                TM_LOG_INFO("[forward] Request completed for %ld", (long)ids[i]);
             }
             else {
                 TM_LOG_WARNING("[forward] Request failed for %ld, code %d", (long)ids[i], (int)ec);

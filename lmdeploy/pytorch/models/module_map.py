@@ -89,6 +89,8 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'modeling_internlm2.InternLM2Attention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Attention',
+    'modeling_internlm2.InternLM2FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Attention',
     'modeling_internlm2.InternLM2Model':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Model',
     'modeling_internlm2.InternLM2MLP':
@@ -267,6 +269,22 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 
+# deepseek-v2
+MODULE_MAP.update({
+    'modeling_deepseek.DeepseekV2Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.PatchedDeepseekV2Attention',
+    'modeling_deepseek.DeepseekV2FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.PatchedDeepseekV2Attention',
+    'modeling_deepseek.DeepseekV2Model':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'modeling_deepseek.DeepseekV2MoE':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.PatchedDeepseekV2MoE',
+    'modeling_deepseek.DeepseekV2RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'modeling_deepseek.DeepseekV2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+})
+
 # cogvlm
 MODULE_MAP.update({
     'modeling_cogvlm.RMSNorm':
@@ -280,3 +298,30 @@ MODULE_MAP.update({
     'modeling_cogvlm.CogVLMModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.cogvlm.PatchedCogVLMModel',
 })
+
+# llava
+MODULE_MAP.update({
+    'llava.model.language_model.llava_llama.LlavaLlamaForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaLlamaForCausalLM',
+    'llava.model.language_model.llava_llama.LlavaLlamaModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'llava.model.language_model.llava_mistral.LlavaMistralForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaLlamaForCausalLM',
+    'llava.model.language_model.llava_mistral.LlavaMistralModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'transformers.models.llava.modeling_llava.LlavaForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaForConditionalGeneration',  # noqa: E501
+    'transformers.models.llava_next.modeling_llava_next.LlavaNextForConditionalGeneration':  # noqa: E501
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaForConditionalGeneration'
+})
+
+# internvl
+MODULE_MAP.update({
+    'modeling_internvl_chat.InternVLChatModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.PatchedInternVLChatModel'
+})
+
+# ascend module
+ASCEND_MODULE_MAP = dict()
+
+DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)

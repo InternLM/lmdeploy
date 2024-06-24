@@ -2,12 +2,13 @@
 import asyncio
 import queue
 import time
-from typing import List, Union
+from typing import List, Optional, Union
 
 import torch
 from PIL.Image import Image
 
-from lmdeploy.messages import VisionConfig
+from lmdeploy.messages import (PytorchEngineConfig, TurbomindEngineConfig,
+                               VisionConfig)
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.builder import load_vl_model
 
@@ -41,7 +42,7 @@ class Record:
         self.log('process', len(inputs))
         return inputs
 
-    def nofify(self):
+    def notify(self):
         """set result if request i is finished."""
         if len(self.number) == 0 or self.number[0] > len(self.done):
             return False
@@ -61,8 +62,12 @@ class Record:
 class ImageEncoder:
     """Image encoder."""
 
-    def __init__(self, model_path: str, vision_config: VisionConfig = None):
-        self.model = load_vl_model(model_path)
+    def __init__(self,
+                 model_path: str,
+                 vision_config: VisionConfig = None,
+                 backend_config: Optional[Union[TurbomindEngineConfig,
+                                                PytorchEngineConfig]] = None):
+        self.model = load_vl_model(model_path, backend_config=backend_config)
         self.max_batch_size = (1 if vision_config is None else
                                vision_config.max_batch_size)
         torch.cuda.empty_cache()
@@ -92,7 +97,7 @@ class ImageEncoder:
             outputs = await asyncio.get_event_loop().run_in_executor(
                 None, self.forward, inputs)
             record.done.extend(outputs)
-            while record.nofify():
+            while record.notify():
                 pass
 
     def forward(self, inputs: List[Image]):

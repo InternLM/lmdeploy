@@ -21,6 +21,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                                                     const int*   cu_k_len,
                                                     const int*   cu_block_num,
                                                     const float* rope_base,
+                                                    int          rope_dim,
                                                     float        rope_ti_scale,
                                                     int64_t      stride_b,
                                                     int64_t      stride_c,
@@ -120,11 +121,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(di,
-                          std::integral_constant<int, HeadDim>{},
-                          base,
-                          rope_ti_scale,
-                          std::integral_constant<int, kVecSize>{});
+            FastRoPE  rope(di, rope_dim, base, rope_ti_scale, std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = history_len + offset.y + s * Map::kDeltaS + token_idx;  // sequence local
@@ -195,6 +192,7 @@ void invokeProcessKV_v2(char**       blocks,
                         const int*   cu_k_len,
                         const int*   cu_block_num,
                         const float* rope_base,
+                        int          rope_dim,
                         float        rope_ti_scale,
                         int64_t      stride_b,
                         int64_t      stride_c,
@@ -232,6 +230,7 @@ void invokeProcessKV_v2(char**       blocks,
                                                                               cu_k_len,
                                                                               cu_block_num,
                                                                               rope_base,
+                                                                              rope_dim,
                                                                               rope_ti_scale,
                                                                               stride_b,
                                                                               stride_c,
@@ -262,6 +261,7 @@ void invokeProcessKV_v2(char**       blocks,
                                      const int*   cu_k_len,                                                            \
                                      const int*   cu_block_num,                                                        \
                                      const float* rope_base,                                                           \
+                                     int          rope_dim,                                                            \
                                      float        rope_ti_scale,                                                       \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \
@@ -288,6 +288,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                                                     const int*   cu_k_len,
                                                     const int*   cu_block_num,
                                                     const float* rope_base,
+                                                    int          rope_dim,
                                                     float        rope_ti_scale,
                                                     int64_t      stride_b,
                                                     int64_t      stride_c,
@@ -349,9 +350,6 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                 if constexpr (!std::is_same_v<T, Tkv>) {
                     Ldg(param_K[s], k_param);
                     Ldg(param_V[s], v_param);
-                    // if (offset.x == 0) {
-                    //     printf("dst %d %f %f\n", si, (float)param_V[s][0], (float)param_V[s][1]);
-                    // }
                 }
             });
         }
@@ -373,11 +371,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(di,
-                          std::integral_constant<int, HeadDim>{},
-                          base,
-                          rope_ti_scale,
-                          std::integral_constant<int, kVecSize>{});
+            FastRoPE  rope(di, rope_dim, base, rope_ti_scale, std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
@@ -409,6 +403,7 @@ void invokeFlattenKV_v2(T*           k,
                         const int*   cu_k_len,
                         const int*   cu_block_num,
                         const float* rope_base,
+                        int          rope_dim,
                         float        rope_ti_scale,
                         int64_t      stride_b,
                         int64_t      stride_c,
@@ -443,6 +438,7 @@ void invokeFlattenKV_v2(T*           k,
                                                                             cu_k_len,
                                                                             cu_block_num,
                                                                             rope_base,
+                                                                            rope_dim,
                                                                             rope_ti_scale,
                                                                             stride_b,
                                                                             stride_c,
@@ -470,6 +466,7 @@ void invokeFlattenKV_v2(T*           k,
                                      const int*   cu_k_len,                                                            \
                                      const int*   cu_block_num,                                                        \
                                      const float* rope_base,                                                           \
+                                     int          rope_dim,                                                            \
                                      float        rope_ti_scale,                                                       \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \

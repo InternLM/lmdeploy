@@ -479,9 +479,9 @@ class EngineInstance:
 
     def decode(self,
                input_ids,
+               input_embeddings: List[InputEmbeddingType] = None,
+               input_embedding_ranges: List[InputEmbeddingRangeType] = None,
                steps: List[int] = None,
-               input_embeddings=None,
-               input_embedding_ranges=None,
                sequence_start: bool = True,
                sequence_end: bool = True,
                adapter_names: List[str] = None):
@@ -510,9 +510,10 @@ class EngineInstance:
             if input_embeddings is None:
                 input_embeddings = [None] * batch_size
                 input_embedding_ranges = [None] * batch_size
-            for session_id, token_id, adapter_name, input_emb, input_ranges in zip(  # noqa: E501
-                    session_ids, input_ids, adapter_names, input_embeddings,
-                    input_embedding_ranges):
+            for (session_id, token_id, adapter_name, input_emb,
+                 input_ranges) in zip(session_ids, input_ids, adapter_names,
+                                      input_embeddings,
+                                      input_embedding_ranges):
                 if len(token_id) > self.max_input_len:
                     raise RuntimeError(
                         f'Expect input length<={self.max_input_len} '
@@ -539,9 +540,17 @@ class EngineInstance:
         if steps is not None:
             assert batch_size == len(steps)
 
-        if adapter_names is None:
+        if adapter_names is not None:
+            assert len(adapter_names) == batch_size
+        else:
             adapter_names = [None] * batch_size
-        assert batch_size == len(adapter_names)
+
+        if input_embeddings is not None:
+            assert len(input_embeddings) == batch_size
+            assert len(input_embedding_ranges) == batch_size
+        else:
+            input_embeddings = [None] * batch_size
+            input_embedding_ranges = [None] * batch_size
 
         session_ids = tuple(range(batch_size))
         if sequence_start:

@@ -37,10 +37,10 @@ class QwenVisionModel(VisonModel):
         max_memory = get_balanced_memory(
             model,
             dtype=torch.half,
-            no_split_module_classes=['VisualAttentionBlock'])
+            no_split_module_classes=['VisualAttentionBlock', 'Resampler'])
         device_map = infer_auto_device_map(
             model,
-            no_split_module_classes=['VisualAttentionBlock'],
+            no_split_module_classes=['VisualAttentionBlock', 'Resampler'],
             max_memory=max_memory,
             dtype=torch.half)
         same_device_keys = [('transformer.visual.conv1',

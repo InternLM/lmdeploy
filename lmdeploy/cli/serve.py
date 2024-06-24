@@ -42,6 +42,9 @@ class SubCliServe:
 
         # common args
         ArgumentHelper.backend(parser)
+        # model args
+        ArgumentHelper.revision(parser)
+        ArgumentHelper.download_dir(parser)
 
         # chat template args
         ArgumentHelper.meta_instruction(parser)  # TODO remove
@@ -136,6 +139,10 @@ class SubCliServe:
         ArgumentHelper.meta_instruction(parser)  # TODO remove
         ArgumentHelper.chat_template(parser)
         ArgumentHelper.cap(parser)
+
+        # model args
+        ArgumentHelper.revision(parser)
+        ArgumentHelper.download_dir(parser)
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')

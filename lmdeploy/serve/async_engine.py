@@ -336,7 +336,8 @@ class AsyncEngine(LogitsMixin):
         try:
             yield
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            await self.stop_session(session_id)
+            # TODO: find out why await would block the coroutine here
+            _get_event_loop().create_task(self.stop_session(session_id))
             raise e
         if str(session_id) in self.id2generator:
             self.gens_set.add(self.id2generator[str(session_id)])
@@ -603,7 +604,7 @@ class AsyncEngine(LogitsMixin):
         else:
             generator = await self.get_generator(False, session_id)
             async with self.safe_run(session_id):
-                state = DetokenizeState()
+                state = DetokenizeState(len(input_ids))
                 response = ''
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
@@ -615,7 +616,7 @@ class AsyncEngine(LogitsMixin):
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
                     # decode res
-                    res, tokens = outputs.token_ids, outputs.num_token
+                    res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
                     if len(res) <= state.ids_offset:
                         continue
 
