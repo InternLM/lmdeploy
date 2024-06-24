@@ -1320,7 +1320,8 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
                                 TM_LOG_ERROR("Null stream callback for (%s)", std::to_string(r->id).c_str());
                             }
                             catch (...) {
-                                TM_LOG_ERROR("Unknown exception invoking stream callback for (%s)", std::to_string(r->id).c_str());
+                                TM_LOG_ERROR("Unknown exception invoking stream callback for (%s)",
+                                             std::to_string(r->id).c_str());
                             }
                         }
                     });
