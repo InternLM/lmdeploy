@@ -81,6 +81,21 @@ def _update_cache_config(model_config: ModelConfig,
                      f' {runtime_cache_size>>20} mb')
         return gpu_mem_physical_free * cache_config.cache_max_entry_count
 
+    def __adjust_block_size():
+        """adjust block_size."""
+        # TODO: support kernel with both large head dim and large block size.
+        if model_config.k_head_dim >= 512 and cache_config.block_size > 32:
+            cache_config.block_size = 32
+            rank = 0
+            if dist.is_initialized():
+                rank = dist.get_rank()
+            if rank == 0:
+                logger.warning(
+                    f'Update `block_size={cache_config.block_size}`'
+                    f' for large `head_dim={model_config.k_head_dim}`.')
+
+    __adjust_block_size()
+
     cache_block_size = CacheEngine.get_cache_block_size(
         cache_config.block_size, model_config, world_size)
     gpu_mem = __get_free_gpu_mem_size(cache_block_size)

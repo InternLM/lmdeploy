@@ -104,6 +104,7 @@ def get_cuda_autotune_config():
     GROUP_SIZE_M=torch.int32,
     ENABLE_WEIGHTS=bool,
     top_k=torch.int32,
+    expert_offset=torch.int32,
     reindex_a=bool,
     reindex_c=bool,
 ))
@@ -131,6 +132,7 @@ def fused_moe_kernel(
     GROUP_SIZE_M: tl.constexpr,
     ENABLE_WEIGHTS: tl.constexpr,
     top_k: tl.constexpr,
+    expert_offset: tl.constexpr,
     reindex_a: tl.constexpr,
     reindex_c: tl.constexpr,
 ):
@@ -138,8 +140,8 @@ def fused_moe_kernel(
     exp_id = tl.program_id(0)
     pid = tl.program_id(1)
 
-    exp_start = tl.load(ExpStart + exp_id)
-    exp_end = tl.load(ExpEnd + exp_id)
+    exp_start = tl.load(ExpStart + exp_id + expert_offset)
+    exp_end = tl.load(ExpEnd + exp_id + expert_offset)
     M = exp_end - exp_start
     if M <= 0:
         return
@@ -167,8 +169,11 @@ def fused_moe_kernel(
         offs_am = offs_sid
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
-    b_ptrs = B + exp_id * stride_be + (offs_k[:, None] * stride_bk +
-                                       offs_bn[None, :] * stride_bn)
+
+    # deepseek has 160 experts, exp index would overflow int32
+    exp_off = tl.full((1, ), stride_be, dtype=tl.int64) * exp_id
+    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk +
+                            offs_bn[None, :] * stride_bn)
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
@@ -211,10 +216,15 @@ def fused_moe_kernel_launcher(
     enable_weights: bool = False,
     top_k: int = 1,
     num_tokens: int = None,
+    expert_offset: int = 0,
     reindex_a: bool = True,
     reindex_c: bool = True,
 ):
     """fused moe kernel launcher."""
+
+    if num_tokens is None:
+        num_tokens = A.size(0)
+    E, N, K = B.shape
 
     def _grid_fn(META):
         grid = (
@@ -224,9 +234,6 @@ def fused_moe_kernel_launcher(
         )
         return grid
 
-    if num_tokens is None:
-        num_tokens = A.size(0)
-    E, N, K = B.shape
     GROUP_SIZE_M = 1
     A = A.flatten(0, -2)
     C = C.flatten(0, -2)
@@ -252,6 +259,7 @@ def fused_moe_kernel_launcher(
         stride_cn=C.stride(1),
         ENABLE_WEIGHTS=enable_weights,
         top_k=top_k,
+        expert_offset=expert_offset,
         reindex_a=reindex_a,
         reindex_c=reindex_c,
         GROUP_SIZE_M=GROUP_SIZE_M,
@@ -259,6 +267,13 @@ def fused_moe_kernel_launcher(
     )
 
 
+@wrap_jit_func(type_hint=dict(TopkIdx=torch.Tensor,
+                              SortedIdx=torch.Tensor,
+                              ExpStart=torch.Tensor,
+                              ExpEnd=torch.Tensor,
+                              len_sorted_idx=int,
+                              num_experts=torch.int32,
+                              BLOCK=torch.int32))
 @triton.jit
 def _start_end_kernel(TopkIdx, SortedIdx, ExpStart, ExpEnd,
                       len_sorted_idx: int, num_experts: tl.constexpr,
@@ -325,16 +340,24 @@ def fused_moe(hidden_states: torch.Tensor,
               topk_weights: torch.Tensor,
               topk_ids: torch.Tensor,
               topk: int,
+              expert_offset: int = 0,
+              num_experts: int = None,
               renormalize: bool = False) -> torch.Tensor:
     """fused moe."""
     M = hidden_states.size(0)
     E, N, _ = w1.shape
+    full_exp = False
+    if num_experts is None:
+        num_experts = E
+    elif num_experts == E:
+        full_exp = True
 
     def __get_sorted_idx(topk_ids: torch.Tensor):
         flatten_topk_ids = topk_ids.flatten()
         sorted_idx = flatten_topk_ids.argsort()
 
-        exp_start, exp_end = get_start_end(flatten_topk_ids, sorted_idx, E)
+        exp_start, exp_end = get_start_end(flatten_topk_ids, sorted_idx,
+                                           num_experts)
         return sorted_idx, exp_start, exp_end
 
     if renormalize:
@@ -344,7 +367,10 @@ def fused_moe(hidden_states: torch.Tensor,
 
     sorted_idx, exp_start, exp_end = __get_sorted_idx(topk_ids)
 
-    intermediate_cache1 = hidden_states.new_empty((M, topk, N))
+    if full_exp:
+        intermediate_cache1 = hidden_states.new_empty((M, topk, N))
+    else:
+        intermediate_cache1 = hidden_states.new_zeros((M, topk, N))
     # gate and up
     fused_moe_kernel_launcher(
         hidden_states,
@@ -357,6 +383,7 @@ def fused_moe(hidden_states: torch.Tensor,
         enable_weights=False,
         top_k=topk,
         num_tokens=M,
+        expert_offset=expert_offset,
         reindex_a=True,
         reindex_c=False,
     )
@@ -365,7 +392,10 @@ def fused_moe(hidden_states: torch.Tensor,
     gate_cache, up_cache = intermediate_cache1.chunk(2, -1)
     gate_cache = F.silu(gate_cache, inplace=True) * up_cache
 
-    intermediate_cache2 = hidden_states.new_empty((M, topk, w2.shape[1]))
+    if full_exp:
+        intermediate_cache2 = hidden_states.new_empty((M, topk, w2.shape[1]))
+    else:
+        intermediate_cache2 = hidden_states.new_zeros((M, topk, w2.shape[1]))
     # down
     fused_moe_kernel_launcher(
         gate_cache,
@@ -378,6 +408,7 @@ def fused_moe(hidden_states: torch.Tensor,
         enable_weights=True,
         top_k=1,
         num_tokens=M,
+        expert_offset=expert_offset,
         reindex_a=False,
         reindex_c=True,
     )
