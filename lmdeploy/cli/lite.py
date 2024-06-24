@@ -29,6 +29,8 @@ class SubCliLite(object):
         parser.add_argument('model',
                             type=str,
                             help='The path of model in hf format')
+        ArgumentHelper.revision(parser)
+        ArgumentHelper.download_dir(parser)
         ArgumentHelper.work_dir(parser)
         ArgumentHelper.calib_dataset(parser)
         ArgumentHelper.calib_samples(parser)
