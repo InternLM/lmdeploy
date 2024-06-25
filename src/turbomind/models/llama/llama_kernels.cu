@@ -240,6 +240,7 @@ __global__ void KernelWrapper(Params params)
 }  // namespace
 
 __global__ void gatherOutput(int*       output_ids,
+                             int*       input_ids,
                              const int* ids,
                              const int* context_length,
                              int        max_context_len,
@@ -250,6 +251,7 @@ __global__ void gatherOutput(int*       output_ids,
     const int batch_id    = blockIdx.x;
     const int context_len = context_length[batch_id];
     output_ids += batch_id * max_output_len;
+    input_ids += batch_id * max_output_len;
     for (int src_idx = threadIdx.x; src_idx < max_gen_step; src_idx += blockDim.x) {
         // skip padding for src
         if (context_len <= src_idx && src_idx < max_context_len) {
@@ -259,11 +261,15 @@ __global__ void gatherOutput(int*       output_ids,
         const int dst_idx = src_idx < context_len ? src_idx : src_idx - (max_context_len - context_len);
         if (dst_idx < max_output_len) {
             output_ids[dst_idx] = ids[src_idx * batch_size + batch_id];
+            if (src_idx == max_gen_step - 1) {
+                input_ids[0] = ids[src_idx * batch_size + batch_id];
+            }
         }
     }
 }
 
 void invokeGatherOutput(int*         output_ids,
+                        int*         input_ids,
                         const int*   ids,
                         const int*   context_length,
                         int          max_context_len,
@@ -275,7 +281,7 @@ void invokeGatherOutput(int*         output_ids,
     int block_size = 128;
     int grid_size  = batch_size;
     gatherOutput<<<grid_size, block_size, 0, stream>>>(
-        output_ids, ids, context_length, max_context_len, max_gen_step, max_output_len, batch_size);
+        output_ids, input_ids, ids, context_length, max_context_len, max_gen_step, max_output_len, batch_size);
 }
 
 __global__ void updateOutput(int**      request_output_ids_ptrs,
