@@ -8,7 +8,12 @@ from lmdeploy.serve.async_engine import deduce_a_name
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _stop_words
 
-os.environ['TM_LOG_LEVEL'] = 'ERROR'
+log_level = 'ERROR'
+if os.getenv('TM_LOG_LEVEL') is None:
+    os.environ['TM_LOG_LEVEL'] = log_level
+    from lmdeploy.utils import get_logger
+    logger = get_logger('lmdeploy')
+    logger.setLevel(log_level)
 
 
 def input_prompt(model_name):
