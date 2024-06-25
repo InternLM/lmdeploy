@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
+from typing import Optional, Union
 
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.utils import get_hf_config_content, get_model
 
 from .cogvlm import CogVLMVisionModel
@@ -17,10 +19,17 @@ from .xcomposer2 import Xcomposer2VisionModel
 from .yi import YiVisionModel
 
 
-def load_vl_model(model_path: str, with_llm: bool = False):
+def load_vl_model(model_path: str,
+                  with_llm: bool = False,
+                  backend_config: Optional[Union[TurbomindEngineConfig,
+                                                 PytorchEngineConfig]] = None):
     """load visual model."""
     if not os.path.exists(model_path):
-        model_path = get_model(model_path)
+        revision = getattr(backend_config, 'revision', None)
+        download_dir = getattr(backend_config, 'download_dir', None)
+        model_path = get_model(model_path,
+                               revision=revision,
+                               download_dir=download_dir)
     config = get_hf_config_content(model_path)
     arch = config['architectures'][0]
     if 'auto_map' in config:

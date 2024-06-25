@@ -68,7 +68,9 @@ def auto_awq(model: str,
              w_sym: bool = False,
              w_group_size: int = 128,
              search_scale: bool = False,
-             device: str = 'cuda'):
+             device: str = 'cuda',
+             revision: str = None,
+             download_dir: str = None):
     """Perform weight quantization using AWQ algorithm.
 
     Args:
@@ -86,12 +88,17 @@ def auto_awq(model: str,
         search_scale (bool): Whether search scale ratio. Default to False,
             which means only smooth quant with 0.5 ratio will be applied.
         device (str): Device type of running.
+        revision (str): The specific model version to use. It can be a
+            branch name, a tag name, or a commit id. If unspecified,
+            will use the default version.
+        download_dir (str): Directory to download and load the weights,
+            default to the default cache directory of huggingface.
     """
     if not osp.exists(model):
         print(f'can\'t find model from local_path {model}, '
               'try to download from remote')
         from lmdeploy.utils import get_model
-        model = get_model(model)
+        model = get_model(model, revision=revision, download_dir=download_dir)
     model_path = model
     vl_model, model, tokenizer, work_dir = calibrate(model,
                                                      calib_dataset,

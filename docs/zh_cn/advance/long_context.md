@@ -81,20 +81,19 @@ passkey_retrival(session_len, 5)
 下面展示使用 LMDeploy 计算困惑度的用法
 
 ```python
-from datasets import load_dataset
-from lmdeploy import TurbomindEngineConfig
-from lmdeploy.turbomind import TurboMind
+from transformers import AutoTokenizer
+from lmdeploy import TurbomindEngineConfig, pipeline
 import numpy as np
 
 # load model and tokenizer
-engine_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=160000)
-engine = TurboMind.from_pretrained('internlm/internlm2-chat-7b', engine_config)
-tokenizer = engine.tokenizer
-generator = engine.create_instance()
+model_repoid_or_path = 'internlm/internlm2-chat-7b'
+backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=160000)
+pipe = pipeline(model_repoid_or_path, backend_config=backend_config)
+tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
 
 # get perplexity
-text = 'The grass is green. The sky is blue. The sun is yellow'
+text = 'Use a long prompt to replace this sentence'
 input_ids = tokenizer.encode(text)
-loss = generator.get_ppl(input_ids)[0]
+loss = pipe.get_ppl(input_ids)[0]
 ppl = np.exp(loss)
 ```

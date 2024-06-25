@@ -92,11 +92,11 @@ class Engine:
         for prompt, input_seqlen, output_seqlen in iter(
                 req_queue.get, [None, None, None]):
             _per_token_latency_stats = [0] * (output_seqlen + 1)
-            state = DetokenizeState()
             prev = time.perf_counter()
             n_prev_token = 0
 
             input_ids = self.tokenizer(prompt).input_ids
+            state = DetokenizeState(len(input_ids))
 
             for outputs in model_inst.stream_infer(
                     session_id,
@@ -110,7 +110,7 @@ class Engine:
                     sequence_start=True,
                     sequence_end=True,
                     stream_output=stream_output):
-                res, n_token = outputs.token_ids, outputs.num_token
+                res, n_token = input_ids + outputs.token_ids, outputs.num_token
                 _, state = self.tokenizer.detokenize_incrementally(res, state)
                 now = time.perf_counter()
                 if n_prev_token != n_token:

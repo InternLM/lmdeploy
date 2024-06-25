@@ -88,6 +88,25 @@ class ArgumentHelper:
             'meaning `meta_llama`, `awq` meaning the quantized model by awq')
 
     @staticmethod
+    def revision(parser, default: str = None):
+        return parser.add_argument(
+            '--revision',
+            type=str,
+            default=default,
+            help='The specific model version to use. '
+            'It can be a branch name, a tag name, or a commit id. '
+            'If unspecified, will use the default version.')
+
+    @staticmethod
+    def download_dir(parser, default: str = None):
+        return parser.add_argument(
+            '--download-dir',
+            type=str,
+            default=default,
+            help='Directory to download and load the weights, '
+            'default to the default cache directory of huggingface.')
+
+    @staticmethod
     def tp(parser):
         """Add argument tp to parser."""
 

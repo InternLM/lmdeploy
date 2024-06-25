@@ -38,6 +38,9 @@ class SubCliChat(object):
         ArgumentHelper.adapters(engine_group)
         ArgumentHelper.cache_max_entry_count(engine_group)
         ArgumentHelper.cache_block_seq_len(engine_group)
+        # model args
+        ArgumentHelper.revision(engine_group)
+        ArgumentHelper.download_dir(engine_group)
 
         # other args
         parser.add_argument('--trust-remote-code',
@@ -72,6 +75,9 @@ class SubCliChat(object):
         ArgumentHelper.cache_block_seq_len(engine_group)
         ArgumentHelper.rope_scaling_factor(engine_group)
         ArgumentHelper.session_len(engine_group)
+        # model args
+        ArgumentHelper.revision(engine_group)
+        ArgumentHelper.download_dir(engine_group)
 
     @staticmethod
     def torch(args):

@@ -38,6 +38,9 @@ def check_env_torch():
         _handle_exception(e, 'PyTorch', logger)
 
 
+MAX_TRITON_VERSION = '2.2.0'
+
+
 def check_env_triton():
     """check OpenAI Triton environment."""
     from packaging import version
@@ -47,8 +50,9 @@ def check_env_triton():
         logger.debug('Checking <Triton> environment.')
         import torch
         import triton
-        if version.parse(triton.__version__) != version.parse('2.1.0'):
-            logger.warning('Install triton==2.1.0'
+        if version.parse(
+                triton.__version__) > version.parse(MAX_TRITON_VERSION):
+            logger.warning(f'Install triton<={MAX_TRITON_VERSION}'
                            ' if you want to get better performance.')
 
         from .triton_custom_add import custom_add
@@ -56,20 +60,31 @@ def check_env_triton():
         b = a.new_tensor([3, 4], device='cuda')
         c = custom_add(a, b)
         torch.testing.assert_close(c, a + b)
+    except RuntimeError as e:
+        ptxas_error = 'device kernel image is invalid'
+        if len(e.args) > 0 and ptxas_error in e.args[0]:
+            msg = (
+                'This Error might caused by mismatching between NVIDIA Driver and nvcc compiler. \n'  # noqa: E501
+                'Try solution https://github.com/triton-lang/triton/issues/1955#issuecomment-1929908209'  # noqa: E501
+                ' or reinstall the driver.')
+        else:
+            msg = None
+        _handle_exception(e, 'Triton', logger, msg)
     except Exception as e:
         _handle_exception(e, 'Triton', logger)
 
 
-def check_env():
+def check_env(device_type: str):
     """check all environment."""
     logger = get_logger('lmdeploy')
     logger.info('Checking environment for PyTorch Engine.')
     check_env_torch()
-    check_env_triton()
+    if device_type == 'cuda':
+        check_env_triton()
 
 
 MIN_TRANSFORMERS_VERSION = '4.33.0'
-MAX_TRANSFORMERS_VERSION = '4.38.2'
+MAX_TRANSFORMERS_VERSION = '4.41.2'
 
 
 def check_transformers_version(model_path: str,

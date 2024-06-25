@@ -13,6 +13,7 @@ from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                PytorchEngineConfig, Response,
                                TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
+from lmdeploy.serve.utils import LogitsMixin, _get_event_loop
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
 
@@ -119,19 +120,7 @@ class Session:
         return res
 
 
-def _get_event_loop():
-    """get event loop."""
-    try:
-        event_loop = asyncio.get_event_loop()
-    except Exception:
-        logger.warning('Can not found event loop in current thread.'
-                       ' Create a new event loop.')
-        event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(event_loop)
-    return event_loop
-
-
-class AsyncEngine:
+class AsyncEngine(LogitsMixin):
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
     Args:
@@ -342,7 +331,8 @@ class AsyncEngine:
         try:
             yield
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            await self.stop_session(session_id)
+            # TODO: find out why await would block the coroutine here
+            _get_event_loop().create_task(self.stop_session(session_id))
             raise e
         if str(session_id) in self.id2generator:
             self.gens_set.add(self.id2generator[str(session_id)])
@@ -609,7 +599,7 @@ class AsyncEngine:
         else:
             generator = await self.get_generator(False, session_id)
             async with self.safe_run(session_id):
-                state = DetokenizeState()
+                state = DetokenizeState(len(input_ids))
                 response = ''
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
@@ -621,7 +611,7 @@ class AsyncEngine:
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
                     # decode res
-                    res, tokens = outputs.token_ids, outputs.num_token
+                    res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
                     if len(res) <= state.ids_offset:
                         continue
 

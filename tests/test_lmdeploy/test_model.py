@@ -20,7 +20,7 @@ from lmdeploy.model import MODELS, best_match_model
      ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
      ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
      ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
-     ('tiiuae/falcon-7b', ['falcon']), ('workspace', [None])])
+     ('tiiuae/falcon-7b', ['falcon']), ('workspace', ['base'])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
     if model_path_and_name[0] == 'internlm/internlm2-1_8b' and suffix:
@@ -264,4 +264,27 @@ def test_deepseek_coder():
         'deepseek-ai/deepseek-coder-1.3b-instruct', trust_remote_code=True)
     ref = tokenizer.apply_chat_template(messages, tokenize=False)
     res = '<｜begin▁of▁sentence｜>' + model.messages2prompt(messages)
+    assert res.startswith(ref)
+
+
+def test_glm4():
+    model = MODELS.get('glm4')()
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained('THUDM/glm-4-9b-chat',
+                                              trust_remote_code=True)
+    ref = tokenizer.apply_chat_template(messages, tokenize=False)
+    res = model.messages2prompt(messages)
     assert res.startswith(ref)

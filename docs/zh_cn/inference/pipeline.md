@@ -116,6 +116,26 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
     print(item)
 ```
 
+- **计算 logits & ppl:**
+
+```python
+from transformers import AutoTokenizer
+from lmdeploy import pipeline
+model_repoid_or_path='internlm/internlm2-chat-7b'
+pipe = pipeline(model_repoid_or_path)
+tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
+
+# logits
+messages = [
+   {"role": "user", "content": "Hello, how are you?"},
+]
+input_ids = tokenizer.apply_chat_template(messages)
+logits = pipe.get_logits(input_ids)
+
+# ppl
+ppl = pipe.get_ppl(input_ids)
+```
+
 - **使用 pytorch 后端**
 
 需要先安装 triton
