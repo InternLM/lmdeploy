@@ -952,6 +952,10 @@ class Engine:
             input_ids (List[List[int]] | List[np.ndaray]): the batch of input
                  token ids
             steps (List[int]): the offset of the k/v cache
+            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
+                embeddings features
+            input_embedding_ranges: (List[List[Tuple[int, int]]]):
+                the begin/end offsets of input_embeddings to input_ids
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             adapter_names (List[str]): The name of the adapters.

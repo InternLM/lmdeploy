@@ -490,6 +490,10 @@ class EngineInstance:
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
             steps (List[int]): the offset of the k/v cache
+            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
+                embeddings features
+            input_embedding_ranges: (List[List[Tuple[int, int]]]):
+                the begin/end offsets of input_embeddings to input_ids
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             adapter_names (List[str]): The name of the adapters.
@@ -502,6 +506,10 @@ class EngineInstance:
                            input_embeddings, input_embedding_ranges):
             add_msgs = []
             sampling_param = SamplingParam(max_new_tokens=0)
+            batch_size = len(input_ids)
+            if input_embeddings is None:
+                input_embeddings = [None] * batch_size
+                input_embedding_ranges = [None] * batch_size
             for (session_id, token_id, adapter_name, input_emb,
                  input_ranges) in zip(session_ids, input_ids, adapter_names,
                                       input_embeddings,

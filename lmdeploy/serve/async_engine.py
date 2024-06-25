@@ -13,6 +13,7 @@ from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                PytorchEngineConfig, Response,
                                TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
+from lmdeploy.serve.utils import LogitsMixin, _get_event_loop
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
 
@@ -119,19 +120,7 @@ class Session:
         return res
 
 
-def _get_event_loop():
-    """get event loop."""
-    try:
-        event_loop = asyncio.get_event_loop()
-    except Exception:
-        logger.warning('Can not found event loop in current thread.'
-                       ' Create a new event loop.')
-        event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(event_loop)
-    return event_loop
-
-
-class AsyncEngine:
+class AsyncEngine(LogitsMixin):
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
     Args:
