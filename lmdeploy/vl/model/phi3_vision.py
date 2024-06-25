@@ -12,7 +12,8 @@ from lmdeploy.vl.model.utils import disable_logging
 
 
 # from https://huggingface.co/microsoft/Phi-3-vision-128k-instruct/blob/main/image_embedding_phi3_v.py # noqa E501
-def _process_image_embedding(self, pixel_values, image_sizes):
+def _process_image_embedding(self, pixel_values: torch.Tensor,
+                             image_sizes: torch.Tensor):
     """process image embedding."""
     img_embeds = pixel_values
     img_sizes = image_sizes
@@ -120,7 +121,7 @@ def _process_image_embedding(self, pixel_values, image_sizes):
 class Phi3VisionModel(VisonModel):
     """Llava hf vision model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
+    def __init__(self, model_path: str, with_llm: bool = False):
         self.model_path = model_path
         self.with_llm = with_llm
         self.hf_config = AutoConfig.from_pretrained(model_path,
@@ -168,7 +169,8 @@ class Phi3VisionModel(VisonModel):
                 continue
             for k in keys[1:]:
                 device_map[k] = device_map[keys[0]]
-
+        for k, v in device_map.items():
+            print(k, v)
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
