@@ -14,11 +14,9 @@ from torch.nn.utils.rnn import pad_sequence
 import lmdeploy
 from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
                                ResponseType, TurbomindEngineConfig)
-from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
-                            best_match_model)
+from lmdeploy.model import best_match_model
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import (_stop_words, get_hf_config_content, get_logger,
-                            get_model)
+from lmdeploy.utils import get_hf_config_content, get_logger, get_model
 
 from .deploy.converter import (SUPPORTED_FORMATS,
                                get_input_model_registered_name,
@@ -103,7 +101,6 @@ class TurboMind:
                  model_format: Optional[str] = None,
                  group_size: Optional[int] = None,
                  tp: Optional[int] = None,
-                 chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
         # if loading from workspace and engine_config is None, use config.ini
         # and ignore passed args like model_format, tp, etc.
@@ -148,17 +145,8 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=engine_config)
 
-        if chat_template_config:
-            if chat_template_config.model_name is None:
-                chat_template_config.model_name = self.model_name
-                logger.warning(f'Input chat template with model_name is None. '
-                               f'Forcing to use {self.model_name}')
-            self.model = chat_template_config.chat_template
-        else:
-            self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
-        self.stop_words = _stop_words(self.model.stop_words, self.tokenizer)
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
@@ -320,15 +308,13 @@ class TurboMind:
         return model_comm
 
     @classmethod
-    def from_pretrained(
-            cls,
-            pretrained_model_name_or_path: str,
-            engine_config: TurbomindEngineConfig = None,
-            model_format: Optional[str] = None,
-            group_size: Optional[int] = None,
-            tp: Optional[int] = None,
-            chat_template_config: Optional[ChatTemplateConfig] = None,
-            **kwargs):
+    def from_pretrained(cls,
+                        pretrained_model_name_or_path: str,
+                        engine_config: TurbomindEngineConfig = None,
+                        model_format: Optional[str] = None,
+                        group_size: Optional[int] = None,
+                        tp: Optional[int] = None,
+                        **kwargs):
         """LMDeploy's turbomind inference engine.
 
         Args:
@@ -359,7 +345,6 @@ class TurboMind:
                    model_format=model_format,
                    group_size=group_size,
                    tp=tp,
-                   chat_template_config=chat_template_config,
                    **kwargs)
 
     def create_instance(self, cuda_stream_id=0):
@@ -388,7 +373,6 @@ class TurboMindInstance:
         self.node_id = tm_model.node_id
         self.gpu_count = tm_model.gpu_count
 
-        self.stop_words = tm_model.stop_words
         self.eos_id = tm_model.eos_id
         self.session_len = tm_model.session_len
 
@@ -457,10 +441,6 @@ class TurboMindInstance:
                                   **kwargs: dict):
         if config is None:
             config = EngineGenerationConfig()
-        # backward compatibility
-        # if doesn't supply stop words, use default
-        if config.stop_words is None and self.stop_words is not None:
-            config.stop_words = self.stop_words[0][0].tolist()
 
         deprecated_kwargs = []
         for k, v in kwargs.items():
