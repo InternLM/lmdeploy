@@ -96,13 +96,12 @@ def main(model_path: str,
         elif prompt == 'end':
             prompt = model.get_prompt('', nth_round == 1)
             input_ids = tokenizer.encode(prompt)
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=[input_ids],
-                    request_output_len=request_output_len,
-                    sequence_start=False,
-                    sequence_end=True,
-                    stream_output=stream_output):
+            for outputs in generator.stream_infer(session_id=session_id,
+                                                  input_ids=[input_ids],
+                                                  request_output_len=1,
+                                                  sequence_start=False,
+                                                  sequence_end=True,
+                                                  stream_output=stream_output):
                 pass
             nth_round = 1
             step = 0
