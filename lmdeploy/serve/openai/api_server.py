@@ -453,11 +453,11 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             request.stream = False
         if not isinstance(request.tool_choice, str):
             tools = [
-                item.model_dump() for item in request.tools
+                item.function.model_dump() for item in request.tools
                 if item.function.name == request.tool_choice.function.name
             ]
         else:
-            tools = [item.model_dump() for item in request.tools]
+            tools = [item.function.model_dump() for item in request.tools]
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
