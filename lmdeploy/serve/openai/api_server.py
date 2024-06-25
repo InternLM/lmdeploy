@@ -451,6 +451,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         if request.stream is True:
             logger.warning('Set stream to False for tools')
             request.stream = False
+        # internlm2 only uses contents inside function regardless of 'type'
         if not isinstance(request.tool_choice, str):
             tools = [
                 item.function.model_dump() for item in request.tools

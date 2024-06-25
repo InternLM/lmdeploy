@@ -193,46 +193,7 @@ for message in messages:
 
 ### 工具调用
 
-目前的 LMDeploy 只支持 InternLM2 模型的工具调用。启动好 InternLM2 模型的服务后，运行下面 demo 即可。
-
-```python
-from openai import OpenAI
-
-tools = [
-  {
-    "type": "function",
-    "function": {
-      "name": "get_current_weather",
-      "description": "Get the current weather in a given location",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "location": {
-            "type": "string",
-            "description": "The city and state, e.g. San Francisco, CA",
-          },
-          "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-        },
-        "required": ["location"],
-      },
-    }
-  }
-]
-messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
-tool_choice={"type": "function", "function": {"name": "get_current_weather"}}
-
-client = OpenAI(api_key='YOUR_API_KEY',base_url='http://0.0.0.0:23333/v1')
-model_name = client.models.list().data[0].id
-response = client.chat.completions.create(
-    model=model_name,
-    messages=messages,
-    temperature=0.8,
-    top_p=0.8,
-    stream=False,
-    tools=tools,
-    tool_choice=tool_choice)
-print(response)
-```
+参考 [api_server_tools](./api_server_tools.md)。
 
 ### 使用 Java/Golang/Rust
 
