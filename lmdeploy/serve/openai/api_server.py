@@ -136,12 +136,6 @@ async def check_request(request) -> Optional[JSONResponse]:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             f'The temperature `{request.temperature}` must be in [0, 2]')
-    if hasattr(request,
-               'tool_choice') and request.tool_choice in ['auto', 'required']:
-        return create_error_response(
-            HTTPStatus.BAD_REQUEST,
-            'Current tool_choice only support a dict referring to one'
-            f' of {request.tools}.')
     return
 
 
@@ -402,10 +396,11 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         internlm2 functions are supported as a tool. Use this to provide
         a list of functions the model may generate JSON inputs for.
     - tool_choice (str | object): Controls which (if any) tool is called by
-        the model. `auto` and `required` are not supported yet. `none` means
-        the model will not call any tool and instead generates a message.
-        Specifying a particular tool via {"type": "function", "function":
-        {"name": "my_function"}} forces the model to call that tool.
+        the model. `none` means the model will not call any tool and instead
+        generates a message. Specifying a particular tool via {"type":
+        "function", "function": {"name": "my_function"}} forces the model to
+        call that tool. `auto` or `required` will put all the tools information
+        to the model.
 
     Additional arguments supported by LMDeploy:
     - top_k (int): The number of the highest probability vocabulary
@@ -456,11 +451,13 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         if request.stream is True:
             logger.warning('Set stream to False for tools')
             request.stream = False
-        if request.tool_choice:
+        if not isinstance(request.tool_choice, str):
             tools = [
                 item.model_dump() for item in request.tools
                 if item.function.name == request.tool_choice.function.name
             ]
+        else:
+            tools = [item.model_dump() for item in request.tools]
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
@@ -536,9 +533,12 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     tool_calls = None
     if request.tool_choice != 'none' and '<|plugin|>' in text:
+        if final_res.finish_reason == 'stop':
+            final_res.finish_reason = 'tool_calls'
         # TODO may move to generate function
-        text, action = text.split('<|action_start|><|plugin|>\n')
+        text, action = text.split('<|action_start|><|plugin|>')
         action = action.split('<|action_end|>'.strip())[0]
+        action = action[action.find('{'):]
         try:  # TODO add json_schema guidance to turbomind
             action = json.loads(action)
             tool_calls = [

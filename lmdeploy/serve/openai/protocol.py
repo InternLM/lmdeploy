@@ -111,7 +111,7 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     tools: Optional[List[Tool]] = Field(default=None, examples=[None])
-    tool_choice: Union[ToolChoice, Literal['auto', 'required','none']] = Field(default='none', examples=['none'])  # noqa
+    tool_choice: Union[ToolChoice, Literal['auto', 'required','none']] = Field(default='auto', examples=['none'])  # noqa
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
     n: Optional[int] = 1
@@ -179,7 +179,7 @@ class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
     logprobs: Optional[ChoiceLogprobs] = None
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls']] = None
 
 
 class ChatCompletionResponse(BaseModel):
