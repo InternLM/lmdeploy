@@ -211,6 +211,8 @@ class CogVLMChatTemplateWrapper(VLChatTemplateWrapper):
             for item in content:
                 if item['type'] == 'image_url':
                     num_images += 1
+                elif item['type'] == 'image_data':
+                    num_images += 1
                 elif item['type'] == 'text':
                     prompt = item['text']
 
