@@ -27,7 +27,6 @@ class LlavaHfVisionModel(VisonModel):
 
     def build_model(self):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
-        from accelerate.utils import get_balanced_memory, infer_auto_device_map
 
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
