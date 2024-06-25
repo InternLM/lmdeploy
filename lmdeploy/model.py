@@ -1531,7 +1531,7 @@ class Glm4Chat(BaseChatTemplate):
 
 @MODELS.register_module(name='internvl-phi3')
 class InternVLPhi3(Phi3Instruct):
-    """Chat template of InternLM model."""
+    """Chat template of InternVL Chat 4B model."""
 
     def __init__(
             self,
