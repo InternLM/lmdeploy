@@ -368,7 +368,8 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
         for ratio in range(0, n_grid):
             ratio = ratio * 1 / n_grid
             scales = (x_max.pow(ratio) /
-                      w_mean.pow(1 - ratio)).clamp(min=1e-4).view(-1)
+                      w_mean.pow(1 - ratio).clamp(min=1e-4)).clamp(
+                          min=1e-4).view(-1)
             scales = scales / (scales.max() * scales.min()).sqrt()
             for fc in linears2scale:
                 fc.weight.mul_(scales.view(1, -1).to(fc.weight.device))
