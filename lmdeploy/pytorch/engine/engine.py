@@ -556,17 +556,12 @@ class Engine:
             """forward."""
             nonlocal swap_done, swap_in_map, swap_out_map
             if swap_done:
-                ret = self.model_agent.forward(inputs,
-                                               swap_in_map=dict(),
-                                               swap_out_map=dict())
+                return await self.model_agent.async_forward(
+                    inputs, swap_in_map=dict(), swap_out_map=dict())
             else:
                 swap_done = True
-                ret = self.model_agent.forward(inputs,
-                                               swap_in_map=swap_in_map,
-                                               swap_out_map=swap_out_map)
-            await asyncio.get_event_loop().run_in_executor(
-                None, self.stream.synchronize)
-            return ret
+                return await self.model_agent.async_forward(
+                    inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         async def __long_context_single_forward(inputs):
             """one large sequence."""
