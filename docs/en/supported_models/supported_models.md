@@ -53,6 +53,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |     QWen1.5-MoE     |    A2.7B    |    Yes    |   No    |  No  |
 |        QWen2        | 0.5B - 72B  |    Yes    |   No    |  No  |
 |    DeepSeek-MoE     |     16B     |    Yes    |   No    |  No  |
+|     DeepSeek-V2     |  16B, 236B  |    Yes    |   No    |  No  |
 |        Gemma        |    2B-7B    |    Yes    |   No    |  No  |
 |        Dbrx         |    132B     |    Yes    |   No    |  No  |
 |     StarCoder2      |   3B-15B    |    Yes    |   No    |  No  |
