@@ -73,6 +73,7 @@
    advance/long_context.md
    advance/chat_template.md
    advance/debug_turbomind.md
+   advance/structed_output.md
    serving/qos.md
 
 .. toctree::
