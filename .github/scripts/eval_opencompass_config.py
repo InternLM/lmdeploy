@@ -473,7 +473,7 @@ pt_internlm2_chat_20b = dict(
     batch_size=64,
     concurrency=64,
     meta_template=internlm2_meta_template,
-    run_cfg=run_cfg_tp1_template,
+    run_cfg=run_cfg_tp2_template,
     end_str='<|im_end|>')
 
 # ===== Configs for Qwen/Qwen-7B-Chat =====
