@@ -261,7 +261,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
     return __inner
 
 
-# copy from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
+# modified from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
 def _get_and_verify_max_len(
     hf_tm_config: Union[PretrainedConfig,
                         TypeVar('TurbomindModelConfig')],
@@ -272,6 +272,11 @@ def _get_and_verify_max_len(
         # `hf_tm_config` is TurbomindModelConfig
         session_len = getattr(hf_tm_config, 'session_len')
         return max_model_len if max_model_len else session_len
+
+    # vl configs hide session-len inside llm configs
+    llm_keys = ['language_config', 'llm_config']
+    for key in llm_keys:
+        hf_tm_config = getattr(hf_tm_config, key, hf_tm_config)
 
     logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')
