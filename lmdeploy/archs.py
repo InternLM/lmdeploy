@@ -177,7 +177,8 @@ def get_model_arch(model_path: str):
                                              trust_remote_code=True)
         except Exception as e:  # noqa
             from transformers import PretrainedConfig
-            cfg = PretrainedConfig.from_pretrained(model_path)
+            cfg = PretrainedConfig.from_pretrained(model_path,
+                                                   trust_remote_code=True)
 
         _cfg = cfg.to_dict()
         if _cfg.get('architectures', None):

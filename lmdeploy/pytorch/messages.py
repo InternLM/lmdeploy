@@ -72,7 +72,10 @@ class SamplingParam:
             logger.warning('`top_p` has to be a float > 0 and < 1'
                            f' but is {top_p}')
             top_p = 1.0
-        if temperature <= 0:
+        if temperature == 0:
+            logger.warning('`temperature` is 0, set to 1e-6')
+            temperature = 1e-6
+        if temperature < 0:
             logger.warning('`temperature` has to be a strictly'
                            f' positive value, but is {temperature}')
             temperature = 1.0
