@@ -75,6 +75,8 @@ class SubCliChat(object):
         ArgumentHelper.cache_block_seq_len(engine_group)
         ArgumentHelper.rope_scaling_factor(engine_group)
         ArgumentHelper.session_len(engine_group)
+        # other arguments
+        ArgumentHelper.cap(parser)
         # model args
         ArgumentHelper.revision(engine_group)
         ArgumentHelper.download_dir(engine_group)
