@@ -106,6 +106,7 @@ class CLI(object):
         ArgumentHelper.backend(parser)
         ArgumentHelper.trust_remote_code(parser)
         # # chat template args
+        # ArgumentHelper.meta_instruction(parser)
         ArgumentHelper.cap(parser)
         ArgumentHelper.chat_template(parser)
         # model args
