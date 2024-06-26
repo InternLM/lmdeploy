@@ -1,5 +1,6 @@
 from mmengine.config import read_base
-from opencompass.models import LmdeployPytorchModel, TurboMindModel
+from opencompass.models import (LmdeployPytorchModel, TurboMindModel,
+                                TurboMindModelwithChatTemplate)
 
 with read_base():
     # choose a list of datasets
@@ -32,10 +33,6 @@ with read_base():
         nq_datasets  # noqa: F401, E501
     from .datasets.race.race_gen_69ee4f import \
         race_datasets  # noqa: F401, E501
-    from .datasets.SuperGLUE_WiC.SuperGLUE_WiC_gen_d06864 import \
-        WiC_datasets  # noqa: F401, E501
-    from .datasets.SuperGLUE_WSC.SuperGLUE_WSC_gen_7902a7 import \
-        WSC_datasets  # noqa: F401, E501
     from .datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import \
         TheoremQA_datasets  # noqa: F401, E501
     from .datasets.triviaqa.triviaqa_wiki_1shot_gen_eaf81e import \
@@ -270,6 +267,24 @@ model_kwargs_template = dict(device_map='auto', trust_remote_code=True)
 run_cfg_tp1_template = dict(num_gpus=1, num_procs=1)
 run_cfg_tp2_template = dict(num_gpus=2, num_procs=1)
 
+engine_config_template_max_bs_128 = dict(session_len=MAX_SESSION_LEN,
+                                         max_batch_size=128)
+engine_config_template_max_bs_128_awq = dict(session_len=MAX_SESSION_LEN,
+                                             max_batch_size=128,
+                                             model_format='awq')
+engine_config_template_max_bs_128_kvint4 = dict(session_len=MAX_SESSION_LEN,
+                                                max_batch_size=128,
+                                                quant_policy=4)
+engine_config_template_max_bs_128_tp2 = dict(session_len=MAX_SESSION_LEN,
+                                             max_batch_size=128,
+                                             tp=2)
+engine_config_template_max_bs_128_awq_tp2 = dict(session_len=MAX_SESSION_LEN,
+                                                 max_batch_size=128,
+                                                 model_format='awq',
+                                                 tp=2)
+engine_config_template_max_bs_128_kvint4_tp2 = dict(
+    session_len=MAX_SESSION_LEN, max_batch_size=128, quant_policy=4, tp=2)
+
 # ===== Configs for internlm/internlm-chat-7b =====
 # config for internlm-chat-7b
 tb_internlm_chat_7b = dict(type=TurboMindModel,
@@ -359,122 +374,106 @@ pt_internlm_chat_20b = dict(
     end_str='<eoa>')
 
 # ===== Configs for internlm/internlm2-chat-7b =====
-# config for internlm2-chat-7b
-tb_internlm2_chat_7b = dict(type=TurboMindModel,
-                            abbr='internlm2-chat-7b-turbomind',
-                            path='internlm/internlm2-chat-7b',
-                            engine_config=tb_engine_config_template_max_bs_128,
-                            gen_config=gen_config_template,
-                            max_out_len=MAX_NEW_TOKENS,
-                            max_seq_len=MAX_SESSION_LEN,
-                            batch_size=128,
-                            concurrency=128,
-                            meta_template=internlm2_meta_template,
-                            run_cfg=run_cfg_tp1_template,
-                            end_str='<|im_end|>')
-
-# config for internlm2-chat-7b-w4
-tb_internlm2_chat_7b_w4a16 = dict(
-    type=TurboMindModel,
-    abbr='internlm2-chat-7b-4bits-turbomind',
-    path='internlm/internlm2-chat-7b-inner-4bits',
-    engine_config=tb_awq_engine_config_template_max_bs_128,
+tb_internlm2_chat_7b = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_chat_7b',
+    path='internlm/internlm2-chat-7b',
+    engine_config=engine_config_template_max_bs_128,
     gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
-    concurrency=128,
-    meta_template=internlm2_meta_template,
-    run_cfg=run_cfg_tp1_template,
-    end_str='<|im_end|>')
+    run_cfg=dict(num_gpus=1),
+)
+
+tb_internlm2_chat_7b_w4a16 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_chat_7b_w4a16',
+    path='internlm/internlm2-chat-7b-inner-4bits',
+    engine_config=engine_config_template_max_bs_128_awq,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+)
 
 tb_internlm2_chat_7b_kvint4 = dict(
-    type=TurboMindModel,
-    abbr='internlm2-chat-7b-turbomind-kvint4',
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_chat_7b_kvint4',
     path='internlm/internlm2-chat-7b',
-    engine_config=tb_kvint4_engine_config_template_max_bs_128,
+    engine_config=engine_config_template_max_bs_128_kvint4,
     gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
-    concurrency=128,
-    meta_template=internlm2_meta_template,
-    run_cfg=run_cfg_tp1_template,
-    end_str='<|im_end|>')
+    run_cfg=dict(num_gpus=1),
+)
 
 # config for pt internlm-chat-7b
 pt_internlm2_chat_7b = dict(type=LmdeployPytorchModel,
                             abbr='internlm2-chat-7b-pytorch',
                             path='internlm/internlm2-chat-7b',
-                            engine_config=pt_engine_config_template_max_bs_128,
+                            engine_config=pt_engine_config_template_max_bs_64,
                             gen_config=gen_config_template,
                             max_out_len=MAX_NEW_TOKENS,
                             max_seq_len=MAX_SESSION_LEN,
-                            batch_size=128,
-                            concurrency=128,
+                            batch_size=64,
+                            concurrency=64,
                             meta_template=internlm2_meta_template,
                             run_cfg=run_cfg_tp1_template,
                             end_str='<|im_end|>')
 
 # ===== Configs for internlm/internlm2-chat-20b =====
-# config for internlm2-chat-20b
 tb_internlm2_chat_20b = dict(
-    type=TurboMindModel,
-    abbr='internlm2-chat-20b-turbomind',
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_chat_20b',
     path='internlm/internlm2-chat-20b',
-    engine_config=tb_engine_config_template_max_bs_128_tp2,
+    engine_config=engine_config_template_max_bs_128_tp2,
     gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
-    concurrency=128,
-    meta_template=internlm2_meta_template,
-    run_cfg=run_cfg_tp2_template,
-    end_str='<|im_end|>')
+    run_cfg=dict(num_gpus=2),
+)
 
-# config for internlm2-chat-20b-w4 model
 tb_internlm2_chat_20b_w4a16 = dict(
-    type=TurboMindModel,
-    abbr='internlm2-chat-20b-4bits-turbomind',
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_chat_20b_w4a16',
     path='internlm/internlm2-chat-20b-inner-4bits',
-    engine_config=tb_awq_engine_config_template_max_bs_128_tp2,
+    engine_config=engine_config_template_max_bs_128_awq_tp2,
     gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
-    concurrency=128,
-    meta_template=internlm2_meta_template,
-    run_cfg=run_cfg_tp2_template,
-    end_str='<|im_end|>')
+    run_cfg=dict(num_gpus=2),
+)
 
-# config for internlm2-chat-20b-w4 model
 tb_internlm2_chat_20b_kvint4 = dict(
-    type=TurboMindModel,
-    abbr='internlm2-chat-20b-turbomind-kvint4',
-    path='internlm/internlm2-chat-20b-inner-4bits',
-    engine_config=tb_kvint4_engine_config_template_max_bs_128_tp2,
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_chat_7b_kvint4',
+    path='internlm/internlm2-chat-20b',
+    engine_config=engine_config_template_max_bs_128_kvint4_tp2,
     gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
-    concurrency=128,
-    meta_template=internlm2_meta_template,
-    run_cfg=run_cfg_tp2_template,
-    end_str='<|im_end|>')
+    run_cfg=dict(num_gpus=2),
+)
 
 # config for pt internlm-chat-20b
 pt_internlm2_chat_20b = dict(
     type=LmdeployPytorchModel,
     abbr='internlm2-chat-20b-pytorch',
     path='internlm/internlm2-chat-20b',
-    engine_config=pt_engine_config_template_max_bs_64_prefill,
+    engine_config=pt_engine_config_template_max_bs_64_prefill_tp2,
     gen_config=gen_config_template,
     max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
     batch_size=64,
     concurrency=64,
     meta_template=internlm2_meta_template,
-    run_cfg=run_cfg_tp1_template,
+    run_cfg=run_cfg_tp2_template,
     end_str='<|im_end|>')
 
 # ===== Configs for Qwen/Qwen-7B-Chat =====
@@ -624,48 +623,43 @@ pt_mixtral_chat_8x7b = dict(
     end_str='</s>')
 
 # ===== Configs for Qwen/Qwen1.5-7B-Chat =====
-tb_qwen1_5_chat_7b = dict(type=TurboMindModel,
-                          abbr='qwen1.5-7b-chat-turbomind',
-                          path='Qwen/Qwen1.5-7B-Chat',
-                          engine_config=tb_engine_config_template_max_bs_128,
-                          gen_config=gen_config_template,
-                          max_out_len=MAX_NEW_TOKENS,
-                          max_seq_len=MAX_SESSION_LEN,
-                          batch_size=128,
-                          concurrency=128,
-                          meta_template=qwen1_5_meta_template,
-                          run_cfg=run_cfg_tp1_template,
-                          end_str='<|im_end|>')
-
-tb_qwen1_5_chat_7b_w4a16 = dict(
-    type=TurboMindModel,
-    abbr='qwen1.5-7b-chat-4bits-turbomind',
-    path='Qwen/Qwen1.5-7B-Chat-inner-4bits',
-    engine_config=tb_awq_engine_config_template_max_bs_128,
-    gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
-    max_seq_len=MAX_SESSION_LEN,
-    batch_size=128,
-    concurrency=128,
-    meta_template=qwen1_5_meta_template,
-    run_cfg=run_cfg_tp1_template,
-    end_str='<|im_end|>')
-
-tb_qwen1_5_chat_7b_kvint4 = dict(
-    type=TurboMindModel,
-    abbr='qwen1.5-7b-chat-turbomind-kvint4',
+tb_qwen1_5_7b_chat = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_qwen1_5_7b_chat',
     path='Qwen/Qwen1.5-7B-Chat',
-    engine_config=tb_kvint4_engine_config_template_max_bs_128,
+    engine_config=engine_config_template_max_bs_128,
     gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
-    concurrency=128,
-    meta_template=qwen1_5_meta_template,
-    run_cfg=run_cfg_tp1_template,
-    end_str='<|im_end|>')
+    run_cfg=dict(num_gpus=1),
+)
 
-pt_qwen1_5_chat_7b = dict(type=LmdeployPytorchModel,
+tb_qwen1_5_7b_chat_w4a16 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_qwen1_5_7b_chat_w4a16',
+    path='Qwen/Qwen1.5-7B-Chat-inner-4bits',
+    engine_config=engine_config_template_max_bs_128_awq,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+)
+
+tb_qwen1_5_7b_chat_kvint4 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_qwen1_5_7b_chat_kvint4',
+    path='Qwen/Qwen1.5-7B-Chat',
+    engine_config=engine_config_template_max_bs_128_kvint4,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+)
+
+pt_qwen1_5_7b_chat = dict(type=LmdeployPytorchModel,
                           abbr='qwen1.5-7b-chat-pytorch',
                           path='Qwen/Qwen1.5-7B-Chat',
                           engine_config=pt_engine_config_template_max_bs_128,
@@ -692,6 +686,43 @@ pt_qwen1_5_moe_2_7b_chat = dict(
     run_cfg=run_cfg_tp1_template,
     end_str='<|im_end|>')
 
+# ===== Configs for Qwen/Qwen2-7B-Instruct =====
+tb_qwen2_7b_instruct = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_qwen2_7b_instruct',
+    path='Qwen/Qwen2-7B-Instruct',
+    engine_config=engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+)
+
+tb_qwen2_7b_instruct_w4a16 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_qwen2_7b_instruct_w4a16',
+    path='Qwen/Qwen2-7B-Instruct-inner-4bits',
+    engine_config=engine_config_template_max_bs_128_awq,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+)
+
+tb_qwen2_7b_instruct_kvint4 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_qwen2_7b_instruct_kvint4',
+    path='Qwen/Qwen2-7B-Instruct',
+    engine_config=engine_config_template_max_bs_128_kvint4,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+)
+
 # ===== Configs for google/gemma-7b-it =====
 pt_gemma_chat_7b = dict(type=LmdeployPytorchModel,
                         abbr='gemma-7b-it-pytorch',
@@ -707,48 +738,44 @@ pt_gemma_chat_7b = dict(type=LmdeployPytorchModel,
                         end_str='<end_of_turn>')
 
 # ===== Configs for meta-llama/Meta-Llama-3-8B-Instruct =====
-# config for llama-3-8b-instruct turbomind
 tb_llama_3_8b_instruct = dict(
-    type=TurboMindModel,
-    abbr='llama-3-8b-instruct-turbomind',
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_llama_3_8b_instruct',
     path='meta-llama/Meta-Llama-3-8B-Instruct',
-    engine_config=tb_engine_config_template_max_bs_128,
+    engine_config=engine_config_template_max_bs_128,
     gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
-    concurrency=128,
-    meta_template=llama3_meta_template,
-    run_cfg=run_cfg_tp1_template,
-    end_str='[INST]')
+    run_cfg=dict(num_gpus=1),
+    stop_words=['<|eot_id|>', '<|end_of_text|>'],
+)
 
 tb_llama_3_8b_instruct_w4a16 = dict(
-    type=TurboMindModel,
-    abbr='llama-3-8b-instruct-4bits-turbomind',
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_llama_3_8b_instruct_w4a16',
     path='meta-llama/Meta-Llama-3-8B-Instruct-inner-4bits',
-    engine_config=tb_awq_engine_config_template_max_bs_128,
+    engine_config=engine_config_template_max_bs_128_awq,
     gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
-    concurrency=128,
-    meta_template=llama3_meta_template,
-    run_cfg=run_cfg_tp1_template,
-    end_str='[INST]')
+    run_cfg=dict(num_gpus=1),
+    stop_words=['<|eot_id|>', '<|end_of_text|>'],
+)
 
 tb_llama_3_8b_instruct_kvint4 = dict(
-    type=TurboMindModel,
-    abbr='llama-3-8b-instruct-turbomind-kvint4',
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_llama_3_8b_instruct_kvint4',
     path='meta-llama/Meta-Llama-3-8B-Instruct',
-    engine_config=tb_kvint4_engine_config_template_max_bs_128,
+    engine_config=engine_config_template_max_bs_128_kvint4,
     gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
-    concurrency=128,
-    meta_template=llama3_meta_template,
-    run_cfg=run_cfg_tp1_template,
-    end_str='[INST]')
+    run_cfg=dict(num_gpus=1),
+    stop_words=['<|eot_id|>', '<|end_of_text|>'],
+)
 
 # config for llama-3-8b-instruct pytorch
 pt_llama_3_8b_instruct = dict(
