@@ -113,15 +113,15 @@ def run_chat(model_path: str,
                       ' Please end the session.')
                 continue
 
-            print(f'{prompt} ', end='', flush=True)
-            state = DetokenizeState()
+            print(f'{prompt}', end='', flush=True)
+            state = DetokenizeState(len(input_ids))
             gen_config.random_seed = seed
             gen_config.stop_words = stop_words
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=input_ids,
                                                   gen_config=gen_config,
                                                   adapter_name=adapter_name):
-                res, tokens = outputs.token_ids, outputs.num_token
+                res, tokens = input_ids + outputs.token_ids, outputs.num_token
                 # decode res
                 response, state = tokenizer.detokenize_incrementally(
                     res, state)

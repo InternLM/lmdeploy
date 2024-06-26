@@ -133,7 +133,7 @@ def run_local(model_path: str,
                                           top_k=top_k,
                                           temperature=temperature)
             step = session.step
-            state = DetokenizeState()
+            state = DetokenizeState(len(input_ids))
             for outputs in generator.stream_infer(
                     session_id=session._session_id,
                     **inputs,
@@ -141,7 +141,7 @@ def run_local(model_path: str,
                     step=step,
                     gen_config=gen_config,
                     stream_output=True):
-                res, tokens = outputs.token_ids, outputs.num_token
+                res, tokens = input_ids + outputs.token_ids, outputs.num_token
                 response, state = engine.tokenizer.detokenize_incrementally(
                     res,
                     state,

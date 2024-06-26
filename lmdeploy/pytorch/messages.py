@@ -271,8 +271,8 @@ class HistoryEmbeddings:
             if history_image_num < num_all_images:
                 emb = self._embeddings[history_image_num]
                 # for case step in middle of an image
-                if emb.start - 1 <= step:
-                    real_step = emb.start - 1
+                if emb.start < step:
+                    real_step = emb.start
         num_images = num_all_images - history_image_num
         return real_step, history_image_num, num_images
 

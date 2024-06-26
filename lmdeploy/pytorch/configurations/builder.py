@@ -27,7 +27,7 @@ class AutoModelConfigBuilder(ABC):
             f'`condition` of {cls.__name__} not implemented.')
 
     @classmethod
-    def build(cls, hf_config):
+    def build(cls, hf_config, model_path: str = None):
         """build."""
         from .default import DefaultModelConfigBuilder
 
@@ -46,4 +46,36 @@ class AutoModelConfigBuilder(ABC):
 
         logger.debug(f'build model config with {valid_builder.__name__}')
 
-        return valid_builder.build(hf_config)
+        cfg = valid_builder.build(hf_config, model_path)
+        if cfg.hf_config is None:
+            cfg.hf_config = hf_config
+
+        return cfg
+
+
+class ProxyAutoModel:
+    """wrapper of auto model class."""
+
+    def __init__(self, model_cls=None) -> None:
+        """init."""
+        if model_cls is None:
+            from transformers import AutoModelForCausalLM
+            model_cls = AutoModelForCausalLM
+        self.model_cls = model_cls
+
+    def from_config(self, *args, **kwargs):
+        """wrap from_config."""
+        if hasattr(self.model_cls, '_from_config'):
+            if 'trust_remote_code' in kwargs:
+                kwargs.pop('trust_remote_code')
+            return self.model_cls._from_config(*args, **kwargs)
+        else:
+            return self.model_cls.from_config(*args, **kwargs)
+
+    def from_pretrained(self, *args, **kwargs):
+        """wrap from_pretrained."""
+        if hasattr(self.model_cls,
+                   '_from_config') and 'trust_remote_code' in kwargs:
+            kwargs.pop('trust_remote_code')
+
+        return self.model_cls.from_pretrained(*args, **kwargs)

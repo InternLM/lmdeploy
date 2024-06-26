@@ -227,7 +227,7 @@ struct AttentionUniversal {
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
             FastRoPE  rope(di,
-                          std::integral_constant<int, kHeadDim>{},
+                          params.rotary_embedding_dim,
                           rope_base,
                           params.rope_ti_scale,
                           std::integral_constant<int, kVecSize>{});

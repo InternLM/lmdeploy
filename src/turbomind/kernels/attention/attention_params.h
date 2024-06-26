@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #pragma once
+#include <cstdint>
 #include <cuda_runtime.h>
 
 namespace turbomind {

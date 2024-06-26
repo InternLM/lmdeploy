@@ -12,7 +12,7 @@ class FalconModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.model_type == 'falcon'
 
     @classmethod
-    def build(cls, hf_config):
+    def build(cls, hf_config, model_path: str = None):
         """build falcon."""
         num_attention_heads = hf_config.num_attention_heads
         if hf_config.new_decoder_architecture:

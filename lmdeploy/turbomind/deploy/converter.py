@@ -149,15 +149,17 @@ def get_output_model_registered_name_and_config(model_path: str,
             group_size = 128 if group_size == 0 else group_size
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
+            TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16', torch.float16: 'fp16'}
+            weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'fp16')
+
             # Qwen-1 didn't set torch_dtype. It used bf16 as default
             if model_arch == 'QWenLMHeadModel':
-                torch_dtype = 'bfloat16'
+                weight_type = 'bf16'
             if not torch.cuda.is_bf16_supported():
                 print(
                     'Device does not support bfloat16. Set float16 forcefully')
-                torch_dtype = 'float16'
+                weight_type = 'fp16'
 
-            weight_type = 'bf16' if torch_dtype == 'bfloat16' else 'fp16'
             register_name = weight_type
             if turbomind_model_arch == 'xcomposer2':
                 register_name = 'plora'
@@ -204,6 +206,8 @@ def main(model_name: str,
          quant_path: str = None,
          group_size: int = 0,
          trust_remote_code: bool = False,
+         revision: str = None,
+         download_dir: str = None,
          **kwargs):
     """deploy llama family models via turbomind.
 
@@ -224,6 +228,11 @@ def main(model_name: str,
             to 4 bits
         trust_remote_code (bool):  Whether or not to allow for custom models
             defined on the Hub in their own modeling files. Defaults to False
+        revision (str): The specific model version to use. It can be a branch
+            name, a tag name, or a commit id. If unspecified, will use
+            the default version.
+        download_dir (str): Directory to download and load the weights,
+            default to the default cache directory of huggingface.
         kwargs (dict): other params for convert
     """
 
@@ -243,7 +252,11 @@ def main(model_name: str,
     if not os.path.exists(model_path):
         print(f"can't find model from local_path {model_path}, "
               'try to download from huggingface')
-        model_path = get_model(model_path)
+        model_path = get_model(
+            model_path,
+            revision=revision,
+            download_dir=download_dir,
+        )
         print(f'load model from {model_path}')
 
     input_model_name = get_input_model_registered_name(model_path,

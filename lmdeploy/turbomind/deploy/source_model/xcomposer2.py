@@ -22,8 +22,8 @@ class Xcomposer2Reader(LlamaReader):
 
     def _attn(self, i: int, kind: str, size_dim: int, dim: int = 0):
         """Get q, k, v, o kind for layer i."""
-        kv_head_num = self.model_cfg['kv_head_num']
-        gs = int(self.model_cfg['attn_head_num'] / kv_head_num)
+        kv_head_num = self.model_cfg['num_key_value_heads']
+        gs = int(self.model_cfg['num_attention_heads'] / kv_head_num)
         qkv = self.params[f'model.layers.{i}.attention.wqkv.{kind}']
         qkv = qkv.view(kv_head_num, gs + 2, 128, -1)
         hidden_dim = qkv.shape[-1]

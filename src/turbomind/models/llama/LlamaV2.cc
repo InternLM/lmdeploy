@@ -33,6 +33,7 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include <functional>
@@ -168,6 +169,8 @@ void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int ba
                                              0,                   // ite
                                              stream_);
     sync_check_cuda_error();
+
+    count_and_fix(embeddings, batch_size * hidden_units_, "embedding", 1);
 }
 
 template<typename T>
@@ -258,6 +261,9 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                              1,
                                              hidden_units_,
                                              stream_);
+
+    count_and_fix(decoder_input, token_num * hidden_units_, "embedding", 1);
+
     bool have_embeddings = false;
     updateEmbedding(decoder_input,
                     dc_batch_size + pf_batch_size,
@@ -521,7 +527,12 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
             if (ec) {
                 has_error = true;
             }
-            TM_LOG_INFO("[forward] Request complete for %ld, code %d", (long)ids[i], (int)ec);
+            if (!ec) {
+                TM_LOG_INFO("[forward] Request completed for %ld", (long)ids[i]);
+            }
+            else {
+                TM_LOG_WARNING("[forward] Request failed for %ld, code %d", (long)ids[i], (int)ec);
+            }
         }
     }
 

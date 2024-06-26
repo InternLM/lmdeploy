@@ -115,6 +115,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
   <li>ChatGLM2 (6B)</li>
+  <li>GLM4 (9B)</li>
   <li>Falcon (7B - 180B)</li>
   <li>YI (6B-34B)</li>
   <li>Mistral (7B)</li>

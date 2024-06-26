@@ -16,6 +16,7 @@ class DeepSeekVLReader(LlamaReader):
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict):
+        model_cfg = model_cfg['language_config']
         super().__init__(new_params, unused_params, last_bin, model_cfg)
 
     def init_layer_id(self):

@@ -159,17 +159,20 @@ def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
 
 
 # TODO remove stop_word_offsets stuff and make it clean
-def _stop_words(stop_words: List[str], tokenizer: object):
+def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
     """return list of stop-words to numpy.ndarray."""
     import numpy as np
     if stop_words is None:
         return None
     assert isinstance(stop_words, List) and \
-        all(isinstance(elem, str) for elem in stop_words), \
+        all(isinstance(elem, (str, int)) for elem in stop_words), \
         f'stop_words must be a list but got {type(stop_words)}'
     stop_indexes = []
     for stop_word in stop_words:
-        stop_indexes += tokenizer.indexes_containing_token(stop_word)
+        if isinstance(stop_word, str):
+            stop_indexes += tokenizer.indexes_containing_token(stop_word)
+        elif isinstance(stop_word, int):
+            stop_indexes.append(stop_word)
     assert isinstance(stop_indexes, List) and all(
         isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
     # each id in stop_indexes represents a stop word
