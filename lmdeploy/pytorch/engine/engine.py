@@ -28,6 +28,8 @@ logger = get_logger('lmdeploy')
 SeqList = List[SchedulerSequence]
 AdapterList = List[SchedulerAdapter]
 
+EMPTY_TOKEN = np.empty((0, ), dtype=np.int64)
+
 
 def _raise_exception_on_finish(task: asyncio.Task) -> None:
     """raise exception on finish."""
@@ -467,10 +469,13 @@ class Engine:
                                  num_appendable_ids: torch.Tensor):
         """batched stopping criteria."""
         num_appendable_ids = num_appendable_ids - 1
+        # one more step to cache last token(stop word)
         stopped = num_appendable_ids < 0
         if stop_words is not None:
             sw_stopped = (token_ids[:, None] == stop_words).any(1)
-            stopped = stopped | sw_stopped
+            one_ids = torch.clamp_max(num_appendable_ids, 0)
+            num_appendable_ids = torch.where(sw_stopped, one_ids,
+                                             num_appendable_ids)
         return stopped, num_appendable_ids
 
     @logging_timer('SamplingLogits', logger)
@@ -502,13 +507,15 @@ class Engine:
                        stopped: torch.Tensor):
         """update scheduler."""
         next_token_ids = next_token_ids.numpy()
+        eos_token_id = self.model_config.eos_token_id
         for token, msg, stop in zip(next_token_ids, running, stopped):
             if msg.status != MessageStatus.RUNNING:
                 continue
             msg.num_new_tokens += 1
             update_token = token
-            if stop:
-                update_token = np.empty((0, ), dtype=np.int64)
+            max_new_tokens = msg.sampling_param.max_new_tokens
+            if msg.num_new_tokens > max_new_tokens or token in eos_token_id:
+                update_token = EMPTY_TOKEN
             msg.update_token_ids(update_token)
             if stop:
                 msg.status = MessageStatus.STOPPED
@@ -591,6 +598,8 @@ class Engine:
                                 stopped: bool):
             """check if output is necessary."""
             if stopped:
+                return []
+            if token in msg.sampling_param.stop_words:
                 return []
             return [token]
 
