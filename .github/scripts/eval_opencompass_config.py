@@ -384,6 +384,7 @@ tb_internlm2_chat_7b = dict(
     max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
     run_cfg=dict(num_gpus=1),
+    stop_words=['</s>', '<|im_end|>'],
 )
 
 tb_internlm2_chat_7b_w4a16 = dict(
@@ -396,6 +397,7 @@ tb_internlm2_chat_7b_w4a16 = dict(
     max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
     run_cfg=dict(num_gpus=1),
+    stop_words=['</s>', '<|im_end|>'],
 )
 
 tb_internlm2_chat_7b_kvint4 = dict(
@@ -408,6 +410,7 @@ tb_internlm2_chat_7b_kvint4 = dict(
     max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
     run_cfg=dict(num_gpus=1),
+    stop_words=['</s>', '<|im_end|>'],
 )
 
 # config for pt internlm-chat-7b
@@ -435,6 +438,7 @@ tb_internlm2_chat_20b = dict(
     max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
     run_cfg=dict(num_gpus=2),
+    stop_words=['</s>', '<|im_end|>'],
 )
 
 tb_internlm2_chat_20b_w4a16 = dict(
@@ -447,6 +451,7 @@ tb_internlm2_chat_20b_w4a16 = dict(
     max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
     run_cfg=dict(num_gpus=2),
+    stop_words=['</s>', '<|im_end|>'],
 )
 
 tb_internlm2_chat_20b_kvint4 = dict(
@@ -459,6 +464,7 @@ tb_internlm2_chat_20b_kvint4 = dict(
     max_out_len=MAX_NEW_TOKENS,
     batch_size=128,
     run_cfg=dict(num_gpus=2),
+    stop_words=['</s>', '<|im_end|>'],
 )
 
 # config for pt internlm-chat-20b
@@ -466,14 +472,14 @@ pt_internlm2_chat_20b = dict(
     type=LmdeployPytorchModel,
     abbr='internlm2-chat-20b-pytorch',
     path='internlm/internlm2-chat-20b',
-    engine_config=pt_engine_config_template_max_bs_64_prefill_tp2,
+    engine_config=pt_engine_config_template_max_bs_64_prefill,
     gen_config=gen_config_template,
     max_out_len=MAX_NEW_TOKENS,
     max_seq_len=MAX_SESSION_LEN,
     batch_size=64,
     concurrency=64,
     meta_template=internlm2_meta_template,
-    run_cfg=run_cfg_tp2_template,
+    run_cfg=run_cfg_tp1_template,
     end_str='<|im_end|>')
 
 # ===== Configs for Qwen/Qwen-7B-Chat =====
@@ -829,3 +835,8 @@ pt_codellama_7b_chat = dict(type=LmdeployPytorchModel,
                             concurrency=128,
                             run_cfg=dict(num_gpus=1, num_procs=1),
                             end_str='</s>')
+
+
+
+models = [tb_internlm2_chat_7b,tb_internlm2_chat_7b_w4a16,tb_internlm2_chat_7b_kvint4,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_internlm2_chat_20b_kvint4,tb_llama_3_8b_instruct,tb_llama_3_8b_instruct_w4a16,tb_llama_3_8b_instruct_kvint4,tb_qwen1_5_7b_chat,tb_qwen1_5_7b_chat_kvint4,tb_qwen1_5_7b_chat_w4a16,pt_qwen1_5_7b_chat,pt_qwen1_5_moe_2_7b_chat,tb_qwen2_7b_instruct,tb_qwen2_7b_instruct_w4a16,tb_qwen2_7b_instruct_kvint4]
+datasets = [*race_datasets]
