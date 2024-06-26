@@ -28,7 +28,7 @@ logger = get_logger('lmdeploy')
 SeqList = List[SchedulerSequence]
 AdapterList = List[SchedulerAdapter]
 
-EMPTY_TOKEN = np.empty((0, ), dtype=np.int64)
+_EMPTY_TOKEN = np.empty((0, ), dtype=np.int64)
 
 
 def _raise_exception_on_finish(task: asyncio.Task) -> None:
@@ -511,11 +511,11 @@ class Engine:
         for token, msg, stop in zip(next_token_ids, running, stopped):
             if msg.status != MessageStatus.RUNNING:
                 continue
-            msg.num_new_tokens += 1
             update_token = token
-            max_new_tokens = msg.sampling_param.max_new_tokens
-            if msg.num_new_tokens > max_new_tokens or token in eos_token_id:
-                update_token = EMPTY_TOKEN
+            if stop or token in eos_token_id:
+                update_token = _EMPTY_TOKEN
+            else:
+                msg.num_new_tokens += 1
             msg.update_token_ids(update_token)
             if stop:
                 msg.status = MessageStatus.STOPPED
