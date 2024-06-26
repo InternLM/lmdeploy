@@ -163,7 +163,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
 
         work_dir = os.path.join(workspace, target_model)
         cmd_eval = [
-            f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --max-num-workers 8'  # noqa: E501
+            f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
         ret = run_cmd(cmd_eval, log_path=eval_log, cwd=lmdeploy_dir)
