@@ -19,6 +19,10 @@ struct RakedThreadGroupMap {
     static constexpr int TileN = TN;
     static constexpr int TileK = TK;
 
+    static constexpr int kGroupM = GM;
+    static constexpr int kGroupN = GN;
+    static constexpr int kGroupK = GK;
+
     static constexpr int kGroupCount = GM * GN * GK;
 
     static constexpr int M1 = GM * TM;

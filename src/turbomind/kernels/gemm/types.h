@@ -57,10 +57,9 @@ enum class QuantType : int {
 };
 
 enum class Epilogue : int {
-    kNone = 0,
-    kChannelwiseLinearCombination,  // D'[i,:] = a[i] * D[i,:] + b[i]
-    kGatedSilu,                     // D'[:,i] = D[:,i*2] * silu(D[:,i*2+1])
-    kGatedGelu,
+    kNone               = 0,
+    kChannelCombination = 0x1,
+    kGatedSilu          = 0x2,
 };
 
 enum class DataType : int {

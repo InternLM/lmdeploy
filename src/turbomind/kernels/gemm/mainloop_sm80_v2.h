@@ -10,6 +10,7 @@
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include "src/turbomind/kernels/gemm/operand.h"
+#include "src/turbomind/kernels/gemm/thread_map.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 #include <cuda_pipeline_primitives.h>
@@ -381,29 +382,8 @@ struct MainloopSm80_v2 {
 
         __pipeline_commit();
         __pipeline_wait_prior(0);
-    }
 
-    template<class Tc, class Func>
-    __device__ static void StoreC(FragC& frag_C, SharedStorage& storage, Func&& func)
-    {
-        const int3 offset_mnk = MMA::get_offset(threadIdx.x);
-        const int  offset_m   = offset_mnk.x;
-        const int  offset_n   = offset_mnk.y;
-        // const int  offset_k   = offset_mnk.z;
-
-        // static_assert(WARP_CNT_K == 1);
-
-        PRAGMA_UNROLL
-        for (int m = 0; m < MMA::kMmaIterM; ++m) {
-            PRAGMA_UNROLL
-            for (int n = 0; n < MMA::kMmaIterN; ++n) {
-                MMA_Atom::foreach_C(frag_C[m][n], [&](auto vec, int mi, int ni) {
-                    ((Func&&)func)(offset_m + m * MMA_Atom::M + mi,  //
-                                   offset_n + n * MMA_Atom::N + ni,
-                                   cast<Tc>(vec));
-                });
-            }
-        }
+        __syncthreads();
     }
 };
 

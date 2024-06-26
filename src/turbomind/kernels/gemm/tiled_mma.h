@@ -2,10 +2,10 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/core/mma.h"
-
 #include "src/turbomind/kernels/gemm/simt.h"
 
 namespace turbomind::gemm {
@@ -146,6 +146,70 @@ struct Tiled_MMA_v2 {
     {
         return Map::get_offset(Atom::get_group_id(thread_idx));
     }
+
+    template<class T, int V, int M, int N, class Func>
+    __device__ static void _foreach_C(Array<T, V> (&frag_C)[M][N], Func&& func)
+    {
+        const int3 offset_mnk = get_offset(threadIdx.x);
+        const int  offset_m   = offset_mnk.x;
+        const int  offset_n   = offset_mnk.y;
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < M; ++m) {
+            PRAGMA_UNROLL
+            for (int n = 0; n < N; ++n) {
+                const int mm = offset_m + m / kAtomM * Map::TileM + m % kAtomM * Atom::M;
+                const int nn = offset_n + n / kAtomN * Map::TileN + n % kAtomN * Atom::N;
+                Atom::foreach_C(frag_C[m][n], [&](auto& vec, int mi, int ni) {  //
+                    ((Func&&)func)(vec, mm + mi, nn + ni);
+                });
+            }
+        }
+    }
+
+    struct Rearrange {
+        template<class FragC, class AccessorV2, int PM, int PN>
+        __device__ static void apply(FragC& frag_C, AccessorV2& smem_C, int2 offset_mn, pair<PM, PN>)
+        {
+            const int3 offset_mnk = get_offset(threadIdx.x);
+            const int  group_id_k = offset_mnk.z / Map::kFootprintK;
+
+            PRAGMA_UNROLL
+            for (int k = 0; k < Map::kGroupK; ++k) {
+                // `vec` is a array in C's continguous dim
+                _foreach_C(frag_C, [&](auto vec, int mi, int ni) {
+                    const int mm = mi - offset_mn.x;
+                    const int nn = ni - offset_mn.y;
+                    // const int mm       = mi;
+                    // const int nn       = ni;
+                    auto smem_ptr = &smem_C(mm, nn);
+
+                    // Store(smem_ptr, vec);
+                    *(uint2*)smem_ptr = (uint2&)vec;
+                    static_assert(sizeof(vec) == 8);
+                    // if ((Map::kGroupK == 1 || group_id_k == k)     //
+                    //     && (PM >= Map::M || (0 <= mm && mm < PM))  //
+                    //     && (PN >= Map::N || (0 <= nn && nn < PN))) {
+                    //     if (k > 0) {  // constant
+                    //         std::remove_reference_t<decltype(vec)> tmp;
+                    //         Load(tmp, smem_ptr);
+                    //         {
+                    //             using namespace ops;
+                    //             vec = vec + tmp;
+                    //         }
+                    //     }
+
+                    //     // for (const auto& x : vec) {
+                    //     //     printf("%d %f %d %d\n", (int)threadIdx.x, x, mi, ni);
+                    //     // }
+
+                    //     Store(smem_ptr, vec);
+                    // }
+                });
+                __syncthreads();
+            }
+        }
+    };
 };
 
 }  // namespace turbomind::gemm

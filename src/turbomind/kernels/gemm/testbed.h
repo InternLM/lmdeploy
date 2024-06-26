@@ -31,6 +31,7 @@ template<class Ta,
          class Tc,
          Order order_a,
          Order order_b,
+         Order order_c,
          Pack  pack_a,
          Pack  pack_b,
          Pack  pack_u = 0,
@@ -84,7 +85,7 @@ public:
 
         a_desc_ = MatrixLayout{get_data_type_v<Tc>, order_a, m, k, mk2cs<order_a>(m, k).x};
         b_desc_ = MatrixLayout{get_data_type_v<Tc>, order_b, k, n, _kn2cs<order_b>(k, n).x};
-        c_desc_ = MatrixLayout{get_data_type_v<Tc>, order_c_, m, n, mk2cs<order_c_>(m, n).x};
+        c_desc_ = MatrixLayout{get_data_type_v<Tc>, order_c, m, n, mk2cs<order_c>(m, n).x};
 
         c_f_.resize(c_.size());
         c_ref_.resize(c_.size());
@@ -282,8 +283,6 @@ private:
     int n_{};
     int k_{};
     int g_{};
-
-    static constexpr Order order_c_ = Order::kRowMajor;
 
     universal_vector<Tc> a_;      // A in fp
     universal_vector<Tc> b_;      // B in fp

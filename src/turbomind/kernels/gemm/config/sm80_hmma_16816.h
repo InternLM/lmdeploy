@@ -2,8 +2,11 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/gemm/cta_map.h"
+#include "src/turbomind/kernels/gemm/epilogue.h"
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
 #include "src/turbomind/kernels/gemm/impl.h"
 #include "src/turbomind/kernels/gemm/iterator.h"
@@ -74,6 +77,33 @@ struct Operand_B_T {
     using GetGmemIter   = GetGmemIter;
 };
 
+template<class T, Order order>
+struct Operand_C {
+    using Dtype = T;
+
+    static constexpr Order kOrder = order;
+
+    struct GetSmemLayout {
+        template<int M, int N>
+        static constexpr auto apply(pair<M, N>)
+        {
+            constexpr auto cs = mk2cs<order>(M, N);
+            // Padding 4C halves bank-confict but slow down the kernel
+            return SmemLayoutV2<cs.y, cs.x + 4>{};
+            // return SmemLayoutV2<cs.y, cs.x, 32, 128, Swizzle<3, 3, 3>>{};
+        }
+    };
+
+    struct GetThreadMap {
+        template<int M, int N, int THREADS>
+        static constexpr auto apply(pair<M, N>, constant<THREADS>)
+        {
+            constexpr auto cs = mk2cs<order>(M, N);
+            return ThreadMap<cs.x, cs.y, 4, THREADS / WARP_SIZE>{};
+        }
+    };
+};
+
 template<class T>
 struct Operand_U {
     using Dtype = T;
@@ -93,7 +123,7 @@ struct Operand_U {
     using GetGmemIter = GetGmemIter;
 };
 
-template<class A, class TransformA, class U, class B, class TransformB, class V, class Tc>
+template<class A, class TransformA, class U, class B, class TransformB, class V, Order order_c, class Tc>
 struct SM80_HMMA_16816_F32 {
     template<int  CTA_M,
              int  CTA_N,
@@ -125,7 +155,17 @@ struct SM80_HMMA_16816_F32 {
                                          GroupSizeV,
                                          Stages>;
 
-        using Kernel = GemmUniversal<void, Mainloop, Tc, CtaMap, AlignedM, AlignedN, SplitK>;
+        using Epilogue = gemm::Epilogue_<Tc,
+                                         CTA_M,
+                                         CTA_N,
+                                         CTA_M,
+                                         CTA_N,
+                                         MMA::kThreadCount,
+                                         typename MMA::Rearrange,
+                                         Operand_C<float, order_c>,
+                                         SplitK>;
+
+        using Kernel = GemmUniversal<void, Mainloop, Epilogue, CtaMap>;
     };
 };
 

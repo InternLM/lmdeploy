@@ -45,11 +45,12 @@ T& gTestbed()
 template<class T, class Tb>
 void Run(int m, int n, int k, int g = 128)
 {
-    // constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;
-    // constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
-    // constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
-    // constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
-    // auto& test = gTestbed<gemm::Testbed<half, half, half, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
+    constexpr Pack kPackA = 0;  // HMMA_16816 | OPERAND_A | 1;
+    constexpr Pack kPackU = 0;  // HMMA_16816 | OPERAND_U | 1;
+    constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
+    constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
+    auto&          test =
+        gTestbed<gemm::Testbed<half, uint4_t, half, kColMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
 
     // constexpr Pack kPackA = 0;
     // constexpr Pack kPackU = 0;
@@ -58,11 +59,12 @@ void Run(int m, int n, int k, int g = 128)
     // auto& test = gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kPackA, kPackB, kPackU,
     // kPackV>>();
 
-    constexpr Pack kPackA = 0;
-    constexpr Pack kPackU = 0;
-    constexpr Pack kPackB = HMMA_884 | OPERAND_B | 2;
-    constexpr Pack kPackV = HMMA_884 | OPERAND_V | 2;
-    auto& test = gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
+    // constexpr Pack kPackA = 0;
+    // constexpr Pack kPackU = 0;
+    // constexpr Pack kPackB = HMMA_884 | OPERAND_B | 2;
+    // constexpr Pack kPackV = HMMA_884 | OPERAND_V | 2;
+    // auto& test = gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kPackA, kPackB, kPackU,
+    // kPackV>>();
 
     test.Initialize(m, n, k, g, 0);
     for (int i = 0; i < 10; ++i) {
@@ -103,13 +105,13 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(8192, 8192, 8192);
 
-    Run<T, Tb>(4096, 4096, 4096);
+    // Run<T, Tb>(4096, 4096, 4096);
 
-    // Run<T, Tb>(1024, 1024, 1024);
+    // Run<T, Tb>(1024, 1024, 16384);
 
-    // Run<T, Tb>(128, 128, 128);
+    Run<T, Tb>(128, 128 * (2 + 8), 8192);
 
-    // Run<T, Tb>(32, 32, 128);
+    // Run<T, Tb>(16, 32, 16384);
 
     // Run<T, Tb>(16, 16, 16);
 

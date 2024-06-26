@@ -17,15 +17,15 @@ public:
 
         // register_sm80_f16_f16();
 
-        reigster_sm80_s16816gemm_f16_f16_v2();
+        // reigster_sm80_s16816gemm_f16_f16_v2();
         reigster_sm80_s16816gemm_f16_f16_nn_packed();
         // reigster_sm80_s16816gemm_f16_f16_nt();
 
         // register_sm70_s884gemm_f16_f16();
 
 
-        reigster_sm70_sgemm_f16_f16_f16_tn();
-        register_sm70_s884gemm_f16_f16_f16_tn();
+        // reigster_sm70_sgemm_f16_f16_f16_tn();
+        // register_sm70_s884gemm_f16_f16_f16_tn();
     }
 
     [[maybe_unused]] bool Add(std::unique_ptr<Kernel> kernel)

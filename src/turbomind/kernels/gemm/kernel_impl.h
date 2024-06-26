@@ -7,9 +7,9 @@
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/operand.h"
+#include "src/turbomind/kernels/gemm/thread_group_map.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
-#include "src/turbomind/kernels/gemm/thread_group_map.h"
 
 namespace turbomind::gemm {
 
@@ -51,8 +51,8 @@ public:
         desc_.warp_tile = {Impl::WARP_M, Impl::WARP_N, Impl::WARP_K};
         chunk_size_k_   = Gemm::kChunkSizeK;
 
-        desc_.align_m = Gemm::AlignedM;
-        desc_.align_n = Gemm::AlignedN;
+        desc_.align_m = 0;  // Gemm::AlignedM;
+        desc_.align_n = 0;  // Gemm::AlignedN;
 
         smem_size_ = sizeof(typename Gemm::SharedStorage);
 
@@ -140,6 +140,13 @@ public:
                 }
                 printf("warp count: %d\n", Impl::WARPS);
                 Print_(typename Gemm::Impl::MMA_Map{});
+
+                printf("C:\n");
+                Print(typename Gemm::Epilogue::Map{});
+
+                std::cout << "Smem for mainloop: " << sizeof(Gemm::SharedStorage::mainloop) << "\n";
+                std::cout << "Smem for epilogue: " << sizeof(Gemm::SharedStorage::epilogue) << "\n";
+
                 return 0;
             }();
         }
@@ -156,6 +163,19 @@ public:
 
         std::cout << "lda=" << lda << ", ldb=" << ldb << ", ldc=" << Cdesc.ld << "\n";
 
+        std::cout << "C: " << C << ", D: " << D << "\n";
+
+        typename Gemm::Epilogue::Param epilogue{m,
+                                                n,
+                                                (Tc*)D,
+                                                Cdesc.ld,
+                                                (float*)workspace.partials,
+                                                Cdesc.ld,  /// TODO: optimize this
+                                                (int*)workspace.barriers,
+                                                {},
+                                                {1.f, 0.f},
+                                                false};
+
         typename Gemm::Param param{m,
                                    n,
                                    k,
@@ -167,12 +187,9 @@ public:
                                    ldb,
                                    (Tv*)V,
                                    Vdesc.ld,
-                                   (Tc*)C,
-                                   Cdesc.ld,
                                    log_tile,
                                    tiles,
-                                   (float*)workspace.partials,
-                                   (int*)workspace.barriers};
+                                   epilogue};
 
         gemm_kernel<Gemm><<<grid, block, smem_size_, stream>>>(param, Map{});
 

@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/transform.h"
+#include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
 
@@ -17,6 +18,7 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
             typename GetOperand<HMMA_16816, OPERAND_B, half, kRowMajor, true>::Operand,
             Transform_Default,
             VoidOperand,
+            kRowMajor,
             half>;
 
         // Add(std::make_unique<KernelImpl<Config::Type<256, 128, 64, 4, 2, 1, 3, false, 0, 0>::Kernel>>());
@@ -32,6 +34,7 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
             typename GetOperand<HMMA_16816, OPERAND_B, uint4_t, kRowMajor, true>::Operand,
             Transform_HMMA_16816<1, 0>,                                                      // Transform_Default,
             typename GetOperand<HMMA_16816, OPERAND_V, uint32_t, kColMajor, true>::Operand,  // VoidOperand,
+            kRowMajor,
             half>;
 
         // Add(std::make_unique<KernelImpl<Config::Type<128, 128, 32, 2, 2, 1, 3, false, 0, 0, 128, 128>::Kernel>>());
@@ -47,6 +50,7 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
             typename GetOperand<HMMA_16816, OPERAND_B, half, kRowMajor, false>::Operand,  // non-packed
             Transform_Default,
             VoidOperand,
+            kRowMajor,
             half>;
 
         // Add(std::make_unique<KernelImpl<Config::Type<256, 128, 64, 4, 2, 1, 3, false, 0, 0, 128, 1>::Kernel>>());
@@ -72,14 +76,18 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
             typename GetOperand<HMMA_16816, OPERAND_B, uint4_t, kRowMajor, true>::Operand,
             Transform_HMMA_16816<1, 0>,                                                      // Transform_Default,
             typename GetOperand<HMMA_16816, OPERAND_V, uint32_t, kColMajor, true>::Operand,  // VoidOperand,
+            kRowMajor,
             half>;
 
-        Add(std::make_unique<KernelImpl<Config::Type<128, 256, 32, 1, 8, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<128, 256, 32, 1, 8, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<256, 128, 32, 2, 4, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
 
-        // Add(std::make_unique<KernelImpl<Config::Type<16, 16, 32, 1, 1, 1, 3, false, 0, 0, 128, 128>::Kernel>>());
+        Add(std::make_unique<KernelImpl<Config::Type<128, 128, 32, 1, 4, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
+
+        // Add(std::make_unique<KernelImpl<Config::Type<16, 32, 32, 1, 1, 1, 3, true, 0, 0, 1, 128>::Kernel>>());
+
+        // Add(std::make_unique<KernelImpl<Config::Type<16, 32, 32, 1, 1, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
     }
-
-    // Add(std::make_unique<KernelImpl<typename Config<half, 32, 32, 32, 32, 32, 32, 3, false, 0, 0>::Kernel>>());
 }
 
 }  // namespace turbomind::gemm

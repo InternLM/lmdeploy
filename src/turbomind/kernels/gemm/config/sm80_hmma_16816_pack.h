@@ -44,7 +44,7 @@ template<class T>
 struct Operand_B_T {
     using Dtype = T;
 
-    static constexpr int Pack_M = 1;
+    static constexpr int Pack_M = 2;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | Pack_M;
     static constexpr Order kOrder = Order::kRowMajor;
