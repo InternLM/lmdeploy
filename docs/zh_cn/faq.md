@@ -24,7 +24,7 @@ pip install lmdeploy[all]
 
 2. 如果已经安装了，还是出现这个问题，请检查下执行目录。不要在 lmdeploy 的源码根目录下执行 python -m lmdeploy.turbomind.\*下的package，换到其他目录下执行。
 
-3. 如果您是开发人员，通常需要在本地进行开发和编译。每次安装 whl 的效率太低了。您可以通过符号链接在编译后指定 lib 的路径。
+但是如果您是开发人员，通常需要在本地进行开发和编译。每次安装 whl 的效率太低了。您可以通过符号链接在编译后指定 lib 的路径。
 
 ```shell
 # 创建 bld 和进行本地编译
@@ -40,7 +40,7 @@ cd ..
 python3 -m lmdeploy check_env
 ```
 
-4. 如果您仍然遇到在本地机器上找不到 turbomind so 的问题，这意味着您的本地机器上存在多个 Python 环境，并且在编译和执行过程中 Python 的版本不匹配。在这种情况下，您需要根据实际情况设置 `lmdeploy/generate.sh` 中的 `PYTHON_EXECUTABLE`，例如 `-DPYTHON_EXECUTABLE=/usr/local/bin/python3`，并且需要重新编译。
+如果您仍然遇到在本地机器上找不到 turbomind so 的问题，这意味着您的本地机器上可能存在多个 Python 环境，并且在编译和执行过程中 Python 的版本不匹配。在这种情况下，您需要根据实际情况设置 `lmdeploy/generate.sh` 中的 `PYTHON_EXECUTABLE`，例如 `-DPYTHON_EXECUTABLE=/usr/local/bin/python3`，并且需要重新编译。
 
 ## Libs
 
