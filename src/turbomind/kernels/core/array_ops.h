@@ -291,6 +291,29 @@ inline __device__ void LdShared(Array<T, N>& dst, uint32_t uintptr)
     }
 }
 
+template<typename T, int N>
+inline __device__ void StShared(uint32_t uintptr, Array<T, N>& src)
+{
+    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
+    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
+        uint4& p = (uint4&)src;
+        // clang-format off
+        asm volatile("st.shared.v4.b32 [%0], {%1,%2,%3,%4};\n" :: "r"(uintptr), "r"(p.x), "r"(p.y), "r"(p.z), "r"(p.w) );
+        // clang-format on
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
+        uint2& p = (uint2&)src;
+        asm volatile("st.shared.v2.b32 [%0], {%1,%2};\n" ::"r"(uintptr), "r"(p.x), "r"(p.y));
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
+        uint& p = (uint&)src;
+        asm volatile("st.shared.b32  [%0], %1;\n" ::"r"(uintptr), "r"(p));
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>);
+    }
+}
+
 template<int kWarpCount, typename T, int N>
 inline __device__ Array<T, N> blockSum(Array<T, N> val, T* smem_red, int warp_id, int lane_id)
 {

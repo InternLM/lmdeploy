@@ -293,7 +293,8 @@ struct Epilogue_ {
     }
 
     template<class VecC, class T>
-    __device__ void StoreC(const VecC& vec_C, T* data_C, int64_t ldc, const int2& cta_cs, const int2& end_cs)
+    __device__ void
+    StoreC(const VecC& vec_C, T* data_C, int64_t ldc, const int2& cta_cs, const int2& end_cs, bool force = false)
     {
         const int2 thr_cs = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
         PRAGMA_UNROLL
@@ -305,7 +306,7 @@ struct Epilogue_ {
                 const int64_t index = (cta_cs.y + ss) * ldc + (cta_cs.x + cc);
                 const bool    mask  = cc < end_cs.x && ss < end_cs.y;
                 const auto    tmp   = cast<T>(vec_C[s][c]);
-                if (mask) {
+                if (force || mask) {
                     Store(&data_C[index], tmp);
                 }
             }
@@ -329,10 +330,10 @@ struct Epilogue_ {
                     const int     ss   = thr_cs.y + s * Map::kDeltaS;
                     const int     cc   = thr_cs.x + c * Map::kDeltaC;
                     const int64_t idx  = k * split_size + (cta_cs.y + ss) * param.partial_C_ld + (cta_cs.x + cc);
-                    const bool    mask = cc < end_cs.x && ss < end_cs.y;
+                    const bool    mask = true;  // cc < end_cs.x && ss < end_cs.y;
                     if (mask) {
                         Vec tmp;
-                        Ldg(tmp, &param.partial_C[idx]);
+                        Load(tmp, &param.partial_C[idx]);
                         using namespace ops;
                         frag_C[s][c] = frag_C[s][c] + tmp;
                     }
@@ -366,43 +367,37 @@ struct Epilogue_ {
 
         if (SplitK_ && tiled_shape.z > 1) {
 
+            // if (!is_primary_cta) {
+            //     return;
+            // }
+
+            int*       locks      = &param.locks[(tile_offset.x * tiled_shape.y + tile_offset.y) * tiled_shape.z];
+            const auto split_size = cs2idx(mk2cs<kOrder>(param.m, param.n), (int64_t)param.partial_C_ld);
+            const int  thread_idx = threadIdx.x;
+
             if (!is_primary_cta) {
+                auto partial = param.partial_C + tile_offset.z * split_size;
+                StoreC(tmp_C, partial, param.partial_C_ld, cta_cs, end_cs, true);
+                sem_post(&locks[tile_offset.z], 1, thread_idx == 0);
                 return;
             }
 
-            // int*       locks      = &param.locks[(tile_offset.x * tiled_shape.y + tile_offset.y) * tiled_shape.z];
-            // const auto split_size = cs2idx(mk2cs<kOrder>(param.m, param.n), (int64_t)param.partial_C_ld);
-            // const int  thread_idx = threadIdx.x;
-
-            // if (!is_primary_cta) {
-            //     auto partial = param.partial_C + tile_offset.z * split_size;
-            //     StoreC(tmp_C, partial, param.partial_C_ld, cta_cs, end_cs);
-            //     sem_post(&locks[tile_offset.z], 1, thread_idx == 0);
-            //     return;
-            // }
-
-            // if (!is_primary_cta) {
-            //     return;
-            // }
-
-            // clear(tmp_C);
-
             // Wait for other splits
-            // sem_wait_many(&locks[thread_idx], tile_offset.z, thread_idx < tile_offset.z);
+            sem_wait_many(&locks[thread_idx], tile_offset.z, thread_idx < tile_offset.z);
 
-            // Reduce(tmp_C, tile_offset.z, split_size, cta_cs, end_cs, param);
+            Reduce(tmp_C, tile_offset.z, split_size, cta_cs, end_cs, param);
 
-            // if (thread_idx <= tile_offset.z) {
-            //     locks[thread_idx] = 0;
-            // }
+            if (thread_idx <= tile_offset.z) {
+                locks[thread_idx] = 0;
+            }
         }
 
         const int2 thr_cs = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
 
-        // constexpr int2 delta_cs{Map::kDeltaC, Map::kDeltaS};
+        constexpr int2 delta_cs{Map::kDeltaC, Map::kDeltaS};
 
-        // param.combine_chn(tmp_C, cta_cs, thr_cs, delta_cs, end_cs);
-        // param.combine_mat(tmp_C, cta_cs, thr_cs, delta_cs, end_cs);
+        param.combine_chn(tmp_C, cta_cs, thr_cs, delta_cs, end_cs);
+        param.combine_mat(tmp_C, cta_cs, thr_cs, delta_cs, end_cs);
 
         if (0 && param.silu_act) {
             PRAGMA_UNROLL

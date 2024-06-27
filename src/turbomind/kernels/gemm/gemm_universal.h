@@ -129,7 +129,8 @@ struct GemmUniversal {
 
         SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
-        FragC frag_C{};
+        // Is 8 enough?
+        __align__(8) FragC frag_C{};
 
         int tile_iter = (gemm_k_size + CTA_K - 1) / CTA_K;
 
@@ -155,7 +156,7 @@ struct GemmUniversal {
         Epilogue epilogue{};
 
         const bool is_primary = offset_k + gemm_k_size == param.k;
-        
+
         epilogue(frag_C, tile_offset, tiled_shape, end_m, end_n, is_primary, param.epilogue, storage.epilogue);
 
         // if (!SplitK || tiled_shape.z == 1) {

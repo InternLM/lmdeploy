@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/core/mma.h"
+#include "src/turbomind/kernels/core/smem.h"
 #include "src/turbomind/kernels/gemm/simt.h"
 
 namespace turbomind::gemm {
@@ -177,7 +178,7 @@ struct Tiled_MMA_v2 {
             PRAGMA_UNROLL
             for (int k = 0; k < Map::kGroupK; ++k) {
                 // `vec` is a array in C's continguous dim
-                _foreach_C(frag_C, [&](auto vec, int mi, int ni) {
+                _foreach_C(frag_C, [&](auto& vec, int mi, int ni) {
                     const int mm = mi - offset_mn.x;
                     const int nn = ni - offset_mn.y;
                     // const int mm       = mi;
@@ -185,8 +186,12 @@ struct Tiled_MMA_v2 {
                     auto smem_ptr = &smem_C(mm, nn);
 
                     // Store(smem_ptr, vec);
-                    *(uint2*)smem_ptr = (uint2&)vec;
-                    static_assert(sizeof(vec) == 8);
+
+                    //  *(uint2*)smem_ptr = (const uint2&)vec;
+
+                    StShared(cast_smem_ptr_to_uint(smem_ptr), vec);
+                    // *(uint2*)smem_ptr = (uint2&)vec;
+                    // static_assert(sizeof(vec) == 8);
                     // if ((Map::kGroupK == 1 || group_id_k == k)     //
                     //     && (PM >= Map::M || (0 <= mm && mm < PM))  //
                     //     && (PN >= Map::N || (0 <= nn && nn < PN))) {

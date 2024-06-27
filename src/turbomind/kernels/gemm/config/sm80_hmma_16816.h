@@ -89,8 +89,10 @@ struct Operand_C {
         {
             constexpr auto cs = mk2cs<order>(M, N);
             // Padding 4C halves bank-confict but slow down the kernel
-            return SmemLayoutV2<cs.y, cs.x + 4>{};
-            // return SmemLayoutV2<cs.y, cs.x, 32, 128, Swizzle<3, 3, 3>>{};
+            // return SmemLayoutV2<cs.y, cs.x, 8, cs.x, Swizzle<4, 1, 6>>{};
+            // return SmemLayoutV2<cs.y, cs.x + 2>{};
+            // return SmemLayoutV2<cs.y, cs.x, 8, cs.x, Swizzle<2, 3, 4>>{};
+            return SmemLayoutV2<cs.y, cs.x, 16, cs.x, Swizzle<2, 3, 4>>{};
         }
     };
 
