@@ -172,7 +172,7 @@ class ChatCompletionStreamResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[ChatCompletionResponseStreamChoice]
-
+    usage: Optional[UsageInfo] = None
 
 class CompletionRequest(BaseModel):
     """Completion request."""
