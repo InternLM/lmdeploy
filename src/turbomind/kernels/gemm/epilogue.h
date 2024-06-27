@@ -6,42 +6,12 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/core/sync.h"
+#include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 
 namespace turbomind::gemm {
-
-template<class Tc>
-struct ChannelCombination {
-    const float* __restrict__ scale_ptr;
-    const float* __restrict__ bias_ptr;
-
-    __device__ bool is_valid() const noexcept
-    {
-        return scale_ptr || bias_ptr;
-    }
-
-    template<class T, int N>
-    __device__ void operator()(Array<T, N>& x, int m, int n)
-    {
-        using namespace ops;
-
-        float scale = 1.f;
-        float bias  = 0.f;
-
-        if (scale_ptr) {
-            scale = __ldg(scale_ptr + n);
-        }
-
-        if (bias_ptr) {
-            bias = __ldg(bias_ptr + n);
-        }
-
-        // FMA
-        x = x * static_cast<T>(scale) + static_cast<T>(bias);
-    }
-};
 
 template<class Tc>
 struct ChannelCombination_v2 {
@@ -93,18 +63,20 @@ template<class Tc>
 struct ChannelCombination_v3 {
     const Tc* __restrict__ scale_bias_ptr;
 
-    template<class T, int V, int S, int C>
-    __device__ void operator()(Array<T, V> (&x)[S][C], int2 cta_cs, int2 thr_cs, int2 delta_cs, int2 end_cs) const
+    template<class T, int V, int S, int C, int delta_c, int delta_s, class Pred>
+    __device__ void operator()(Array<T, V> (&x)[S][C], int2 cs0, pair<delta_c, delta_s>, Pred& pred) const
     {
         __align__(16) Array<Tc, 2> scale_bias[S];
 
         if (scale_bias_ptr) {
+            constexpr int ds  = sizeof(Tc) * delta_s;
+            auto          ptr = reinterpret_cast<const char*>(scale_bias_ptr + cs0.y);
             PRAGMA_UNROLL
             for (int s = 0; s < S; ++s) {
-                const int ss = thr_cs.y + s * delta_cs.y;
-                if (ss < end_cs.y) {
-                    Ldg(scale_bias[s], scale_bias_ptr + ss + cta_cs.y);
+                if (pred(s, 0)) {
+                    Ldg(scale_bias[s], reinterpret_cast<const Tc*>(ptr));
                 }
+                ptr += ds;
             }
             PRAGMA_UNROLL
             for (int s = 0; s < S; ++s) {
@@ -127,23 +99,25 @@ struct MatrixCombination_v2 {
     const Tc* C_ptr;  // can't `__restrict__` since it may be alias of `D`
     int64_t   ldc;
 
-    template<class T, int N, int S, int C>
-    __device__ void operator()(Array<T, N> (&x)[S][C], int2 cta_cs, int2 thr_cs, int2 delta_cs, int2 end_cs) const
+    template<class T, int N, int S, int C, int delta_c, int delta_s, class Pred>
+    __device__ void operator()(Array<T, N> (&x)[S][C], int2 cs0, pair<delta_c, delta_s>, Pred& pred) const
     {
         Array<Tc, N> frag[S][C]{};
         if (beta) {
+            constexpr int dc  = sizeof(Tc) * delta_c;
+            const int     ds  = sizeof(Tc) * delta_s * ldc;
+            auto          ptr = reinterpret_cast<const char*>(C_ptr + cs2idx(cs0, (int64_t)ldc));
             PRAGMA_UNROLL
             for (int s = 0; s < S; ++s) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < C; ++c) {
-                    const int     ss    = thr_cs.y + s * delta_cs.y;
-                    const int     cc    = thr_cs.x + c * delta_cs.x;
-                    const int64_t index = (cta_cs.y + ss) * ldc + (cta_cs.x + cc);
-                    const bool    mask  = cc < end_cs.x && ss < end_cs.y;
-                    if (mask) {
-                        Load(frag[s][c], &C_ptr[index]);
+                    if (pred(s, c)) {
+                        Load(frag[s][c], reinterpret_cast<const Tc*>(ptr));
                     }
+                    ptr += dc;
                 }
+                ptr -= dc * C;
+                ptr += ds;
             }
         }
 
@@ -159,31 +133,47 @@ struct MatrixCombination_v2 {
 };
 
 template<class Tc>
-struct MatrixCombination {
+struct MatrixCombination_v3 {
     float alpha;
     float beta;
 
-    const Tc* C;  // can't `__restrict__` since it may be alias of `D`
+    const Tc* C_ptr;  // can't `__restrict__` since it may be alias of `D`
     int64_t   ldc;
 
-    __device__ bool is_valid() const noexcept
+    template<class T, int N, int S, int C, int delta_c, int delta_s, class Pred>
+    __device__ void operator()(Array<T, N> (&x)[S][C], int2 cs0, pair<delta_c, delta_s>, Pred& pred) const
     {
-        return true;
-    }
-
-    template<class T, int N>
-    __device__ void operator()(Array<T, N>& x, int m, int n)
-    {
-        using namespace ops;
-
-        Array<Tc, N> c{};
 
         if (beta) {
-            Load(c, &C[m * ldc + n]);
+            Array<Tc, N>  frag[S][C];
+            constexpr int dc  = sizeof(Tc) * delta_c;
+            const int     ds  = sizeof(Tc) * delta_s * ldc;
+            auto          ptr = reinterpret_cast<const char*>(C_ptr + cs2idx(cs0, (int64_t)ldc));
+            PRAGMA_UNROLL
+            for (int s = 0; s < S; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < C; ++c) {
+                    if (pred(s, c)) {
+                        Load(frag[s][c], reinterpret_cast<const Tc*>(ptr));
+                        using namespace ops;
+                        x[s][c] = x[s][c] * alpha + cast<T>(frag[s][c]) * beta;
+                    }
+                    ptr += dc;
+                }
+                ptr -= dc * C;
+                ptr += ds;
+            }
         }
-
-        // FMA
-        x = x * static_cast<T>(alpha) + cast<T>(c);
+        else if (alpha != 1.f) {
+            PRAGMA_UNROLL
+            for (int s = 0; s < S; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < C; ++c) {
+                    using namespace ops;
+                    x[s][c] = x[s][c] * alpha;
+                }
+            }
+        }
     }
 };
 
@@ -240,7 +230,7 @@ struct Epilogue_ {
         int* locks;  // (m/cta_m, n/cta_n, k)
 
         ChannelCombination_v3<Tc> combine_chn;
-        MatrixCombination_v2<Tc>  combine_mat;
+        MatrixCombination_v3<Tc>  combine_mat;
         bool                      silu_act;
     };
 
@@ -292,60 +282,118 @@ struct Epilogue_ {
         }
     }
 
-    template<class VecC, class T>
-    __device__ void
-    StoreC(const VecC& vec_C, T* data_C, int64_t ldc, const int2& cta_cs, const int2& end_cs, bool force = false)
+    template<class VecC, class T, class Pred>
+    __device__ void StoreC(const VecC& vec_C, T* data_C, int ldc, int2 cs0, Pred& pred)
     {
-        const int2 thr_cs = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
+        constexpr int dc  = sizeof(T) * Map::kDeltaC;
+        const int     ds  = sizeof(T) * Map::kDeltaS * ldc;
+        auto          ptr = reinterpret_cast<char*>(data_C + cs2idx(cs0, (int64_t)ldc));
         PRAGMA_UNROLL
         for (int s = 0; s < S; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < C; ++c) {
-                const int     ss    = thr_cs.y + s * Map::kDeltaS;
-                const int     cc    = thr_cs.x + c * Map::kDeltaC;
-                const int64_t index = (cta_cs.y + ss) * ldc + (cta_cs.x + cc);
-                const bool    mask  = cc < end_cs.x && ss < end_cs.y;
-                const auto    tmp   = cast<T>(vec_C[s][c]);
-                if (force || mask) {
-                    Store(&data_C[index], tmp);
+                if (pred(s, c)) {
+                    const auto tmp = cast<T>(vec_C[s][c]);
+                    Store(reinterpret_cast<T*>(ptr), tmp);
                 }
+                ptr += dc;
             }
+            ptr -= dc * C;
+            ptr += ds;
         }
     }
 
-    template<class FragC>
+    template<class FragC, class Pred>
     __device__ void
-    Reduce(FragC& frag_C, int splits, int64_t split_size, const int2& cta_cs, const int2& end_cs, const Param& param)
+    Reduce(FragC& frag_C, int splits, int64_t split_size, const int2& cta_cs, Pred& pred, const Param& param)
     {
         using Vec         = OutputC<Dtype>;
         const int2 thr_cs = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
-
         for (int k = 0; k < splits; ++k) {
             PRAGMA_UNROLL
             for (int s = 0; s < S; ++s) {
-                // Vec tmp_C[1][C]{};
-
                 PRAGMA_UNROLL
                 for (int c = 0; c < C; ++c) {
-                    const int     ss   = thr_cs.y + s * Map::kDeltaS;
-                    const int     cc   = thr_cs.x + c * Map::kDeltaC;
-                    const int64_t idx  = k * split_size + (cta_cs.y + ss) * param.partial_C_ld + (cta_cs.x + cc);
-                    const bool    mask = true;  // cc < end_cs.x && ss < end_cs.y;
-                    if (mask) {
+                    const int     ss  = thr_cs.y + s * Map::kDeltaS;
+                    const int     cc  = thr_cs.x + c * Map::kDeltaC;
+                    const int64_t idx = k * split_size + (cta_cs.y + ss) * param.partial_C_ld + (cta_cs.x + cc);
+                    if (true) {
                         Vec tmp;
                         Load(tmp, &param.partial_C[idx]);
                         using namespace ops;
                         frag_C[s][c] = frag_C[s][c] + tmp;
                     }
                 }
-
-                // PRAGMA_UNROLL
-                // for (int c = 0; c < C; ++c) {
-                //     using namespace ops;
-                //     frag_C[s][c] = frag_C[s][c] + tmp_C[0][c];
-                // }
             }
         }
+    }
+
+    template<class FragC, class Pred>
+    __device__ void Reduce_v2(FragC& frag_C, int split_id, bool is_last, int2 cs0, Pred& pred, const Param& param)
+    {
+        constexpr int dc = sizeof(Dtype) * Map::kDeltaC;
+        const int     ds = sizeof(Dtype) * Map::kDeltaS * param.partial_C_ld;
+
+        const auto ptr0 = reinterpret_cast<char*>(param.partial_C + cs2idx(cs0, (int64_t)param.partial_C_ld));
+
+        Pred ld_mask = split_id == 0 ? Pred{} : pred;
+        Pred st_mask = is_last ? Pred{} : pred;
+
+        auto ptr = ptr0;
+        PRAGMA_UNROLL
+        for (int s = 0; s < S; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < C; ++c) {
+                OutputC<Dtype> tmp{};  // ! ZERO-filled
+                if (ld_mask(s, c)) {
+                    Load(tmp, reinterpret_cast<Dtype*>(ptr));
+                }
+                if (1) {
+                    using namespace ops;
+                    frag_C[s][c] = frag_C[s][c] + tmp;
+                }
+                if (st_mask(s, c)) {
+                    Store(reinterpret_cast<Dtype*>(ptr), frag_C[s][c]);
+                }
+                ptr += dc;
+            }
+            ptr -= dc * C;
+            ptr += ds;
+        }
+
+        // if (split_id > 0) {
+        //     auto ptr = ptr0;
+        //     PRAGMA_UNROLL
+        //     for (int s = 0; s < S; ++s) {
+        //         PRAGMA_UNROLL
+        //         for (int c = 0; c < C; ++c) {
+        //             if (pred(s, c)) {
+        //                 OutputC<Dtype> tmp;
+        //                 Load(tmp, reinterpret_cast<Dtype*>(ptr));
+        //                 using namespace ops;
+        //                 frag_C[s][c] = frag_C[s][c] + tmp;
+        //             }
+        //             ptr += dc;
+        //         }
+        //         ptr -= dc * C;
+        //         ptr += ds;
+        //     }
+        // }
+        // if (!is_last) {
+        //     auto ptr = ptr0;
+        //     PRAGMA_UNROLL
+        //     for (int s = 0; s < S; ++s) {
+        //         PRAGMA_UNROLL
+        //         for (int c = 0; c < C; ++c) {
+        //             if (pred(s, c)) {
+        //                 Store(reinterpret_cast<Dtype*>(ptr), frag_C[s][c]);
+        //             }
+        //             ptr += dc;
+        //         }
+        //         ptr -= dc * C;
+        //         ptr += ds;
+        //     }
+        // }
     }
 
     template<class FragC>
@@ -354,7 +402,7 @@ struct Epilogue_ {
                                const int3&    tiled_shape,
                                int            end_m,
                                int            end_n,
-                               bool           is_primary_cta,
+                               bool           is_last_split,
                                const Param&   param,
                                SharedStorage& storage)
     {
@@ -365,59 +413,65 @@ struct Epilogue_ {
 
         Rearrange(frag_C, storage, tmp_C);
 
-        if (SplitK_ && tiled_shape.z > 1) {
+        Predicate<S, C, false, false> pred{};  //  1 regs
 
-            // if (!is_primary_cta) {
-            //     return;
-            // }
+        const int2 thr_cs = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
+        const int2 cs0    = {cta_cs.x + thr_cs.x, cta_cs.y + thr_cs.y};
 
-            int*       locks      = &param.locks[(tile_offset.x * tiled_shape.y + tile_offset.y) * tiled_shape.z];
-            const auto split_size = cs2idx(mk2cs<kOrder>(param.m, param.n), (int64_t)param.partial_C_ld);
-            const int  thread_idx = threadIdx.x;
-
-            if (!is_primary_cta) {
-                auto partial = param.partial_C + tile_offset.z * split_size;
-                StoreC(tmp_C, partial, param.partial_C_ld, cta_cs, end_cs, true);
-                sem_post(&locks[tile_offset.z], 1, thread_idx == 0);
-                return;
-            }
-
-            // Wait for other splits
-            sem_wait_many(&locks[thread_idx], tile_offset.z, thread_idx < tile_offset.z);
-
-            Reduce(tmp_C, tile_offset.z, split_size, cta_cs, end_cs, param);
-
-            if (thread_idx <= tile_offset.z) {
-                locks[thread_idx] = 0;
+        PRAGMA_UNROLL
+        for (int s = 0; s < S; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < C; ++c) {
+                const int ss = thr_cs.y + s * Map::kDeltaS;
+                const int cc = thr_cs.x + c * Map::kDeltaC;
+                if (ss < end_cs.y && cc < end_cs.x) {
+                    pred.set(s, c);
+                }
             }
         }
 
-        const int2 thr_cs = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
+        if (SplitK_ && tiled_shape.z > 1) {
+            int* barrier = &param.locks[tile_offset.x * tiled_shape.y + tile_offset.y];
 
-        constexpr int2 delta_cs{Map::kDeltaC, Map::kDeltaS};
+            sem_wait(barrier, tile_offset.z, threadIdx.x == 0);
 
-        param.combine_chn(tmp_C, cta_cs, thr_cs, delta_cs, end_cs);
-        param.combine_mat(tmp_C, cta_cs, thr_cs, delta_cs, end_cs);
+            Reduce_v2(tmp_C, tile_offset.z, is_last_split, cs0, pred, param);
 
-        if (0 && param.silu_act) {
+            const int post_id = is_last_split ? 0 : tile_offset.z + 1;
+            sem_post(barrier, post_id, threadIdx.x == 0);
+
+            if (!is_last_split) {
+                return;
+            }
+        }
+
+        constexpr pair<Map::kDeltaC, Map::kDeltaS> delta_cs{};
+
+        param.combine_chn(tmp_C, cs0, delta_cs, pred);
+
+        param.combine_mat(tmp_C, cs0, delta_cs, pred);
+
+        if (param.silu_act) {
+            constexpr int dc  = sizeof(Dtype) * Map::kDeltaC / 2;
+            const int     ds  = sizeof(Dtype) * Map::kDeltaS * param.ldc;
+            auto          ptr = reinterpret_cast<char*>(param.C + cs2idx({cs0.x / 2, cs0.y}, (int64_t)param.ldc));
             PRAGMA_UNROLL
             for (int s = 0; s < S; ++s) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < C; ++c) {
                     GatedActivation<Silu>::apply(tmp_C[s][c]);
-                    const int     ss   = thr_cs.y + s * Map::kDeltaS;
-                    const int     cc   = thr_cs.x + c * Map::kDeltaC;
-                    const int64_t idx  = (cta_cs.y + ss) * param.ldc + (cta_cs.x + cc) / 2;
-                    const bool    mask = cc < end_cs.x && ss < end_cs.y;
-                    const auto    tmp  = cast<Tc>((Array<Dtype, kAccess / 2>&)tmp_C[s][c]);
-                    if (mask) {
-                        Store(&param.C[idx], tmp);
+                    if (pred(s, c)) {
+                        const auto tmp = cast<Tc>((Array<Dtype, kAccess / 2>&)tmp_C[s][c]);
+                        Store(reinterpret_cast<Tc*>(ptr), tmp);
                     }
+                    ptr += dc;
                 }
+                ptr -= dc * C;
+                ptr += ds;
             }
         }
         else {
-            StoreC(tmp_C, param.C, param.ldc, cta_cs, end_cs);
+            StoreC(tmp_C, param.C, param.ldc, cs0, pred);
         }
     }
 };

@@ -79,10 +79,13 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
             kRowMajor,
             half>;
 
-        Add(std::make_unique<KernelImpl<Config::Type<128, 256, 32, 1, 8, 1, 3, true, 0, 0, 1, 128>::Kernel>>());
-        // Add(std::make_unique<KernelImpl<Config::Type<256, 128, 32, 2, 4, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<128, 256, 32, 1, 8, 1, 3, true, 0, 0, 1, 128>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<256, 128, 32, 2, 4, 1, 3, true, 0, 0, 1, 128>::Kernel>>());
 
-        Add(std::make_unique<KernelImpl<Config::Type<128, 128, 32, 1, 4, 1, 3, true, 0, 0, 1, 128>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<128, 128, 32, 1, 4, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
+        Add(std::make_unique<KernelImpl<Config::Type<64, 128, 64, 1, 4, 1, 3, true, 0, 0, 1, 128>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<32, 128, 128, 1, 4, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<16, 128, 128, 1, 4, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
 
         // Add(std::make_unique<KernelImpl<Config::Type<16, 32, 32, 1, 1, 1, 3, true, 0, 0, 1, 128>::Kernel>>());
 
