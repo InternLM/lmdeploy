@@ -134,7 +134,7 @@ struct Gemm::Impl {
         for (const auto& k : kernels) {
             std::cout << "\n" << k->name() << "\n";
             int max_split_k = k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
-            max_split_k = std::min(2, max_split_k);
+            // max_split_k = std::min(3, max_split_k);
             std::cout << "max_split_k: " << max_split_k << "\n";
             auto [splits, cost] = k->Estimate(desc.m,  //
                                               desc.n,

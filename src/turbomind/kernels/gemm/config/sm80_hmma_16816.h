@@ -18,6 +18,7 @@
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
 #include "src/turbomind/kernels/gemm/transform.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include <type_traits>
 
 namespace turbomind::gemm {
 
@@ -50,14 +51,15 @@ struct GetSmemLayoutV2 {
 };
 
 // (m, k)
-template<class T>
-struct Operand_A_N {
+template<class T, Order order>
+struct Operand_A {
     using Dtype = T;
 
     static constexpr Pack  kPack  = 0;
-    static constexpr Order kOrder = Order::kColMajor;
+    static constexpr Order kOrder = order;
 
-    using SmemCopyAtom = SmemCopy_MMA_16816_B<T, true>;
+    using SmemCopyAtom =
+        std::conditional_t<order == kRowMajor, SmemCopy_MMA_16816_A<T, false>, SmemCopy_MMA_16816_B<T, true>>;
 
     using GetSmemLayout = GetSmemLayoutV2<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -173,9 +175,9 @@ struct SM80_HMMA_16816_F32 {
 
 }  // namespace sm80_hmma_16816
 
-template<class T>
-struct GetOperand<HMMA_16816, OPERAND_A, T, kColMajor, false>: std::true_type {
-    using Operand = sm80_hmma_16816::Operand_A_N<T>;
+template<class T, Order order>
+struct GetOperand<HMMA_16816, OPERAND_A, T, order, false>: std::true_type {
+    using Operand = sm80_hmma_16816::Operand_A<T, order>;
 };
 
 template<class T>

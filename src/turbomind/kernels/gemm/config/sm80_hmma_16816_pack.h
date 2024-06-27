@@ -25,14 +25,14 @@ struct GetSmemLayout {
     }
 };
 
-template<class T>
-struct Operand_A_N {
+template<class T, Order order>
+struct Operand_A {
     using Dtype = T;
 
     static constexpr int Pack_M = 1;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | Pack_M;
-    static constexpr Order kOrder = Order::kColMajor;
+    static constexpr Order kOrder = order;
 
     using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
 
@@ -74,7 +74,7 @@ struct Operand_U {
 
 template<class T>
 struct GetOperand<HMMA_16816, OPERAND_A, T, kColMajor, true>: std::true_type {
-    using Operand = sm80_hmma_16816_pack::Operand_A_N<T>;
+    using Operand = sm80_hmma_16816_pack::Operand_A<T, kColMajor>;
 };
 
 template<class T>
