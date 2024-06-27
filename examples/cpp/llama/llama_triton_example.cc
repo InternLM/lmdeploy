@@ -31,7 +31,6 @@
 #include "src/turbomind/utils/mpi_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
 #include "src/turbomind/utils/nvtx_utils.h"
-#include "src/turbomind/utils/word_list.h"
 
 namespace ft = turbomind;
 
@@ -288,7 +287,6 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     std::cerr << "max_input_len=" << max_input_len << "\n";
 
     std::vector<int> v_bad_words;
-    // ft::read_word_list("../examples/cpp/llama/bad_words.csv", v_bad_words);
 
     RequestParam param;
     param.beam_width                 = reader.GetInteger("request", "beam_width");
