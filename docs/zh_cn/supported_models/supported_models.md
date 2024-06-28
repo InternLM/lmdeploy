@@ -9,6 +9,7 @@
 |       Llama3        |   8B, 70B    |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM       |   7B - 20B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM2      |   7B - 20B   |    Yes    |   Yes   |   Yes   |  Yes  |
+|     InternLM2.5     |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 | InternLM-XComposer  |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 | InternLM-XComposer2 | 7B, 4khd-7B  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        QWen         |  1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -41,6 +42,7 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |       Llama3        |  8B, 70B   |    Yes    |   No    | Yes  |
 |      InternLM       |  7B - 20B  |    Yes    |   No    | Yes  |
 |      InternLM2      |  7B - 20B  |    Yes    |   No    |  -   |
+|     InternLM2.5     |     7B     |    Yes    |   No    |  -   |
 |      Baichuan2      |  7B - 13B  |    Yes    |   No    | Yes  |
 |      ChatGLM2       |     6B     |    Yes    |   No    |  No  |
 |       Falcon        | 7B - 180B  |    Yes    |   No    |  No  |
