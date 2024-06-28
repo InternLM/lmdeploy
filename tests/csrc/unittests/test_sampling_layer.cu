@@ -111,13 +111,14 @@ protected:
     float* h_cum_log_probs;
     float* h_output_log_probs;
 
-    T*             d_logits;
-    int*           d_input_lengths;
-    float*         d_cum_log_probs;
-    float*         d_output_log_probs;
-    int*           d_output_ids;
-    int*           d_end_ids;
-    curandState_t* d_curand_state;
+    T*                  d_logits;
+    int*                d_input_lengths;
+    float*              d_cum_log_probs;
+    float*              d_output_log_probs;
+    int*                d_output_ids;
+    int*                d_end_ids;
+    curandState_t*      d_curand_state;
+    unsigned long long* d_random_seed;
 
     void setup(unsigned long long seed = 0)
     {
@@ -167,12 +168,16 @@ protected:
         d_output_log_probs = reinterpret_cast<float*>(allocator->malloc(sizeof(float) * max_output_len * batchxbeam));
         d_output_ids       = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * max_seq_len * batchxbeam));
         d_end_ids          = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batchxbeam));
-        d_curand_state     = reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batch_size));
+        d_curand_state     = reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batchxbeam));
+        d_random_seed =
+            reinterpret_cast<unsigned long long*>(allocator->malloc(sizeof(unsigned long long) * batchxbeam));
 
         // Init by zero.
         cudaMemset(d_cum_log_probs, 0, sizeof(float) * batchxbeam);
         cudaMemset(d_output_log_probs, 0, sizeof(float) * max_output_len * batchxbeam);
         cudaMemset(d_output_ids, 0, sizeof(int) * max_seq_len * batchxbeam);
+        cudaMemset(d_random_seed, 0, sizeof(unsigned long long) * batchxbeam);
+        invokeCurandBatchInitialize(d_curand_state, batchxbeam, d_random_seed, stream);
         deviceFill(d_end_ids, batchxbeam, end_id, stream);
     }
 
@@ -969,13 +974,14 @@ protected:
     float* h_output_log_probs;
     int*   h_output_ids;
 
-    T*             d_logits;
-    int*           d_input_lengths;
-    float*         d_cum_log_probs;
-    float*         d_output_log_probs;
-    int*           d_output_ids;
-    int*           d_end_ids;
-    curandState_t* d_curand_state;
+    T*                  d_logits;
+    int*                d_input_lengths;
+    float*              d_cum_log_probs;
+    float*              d_output_log_probs;
+    int*                d_output_ids;
+    int*                d_end_ids;
+    curandState_t*      d_curand_state;
+    unsigned long long* d_random_seed;
 
     void setup(SamplingLayerTestParam param)
     {
@@ -1001,12 +1007,16 @@ protected:
         d_input_lengths = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batchxbeam));
         d_output_ids    = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * max_seq_len * batchxbeam));
         d_end_ids       = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size));
-        d_curand_state  = reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batch_size));
+        d_curand_state  = reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batchxbeam));
+        d_random_seed =
+            reinterpret_cast<unsigned long long*>(allocator->malloc(sizeof(unsigned long long) * batchxbeam));
 
         // Init by zero.
         deviceFill(d_input_lengths, batchxbeam, 0, stream);
         deviceFill(d_output_ids, max_seq_len * batchxbeam, 0, stream);
         deviceFill(d_end_ids, batch_size, end_id);
+        cudaMemset(d_random_seed, 0, sizeof(unsigned long long) * batchxbeam);
+        invokeCurandBatchInitialize(d_curand_state, batchxbeam, d_random_seed, stream);
     }
 
     void teardown()
