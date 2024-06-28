@@ -387,6 +387,7 @@ class LlamaAttentionAscend(nn.Module):
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
             max_seqlen=max_q_seq_length,
+            context=context,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1],
                                           hidden_size)

@@ -326,7 +326,7 @@ ASCEND_MODULE_MAP = dict()
 
 DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)
 
-# llama
+# ascend llama
 ASCEND_MODULE_MAP.update({
     'transformers.models.llama.modeling_llama.LlamaFlashAttention2':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
@@ -339,7 +339,7 @@ ASCEND_MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
 })
 
-# internlm2
+# ascend internlm2
 MODULE_MAP.update({
     'modeling_internlm2.InternLM2Attention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',

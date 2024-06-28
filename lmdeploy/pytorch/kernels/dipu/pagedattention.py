@@ -1,18 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from functools import lru_cache
-
 import deeplink_ext.cpp_extensions as ext
 import torch
 from torch import Tensor
-
-
-@lru_cache(None)
-def cached_mask_generator(q_seq_len, kv_seq_len):
-    mask = torch.tril(
-        torch.ones(q_seq_len, kv_seq_len, dtype=torch.bool),
-        diagonal=kv_seq_len - q_seq_len,
-    ).cuda()
-    return torch.logical_not(mask)
 
 
 def flash_context_attention(
@@ -28,6 +17,7 @@ def flash_context_attention(
     kv_seqlens: list,
     block_size: int,
     kv_cache_len: int,
+    context=None,
 ):
     batch, head, dim = (
         q_start_loc.shape[0],
@@ -44,8 +34,8 @@ def flash_context_attention(
         single_k = key_states[start:end].reshape(1, single_seqlen, -1)
         single_v = value_states[start:end].reshape(1, single_seqlen, -1)
         single_out = attn_output[start:end, :].view(1, single_seqlen, -1)
+        mask = context.attention_mask[i]
         if q_seqlens[i] == kv_seqlens[i]:
-            mask = cached_mask_generator(single_seqlen, single_seqlen)
             ext.prompt_flash_attention(
                 single_out,
                 single_q,
@@ -67,7 +57,6 @@ def flash_context_attention(
                 single_q = query_states[start + j:start + j + 1].view(1, 1, -1)
                 single_out = attn_output[start + j:start + j + 1].view(
                     1, 1, -1)
-                mask = cached_mask_generator(q_seqlens[i], kv_seqlens[i])
                 ext.paged_attention(
                     single_out,
                     single_q,
@@ -119,6 +108,7 @@ def paged_attention_fwd(
     q_seqlens: Tensor,
     kv_seqlens: Tensor,
     max_seqlen: int,
+    context: None,
 ):
     is_decoding = query_states.shape[-3] == q_seqlens.size(0)
     block_num, block_size, head, dim = key_cache.size()
@@ -139,6 +129,7 @@ def paged_attention_fwd(
             kv_seqlens.tolist(),
             block_size,
             kv_cache_len,
+            context=context,
         )
     else:
         paged_token_attention(
