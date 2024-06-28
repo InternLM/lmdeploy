@@ -275,6 +275,7 @@ class PatchedInternLM2AttentionAscend(nn.Module):
                 position_ids_1d=_position_ids_1d,
                 q_embed=query_states,
                 k_embed=key_states,
+                context=context,
             )
             return query_states, key_states, value_states
 

@@ -118,7 +118,8 @@ class LlamaAttention(nn.Module):
                 position_ids,
                 context.position_ids_1d,
                 q_embed=query_states,
-                k_embed=key_states)
+                k_embed=key_states,
+                context=context)
             return query_states, key_states, value_states
 
         def __rotary_emb_fn_438_naive(query_states, key_states, value_states):
@@ -328,6 +329,7 @@ class LlamaAttentionAscend(nn.Module):
                 scaling_factor=scaling_factor,
                 out_q=query_states[None],
                 out_k=key_states[None],
+                context=context,
             )
             return query_states[0], key_states[0], value_states
 
