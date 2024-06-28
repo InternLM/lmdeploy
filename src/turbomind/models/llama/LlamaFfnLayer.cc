@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/FfnLayer.h
+// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/FfnLayer.h
 
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/kernels/activation_kernels.h"
