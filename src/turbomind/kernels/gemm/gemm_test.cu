@@ -121,7 +121,7 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(16, 32, 16384);
 
-    // Run<T, Tb>(16, 16, 16);
+    // Run<T, Tb>(1, 32, 64);
 
     // Run<T, Tb>(16, 32, 16);
 }

@@ -465,6 +465,7 @@ struct ConvertKvCache<uint4_t, half> {
         static constexpr uint32_t MAGIC_NUM_1 = 0x54005400;        // `64`
         static constexpr uint32_t MAGIC_NUM_2 = MAGIC_NUM_1 >> 4;  // `64` >> 4
         const uint32_t            top_i4s     = i4s >> 8;
+        // uint32_t top_i4s = __byte_perm(i4s, 0, 0x4321);
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[0]) : "r"(i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[1]) : "r"(i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[2]) : "r"(top_i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));

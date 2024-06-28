@@ -115,8 +115,8 @@ struct GmemIteratorSm80 {
 
     __device__ GmemIteratorSm80(Pointer data, int stride_s, int2 offset, int2 extent): smem_data_{Pointer{(T*)nullptr}}
     {
-        int warp_id = threadIdx.x / WARP_SIZE;
-        int lane_id = threadIdx.x % WARP_SIZE;
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
 
         data   = data + cs2idx(to_cs(pack(offset)), stride_s);
         extent = to_cs(pack(extent));
@@ -153,11 +153,12 @@ struct GmemIteratorSm80 {
 
     __device__ constexpr int _src_step_k() const
     {
+        // ! Need to be adjusted when thread map type changes
         if constexpr (kOrder == kRowMajor) {
-            return src_step_c_ * Map::kIterC;  // c is K
+            return src_step_c_ * Map::kIterC * Map::kWarpC;  // c is K
         }
         else {
-            return src_step_s_ * Map::kIterS;  // s is K
+            return src_step_s_ * Map::kIterS * Map::kWarpS;  // s is K
         }
     }
 
@@ -179,7 +180,6 @@ struct GmemIteratorSm80 {
 
     __device__ void Prefetch(int begin, int count, bool tile_mask)
     {
-
         PRAGMA_UNROLL
         for (int s = begin; s < begin + count && s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
