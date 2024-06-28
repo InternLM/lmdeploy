@@ -93,7 +93,7 @@ struct ConvertOperand {
         const int extent_m = min(M, param.m);
         const int extent_k = min(K, param.k);
 
-        GmemIter gmem{(Ts*)param.src, param.lds, {cta_offset_m, 0}, {0, K}, {extent_m, extent_k}};
+        GmemIter gmem{(Ts*)param.src, param.lds, {cta_offset_m, 0}, {extent_m, extent_k}};
 
         gmem.smem_data_ = smem;
 

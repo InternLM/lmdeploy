@@ -30,6 +30,11 @@ struct SubBytePtr {
         return a + n;
     }
 
+    friend __device__ bool operator==(const SubBytePtr& a, const SubBytePtr& b)
+    {
+        return a.ptr_ == b.ptr_;
+    }
+
     __device__ explicit operator T*() const
     {
         return (T*)ptr_;

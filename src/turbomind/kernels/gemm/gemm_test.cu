@@ -38,7 +38,7 @@ void ComputeRefCpu(half* C, const half* A, const half* B, int m, int n, int k)
 template<class T>
 T& gTestbed()
 {
-    static T inst{turbomind::gemm::DispatchPolicy::kMeasure, "tmp"};
+    static T inst{turbomind::gemm::DispatchPolicy::kDefault, "tmp"};
     return inst;
 }
 
@@ -101,7 +101,7 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(16, 16, 64);
 
-    // Run<T, Tb>(16384, 16384, 16384);
+    Run<T, Tb>(16384, 16384, 16384);
 
     // Run<T, Tb>(8192, 8192, 8192);
 
@@ -113,7 +113,7 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(16, 4096, 4096);
 
-    Run<T, Tb>(1, 22016, 4096);
+    // Run<T, Tb>(1, 22016, 4096);
 
     // Run<T, Tb>(256, 8192, 8192 * 3);
 

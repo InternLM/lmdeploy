@@ -19,14 +19,14 @@ namespace turbomind::gemm {
 
 template<int Stages>
 struct GroupIter {
+
+    static_assert((Stages & (Stages - 1)) == 0);
+
     int iter_ = 0;
 
     __device__ void Advance()
     {
-        iter_ += 1;
-        if (iter_ == Stages) {
-            iter_ = 0;
-        }
+        iter_ = (iter_ + 1) % Stages;
     }
 
     __device__ constexpr explicit operator bool()
@@ -108,10 +108,6 @@ struct MainloopSm80_v2 {
     using Tb = typename OperandB::Dtype;
     using Tu = typename OperandU::Dtype;
     using Tv = typename OperandV::Dtype;
-
-    // primary  : AB
-    // qparam   : UV
-    // secondary: XY
 
     using SmemLayoutA = typename OperandA::SmemLayout;
     using SmemLayoutB = typename OperandB::SmemLayout;
@@ -340,7 +336,7 @@ struct MainloopSm80_v2 {
         // r: 0, w:-1
 
         preload(0);
-        // Transform(frag_A, frag_B, 0, data_A, data_B, data_U, data_V);
+
         TransformA::apply(frag_A, 0, data_A, data_U, UU);
         TransformB::apply(frag_B, 0, data_B, data_V, VV);
 

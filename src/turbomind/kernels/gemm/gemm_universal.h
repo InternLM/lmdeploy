@@ -134,20 +134,14 @@ struct GemmUniversal {
 
         int tile_iter = (gemm_k_size + CTA_K - 1) / CTA_K;
 
-        typename OperandA::GmemIter gmem_A{param.A, param.lda, {offset_m, offset_k}, {0, CTA_K}, {end_m, CTA_K}};
-        typename OperandB::GmemIter gmem_B{param.B, param.ldb, {offset_n, offset_k}, {0, CTA_K}, {end_n, CTA_K}};
+        typename OperandA::GmemIter gmem_A{param.A, param.lda, {offset_m, offset_k}, {end_m, CTA_K}};
+        typename OperandB::GmemIter gmem_B{param.B, param.ldb, {offset_n, offset_k}, {end_n, CTA_K}};
 
         /// TODO: move `ceil_div` into `GmemIter`
-        typename OperandU::GmemIter gmem_U{param.U,
-                                           param.ldu,
-                                           {offset_m, ceil_div(offset_k, kGroupSizeU)},
-                                           {0, ceil_div(CTA_K, kGroupSizeU)},
-                                           {end_m, ceil_div(CTA_K, kGroupSizeU)}};
-        typename OperandV::GmemIter gmem_V{param.V,
-                                           param.ldv,
-                                           {offset_n, ceil_div(offset_k, kGroupSizeV)},
-                                           {0, ceil_div(CTA_K, kGroupSizeV)},
-                                           {end_n, ceil_div(CTA_K, kGroupSizeV)}};
+        typename OperandU::GmemIter gmem_U{
+            param.U, param.ldu, {offset_m, ceil_div(offset_k, kGroupSizeU)}, {end_m, ceil_div(CTA_K, kGroupSizeU)}};
+        typename OperandV::GmemIter gmem_V{
+            param.V, param.ldv, {offset_n, ceil_div(offset_k, kGroupSizeV)}, {end_n, ceil_div(CTA_K, kGroupSizeV)}};
 
         Mainloop mainloop{};
 
@@ -158,50 +152,7 @@ struct GemmUniversal {
         const bool is_primary = offset_k + gemm_k_size == param.k;
 
         epilogue(frag_C, tile_offset, tiled_shape, end_m, end_n, is_primary, param.epilogue, storage.epilogue);
-
-        // if (!SplitK || tiled_shape.z == 1) {
-        //     StoreC(frag_C, offset_m, offset_n, end_m, end_n, param, storage);
-        // }
-        // else {
-        //     // store partial
-        //     Impl::foreach_C(frag_C, [&](const auto& vec, int mi, int ni) {
-        //         const int idx = tile_offset.z * param.m * param.n + (offset_m + mi) * param.n + offset_n + ni;
-        //         if (check_m(mi, end_m) && check_n(ni, end_n)) {
-        //             Store(&param.partial_C[idx], cast<float>(vec));
-        //         }
-        //     });
-
-        //     int* locks = &param.locks[(tile_offset.x * tiled_shape.y + tile_offset.y) * tiled_shape.z];
-
-        //     const int thread_idx = threadIdx.x;
-
-        //     if (offset_k + gemm_k_size < param.k) {  // set flag if not last split
-        //         sem_post(&locks[tile_offset.z], 1, thread_idx == 0);
-        //     }
-        //     else {  // offset_k + gemm_k_size == param.k => last split
-        //         sem_wait_many(&locks[thread_idx], tile_offset.z, thread_idx < tile_offset.z);
-
-        //         Reduce(tile_offset, param, end_m, end_n);
-
-        //         if (thread_idx <= tile_offset.z) {
-        //             locks[thread_idx] = 0;
-        //         }
-        //     }
-        // }
     }
-
-    // __device__ void
-    // StoreC(FragC& frag_C, int offset_m, int offset_n, int end_m, int end_n, const Param& param, SharedStorage&
-    // storage)
-    // {
-    //     static_assert(kOrderC == Order::kRowMajor);
-
-    //     Impl::foreach_C(frag_C, [&](const auto& vec, int mi, int ni) {
-    //         if (check_m(mi, end_m) && check_n(ni, end_n)) {
-    //             Store(param.C + cs2idx(mk2cs<kOrderC>(offset_m + mi, offset_n + ni), param.ldc), cast<Tc>(vec));
-    //         }
-    //     });
-    // }
 };
 
 extern __shared__ char smem_buf[];

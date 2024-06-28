@@ -12,7 +12,7 @@ namespace turbomind::gemm {
 struct VoidGmemIter {
     static constexpr int ITER_S = 0;
     template<class P>
-    __device__ VoidGmemIter(P, int, int2, int2, int2)
+    __device__ VoidGmemIter(P, int, int2, int2)
     {
     }
     __device__ void ClearSmem() {}
