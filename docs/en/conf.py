@@ -98,59 +98,33 @@ html_theme = 'sphinx_book_theme'
 html_logo = '_static/image/lmdeploy-logo.svg'
 html_title = project
 html_copy_source = True
-html_favicon = '_static/image/lmdeploy-logo.svg'
 html_last_updated_fmt = ''
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
 # documentation.
 #
 html_theme_options = {
-    'path_to_docs':
-    'docs/en',
-    'repository_url':
-    'https://github.com/InternLM/lmdeploy',
-    'repository_branch':
-    'main',
-    'show_navbar_depth':
-    3,
-    'max_navbar_depth':
-    4,
-    'collapse_navbar':
-    True,
-    'use_edit_page_button':
-    True,
-    'use_source_button':
-    True,
-    'use_issues_button':
-    True,
-    'use_repository_button':
-    True,
-    'use_download_button':
-    True,
-    'use_sidenotes':
-    True,
-    'show_toc_level':
-    2,
-    'icon_links': [
-        {
-            'name': 'GitHub',
-            'url': 'https://github.com/InternLM/lmdeploy',
-            'icon': 'fa-brands fa-github',
-        },
-        {
-            'name': 'PyPI',
-            'url': 'https://pypi.org/project/lmdeploy/',
-            'icon': 'https://img.shields.io/pypi/v/lmdeploy',
-            'type': 'url',
-        },
-        {
-            'name': '切换至简体中文',
-            'url': 'https://lmdeploy.readthedocs.io/en/latest',
-            'icon':
-            'https://img.shields.io/badge/Doc-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-blue',  # noqa #501
-            'type': 'url',
-        },
-    ],
+    'path_to_docs': 'docs/en',
+    'repository_url': 'https://github.com/InternLM/lmdeploy',
+    'repository_branch': 'main',
+    'show_navbar_depth': 3,
+    'max_navbar_depth': 4,
+    'collapse_navbar': True,
+    'use_edit_page_button': True,
+    'use_source_button': True,
+    'use_issues_button': True,
+    'use_repository_button': True,
+    'use_download_button': True,
+    'use_sidenotes': True,
+    'show_toc_level': 2,
+    # "icon_links": [
+    #     {
+    #         "name": "切换至简体中文",
+    #         "url": "https://lmdeploy.readthedocs.io/en/latest",
+    #         "icon": "https://img.shields.io/badge/Doc-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-blue", # noqa: #501
+    #         "type": "url",
+    #     },
+    # ],
 }
 
 # Add any paths that contain custom static files (such as style sheets) here,
@@ -158,14 +132,6 @@ html_theme_options = {
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
 html_css_files = ['css/readthedocs.css']
-
-nitpick_ignore = [
-    ('py:class', 'docutils.nodes.document'),
-    ('py:class', 'docutils.parsers.rst.directives.body.Sidebar'),
-]
-
-suppress_warnings = ['myst.domains', 'ref.ref']
-numfig = True
 
 # Enable ::: for my_st
 myst_enable_extensions = [
@@ -266,7 +232,8 @@ copybutton_prompt_is_regexp = True
 autodoc_preserve_defaults = True
 navigation_with_keys = False
 
-# Mock out external dependencies here
+# Mock out external dependencies here,
+# otherwise the autodoc pages may be blank.
 autodoc_mock_imports = [
     'torch',
     'torchvision',
