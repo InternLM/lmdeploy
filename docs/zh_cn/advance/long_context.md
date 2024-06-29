@@ -85,6 +85,8 @@ def passkey_retrieval(session_len, n_round=5):
 passkey_retrieval(session_len, 5)
 ```
 
+在 A100-80G GPU上，执行上述实验，每轮测试大约需要 364 秒
+
 ### 大海捞针
 
 可使用 OpenCompass 进行测评，具体使用方法，请参考[文档](https://github.com/open-compass/opencompass/blob/main/docs/zh_cn/advanced_guides/needleinahaystack_eval.md)

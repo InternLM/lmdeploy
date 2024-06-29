@@ -85,7 +85,7 @@ def passkey_retrieval(session_len, n_round=5):
 passkey_retrieval(session_len, 5)
 ```
 
-The passkey retrieval test, as described above, takes approximately 364 seconds per round when conducted on A100-80G GPUs
+This test takes approximately 364 seconds per round when conducted on A100-80G GPUs
 
 ### Needle In A Haystack
 
