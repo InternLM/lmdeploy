@@ -849,6 +849,19 @@ tb_llama_3_8b_instruct_kvint4 = dict(
     stop_words=['<|eot_id|>', '<|end_of_text|>'],
 )
 
+tb_llama_3_8b_instruct_kvint8 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_llama_3_8b_instruct_kvint8',
+    path='meta-llama/Meta-Llama-3-8B-Instruct',
+    engine_config=engine_config_template_max_bs_128_kvint8,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+    stop_words=['<|eot_id|>', '<|end_of_text|>'],
+)
+
 # config for llama-3-8b-instruct pytorch
 pt_llama_3_8b_instruct = dict(
     type=LmdeployPytorchModel,
