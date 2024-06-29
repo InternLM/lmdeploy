@@ -6,13 +6,13 @@
 
 如果要直接加载 HuggingFace 格式的模型，可以通过修改 TurbomindEngineConfig 参数的方式赋予模型外推能力。将 `session_len` 修改为外推的长度，并将 `rope_scaling_factor` 修改为不小于 1.0 的值。
 
-以 InternLM2 为例，可以使用如下方式，激活长文本推理能力：
+以 InternLM2.5 为例，可以使用如下方式，激活长文本推理能力：
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
 
-backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=160000)
-pipe = pipeline('internlm/internlm2_5-7b-chat', backend_config=backend_config)
+backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=1000000)
+pipe = pipeline('internlm/internlm2_5-7b-chat-1m', backend_config=backend_config)
 prompt = 'Use a long prompt to replace this sentence'
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
@@ -35,9 +35,9 @@ import numpy as np
 from lmdeploy import pipeline
 from lmdeploy import TurbomindEngineConfig
 
-session_len = 160000
+session_len = 1000000
 backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=session_len)
-pipe = pipeline('internlm/internlm2_5-7b-chat', backend_config=backend_config)
+pipe = pipeline('internlm/internlm2_5-7b-chat-1m', backend_config=backend_config)
 
 
 def passkey_retrival(session_len, n_round=5):
@@ -86,8 +86,8 @@ from lmdeploy import TurbomindEngineConfig, pipeline
 import numpy as np
 
 # load model and tokenizer
-model_repoid_or_path = 'internlm/internlm2_5-7b-chat'
-backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=160000)
+model_repoid_or_path = 'internlm/internlm2_5-7b-chat-1m'
+backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=1000000)
 pipe = pipeline(model_repoid_or_path, backend_config=backend_config)
 tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
 
