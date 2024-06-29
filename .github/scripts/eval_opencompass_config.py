@@ -275,6 +275,9 @@ engine_config_template_max_bs_128_awq = dict(session_len=MAX_SESSION_LEN,
 engine_config_template_max_bs_128_kvint4 = dict(session_len=MAX_SESSION_LEN,
                                                 max_batch_size=128,
                                                 quant_policy=4)
+engine_config_template_max_bs_128_kvint8 = dict(session_len=MAX_SESSION_LEN,
+                                                max_batch_size=128,
+                                                quant_policy=8)
 engine_config_template_max_bs_128_tp2 = dict(session_len=MAX_SESSION_LEN,
                                              max_batch_size=128,
                                              tp=2)
@@ -405,6 +408,69 @@ tb_internlm2_chat_7b_kvint4 = dict(
     abbr='tb_internlm2_chat_7b_kvint4',
     path='internlm/internlm2-chat-7b',
     engine_config=engine_config_template_max_bs_128_kvint4,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+    stop_words=['</s>', '<|im_end|>'],
+)
+tb_internlm2_chat_7b_kvint8 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_chat_7b_kvint8',
+    path='internlm/internlm2-chat-7b',
+    engine_config=engine_config_template_max_bs_128_kvint8,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+    stop_words=['</s>', '<|im_end|>'],
+)
+
+tb_internlm2_5_7b_chat = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_5_7b_chat',
+    path='internlm/internlm2_5-7b-chat',
+    engine_config=engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+    stop_words=['</s>', '<|im_end|>'],
+)
+
+tb_internlm2_5_7b_chat_w4a16 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_5_7b_chat_w4a16',
+    path='internlm/internlm2_5-7b-chat-inner-4bits',
+    engine_config=engine_config_template_max_bs_128_awq,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+    stop_words=['</s>', '<|im_end|>'],
+)
+
+tb_internlm2_5_chat_7b_kvint4 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_5_7b_chat_kvint4',
+    path='internlm/internlm2_5-7b-chat',
+    engine_config=engine_config_template_max_bs_128_kvint4,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+    stop_words=['</s>', '<|im_end|>'],
+)
+tb_internlm2_5_chat_7b_kvint8 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_5_7b_chat_kvint8',
+    path='internlm/internlm2_5-7b-chat',
+    engine_config=engine_config_template_max_bs_128_kvint8,
     gen_config=gen_config_template,
     max_seq_len=MAX_SESSION_LEN,
     max_out_len=MAX_NEW_TOKENS,
@@ -837,6 +903,3 @@ pt_codellama_7b_chat = dict(type=LmdeployPytorchModel,
                             end_str='</s>')
 
 
-
-models = [tb_internlm2_chat_7b,tb_internlm2_chat_7b_w4a16,tb_internlm2_chat_7b_kvint4,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_internlm2_chat_20b_kvint4,tb_llama_3_8b_instruct,tb_llama_3_8b_instruct_w4a16,tb_llama_3_8b_instruct_kvint4,tb_qwen1_5_7b_chat,tb_qwen1_5_7b_chat_kvint4,tb_qwen1_5_7b_chat_w4a16,pt_qwen1_5_7b_chat,pt_qwen1_5_moe_2_7b_chat,tb_qwen2_7b_instruct,tb_qwen2_7b_instruct_w4a16,tb_qwen2_7b_instruct_kvint4]
-datasets = [*race_datasets]
