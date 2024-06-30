@@ -1016,7 +1016,6 @@ protected:
         deviceFill(d_output_ids, max_seq_len * batchxbeam, 0, stream);
         deviceFill(d_end_ids, batch_size, end_id);
         cudaMemset(d_random_seed, 0, sizeof(unsigned long long) * batch_size);
-        invokeCurandBatchInitialize(d_curand_state, batch_size, d_random_seed, stream);
     }
 
     void teardown()
@@ -1049,6 +1048,14 @@ protected:
         for (size_t i = 0; i < random_seed_size; ++i) {
             random_seed[i] = i / period_size;
         }
+        cudaH2Dcpy(d_random_seed, random_seed, random_seed_size);
+        if (use_single_random_seed) {
+            invokeCurandInitialize(d_curand_state, batch_size, random_seed[0], stream);
+        }
+        else {
+            invokeCurandBatchInitialize(d_curand_state, batch_size, d_random_seed, stream);
+        }
+        sync_check_cuda_error();
 
         TensorMap runtime_args;
         runtime_args.insert({"random_seed", Tensor(MEMORY_CPU, TYPE_UINT64, {random_seed_size}, random_seed)});
