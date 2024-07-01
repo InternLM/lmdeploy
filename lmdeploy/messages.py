@@ -226,7 +226,7 @@ class PytorchEngineConfig:
         assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.device_type in [
-            'cuda'
+            'cuda', 'ascend'
         ], (f'invalid device_type: {self.device_type}')
 
 
