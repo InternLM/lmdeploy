@@ -340,7 +340,7 @@ ASCEND_MODULE_MAP.update({
 })
 
 # ascend internlm2
-MODULE_MAP.update({
+ASCEND_MODULE_MAP.update({
     'modeling_internlm2.InternLM2Attention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',
     'modeling_internlm2.InternLM2FlashAttention2':
