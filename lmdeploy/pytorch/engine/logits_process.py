@@ -177,6 +177,8 @@ class SamplingInputs:
         stop_words = __get_bad_words(stop_words)
 
         max_top_k = max(top_k)
+        if min(top_k) <= 0:
+            max_top_k = 0
         if max_top_k == 1:
             top_k = None
             top_p, min_top_p = None, 1.0
@@ -267,7 +269,14 @@ class FusedLogitsProcessor(LogitsWarper):
 
         def __random_sampling(scores: torch.Tensor, indices: torch.LongTensor):
             """random sampling."""
+            max_topk = sampling_inputs.max_top_k
             top_k = sampling_inputs.top_k
+            if max_topk <= 0:
+                max_topk = scores.size(1)
+                if top_k is not None:
+                    top_k = torch.where(top_k <= 0, top_k.new_tensor(max_topk),
+                                        top_k)
+
             if top_k is not None:
                 scores = _filter_topk_sorted(scores, top_k)
 
@@ -277,7 +286,6 @@ class FusedLogitsProcessor(LogitsWarper):
 
             softmax_scores = scores.softmax(1)
 
-            max_topk = sampling_inputs.max_top_k
             softmax_scores = softmax_scores[:, :max_topk]
             indices = indices[:, :max_topk]
 
@@ -291,9 +299,12 @@ class FusedLogitsProcessor(LogitsWarper):
         else:
             # sort logits is too slow. and we only need topk logits
             max_topk = sampling_inputs.max_top_k
-            scores = torch.zeros_like(logits)
-            indices = torch.zeros_like(logits, dtype=torch.int64)
-            topk_scores, topk_indices = logits.topk(max_topk, dim=1)
-            scores[..., :max_topk] = topk_scores
-            indices[..., :max_topk] = topk_indices
+            if max_topk <= 0:
+                scores, indices = logits.sort(1, descending=True)
+            else:
+                scores = torch.zeros_like(logits)
+                indices = torch.zeros_like(logits, dtype=torch.int64)
+                topk_scores, topk_indices = logits.topk(max_topk, dim=1)
+                scores[..., :max_topk] = topk_scores
+                indices[..., :max_topk] = topk_indices
             return __random_sampling(scores, indices)
