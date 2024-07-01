@@ -17,7 +17,7 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/GptContextAttentionLayer.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.cc
 
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/kernels/attention/attention.h"
