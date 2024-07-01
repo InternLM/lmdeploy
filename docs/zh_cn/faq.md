@@ -28,7 +28,7 @@ pip install lmdeploy[all]
 
 ```shell
 # 创建 bld 和进行本地编译
-mkdir bld && cd bld && bash ../generate.sh && ninja $(nproc)
+mkdir bld && cd bld && bash ../generate.sh && ninja -j$(nproc)
 
 # 从 bld 中切到 lmdeploy 子目录并设置软链接
 cd ../lmdeploy && ln -s ../bld/lib .

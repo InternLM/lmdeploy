@@ -28,7 +28,7 @@ But if you are a developer, you often need to develop and compile locally. The e
 
 ```shell
 # mkdir and build locally
-mkdir bld && cd bld && bash ../generate.sh && ninja $(nproc)
+mkdir bld && cd bld && bash ../generate.sh && ninja -j$(nproc)
 
 # go to the lmdeploy subdirectory from bld and set symbolic links
 cd ../lmdeploy && ln -s ../bld/lib .
