@@ -53,33 +53,30 @@ lmdeploy serve api_server internlm/internlm2_5-7b-chat --quant-policy 8
 
 We apply kv quantization of LMDeploy to several LLM models and utilize OpenCompass to evaluate the inference accuracy. The results are shown in the table below:
 
-| -           | -       | -             | llama2-7b-chat | -       | -       | internlm2-chat-7b | -       | -       | internlm2.5-chat-7b | -       | -      qwen1.5-7b-chat | -       | -       |
-| ----------- | ------- | ------------- | -------------- | ------- | ------- | ----------------- | ------- | ------- |  ----------------- | ------- | ------- --------------- | ------- | ------- |
-| dataset     | version | metric        | kv fp16        | kv int8 | kv int4 | kv fp16           | kv int8 | kv int4 | kv fp16           | kv int8 | kv int4 fp16            | kv int8 | kv int4 |
-| ceval       | -       | naive_average | 28.42          | 27.96   | 27.58   | 60.45             | 60.88   | 60.28   |  78.06             | 77.87   |   77.05           | 70.49   | 68.62   |
-| mmlu        | -       | naive_average | 35.64          | 35.58   | 34.79   | 63.91             | 64      | 62.36   | 72.30           | 72.27      | 71.17   | 61.48          61.56   | 60.65   |
-| triviaqa    | 2121ce  | score         | 56.09          | 56.13   | 53.71   | 58.73             | 58.7    | 58.18   |-           | -   | -   | 44.62         44.77   | 44.04   |
-| gsm8k       | 1d7fe4  | accuracy      | 28.2           | 28.05   | 27.37   | 70.13             | 69.75   | 66.87   | 85.67          | 85.44   | 83.78   | 54.97     56.41   | 54.74   |
-| race-middle | 9a54b6  | accuracy      | 41.57          | 41.78   | 41.23   | 88.93             | 88.93   | 88.93   | 92.76           | 92.83   | 92.55   | 87.33         87.26   | 86.28   |
-| race-high   | 9a54b6  | accuracy      | 39.65          | 39.77   | 40.77   | 85.33             | 85.31   | 84.62   | 90.51           | 90.42   | 90.42   | 82.53        82.59   | 82.02   |
+| -           | -       | -             | llama2-7b-chat | -       | -       | internlm2-chat-7b | -       | -       | internlm2.5-chat-7b | -       | -       | qwen1.5-7b-chat | -       | -       |
+| ----------- | ------- | ------------- | -------------- | ------- | ------- | ----------------- | ------- | ------- | ------------------- | ------- | ------- | --------------- | ------- | ------- |
+| dataset     | version | metric        | kv fp16        | kv int8 | kv int4 | kv fp16           | kv int8 | kv int4 | kv fp16             | kv int8 | kv int4 | fp16            | kv int8 | kv int4 |
+| ceval       | -       | naive_average | 28.42          | 27.96   | 27.58   | 60.45             | 60.88   | 60.28   | 78.06               | 77.87   | 77.05   | 70.56           | 70.49   | 68.62   |
+| mmlu        | -       | naive_average | 35.64          | 35.58   | 34.79   | 63.91             | 64      | 62.36   | 72.30               | 72.27   | 71.17   | 61.48           | 61.56   | 60.65   |
+| triviaqa    | 2121ce  | score         | 56.09          | 56.13   | 53.71   | 58.73             | 58.7    | 58.18   | 65.09               | 64.87   | 63.28   | 44.62           | 44.77   | 44.04   |
+| gsm8k       | 1d7fe4  | accuracy      | 28.2           | 28.05   | 27.37   | 70.13             | 69.75   | 66.87   | 85.67               | 85.44   | 83.78   | 54.97           | 56.41   | 54.74   |
+| race-middle | 9a54b6  | accuracy      | 41.57          | 41.78   | 41.23   | 88.93             | 88.93   | 88.93   | 92.76               | 92.83   | 92.55   | 87.33           | 87.26   | 86.28   |
+| race-high   | 9a54b6  | accuracy      | 39.65          | 39.77   | 40.77   | 85.33             | 85.31   | 84.62   | 90.51               | 90.42   | 90.42   | 82.53           | 82.59   | 82.02   |
 
 For detailed evaluation methods, please refer to [this](../benchmark/evaluate_with_opencompass.md) guide. Remember to pass `quant_policy` to the inference engine in the config file.
 
 ## Performance
 
-| model               | kv type | test settings                            | RPS   | v.s. kv fp16 |
-| ------------------- | ------- | ---------------------------------------- | ----- | ------------ |
-| llama2-chat-7b      | fp16    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 14.98 | 1.0          |
-| -                   | int8    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 19.01 | 1.27         |
-| -                   | int4    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 20.81 | 1.39         |
-| llama2-chat-13b     | fp16    | tp1 / ratio 0.9 / bs 128 / prompts 10000 | 8.55  | 1.0          |
-| -                   | int8    | tp1 / ratio 0.9 / bs 256 / prompts 10000 | 10.96 | 1.28         |
-| -                   | int4    | tp1 / ratio 0.9 / bs 256 / prompts 10000 | 11.91 | 1.39         |
-| internlm2-chat-7b   | fp16    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 24.13 | 1.0          |
-| -                   | int8    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 25.28 | 1.05         |
-| -                   | int4    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 25.80 | 1.07         |
-| internlm2_5-chat-7b | fp16    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 19.25 | 1.0          |
-| -                   | int8    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 20.98 | 1.09         |
-| -                   | int4    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 21.82 | 1.13         |
+| model             | kv type | test settings                            | RPS   | v.s. kv fp16 |
+| ----------------- | ------- | ---------------------------------------- | ----- | ------------ |
+| llama2-chat-7b    | fp16    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 14.98 | 1.0          |
+| -                 | int8    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 19.01 | 1.27         |
+| -                 | int4    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 20.81 | 1.39         |
+| llama2-chat-13b   | fp16    | tp1 / ratio 0.9 / bs 128 / prompts 10000 | 8.55  | 1.0          |
+| -                 | int8    | tp1 / ratio 0.9 / bs 256 / prompts 10000 | 10.96 | 1.28         |
+| -                 | int4    | tp1 / ratio 0.9 / bs 256 / prompts 10000 | 11.91 | 1.39         |
+| internlm2-chat-7b | fp16    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 24.13 | 1.0          |
+| -                 | int8    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 25.28 | 1.05         |
+| -                 | int4    | tp1 / ratio 0.8 / bs 256 / prompts 10000 | 25.80 | 1.07         |
 
 The performance data is obtained by `benchmark/profile_throughput.py`
