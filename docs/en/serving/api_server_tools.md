@@ -2,7 +2,7 @@
 
 ## Single Round Invocation
 
-Currently, LMDeploy supports tools only for InternLM2 models. Please start the service of InternLM2 models before running the following example.
+Currently, LMDeploy supports tools only for InternLM2 or InternLM2.5 models. Please start the service of models before running the following example.
 Make sure to pass skip_special_tokens as False.
 
 ```python

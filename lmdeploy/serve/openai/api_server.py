@@ -4,7 +4,6 @@ import copy
 import json
 import os
 import time
-from asyncio.log import logger
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
@@ -33,6 +32,8 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 class VariableInterface:
@@ -1221,7 +1222,6 @@ def serve(model_path: str,
     """ # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
-    logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
 
     if allow_origins:

@@ -2,7 +2,7 @@
 
 ## 单轮调用
 
-目前的 LMDeploy 只支持 InternLM2 模型的工具调用。启动好 InternLM2 模型的服务后，运行下面 demo 即可。请一定要传 `skip_special_tokens` 为 False。
+目前的 LMDeploy 只支持 InternLM2 或者 InternLM2.5 模型的工具调用。启动好模型的服务后，运行下面 demo 即可。请一定要传 `skip_special_tokens` 为 False。
 
 ```python
 from openai import OpenAI
