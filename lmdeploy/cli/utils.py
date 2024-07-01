@@ -379,9 +379,8 @@ class ArgumentHelper:
             '--cache-max-entry-count',
             type=float,
             default=0.8,
-            help=
-            'The percentage of free gpu memory occupied by the k/v cache, excluding weights'
-        )
+            help='The percentage of free gpu memory occupied by the k/v '
+            'cache, excluding weights ')
 
     @staticmethod
     def adapters(parser):
