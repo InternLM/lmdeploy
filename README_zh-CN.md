@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/06\] PyTorch engine 支持了 DeepSeek-V2 和若干 VLM 模型推理, 比如 CogVLM2，Mini-InternVL，LlaVA-Next
 - \[2024/05\] 在多 GPU 上部署 VLM 模型时，支持把视觉部分的模型均分到多卡上
 - \[2024/05\] 支持InternVL v1.5, LLaVa, InternLMXComposer2 等 VLMs 模型的 4bit 权重量化和推理
 - \[2024/04\] 支持 Llama3 和 InternVL v1.1, v1.2，MiniGemini，InternLM-XComposer2 等 VLM 模型
@@ -113,6 +114,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>QWen (1.8B - 72B)</li>
   <li>QWen1.5 (0.5B - 110B)</li>
   <li>QWen1.5 - MoE (0.5B - 72B)</li>
+  <li>QWen2 (0.5B - 72B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
@@ -122,6 +124,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>YI (6B-34B)</li>
   <li>Mistral (7B)</li>
   <li>DeepSeek-MoE (16B)</li>
+  <li>DeepSeek-V2 (16B, 236B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>
   <li>Dbrx (132B)</li>
@@ -163,7 +166,7 @@ pip install lmdeploy
 自 v0.3.0 起，LMDeploy 预编译包默认基于 CUDA 12 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，请执行以下命令：
 
 ```shell
-export LMDEPLOY_VERSION=0.3.0
+export LMDEPLOY_VERSION=0.5.0
 export PYTHON_VERSION=38
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
