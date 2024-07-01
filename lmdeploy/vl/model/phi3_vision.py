@@ -143,10 +143,6 @@ class Phi3VisionModel(VisonModel):
                 del model.model.norm
                 del model.model.embed_tokens
                 del model.model.vision_embed_tokens.wte
-                setattr(model, 'lm_head', None)
-                setattr(model.model.vision_embed_tokens, 'wte', None)
-                for key in ['layers', 'norm', 'embed_tokens']:
-                    setattr(model.model, key, None)
             else:
                 self.vl_model = model
 
@@ -169,8 +165,7 @@ class Phi3VisionModel(VisonModel):
                 continue
             for k in keys[1:]:
                 device_map[k] = device_map[keys[0]]
-        for k, v in device_map.items():
-            print(k, v)
+
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
