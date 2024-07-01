@@ -179,37 +179,23 @@ struct Tiled_MMA_v2 {
             for (int k = 0; k < Map::kGroupK; ++k) {
                 // `vec` is a array in C's continguous dim
                 _foreach_C(frag_C, [&](auto& vec, int mi, int ni) {
-                    const int mm = mi - offset_mn.x;
-                    const int nn = ni - offset_mn.y;
-                    // const int mm       = mi;
-                    // const int nn       = ni;
-                    auto smem_ptr = &smem_C(mm, nn);
-
-                    // Store(smem_ptr, vec);
-
-                    //  *(uint2*)smem_ptr = (const uint2&)vec;
-
-                    StShared(cast_smem_ptr_to_uint(smem_ptr), vec);
-                    // *(uint2*)smem_ptr = (uint2&)vec;
-                    // static_assert(sizeof(vec) == 8);
-                    // if ((Map::kGroupK == 1 || group_id_k == k)     //
-                    //     && (PM >= Map::M || (0 <= mm && mm < PM))  //
-                    //     && (PN >= Map::N || (0 <= nn && nn < PN))) {
-                    //     if (k > 0) {  // constant
-                    //         std::remove_reference_t<decltype(vec)> tmp;
-                    //         Load(tmp, smem_ptr);
-                    //         {
-                    //             using namespace ops;
-                    //             vec = vec + tmp;
-                    //         }
-                    //     }
-
-                    //     // for (const auto& x : vec) {
-                    //     //     printf("%d %f %d %d\n", (int)threadIdx.x, x, mi, ni);
-                    //     // }
-
-                    //     Store(smem_ptr, vec);
-                    // }
+                    const int mm       = mi - offset_mn.x;
+                    const int nn       = ni - offset_mn.y;
+                    auto      smem_ptr = &smem_C(mm, nn);
+                    if ((Map::kGroupK == 1 || group_id_k == k)     //
+                        && (PM >= Map::M || (0 <= mm && mm < PM))  //
+                        && (PN >= Map::N || (0 <= nn && nn < PN))) {
+                        if (k > 0) {  // constant
+                            std::remove_reference_t<decltype(vec)> tmp;
+                            Load(tmp, smem_ptr);
+                            {
+                                using namespace ops;
+                                vec = vec + tmp;
+                            }
+                        }
+                        // StShared(cast_smem_ptr_to_uint(smem_ptr), vec);
+                        Store(smem_ptr, vec);
+                    }
                 });
                 __syncthreads();
             }

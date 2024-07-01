@@ -90,11 +90,8 @@ struct Operand_C {
         static constexpr auto apply(pair<M, N>)
         {
             constexpr auto cs = mk2cs<order>(M, N);
-            // Padding 4C halves bank-confict but slow down the kernel
-            // return SmemLayoutV2<cs.y, cs.x, 8, cs.x, Swizzle<4, 1, 6>>{};
-            // return SmemLayoutV2<cs.y, cs.x + 2>{};
-            // return SmemLayoutV2<cs.y, cs.x, 8, cs.x, Swizzle<2, 3, 4>>{};
-            return SmemLayoutV2<cs.y, cs.x, 16, cs.x, Swizzle<2, 3, 4>>{};
+
+            return SmemLayoutV2<cs.y, cs.x, 8, 32, Swizzle<2, 3, 2>>{};
         }
     };
 
@@ -102,8 +99,10 @@ struct Operand_C {
         template<int M, int N, int THREADS>
         static constexpr auto apply(pair<M, N>, constant<THREADS>)
         {
-            constexpr auto cs = mk2cs<order>(M, N);
-            return ThreadMap<cs.x, cs.y, 4, THREADS / WARP_SIZE>{};
+            constexpr auto cs    = mk2cs<order>(M, N);
+            constexpr int  WARPS = THREADS / WARP_SIZE;
+
+            return ThreadMap_V2<cs.x, cs.y, 4, Raked, WARPS>{};
         }
     };
 };
@@ -143,7 +142,10 @@ struct SM80_HMMA_16816_F32 {
              int  GroupSizeV = 1>
     struct Type {
         using MMA_Map = RakedThreadGroupMap<CTA_M, CTA_N, CTA_K, 16, 16, 16, WARP_CNT_M, WARP_CNT_N, WARP_CNT_K>;
-        using MMA     = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
+        // using Partition = Blocked<WARP_CNT_M, WARP_CNT_N, 1, WARP_CNT_M>;
+        // using Partition = Raked<WARP_CNT_M, WARP_CNT_N, 1, WARP_CNT_M>;
+        // using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, 32, 16, 16, Partition, WARP_CNT_K>;
+        using MMA = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
 
         using Mainloop = MainloopSm80_v2<CTA_M,
                                          CTA_N,

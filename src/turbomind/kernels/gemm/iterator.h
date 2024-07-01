@@ -36,7 +36,7 @@ struct GetGmemIter {
         constexpr int2 kCS = mk2cs<Operand::kOrder>(M, K);
 
         using GmemIter = typename Iterator::template Type<Dtype,
-                                                          gemm::ThreadMap<kCS.x, kCS.y, kAccessSize, WARPS>,
+                                                          gemm::ThreadMap_V2<kCS.x, kCS.y, kAccessSize, Blocked, WARPS>,
                                                           SmemLayout,
                                                           Operand::kPack,
                                                           Operand::kOrder,

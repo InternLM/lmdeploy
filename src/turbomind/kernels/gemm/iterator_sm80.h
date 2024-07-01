@@ -153,13 +153,7 @@ struct GmemIteratorSm80 {
 
     __device__ constexpr int _src_step_k() const
     {
-        // ! Need to be adjusted when thread map type changes
-        if constexpr (kOrder == kRowMajor) {
-            return src_step_c_ * Map::kIterC * Map::kWarpC;  // c is K
-        }
-        else {
-            return src_step_s_ * Map::kIterS * Map::kWarpS;  // s is K
-        }
+        return cs2mk<kOrder>(src_step_c_ * Map::kIterC * Map::kWarpC, src_step_s_ * Map::kIterS * Map::kWarpS).y;
     }
 
     __device__ void ClearSmem(int pipe_iter = 0)

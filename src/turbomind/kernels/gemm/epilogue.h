@@ -200,7 +200,7 @@ struct Silu {
 template<class Tc_, int M, int N, int PM, int PN, int THREADS, class RearrangeC, class OperandC, bool SplitK_>
 struct Epilogue_ {
 
-    using SmemLayout = decltype(OperandC::GetSmemLayout::apply(pair<M, N>{}));
+    using SmemLayout = decltype(OperandC::GetSmemLayout::apply(pair<PM, PN>{}));
     using Map        = decltype(OperandC::GetThreadMap::apply(pair<M, N>{}, constant<THREADS>{}));
 
     using Dtype = typename OperandC::Dtype;
@@ -240,9 +240,7 @@ struct Epilogue_ {
     template<class FragC>
     __device__ void Rearrange(FragC& frag_C, SharedStorage& storage, OutputC<Dtype> (&out)[S][C])
     {
-        SmemAccessorV2 smem_C{(float*)__cvta_shared_to_generic(0)};
-
-        // SmemAccessorV2 smem_C{0};
+        SmemAccessorV2 smem_C{storage.data()};
 
         const int2 thr_cs = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
 
@@ -258,22 +256,14 @@ struct Epilogue_ {
                 for (int s = 0; s < S; ++s) {
                     PRAGMA_UNROLL
                     for (int c = 0; c < C; ++c) {
-                        const int  cc = c * Map::kDeltaC + thr_cs.x;
-                        const int  ss = s * Map::kDeltaS + thr_cs.y;
-                        const int2 mn = cs2mk<kOrder>(cc, ss);
-                        const int  mm = mn.x - m;
-                        const int  nn = mn.y - n;
-                        // const int mm = mn.x;
-                        // const int nn = mn.y;
-                        // printf("%d %d\n", mm, nn);
+                        const int  cc   = c * Map::kDeltaC + thr_cs.x;
+                        const int  ss   = s * Map::kDeltaS + thr_cs.y;
+                        const int2 mn   = cs2mk<kOrder>(cc, ss);
+                        const int  mm   = mn.x - m;
+                        const int  nn   = mn.y - n;
                         const bool mask = (M <= PM || (0 <= mm && mm < PM)) && ((N <= PN) || (0 <= nn && nn < PN));
                         if (mask) {
                             Load(out[s][c], &smem_C(mm, nn));
-                            // for (const auto& x : out[s][c]) {
-                            //     if (mm < 16 && nn < 32) {
-                            //         printf("%d %f %d %d\n", (int)threadIdx.x, x, mm, nn);
-                            //     }
-                            // }
                         }
                     }
                 }
