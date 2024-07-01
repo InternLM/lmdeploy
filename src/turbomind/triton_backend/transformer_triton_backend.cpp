@@ -16,7 +16,7 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/transformer_triton_backend.cpp
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/transformer_triton_backend.cpp
 
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/nccl_utils.h"

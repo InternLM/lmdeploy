@@ -10,12 +10,12 @@
 
 ## 启动服务
 
-以 huggingface hub 上的 [internlm2-chat-7b](https://huggingface.co/internlm/internlm2-chat-7b) 模型为例，你可以任选以下方式之一，启动推理服务。
+以 huggingface hub 上的 [internlm2_5-7b-chat](https://huggingface.co/internlm/internlm2_5-7b-chat) 模型为例，你可以任选以下方式之一，启动推理服务。
 
 ### 方式一：使用 lmdeploy cli 工具
 
 ```shell
-lmdeploy serve api_server internlm/internlm2-chat-7b --server-port 23333
+lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333
 ```
 
 api_server 启动时的参数可以通过命令行`lmdeploy serve api_server -h`查看。
@@ -32,7 +32,7 @@ docker run --runtime nvidia --gpus all \
     -p 23333:23333 \
     --ipc=host \
     openmmlab/lmdeploy:latest \
-    lmdeploy serve api_server internlm/internlm2-chat-7b
+    lmdeploy serve api_server internlm/internlm2_5-7b-chat
 ```
 
 在这个例子中，`lmdeploy server api_server` 的命令参数与方式一一致。
@@ -59,7 +59,7 @@ CMD ["lmdeploy", "serve", "api_server", "liuhaotian/llava-v1.6-34b"]
 
 ### 方式三：部署到Kubernetes集群
 
-使用[kubectl](https://kubernetes.io/docs/reference/kubectl/)命令行工具，连接到一个运行中Kubernetes集群并部署internlm2-chat-7b模型服务。下面是使用示例（需要替换`<your token>`为你的huggingface hub token）：
+使用[kubectl](https://kubernetes.io/docs/reference/kubectl/)命令行工具，连接到一个运行中Kubernetes集群并部署internlm2_5-7b-chat模型服务。下面是使用示例（需要替换`<your token>`为你的huggingface hub token）：
 
 ```shell
 sed 's/{{HUGGING_FACE_HUB_TOKEN}}/<your token>/' k8s/deployment.yaml | kubectl create -f - \

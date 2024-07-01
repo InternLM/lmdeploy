@@ -17,12 +17,17 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[tb_internlm2_chat_7b,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_llama2_chat_7b,tb_qwen1_5_chat_7b,tb_llama_3_8b_instruct,pt_internlm2_chat_7b,pt_internlm2_chat_20b,pt_llama2_chat_7b,pt_qwen1_5_chat_7b,pt_qwen1_5_moe_2_7b_chat,pt_llama_3_8b_instruct,tb_internlm2_chat_7b_kvint4,tb_internlm2_chat_20b_kvint4,tb_qwen1_5_chat_7b_kvint4,tb_llama_3_8b_instruct_kvint4]'
+        default: '[tb_internlm2_chat_7b,tb_internlm2_chat_7b_w4a16,tb_internlm2_chat_7b_kvint4,pt_internlm2_chat_7b,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_internlm2_chat_20b_kvint4,pt_internlm2_chat_20b,tb_llama_3_8b_instruct,tb_llama_3_8b_instruct_w4a16,tb_llama_3_8b_instruct_kvint4,tb_qwen1_5_7b_chat,tb_qwen1_5_7b_chat_kvint4,tb_qwen1_5_7b_chat_w4a16,pt_qwen1_5_7b_chat,pt_qwen1_5_moe_2_7b_chat,tb_qwen2_7b_instruct,tb_qwen2_7b_instruct_w4a16,tb_qwen2_7b_instruct_kvint4]'
       datasets:
         required: true
-        description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*WiC_datasets,*WSC_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
+        description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
         type: string
         default: '[*mmlu_datasets, *gsm8k_datasets]'
+      local_config:
+        required: true
+        description: 'Whether use local eval config'
+        type: boolean
+        default: false
       devices:
         required: true
         description: 'CUDA_VISIBLE_DEVICES.'
@@ -129,6 +134,9 @@ jobs:
         run: |
           ln -s /root/opencompass-data ./data
           python3 .github/scripts/action_tools.py create_model_links /root/models .
+      - name: Use local config
+        if: ${{inputs.local_config}}
+        run: cp /nvme/qa_test_models/offline_pkg/eval_config.py .github/scripts/eval_opencompass_config.py
       - name: Evaluate models
         run: |
           echo ${{github.event.inputs.models}}
@@ -139,7 +147,7 @@ jobs:
           python3 .github/scripts/action_tools.py evaluate \
             --models "${{github.event.inputs.models}}" \
             --datasets "${{github.event.inputs.datasets}}" \
-            --workspace /root/evaluation-reports/$TIME_STAMP
+            --workspace /root/evaluation-reports/${{ github.run_id }}
       - name: Clear workspace
         if: always()
         run: |

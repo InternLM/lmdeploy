@@ -405,6 +405,11 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
         if module2inspect is None:
             assert len(layers) == 1
             module2inspect = layers[0]
+        # internlm-xcomposer2-vl applies plora, which requires im_mask arg
+        if module2inspect._get_name() == 'InternLM2MLP':
+            from inspect import signature
+            if 'im_mask' in signature(module2inspect.forward).parameters:
+                kwargs['im_mask'] = None
 
         best_ratio = _search_module_scale(module2inspect, layers, inp.value,
                                           kwargs)

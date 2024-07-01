@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
 - \[2024/05\] Support 4-bits weight-only quantization and inference on VMLs, such as InternVL v1.5, LLaVa, InternLMXComposer2
 - \[2024/04\] Support Llama3 and more VLMs, such as InternVL v1.1, v1.2, MiniGemini, InternLMXComposer2.
@@ -108,9 +109,11 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Llama3 (8B, 70B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
+  <li>InternLM2.5 (7B)</li>
   <li>QWen (1.8B - 72B)</li>
   <li>QWen1.5 (0.5B - 110B)</li>
   <li>QWen1.5 - MoE (0.5B - 72B)</li>
+  <li>QWen2 (0.5B - 72B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
@@ -120,6 +123,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>YI (6B-34B)</li>
   <li>Mistral (7B)</li>
   <li>DeepSeek-MoE (16B)</li>
+  <li>DeepSeek-V2 (16B, 236B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>
   <li>Dbrx (132B)</li>
@@ -162,7 +166,7 @@ pip install lmdeploy
 Since v0.3.0, The default prebuilt package is compiled on **CUDA 12**. However, if CUDA 11+ is required, you can install lmdeploy by:
 
 ```shell
-export LMDEPLOY_VERSION=0.3.0
+export LMDEPLOY_VERSION=0.5.0
 export PYTHON_VERSION=38
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```

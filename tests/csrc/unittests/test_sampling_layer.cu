@@ -111,12 +111,14 @@ protected:
     float* h_cum_log_probs;
     float* h_output_log_probs;
 
-    T*     d_logits;
-    int*   d_input_lengths;
-    float* d_cum_log_probs;
-    float* d_output_log_probs;
-    int*   d_output_ids;
-    int*   d_end_ids;
+    T*                  d_logits;
+    int*                d_input_lengths;
+    float*              d_cum_log_probs;
+    float*              d_output_log_probs;
+    int*                d_output_ids;
+    int*                d_end_ids;
+    curandState_t*      d_curand_state;
+    unsigned long long* d_random_seed;
 
     void setup(unsigned long long seed = 0)
     {
@@ -166,11 +168,16 @@ protected:
         d_output_log_probs = reinterpret_cast<float*>(allocator->malloc(sizeof(float) * max_output_len * batchxbeam));
         d_output_ids       = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * max_seq_len * batchxbeam));
         d_end_ids          = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batchxbeam));
+        d_curand_state     = reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batch_size));
+        d_random_seed =
+            reinterpret_cast<unsigned long long*>(allocator->malloc(sizeof(unsigned long long) * batch_size));
 
         // Init by zero.
         cudaMemset(d_cum_log_probs, 0, sizeof(float) * batchxbeam);
         cudaMemset(d_output_log_probs, 0, sizeof(float) * max_output_len * batchxbeam);
         cudaMemset(d_output_ids, 0, sizeof(int) * max_seq_len * batchxbeam);
+        cudaMemset(d_random_seed, 0, sizeof(unsigned long long) * batch_size);
+        invokeCurandBatchInitialize(d_curand_state, batch_size, d_random_seed, stream);
         deviceFill(d_end_ids, batchxbeam, end_id, stream);
     }
 
@@ -233,6 +240,7 @@ protected:
             {"output_log_probs",
              Tensor{MEMORY_GPU, TYPE_FP32, {max_seq_len, batch_size, beam_width}, d_output_log_probs}});
         output_tensors->insert({"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, nullptr}});
+        output_tensors->insert({"curand_state"}, {MEMORY_GPU, TYPE_VOID, {batch_size}, d_curand_state});
         return output_tensors;
     }
 
@@ -966,12 +974,14 @@ protected:
     float* h_output_log_probs;
     int*   h_output_ids;
 
-    T*     d_logits;
-    int*   d_input_lengths;
-    float* d_cum_log_probs;
-    float* d_output_log_probs;
-    int*   d_output_ids;
-    int*   d_end_ids;
+    T*                  d_logits;
+    int*                d_input_lengths;
+    float*              d_cum_log_probs;
+    float*              d_output_log_probs;
+    int*                d_output_ids;
+    int*                d_end_ids;
+    curandState_t*      d_curand_state;
+    unsigned long long* d_random_seed;
 
     void setup(SamplingLayerTestParam param)
     {
@@ -997,11 +1007,15 @@ protected:
         d_input_lengths = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batchxbeam));
         d_output_ids    = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * max_seq_len * batchxbeam));
         d_end_ids       = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size));
+        d_curand_state  = reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batch_size));
+        d_random_seed =
+            reinterpret_cast<unsigned long long*>(allocator->malloc(sizeof(unsigned long long) * batch_size));
 
         // Init by zero.
         deviceFill(d_input_lengths, batchxbeam, 0, stream);
         deviceFill(d_output_ids, max_seq_len * batchxbeam, 0, stream);
         deviceFill(d_end_ids, batch_size, end_id);
+        cudaMemset(d_random_seed, 0, sizeof(unsigned long long) * batch_size);
     }
 
     void teardown()
@@ -1034,6 +1048,14 @@ protected:
         for (size_t i = 0; i < random_seed_size; ++i) {
             random_seed[i] = i / period_size;
         }
+        cudaH2Dcpy(d_random_seed, random_seed, random_seed_size);
+        if (use_single_random_seed) {
+            invokeCurandInitialize(d_curand_state, batch_size, random_seed[0], stream);
+        }
+        else {
+            invokeCurandBatchInitialize(d_curand_state, batch_size, d_random_seed, stream);
+        }
+        sync_check_cuda_error();
 
         TensorMap runtime_args;
         runtime_args.insert({"random_seed", Tensor(MEMORY_CPU, TYPE_UINT64, {random_seed_size}, random_seed)});
@@ -1066,7 +1088,8 @@ protected:
                     {{"output_ids",
                       Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len, batch_size, beam_width}, d_output_ids}},
                      {"finished", Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width}, nullptr}},
-                     {"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, nullptr}}});
+                     {"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, nullptr}},
+                     {"curand_state", {MEMORY_GPU, TYPE_VOID, {batch_size}, d_curand_state}}});
 
                 dynamic_decode_layer->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
                 sync_check_cuda_error();
@@ -1170,7 +1193,8 @@ protected:
                  {"cum_log_probs", Tensor{MEMORY_GPU, TYPE_FP32, {batch_size * beam_width}, cum_log_probs}},
                  {"output_log_probs",
                   Tensor{MEMORY_GPU, TYPE_FP32, {max_seq_len, batch_size, beam_width}, output_log_probs}},
-                 {"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, nullptr}}});
+                 {"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, nullptr}},
+                 {"curand_state", {MEMORY_GPU, TYPE_VOID, {batch_size}, d_curand_state}}});
 
             dynamic_decode_layer->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
 

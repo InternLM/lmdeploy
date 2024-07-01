@@ -16,7 +16,7 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
 
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "3rdparty/INIReader.h"
