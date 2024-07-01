@@ -770,12 +770,11 @@ async def completions_v1(request: CompletionRequest,
             adapter_name=adapter_name)
         generators.append(result_generator)
 
-    def create_stream_response_json(
-            index: int,
-            text: str,
-            finish_reason: Optional[str] = None,
-            logprobs: Optional[LogProbs] = None,
-            usage: Optional[UsageInfo] = None) -> str:
+    def create_stream_response_json(index: int,
+                                    text: str,
+                                    finish_reason: Optional[str] = None,
+                                    logprobs: Optional[LogProbs] = None,
+                                    usage: Optional[UsageInfo] = None) -> str:
         choice_data = CompletionResponseStreamChoice(
             index=index,
             text=text,

@@ -174,6 +174,7 @@ class ChatCompletionStreamResponse(BaseModel):
     choices: List[ChatCompletionResponseStreamChoice]
     usage: Optional[UsageInfo] = None
 
+
 class CompletionRequest(BaseModel):
     """Completion request."""
     model: str
