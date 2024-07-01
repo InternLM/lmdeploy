@@ -108,6 +108,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Llama3 (8B, 70B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
+  <li>InternLM2.5 (7B)</li>
   <li>QWen (1.8B - 72B)</li>
   <li>QWen1.5 (0.5B - 110B)</li>
   <li>QWen1.5 - MoE (0.5B - 72B)</li>
