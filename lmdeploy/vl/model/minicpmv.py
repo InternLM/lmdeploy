@@ -7,18 +7,22 @@ from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
 
+@VISION_MODELS.register_module()
 class MiniCPMVModel(VisonModel):
     """MiniCPMV vision model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
+    _arch = 'MiniCPMV'
+
+    def __init__(self, model_path, with_llm: bool = False, max_memory=None):
         self.model_path = model_path
         self.with_llm = with_llm
+        self.max_memory = max_memory
         self.build_model()
 
     def build_model(self):
@@ -41,6 +45,7 @@ class MiniCPMVModel(VisonModel):
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
+                max_memory=self.max_memory,
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['Idefics2EncoderLayer', 'Resampler'],

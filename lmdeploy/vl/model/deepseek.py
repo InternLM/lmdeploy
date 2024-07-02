@@ -7,7 +7,7 @@ import torch
 from PIL.Image import Image
 from transformers import AutoModelForCausalLM
 
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 
@@ -22,11 +22,15 @@ def check_deepseek_vl_install():
             ' --no-deps')
 
 
+@VISION_MODELS.register_module()
 class DeepSeekVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
+    _arch = 'MultiModalityCausalLM'
+
+    def __init__(self, model_path, with_llm: bool = False, max_memory=None):
         self.with_llm = with_llm
+        self.max_memory = max_memory
         self.model_path = model_path
         self.build_model()
 
@@ -45,6 +49,7 @@ class DeepSeekVisionModel(VisonModel):
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(model,
+                                         max_memory=self.max_memory,
                                          dtype=torch.half,
                                          no_split_module_classes=['Block'])
         device_map = infer_auto_device_map(model,
