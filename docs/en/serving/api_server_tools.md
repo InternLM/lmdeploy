@@ -3,7 +3,6 @@
 ## Single Round Invocation
 
 Currently, LMDeploy supports tools only for InternLM2 or InternLM2.5 models. Please start the service of models before running the following example.
-Make sure to pass skip_special_tokens as False.
 
 ```python
 from openai import OpenAI
@@ -38,8 +37,7 @@ response = client.chat.completions.create(
     temperature=0.8,
     top_p=0.8,
     stream=False,
-    tools=tools,
-    extra_body={'skip_special_tokens': False})
+    tools=tools)
 print(response)
 ```
 
@@ -110,8 +108,7 @@ response = client.chat.completions.create(
     temperature=0.8,
     top_p=0.8,
     stream=False,
-    tools=tools,
-    extra_body={'skip_special_tokens': False})
+    tools=tools)
 print(response)
 func1_name = response.choices[0].message.tool_calls[0].function.name
 func1_args = response.choices[0].message.tool_calls[0].function.arguments
@@ -133,8 +130,7 @@ response = client.chat.completions.create(
     temperature=0.8,
     top_p=0.8,
     stream=False,
-    tools=tools,
-    extra_body={'skip_special_tokens': False})
+    tools=tools)
 print(response)
 func2_name = response.choices[0].message.tool_calls[0].function.name
 func2_args = response.choices[0].message.tool_calls[0].function.arguments

@@ -2,7 +2,7 @@
 
 ## 单轮调用
 
-目前的 LMDeploy 只支持 InternLM2 或者 InternLM2.5 模型的工具调用。启动好模型的服务后，运行下面 demo 即可。请一定要传 `skip_special_tokens` 为 False。
+目前的 LMDeploy 只支持 InternLM2 或者 InternLM2.5 模型的工具调用。启动好模型的服务后，运行下面 demo 即可。
 
 ```python
 from openai import OpenAI
@@ -37,8 +37,7 @@ response = client.chat.completions.create(
     temperature=0.8,
     top_p=0.8,
     stream=False,
-    tools=tools,
-    extra_body={'skip_special_tokens': False})
+    tools=tools)
 print(response)
 ```
 
@@ -109,8 +108,7 @@ response = client.chat.completions.create(
     temperature=0.8,
     top_p=0.8,
     stream=False,
-    tools=tools,
-    extra_body={'skip_special_tokens': False})
+    tools=tools)
 print(response)
 func1_name = response.choices[0].message.tool_calls[0].function.name
 func1_args = response.choices[0].message.tool_calls[0].function.arguments
@@ -132,8 +130,7 @@ response = client.chat.completions.create(
     temperature=0.8,
     top_p=0.8,
     stream=False,
-    tools=tools,
-    extra_body={'skip_special_tokens': False})
+    tools=tools)
 print(response)
 func2_name = response.choices[0].message.tool_calls[0].function.name
 func2_args = response.choices[0].message.tool_calls[0].function.arguments

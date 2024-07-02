@@ -449,6 +449,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     tools = None
     if request.tools and request.tool_choice != 'none':
+        gen_config.skip_special_tokens = False
         if request.stream is True:
             logger.warning('Set stream to False for tools')
             request.stream = False
