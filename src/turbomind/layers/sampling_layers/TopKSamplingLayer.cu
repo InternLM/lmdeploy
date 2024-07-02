@@ -28,17 +28,16 @@
 namespace turbomind {
 
 template<uint TOP_K_MAX>
-__global__ void setup_topk_runtime_args(int    batch_size,
-                                        uint   top_k,
-                                        uint*  top_ks,
-                                        int    top_ks_size,
-                                        float  top_p,
-                                        float* top_ps,
-                                        int    top_ps_size,
-                                        bool*  skip_decode)
+void setup_topk_runtime_args(int    batch_size,
+                             uint   top_k,
+                             uint*  top_ks,
+                             int    top_ks_size,
+                             float  top_p,
+                             float* top_ps,
+                             int    top_ps_size,
+                             bool*  skip_decode)
 {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    for (int i = index; i < batch_size; i += gridDim.x * blockDim.x) {
+    for (int i = 0; i < batch_size; ++i) {
         uint  k = top_ks_size > 1 ? top_ks[i] : top_k;
         float p = top_ps_size > 1 ? top_ps[i] : top_p;
         if (k == 0 && p == 0.0f) {
@@ -145,6 +144,11 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     BaseSamplingLayer<T>::setup(batch_size, beam_width, runtime_args);
 
+    if (h_runtime_top_k.size() < batch_size) {
+        h_runtime_top_k.resize(batch_size);
+        h_runtime_top_p.resize(batch_size);
+    }
+
     uint         tmp_top_k     = 0;
     const Tensor runtime_top_k = runtime_args->isExist("runtime_top_k") ?
                                      runtime_args->at("runtime_top_k") :
@@ -160,32 +164,29 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
         FT_CHECK_WITH_INFO(
             runtime_top_k.size() == batch_size,
             fmtstr("runtime_top_k.size() (%d) == batch_size (%d) is not satisfied!", runtime_top_k.size(), batch_size));
-        cudaAutoCpy(runtime_top_k_buf_, runtime_top_k.getPtr<uint>(), batch_size, stream_);
+        std::copy_n(runtime_top_k.getPtr<uint>(), batch_size, h_runtime_top_k.data());
     }
     if (runtime_top_p_size > 1) {
         FT_CHECK_WITH_INFO(
             runtime_top_p.size() == batch_size,
             fmtstr("runtime_top_p.size() (%d) == batch_size (%d) is not satisfied!", runtime_top_p.size(), batch_size));
-        cudaAutoCpy(runtime_top_p_buf_, runtime_top_p.getPtr<float>(), batch_size, stream_);
+        std::copy_n(runtime_top_p.getPtr<float>(), batch_size, h_runtime_top_p.data());
     }
 
-    dim3 block(std::min((int)batch_size, 256));
-    dim3 grid(div_up((int)batch_size, (int)block.x));
-    // support top_k up to 1024.
-    setup_topk_runtime_args<1024><<<grid, block, 0, stream_>>>(batch_size,
-                                                               top_k,
-                                                               runtime_top_k_buf_,
-                                                               runtime_top_k_size,
-                                                               top_p,
-                                                               runtime_top_p_buf_,
-                                                               runtime_top_p_size,
-                                                               skip_decode_buf_);
-    cudaAutoCpy(skip_decode_, skip_decode_buf_, batch_size, stream_);
-    uint* runtime_top_ks = new uint[batch_size];
-    cudaAutoCpy(runtime_top_ks, runtime_top_k_buf_, batch_size, stream_);
-    cudaStreamSynchronize(stream_);
-    runtime_max_top_k_ = static_cast<int>(*std::max_element(runtime_top_ks, runtime_top_ks + batch_size));
-    delete[] runtime_top_ks;
+    setup_topk_runtime_args<1024>(batch_size,
+                                  top_k,
+                                  h_runtime_top_k.data(),
+                                  runtime_top_k_size,
+                                  top_p,
+                                  h_runtime_top_p.data(),
+                                  runtime_top_p_size,
+                                  skip_decode_);
+
+    runtime_max_top_k_ = *std::max_element(h_runtime_top_k.begin(), h_runtime_top_k.end());
+    cudaAutoCpy(runtime_top_k_buf_, h_runtime_top_k.data(), batch_size, stream_);
+    cudaAutoCpy(runtime_top_p_buf_, h_runtime_top_p.data(), batch_size, stream_);
+    cudaAutoCpy(skip_decode_buf_, skip_decode_, batch_size, stream_);
+    sync_check_cuda_error();
 }
 
 template<typename T>

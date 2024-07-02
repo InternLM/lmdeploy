@@ -180,7 +180,7 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     cudaAutoCpy(temperature_buf_, temperature_, batch_size, stream_);
     cudaAutoCpy(repetition_penalty_buf_, repetition_penalty_, batch_size, stream_);
     cudaAutoCpy(min_lengths_buf_, min_lengths_, batch_size, stream_);
-    cudaStreamSynchronize(stream_);
+    sync_check_cuda_error();
 }
 
 template<typename T>
