@@ -50,6 +50,7 @@ class GenerationConfig:
     min_new_tokens: int = None
     skip_special_tokens: bool = True
     logprobs: int = None
+    response_format: Optional[Dict] = None
 
 
 @dataclass
@@ -98,6 +99,7 @@ class EngineGenerationConfig(GenerationConfig):
             ignore_eos=gen_config.ignore_eos,
             random_seed=gen_config.random_seed,
             skip_special_tokens=gen_config.skip_special_tokens,
+            response_format=gen_config.response_format,
             stop_words=special_word_token_ids(gen_config.stop_words),
             bad_words=special_word_token_ids(gen_config.bad_words))
 
