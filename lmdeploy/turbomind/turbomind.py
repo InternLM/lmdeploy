@@ -14,7 +14,6 @@ from torch.nn.utils.rnn import pad_sequence
 import lmdeploy
 from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
                                ResponseType, TurbomindEngineConfig)
-from lmdeploy.model import best_match_model
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_hf_config_content, get_logger, get_model
 
@@ -84,8 +83,6 @@ class TurboMind:
     Args:
         model_path (str): the path of turbomind's model
         model_source (int): model source
-        model_name (str): needed when model_path is a hf model and not
-            managed by lmdeploy
         model_format (str): needed when model_path is a hf model and not
             managed by lmdeploy
         group_size (int): needed when model_path is a hf model and not
@@ -97,7 +94,6 @@ class TurboMind:
                  model_path: str,
                  engine_config: TurbomindEngineConfig = None,
                  model_source: ModelSource = ModelSource.WORKSPACE,
-                 model_name: Optional[str] = None,
                  model_format: Optional[str] = None,
                  group_size: Optional[int] = None,
                  tp: Optional[int] = None,
@@ -223,7 +219,6 @@ class TurboMind:
             'Plz try pytorch engine instead.')
 
         # convert transformers model into turbomind model format
-        match_name = best_match_model(model_path)
         input_model_name = get_input_model_registered_name(
             model_path, engine_config.model_format)
         input_model = INPUT_MODELS.get(input_model_name)(
@@ -238,9 +233,6 @@ class TurboMind:
             input_model=input_model, cfg=cfg, to_file=False, out_dir='')
 
         self.config = output_model.cfg
-        self.config.model_name = match_name \
-            if match_name is not None else 'base'
-        self.model_name = self.config.model_name
         logger.info(f'model_config:\n\n{self.config.toini()}')
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
@@ -292,7 +284,6 @@ class TurboMind:
 
         # update cls
         self.config = cfg
-        self.model_name = cfg.model_name
 
         # create model
         logger.warning(f'model_config:\n\n{cfg.toini()}')
