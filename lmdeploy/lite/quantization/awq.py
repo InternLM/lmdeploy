@@ -66,7 +66,8 @@ def get_weight_scale(weight, q_group_size=-1):
     org_shape = weight.shape
     if q_group_size > 0:
         weight = weight.view(-1, q_group_size)
-    scale = weight.abs() / weight.abs().amax(dim=1, keepdim=True)
+    scale = weight.abs() / weight.abs().amax(dim=1,
+                                             keepdim=True).clamp(min=1e-4)
     scale = scale.view(org_shape)
     scale = scale.mean(0)
     return scale
@@ -100,7 +101,8 @@ def smooth_ln_fcs(ln: torch.nn.Module,
     w_scales = get_weight_scale(concat_w, group_size)
 
     scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
+              w_scales.pow(1 - alpha).clamp(min=1e-4)).clamp(
+                  min=1e-4).to(device).to(dtype)
 
     scales = scales / (scales[nonzero_positions].max() *
                        scales[nonzero_positions].min()).sqrt()
@@ -151,7 +153,8 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     w_scales = get_weight_scale(concat_w, group_size)
 
     scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
+              w_scales.pow(1 - alpha).clamp(min=1e-4)).clamp(
+                  min=1e-4).to(device).to(dtype)
     scales = scales / (scales.max() * scales.min()).sqrt()
 
     # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
