@@ -72,8 +72,8 @@ def multinomial_sampling(scores: torch.Tensor,
 
     outputs = indices[:, 0].clone()
 
-    BLOCK = 32
-    BLOCK_N = 64
+    BLOCK = 8
+    BLOCK_N = 128
 
     grid = [triton.cdiv(batch_size, BLOCK)]
     kernel_meta = get_kernel_meta(scores)
@@ -90,6 +90,7 @@ def multinomial_sampling(scores: torch.Tensor,
                                        num_tokens=num_tokens,
                                        BLOCK=BLOCK,
                                        BLOCK_N=BLOCK_N,
+                                       num_warps=8,
                                        **kernel_meta)
 
     return outputs
