@@ -143,6 +143,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
   <li>MiniCPM-Llama3-V-2_5</li>
+  <li>Phi-3-vision (4.2B)</li>
 </ul>
 </td>
 </tr>
