@@ -124,7 +124,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
-          python3 -m pip install --user -e .
+          python3 -m pip install opencompass==0.2.5
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
