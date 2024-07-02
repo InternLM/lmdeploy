@@ -26,6 +26,7 @@ struct BatchState {
 
     curandState_t* curand_state;
     int*           output_ids;  // output ids in [B, S]
+    int*           input_ids;
 
     float* h_rope_theta;
 
