@@ -17,8 +17,14 @@ void dispatchAttention(const AttentionParams<T>& params)
     if (params.size_per_head == 128) {
 
         if (params.arch >= 80) {
-            using Config = AttentionConfig<arch::Sm80, T, 128, CacheType::kLinear>;
-            return invokeAttention<typename Config::Kernel>(params);
+            if constexpr (std::is_same_v<T, half> || std::is_same_v<T, nv_bfloat16>) {
+                using Config = AttentionConfig<arch::Sm80, T, 128, CacheType::kBlock>;
+                return invokeAttention<typename Config::Kernel>(params);
+            }
+            else {
+                using Config = AttentionConfig<arch::Sm80, T, 128, CacheType::kLinear>;
+                return invokeAttention<typename Config::Kernel>(params);
+            }
         }
 
         if constexpr (!std::is_same_v<T, nv_bfloat16>) {
