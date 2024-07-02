@@ -191,6 +191,10 @@ for message in messages:
         print(item)
 ```
 
+### 工具调用
+
+参考 [api_server_tools](./api_server_tools.md)。
+
 ### 使用 Java/Golang/Rust
 
 可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。

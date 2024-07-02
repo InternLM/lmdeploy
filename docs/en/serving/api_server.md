@@ -173,6 +173,10 @@ for message in messages:
         print(item)
 ```
 
+### Tools
+
+May refer to [api_server_tools](./api_server_tools.md).
+
 ### Integrate with Java/Golang/Rust
 
 May use [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) to convert `http://{server_ip}:{server_port}/openapi.json` to java/rust/golang client.
