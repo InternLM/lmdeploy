@@ -287,6 +287,8 @@ engine_config_template_max_bs_128_awq_tp2 = dict(session_len=MAX_SESSION_LEN,
                                                  tp=2)
 engine_config_template_max_bs_128_kvint4_tp2 = dict(
     session_len=MAX_SESSION_LEN, max_batch_size=128, quant_policy=4, tp=2)
+engine_config_template_max_bs_128_kvint8_tp2 = dict(
+    session_len=MAX_SESSION_LEN, max_batch_size=128, quant_policy=8, tp=2)
 
 # ===== Configs for internlm/internlm-chat-7b =====
 # config for internlm-chat-7b
@@ -525,6 +527,19 @@ tb_internlm2_chat_20b_kvint4 = dict(
     abbr='tb_internlm2_chat_7b_kvint4',
     path='internlm/internlm2-chat-20b',
     engine_config=engine_config_template_max_bs_128_kvint4_tp2,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=2),
+    stop_words=['</s>', '<|im_end|>'],
+)
+
+tb_internlm2_chat_20b_kvint8 = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_chat_7b_kvint8',
+    path='internlm/internlm2-chat-20b',
+    engine_config=engine_config_template_max_bs_128_kvint8_tp2,
     gen_config=gen_config_template,
     max_seq_len=MAX_SESSION_LEN,
     max_out_len=MAX_NEW_TOKENS,
@@ -914,5 +929,3 @@ pt_codellama_7b_chat = dict(type=LmdeployPytorchModel,
                             concurrency=128,
                             run_cfg=dict(num_gpus=1, num_procs=1),
                             end_str='</s>')
-
-
