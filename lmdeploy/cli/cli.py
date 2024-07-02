@@ -31,15 +31,15 @@ class CLI(object):
             description=CLI.convert.__doc__,
             help=CLI.convert.__doc__)
         # define arguments
-        parser.add_argument(
-            'model_name',
-            type=str,
-            help='The name of the to-be-deployed model, such as llama-7b, '
-            'llama-13b, vicuna-7b and etc. You can run `lmdeploy list` to '
-            'get the supported model names')
         parser.add_argument('model_path',
                             type=str,
                             help='The directory path of the model')
+        parser.add_argument(
+            '--model-name',
+            type=str,
+            help='the name of the served model, which is used in '
+            'api_server. It can be accessed by the RESTful API `/v1/models`. '
+            'If it is not specified, `model_path` will be adopted')
         ArgumentHelper.model_format(parser)
         ArgumentHelper.tp(parser)
         # other args

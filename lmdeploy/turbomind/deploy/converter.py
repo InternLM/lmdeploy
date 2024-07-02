@@ -9,7 +9,6 @@ import fire
 import torch
 
 from lmdeploy.archs import get_model_arch
-from lmdeploy.model import MODELS
 from lmdeploy.utils import get_model
 
 from ...utils import _get_and_verify_max_len
@@ -197,8 +196,8 @@ def pack_model_repository(workspace_path: str):
                dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
-def main(model_name: str,
-         model_path: str,
+def main(model_path: str,
+         model_name: str = None,
          model_format: str = None,
          tokenizer_path: str = None,
          dst_path: str = 'workspace',
@@ -212,9 +211,10 @@ def main(model_name: str,
     """deploy llama family models via turbomind.
 
     Args:
-        model_name (str): the name of the to-be-deployed model, such as
-            llama-7b, llama-13b, vicuna-7b and etc
         model_path (str): the directory path of the model
+        model_name (str): the name of the served model, which is used in
+            api_server. It can be accessed by the RESTful API `/v1/models`.
+            If it is not specified, `model_path` will be adopted
         model_format (str): the format of the model, should choose from
             ['meta_llama', 'hf', 'awq', None]. 'meta_llama' stands for META's
             llama format, 'hf' means huggingface llama format, and 'awq' means
@@ -236,10 +236,6 @@ def main(model_name: str,
         kwargs (dict): other params for convert
     """
 
-    assert model_name in MODELS.module_dict.keys(), \
-        f"'{model_name}' is not supported. " \
-        f'The supported models are: {MODELS.module_dict.keys()}'
-
     assert is_supported(model_path), (
         f'turbomind does not support {model_path}. '
         'Plz try pytorch engine instead.')
@@ -259,6 +255,7 @@ def main(model_name: str,
         )
         print(f'load model from {model_path}')
 
+    model_name = model_name if model_name else model_path
     input_model_name = get_input_model_registered_name(model_path,
                                                        model_format)
     print(f'input_model_registered_name : {input_model_name}')
