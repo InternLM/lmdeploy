@@ -978,7 +978,7 @@ class ChatGLM2(BaseModel):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'chatglm' in path and 'chatglm3' not in path:
+        if 'chatglm2' in path:
             return 'chatglm'
 
 
@@ -1509,18 +1509,17 @@ class InternVL2Phi3(Phi3Instruct):
             return 'internvl2-phi3'
 
 
-@MODELS.register_module(name='glm4')
 @MODELS.register_module(name='chatglm3')
-class Glm4Chat(BaseChatTemplate):
-    """Chat template of InternLM model."""
+class ChatGLM3(BaseChatTemplate):
+    """Chat template of chatglm3 model."""
 
     def __init__(self,
-                 system='<|system|>\n',
+                 system='<|system|> \n ',
                  meta_instruction=None,
                  eosys='',
-                 user='<|user|>\n',
+                 user='<|user|> \n ',
                  eoh='',
-                 assistant='<|assistant|>\n',
+                 assistant='<|assistant|> \n ',
                  eoa='',
                  separator='',
                  stop_words=['<|user|>', '<|endoftext|>', '<|observation|>'],
@@ -1535,7 +1534,7 @@ class Glm4Chat(BaseChatTemplate):
                          separator=separator,
                          stop_words=stop_words,
                          **kwargs)
-        self.start = '[gMASK]<sop>'
+        self.start = '[gMASK]sop'
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -1548,7 +1547,7 @@ class Glm4Chat(BaseChatTemplate):
         Returns:
             str: the concatenated prompt
         """
-        prompt = super(Glm4Chat, self).get_prompt(prompt, sequence_start)
+        prompt = super().get_prompt(prompt, sequence_start)
         if sequence_start:
             prompt = self.start + prompt
         return prompt
@@ -1564,8 +1563,7 @@ class Glm4Chat(BaseChatTemplate):
         """
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
-        return self.start + super(Glm4Chat, self).messages2prompt(
-            messages, sequence_start)
+        return self.start + super().messages2prompt(messages, sequence_start)
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -1575,7 +1573,34 @@ class Glm4Chat(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'glm-4' in path or 'chatglm3' in path:
+        if 'chatglm3' in path:
+            return 'chatglm3'
+
+
+@MODELS.register_module(name='glm4')
+class Glm4Chat(ChatGLM3):
+    """Chat template of glm-4 model."""
+
+    def __init__(self,
+                 system='<|system|>\n',
+                 user='<|user|>\n',
+                 assistant='<|assistant|>\n',
+                 **kwargs):
+        super().__init__(system=system,
+                         user=user,
+                         assistant=assistant,
+                         **kwargs)
+        self.start = '[gMASK]<sop>'
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'glm-4' in path:
             return 'glm4'
 
 

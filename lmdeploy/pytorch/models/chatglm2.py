@@ -22,8 +22,17 @@ class PatchedRMSNorm(nn.Module):
         # torch.nn.functional.normalize based implementation might leads
         # to wrong output
         from ..kernels import rms_norm
-        ret = rms_norm(hidden_states.permute(1, 0, 2), self.weight, self.eps)
-        return ret.permute(1, 0, 2)
+
+        if not hasattr(self, '_is_chatglm'):
+            setattr(self, '_is_chatglm', self.context.context._is_chatglm)
+
+        if self._is_chatglm:
+            ret = rms_norm(hidden_states.permute(1, 0, 2), self.weight,
+                           self.eps)
+            ret = ret.permute(1, 0, 2)
+        else:
+            ret = rms_norm(hidden_states, self.weight, self.eps)
+        return ret
 
 
 def split_tensor_along_last_dim(
@@ -51,10 +60,11 @@ def split_tensor_along_last_dim(
 
 def apply_rotary_pos_emb(x: torch.Tensor,
                          rope_cache: torch.Tensor) -> torch.Tensor:
-    # x: [sq, b, np, hn]
-    sq, hn = x.size(0), x.size(-1)
+    # x: [b, sq, np, hn]
+    # rope_cache: [b, sq, dim/4, 2]
+    sq, hn = x.size(1), x.size(-1)
     xslice = x[..., :hn // 2]
-    rope_cache = rope_cache[:sq]
+    rope_cache = rope_cache[:, :sq]
     xshaped = xslice.unflatten(-1, (-1, 2))
     rope_cache = rope_cache.unsqueeze(2)
 
@@ -115,7 +125,7 @@ class PatchedSelfAttention(nn.Module):
         kv_cache: Optional[Tuple[torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
-        # hidden_states: [sq, b, h]
+        # hidden_states: [b, sq, h]
 
         # =================================================
         # Pre-allocate memory for key-values for inference.
@@ -123,7 +133,8 @@ class PatchedSelfAttention(nn.Module):
         # =====================
         # Query, Key, and Value
         # =====================
-        # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
+
+        # Attention heads [b, sq, h] --> [b, sq, (np * 3 * hn)]
 
         world_size = 1
         if dist.is_initialized():
@@ -163,18 +174,21 @@ class PatchedSelfAttention(nn.Module):
             )
             mixed_x_layer = mixed_x_layer.view(*new_tensor_shape)
 
-            # [sq, b, np, 3 * hn] --> 3 [sq, b, np, hn]
+            # [b, sq, np, 3 * hn] --> 3 [b, sq, np, hn]
             (query_layer, key_layer,
              value_layer) = split_tensor_along_last_dim(mixed_x_layer, 3)
+
+        if not hasattr(self, '_is_chatglm'):
+            setattr(self, '_is_chatglm', context._is_chatglm)
+
+        if self._is_chatglm:
+            query_layer = query_layer.transpose(0, 1)
+            key_layer = key_layer.transpose(0, 1)
+            value_layer = value_layer.transpose(0, 1)
 
         # apply relative positional encoding (rotary embedding)
         query_layer = apply_rotary_pos_emb(query_layer, rotary_pos_emb)
         key_layer = apply_rotary_pos_emb(key_layer, rotary_pos_emb)
-
-        # [b, sq, np, hn]
-        query_layer, key_layer, value_layer = [
-            k.transpose(0, 1) for k in [query_layer, key_layer, value_layer]
-        ]
 
         # adjust key and value for inference
         cache_k, cache_v = kv_cache
@@ -204,13 +218,13 @@ class PatchedSelfAttention(nn.Module):
                             q_seqlens=q_seq_length,
                             kv_seqlens=kv_seq_length,
                             max_seqlen=max_q_seq_length)
-
-        context_layer = context_layer.transpose(1, 0).flatten(-2)
+        if self._is_chatglm:
+            context_layer = context_layer.transpose(0, 1)
+        context_layer = context_layer.flatten(-2)
 
         # =================
-        # Output. [sq, b, h]
+        # Output. [b, sq, h]
         # =================
-
         output = self.dense(context_layer)
 
         return output, kv_cache
@@ -268,6 +282,15 @@ class PatchedChatGLMModel(nn.Module):
             past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
                                             ...]] = None,
             inputs_embeds: Optional[torch.Tensor] = None):
+        # chatglm2/chaglm3 uses hidden_states in shape of [sq,b,h]
+        # while glm uses hidden_states in shape of [b,sq,h]
+        if not hasattr(self, '_is_chatglm'):
+            _is_chatglm = False
+            if 'chatglm' in getattr(self.config, '_name_or_path', ''):
+                _is_chatglm = True
+            setattr(self, '_is_chatglm', _is_chatglm)
+            setattr(self.context.context, '_is_chatglm', _is_chatglm)
+
         output_hidden_states = False
         use_cache = True
 
@@ -276,7 +299,7 @@ class PatchedChatGLMModel(nn.Module):
         if inputs_embeds is None:
             inputs_embeds = self.embedding(input_ids)
 
-        if self.pre_seq_len is not None:
+        if getattr(self, 'pre_seq_len', None) is not None:
             if past_key_values is None:
                 past_key_values = self.get_prompt(batch_size=batch_size,
                                                   device=input_ids.device,
@@ -290,7 +313,6 @@ class PatchedChatGLMModel(nn.Module):
             rotary_pos_emb = rotary_pos_emb[position_ids_1d[None]]
         else:
             rotary_pos_emb = rotary_pos_emb[None, :seq_length]
-        rotary_pos_emb = rotary_pos_emb.transpose(0, 1).contiguous()
 
         # Run encoder.
         (hidden_states, presents, all_hidden_states,
@@ -309,19 +331,19 @@ class PatchedChatGLMModel(nn.Module):
             attentions=all_self_attentions,
         )
 
-    def forward(
-        self,
-        input_ids,
-        position_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.BoolTensor] = None,
-        full_attention_mask: Optional[torch.BoolTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
-                                        ...]] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        use_cache: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ):
+    def forward(self,
+                input_ids,
+                position_ids: Optional[torch.Tensor] = None,
+                attention_mask: Optional[torch.BoolTensor] = None,
+                full_attention_mask: Optional[torch.BoolTensor] = None,
+                past_key_values: Optional[Tuple[Tuple[torch.Tensor,
+                                                      torch.Tensor],
+                                                ...]] = None,
+                inputs_embeds: Optional[torch.Tensor] = None,
+                use_cache: Optional[bool] = None,
+                output_hidden_states: Optional[bool] = None,
+                return_dict: Optional[bool] = None,
+                **kwargs):
         return self._contiguous_batching_forward(
             input_ids=input_ids,
             position_ids=position_ids,
