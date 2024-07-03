@@ -18,7 +18,7 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGpt.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc
 
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/kernels/decoding_kernels.h"

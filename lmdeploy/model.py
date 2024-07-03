@@ -562,7 +562,10 @@ class InternVLInternLM2Chat(InternLM2Chat7B):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'internvl' in path and 'v1-5' in path and '4b' not in path:
+        if 'internvl' in path and 'v1-5' in path:
+            if 'mini' in path and '4b' in path:
+                # use internvl-phi3 template
+                return None
             return 'internvl-internlm2'
 
 
@@ -1531,7 +1534,7 @@ class Glm4Chat(BaseChatTemplate):
 
 @MODELS.register_module(name='internvl-phi3')
 class InternVLPhi3(Phi3Instruct):
-    """Chat template of InternLM model."""
+    """Chat template of InternVL Chat 4B model."""
 
     def __init__(
             self,
@@ -1556,7 +1559,7 @@ class InternVLPhi3(Phi3Instruct):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if all([c in path for c in ['internvl-chat', '4b', 'v1-5']]):
+        if all([c in path for c in ['mini-internvl-chat', '4b', 'v1-5']]):
             return 'internvl-phi3'
 
 

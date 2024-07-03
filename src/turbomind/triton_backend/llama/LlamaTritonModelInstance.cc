@@ -16,7 +16,7 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
 
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/macro.h"
@@ -251,10 +251,10 @@ void LlamaTritonModelInstance<T>::allocateBuffer(const size_t request_batch_size
     d_output_ids_ = (int*)std::realloc(d_output_ids_, sizeof(int) * request_batch_size * beam_width * session_len);
     d_sequence_lengths_ = (int*)std::realloc(d_sequence_lengths_, sizeof(int) * request_batch_size * beam_width);
 
-    d_output_log_probs_ = (float*)(allocator_->reMalloc(
-        d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * session_len, false));
-    d_cum_log_probs_ =
-        (float*)(allocator_->reMalloc(d_cum_log_probs_, sizeof(float) * request_batch_size * beam_width, false));
+    // d_output_log_probs_ = (float*)(allocator_->reMalloc(
+    //     d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * session_len, false));
+    // d_cum_log_probs_ =
+    //     (float*)(allocator_->reMalloc(d_cum_log_probs_, sizeof(float) * request_batch_size * beam_width, false));
     if (is_return_logits) {
         d_output_logits_ = (float*)allocator_->reMalloc(
             d_output_logits_, sizeof(float) * request_batch_size * max_input_len * instance_->llm->vocab_size(), false);

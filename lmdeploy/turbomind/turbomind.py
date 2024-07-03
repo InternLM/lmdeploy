@@ -14,11 +14,9 @@ from torch.nn.utils.rnn import pad_sequence
 import lmdeploy
 from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
                                ResponseType, TurbomindEngineConfig)
-from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
-                            best_match_model)
+from lmdeploy.model import best_match_model
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import (_stop_words, get_hf_config_content, get_logger,
-                            get_model)
+from lmdeploy.utils import get_hf_config_content, get_logger, get_model
 
 from .deploy.converter import (SUPPORTED_FORMATS,
                                get_input_model_registered_name,
@@ -103,7 +101,6 @@ class TurboMind:
                  model_format: Optional[str] = None,
                  group_size: Optional[int] = None,
                  tp: Optional[int] = None,
-                 chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
         # if loading from workspace and engine_config is None, use config.ini
         # and ignore passed args like model_format, tp, etc.
@@ -148,17 +145,8 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=engine_config)
 
-        if chat_template_config:
-            if chat_template_config.model_name is None:
-                chat_template_config.model_name = self.model_name
-                logger.warning(f'Input chat template with model_name is None. '
-                               f'Forcing to use {self.model_name}')
-            self.model = chat_template_config.chat_template
-        else:
-            self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
-        self.stop_words = _stop_words(self.model.stop_words, self.tokenizer)
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
@@ -320,15 +308,13 @@ class TurboMind:
         return model_comm
 
     @classmethod
-    def from_pretrained(
-            cls,
-            pretrained_model_name_or_path: str,
-            engine_config: TurbomindEngineConfig = None,
-            model_format: Optional[str] = None,
-            group_size: Optional[int] = None,
-            tp: Optional[int] = None,
-            chat_template_config: Optional[ChatTemplateConfig] = None,
-            **kwargs):
+    def from_pretrained(cls,
+                        pretrained_model_name_or_path: str,
+                        engine_config: TurbomindEngineConfig = None,
+                        model_format: Optional[str] = None,
+                        group_size: Optional[int] = None,
+                        tp: Optional[int] = None,
+                        **kwargs):
         """LMDeploy's turbomind inference engine.
 
         Args:
@@ -359,7 +345,6 @@ class TurboMind:
                    model_format=model_format,
                    group_size=group_size,
                    tp=tp,
-                   chat_template_config=chat_template_config,
                    **kwargs)
 
     def create_instance(self, cuda_stream_id=0):
@@ -388,7 +373,6 @@ class TurboMindInstance:
         self.node_id = tm_model.node_id
         self.gpu_count = tm_model.gpu_count
 
-        self.stop_words = tm_model.stop_words
         self.eos_id = tm_model.eos_id
         self.session_len = tm_model.session_len
 
@@ -457,10 +441,6 @@ class TurboMindInstance:
                                   **kwargs: dict):
         if config is None:
             config = EngineGenerationConfig()
-        # backward compatibility
-        # if doesn't supply stop words, use default
-        if config.stop_words is None and self.stop_words is not None:
-            config.stop_words = self.stop_words[0][0].tolist()
 
         deprecated_kwargs = []
         for k, v in kwargs.items():
@@ -535,6 +515,55 @@ class TurboMindInstance:
         """End the given session."""
         self.cancel(session_id)
 
+    def prepare_embeddings(self,
+                           input_embeddings=None,
+                           input_embedding_ranges=None):
+        """Convert embeddings."""
+        if input_embeddings is None:
+            return None, None
+
+        assert len(input_embeddings) == len(input_embedding_ranges)
+        if not isinstance(input_embeddings[0], (list, type(None))):
+            input_embeddings = [input_embeddings]
+            input_embedding_ranges = [input_embedding_ranges]
+
+        if all([isinstance(x, type(None)) for x in input_embeddings]):
+            return None, None
+
+        hidden_dim = None
+        for embeddings in input_embeddings:
+            if embeddings is not None:
+                hidden_dim = embeddings[0].squeeze().shape[-1]
+                break
+        assert hidden_dim is not None
+
+        # construct input_embeddings
+        for i in range(len(input_embeddings)):
+            item = input_embeddings[i] or []
+            # convert to torch.Tensor if input is np.ndarray
+            if item and isinstance(item[0], np.ndarray):
+                item = [torch.from_numpy(x).squeeze() for x in item]
+            # convert to lookup table type
+            _MAP = dict(fp32=torch.float, bf16=torch.bfloat16)
+            dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
+            item = [x.to(dtype=dtype) for x in item]
+            item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]
+            input_embeddings[i] = item
+        input_embeddings = [torch.cat(x) for x in input_embeddings]
+        input_embeddings = pad_sequence(input_embeddings, batch_first=True)
+        input_embeddings = input_embeddings.reshape(input_embeddings.shape[0],
+                                                    -1).view(torch.int8)
+        # construct input_embedding_ranges
+        for i in range(len(input_embedding_ranges)):
+            item = input_embedding_ranges[i] or []
+            item = torch.IntTensor(item).reshape(-1, 2)
+            input_embedding_ranges[i] = item
+        input_embedding_ranges = pad_sequence(input_embedding_ranges,
+                                              batch_first=True,
+                                              padding_value=-1)
+
+        return input_embeddings, input_embedding_ranges
+
     def prepare_inputs(self,
                        session_id,
                        input_ids,
@@ -591,41 +620,9 @@ class TurboMindInstance:
             CORRID=np.array(session_id, dtype=np.uint64),
             STOP=_broadcast_np((1 if stop else 0), np.int32))
 
+        input_embeddings, input_embedding_ranges = self.prepare_embeddings(
+            input_embeddings, input_embedding_ranges)
         if input_embeddings is not None:
-            assert len(input_embeddings) == len(input_embedding_ranges)
-            if isinstance(input_embeddings[0], np.ndarray):
-                input_embeddings = [input_embeddings]
-                input_embedding_ranges = [input_embedding_ranges]
-            # convert to lookup table type
-            if self.tm_model.config.weight_type == 'fp32':
-                input_embeddings = [[x.astype(np.float32) for x in y]
-                                    for y in input_embeddings]
-            elif self.tm_model.config.weight_type == 'bf16':
-                input_embeddings = [[
-                    torch.from_numpy(x).bfloat16().view(torch.half).numpy()
-                    for x in y
-                ] for y in input_embeddings]
-            else:
-                input_embeddings = [[x.astype(np.float16) for x in y]
-                                    for y in input_embeddings]
-
-            input_embeddings = [[torch.from_numpy(x).squeeze() for x in y]
-                                for y in input_embeddings]
-            input_embeddings = [torch.cat(x) for x in input_embeddings]
-            input_embeddings = pad_sequence(input_embeddings, batch_first=True)
-            input_embeddings = input_embeddings.reshape(
-                input_embeddings.shape[0], -1).view(torch.int8)
-
-            _input_embedding_ranges = []
-            for x in input_embedding_ranges:
-                if x is not None and len(x) != 0:
-                    _input_embedding_ranges.append(torch.IntTensor(x))
-                else:
-                    _input_embedding_ranges.append(torch.IntTensor(size=(0,
-                                                                         2)))
-            input_embedding_ranges = pad_sequence(_input_embedding_ranges,
-                                                  batch_first=True,
-                                                  padding_value=-1)
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
 
@@ -695,6 +692,7 @@ class TurboMindInstance:
         _forward_callback = partial(self._async_forward_callback, que=que)
         _forward_thread = partial(self._async_forward_thread, que=que)
         if stream_output and not stop:
+            logger.info(f'Register stream callback for {session_id}')
             self.model_insts[0].register_callback(_forward_callback)
 
         gen_config = self._update_generation_config(gen_config, **kwargs)
@@ -775,6 +773,7 @@ class TurboMindInstance:
                 break
 
         if stream_output and not stop:
+            logger.info(f'UN-register stream callback for {session_id}')
             self.model_insts[0].unregister_callback()
 
     def stream_infer(self,
@@ -806,6 +805,7 @@ class TurboMindInstance:
             kwargs (dict): kwargs for backward compatibility
         """
         if stream_output and not stop:
+            logger.info(f'Register stream callback for {session_id}')
             self.model_insts[0].register_callback(self._forward_callback)
 
         gen_config = self._update_generation_config(gen_config, **kwargs)
@@ -887,11 +887,14 @@ class TurboMindInstance:
                 break
 
         if stream_output and not stop:
+            logger.info(f'UN-register stream callback for {session_id}')
             self.model_insts[0].unregister_callback()
 
     def decode(self,
                input_ids,
                steps: List[int] = None,
+               input_embeddings=None,
+               input_embedding_ranges=None,
                sequence_start: bool = True,
                sequence_end: bool = True):
         """Perform context decode on input tokens.
@@ -899,6 +902,10 @@ class TurboMindInstance:
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
             steps (List[int]): the offset of the k/v cache
+            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
+                embeddings features
+            input_embedding_ranges: (List[List[Tuple[int, int]]]):
+                the begin/end offsets of input_embeddings to input_ids
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
         """
@@ -913,6 +920,7 @@ class TurboMindInstance:
 
         # append an extra token since input_len-1 tokens will be
         # decoded by context decoder
+        input_ids = [x[:] for x in input_ids]
         for inputs in input_ids:
             inputs.append(0)
 
@@ -940,6 +948,12 @@ class TurboMindInstance:
                                           np.int32),
                       END=_broadcast_np((1 if sequence_end else 0), np.int32),
                       step=steps)
+
+        input_embeddings, input_embedding_ranges = self.prepare_embeddings(
+            input_embeddings, input_embedding_ranges)
+        if input_embeddings is not None:
+            inputs['input_embeddings'] = input_embeddings
+            inputs['input_embedding_ranges'] = input_embedding_ranges
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
 

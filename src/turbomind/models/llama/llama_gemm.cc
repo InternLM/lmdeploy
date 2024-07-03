@@ -15,7 +15,7 @@
  */
 
 // Copied from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/gpt_gemm.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/gpt_gemm.cc
 
 #include "src/turbomind/utils/gemm_test/gpt_gemm_func.h"
 #include "src/turbomind/utils/memory_utils.h"

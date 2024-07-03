@@ -211,6 +211,8 @@ class CogVLMChatTemplateWrapper(VLChatTemplateWrapper):
             for item in content:
                 if item['type'] == 'image_url':
                     num_images += 1
+                elif item['type'] == 'image_data':
+                    num_images += 1
                 elif item['type'] == 'text':
                     prompt = item['text']
 
@@ -306,7 +308,7 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
     elif arch in [
             'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM',
             'LlavaForConditionalGeneration',
-            'LlavaNextForConditionalGeneration'
+            'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM'
     ]:
         return LlavaVLChatTemplateWrapper(chat_template)
     elif arch == 'MultiModalityCausalLM':  # deepseek-vl

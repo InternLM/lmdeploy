@@ -11,7 +11,7 @@ pipeline API 详细的接口说明，请阅读[此处](https://lmdeploy.readthed
 ```python
 from lmdeploy import pipeline
 
-pipe = pipeline('internlm/internlm2-chat-7b')
+pipe = pipeline('internlm/internlm2_5-7b-chat')
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
@@ -30,7 +30,7 @@ LMDeploy 在研发过程中，k/v cache 比例的设定策略有变更，以下�
    # 调低 k/v cache内存占比调整为总显存的 20%
    backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
 
-   pipe = pipeline('internlm/internlm2-chat-7b',
+   pipe = pipeline('internlm/internlm2_5-7b-chat',
                    backend_config=backend_config)
    response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
    print(response)
@@ -46,7 +46,7 @@ LMDeploy 在研发过程中，k/v cache 比例的设定策略有变更，以下�
 from lmdeploy import pipeline, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
@@ -62,7 +62,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
@@ -79,7 +79,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -103,7 +103,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -114,6 +114,26 @@ prompts = [[{
 }]]
 for item in pipe.stream_infer(prompts, gen_config=gen_config):
     print(item)
+```
+
+- **计算 logits & ppl:**
+
+```python
+from transformers import AutoTokenizer
+from lmdeploy import pipeline
+model_repoid_or_path='internlm/internlm2_5-7b-chat'
+pipe = pipeline(model_repoid_or_path)
+tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
+
+# logits
+messages = [
+   {"role": "user", "content": "Hello, how are you?"},
+]
+input_ids = tokenizer.apply_chat_template(messages)
+logits = pipe.get_logits(input_ids)
+
+# ppl
+ppl = pipe.get_ppl(input_ids)
 ```
 
 - **使用 pytorch 后端**
@@ -132,7 +152,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
