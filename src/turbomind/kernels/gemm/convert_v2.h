@@ -34,7 +34,7 @@ struct ConvertOperand {
 
     using Atom = typename Operand::SmemCopyAtom;
 
-    using SmemCopy = SmemCopy<Operand, M_, Atom::M>;
+    using SmemCopy = SmemCopy<Operand, M_ / Atom::M, K_ / Atom::K, Atom::M, Atom::K>;
 
     using Accessor = SmemAccessor<Ts, SmemLayout>;
 
@@ -126,6 +126,8 @@ struct ConvertOperand {
             printf("frag_size=%d, frag_num=%d, pack_size=%d\n", kFragSize, kFragNum, kPackSize);
         }
 
+        SmemCopy smem_copy({warp_offset_m, 0});
+
         for (int cta_idx_k = 0; cta_idx_k < cta_cnt_k; ++cta_idx_k) {
 
             gmem.Prefetch(true);
@@ -139,7 +141,8 @@ struct ConvertOperand {
             for (int k = 0; k < ITER_K; ++k) {
                 // Assuming `SmemCopy` is a warp-level operation
                 // Load from smem as we are doing GEMMs
-                SmemCopy::copy(smem, data, int2{warp_offset_m, k * Atom::K});
+                // SmemCopy::copy(smem, data, int2{warp_offset_m, 0}, k);
+                smem_copy(smem, data, k);
 
                 PRAGMA_UNROLL
                 for (int m = 0; m < kFragNum; m += Pack_M) {

@@ -4,6 +4,7 @@
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/core/sync.h"
 #include "src/turbomind/kernels/gemm/iterator_sm80.h"
@@ -244,6 +245,20 @@ struct Epilogue_ {
 
         const int2 thr_cs = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
 
+        constexpr int kPeriodC = ceil_div(SmemLayout::C0, Map::kDeltaC);
+        constexpr int kPeriodS = ceil_div(SmemLayout::S0, Map::kDeltaS);
+
+        int phases[kPeriodS][kPeriodC];
+        PRAGMA_UNROLL
+        for (int s = 0; s < kPeriodS; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < kPeriodC; ++c) {
+                phases[s][c] = SmemLayout::apply(s * Map::kDeltaS + thr_cs.y, c * Map::kDeltaC + thr_cs.x);
+            }
+        }
+
+        constexpr bool kRaked = true;
+
         PRAGMA_UNROLL
         for (int m = 0; m < M; m += PM) {
             PRAGMA_UNROLL
@@ -256,14 +271,23 @@ struct Epilogue_ {
                 for (int s = 0; s < S; ++s) {
                     PRAGMA_UNROLL
                     for (int c = 0; c < C; ++c) {
-                        const int  cc   = c * Map::kDeltaC + thr_cs.x;
-                        const int  ss   = s * Map::kDeltaS + thr_cs.y;
-                        const int2 mn   = cs2mk<kOrder>(cc, ss);
+                        const int cc = c * Map::kDeltaC + thr_cs.x;
+                        const int ss = s * Map::kDeltaS + thr_cs.y;
+
+                        const int2 mn =
+                            kRaked ? cs2mk<kOrder>(c * Map::kDeltaC, s * Map::kDeltaS) : cs2mk<kOrder>(cc, ss);
                         const int  mm   = mn.x - m;
                         const int  nn   = mn.y - n;
                         const bool mask = (M <= PM || (0 <= mm && mm < PM)) && ((N <= PN) || (0 <= nn && nn < PN));
+
+                        const int2 _cs      = mk2cs<kOrder>(m, n);
+                        const int  offset_0 = SmemLayout::apply(  //
+                            s / kPeriodS * kPeriodS * Map::kDeltaS - _cs.y,
+                            c / kPeriodC * kPeriodC * Map::kDeltaC - _cs.x);
+                        const int  offset_p = phases[s % kPeriodS][c % kPeriodC];
+
                         if (mask) {
-                            Load(out[s][c], &smem_C(mm, nn));
+                            Load(out[s][c], &storage[offset_0 + offset_p]);
                         }
                     }
                 }

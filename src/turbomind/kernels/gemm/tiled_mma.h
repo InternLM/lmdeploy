@@ -159,10 +159,10 @@ struct Tiled_MMA_v2 {
         for (int m = 0; m < M; ++m) {
             PRAGMA_UNROLL
             for (int n = 0; n < N; ++n) {
-                const int mm = offset_m + m / kAtomM * Map::TileM + m % kAtomM * Atom::M;
-                const int nn = offset_n + n / kAtomN * Map::TileN + n % kAtomN * Atom::N;
+                const int mm = offset_m + (m / kAtomM) * Map::kDeltaM + m % kAtomM * Atom::M;
+                const int nn = offset_n + (n / kAtomN) * Map::kDeltaN + n % kAtomN * Atom::N;
                 Atom::foreach_C(frag_C[m][n], [&](auto& vec, int mi, int ni) {  //
-                    ((Func&&)func)(vec, mm + mi, nn + ni);
+                    ((Func&&)func)(vec, mm + mi, nn + ni, mm, nn);
                 });
             }
         }
@@ -175,17 +175,18 @@ struct Tiled_MMA_v2 {
             const int3 offset_mnk = get_offset(threadIdx.x);
             const int  group_id_k = offset_mnk.z / Map::kFootprintK;
 
+            constexpr bool kRaked = false;
+
             PRAGMA_UNROLL
             for (int k = 0; k < Map::kGroupK; ++k) {
                 // `vec` is a array in C's continguous dim
-                _foreach_C(frag_C, [&](auto& vec, int mi, int ni) {
-                    const int mm       = mi - offset_mn.x;
-                    const int nn       = ni - offset_mn.y;
-                    auto      smem_ptr = &smem_C(mm, nn);
-                    if ((Map::kGroupK == 1 || group_id_k == k)     //
-                        && (PM >= Map::M || (0 <= mm && mm < PM))  //
-                        && (PN >= Map::N || (0 <= nn && nn < PN))) {
-                        if (k > 0) {  // constant
+                _foreach_C(frag_C, [&](auto& vec, int mi, int ni, int tm, int tn) {
+                    auto       smem_ptr = &smem_C(mi - offset_mn.x, ni - offset_mn.y);
+                    const int  mm       = kRaked ? tm : mi - offset_mn.x;
+                    const int  nn       = kRaked ? tn : ni - offset_mn.y;
+                    const bool mask = (PM >= Map::M || (0 <= mm && mm < PM)) && (PN >= Map::N || (0 <= nn && nn < PN));
+                    if ((Map::kGroupK == 1 || group_id_k == k) && mask) {
+                        if (k > 0) {
                             std::remove_reference_t<decltype(vec)> tmp;
                             Load(tmp, smem_ptr);
                             {
@@ -193,7 +194,6 @@ struct Tiled_MMA_v2 {
                                 vec = vec + tmp;
                             }
                         }
-                        // StShared(cast_smem_ptr_to_uint(smem_ptr), vec);
                         Store(smem_ptr, vec);
                     }
                 });

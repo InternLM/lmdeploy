@@ -28,7 +28,8 @@ struct GetSmemLayout {
     template<int S, int C>
     static constexpr auto apply(pair<S, C>)
     {
-        constexpr int S0 = S >= 16 ? 16 : 8;
+        // constexpr int S0 = S >= 16 ? 16 : 8;
+        constexpr int S0 = 8;
         constexpr int C0 = C >= 64 ? 64 : (C >= 32 ? 32 : 16);
         using _Small     = std::conditional_t<C0 == 32, Swizzle<2, 3, 3>, Swizzle<1, 3, 3>>;
         using Swizzle    = std::conditional_t<C0 == 64, Swizzle<3, 3, 3>, _Small>;
@@ -141,11 +142,11 @@ struct SM80_HMMA_16816_F32 {
              int  GroupSizeU = 1,
              int  GroupSizeV = 1>
     struct Type {
-        using MMA_Map = RakedThreadGroupMap<CTA_M, CTA_N, CTA_K, 16, 16, 16, WARP_CNT_M, WARP_CNT_N, WARP_CNT_K>;
-        // using Partition = Blocked<WARP_CNT_M, WARP_CNT_N, 1, WARP_CNT_M>;
-        // using Partition = Raked<WARP_CNT_M, WARP_CNT_N, 1, WARP_CNT_M>;
-        // using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, 32, 16, 16, Partition, WARP_CNT_K>;
-        using MMA = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
+        // using MMA_Map = RakedThreadGroupMap<CTA_M, CTA_N, CTA_K, 16, 16, 16, WARP_CNT_M, WARP_CNT_N, WARP_CNT_K>;
+        // using Partition = Blocked<WARP_CNT_M, WARP_CNT_N, kColMajor>;
+        using Partition = Raked<WARP_CNT_M, WARP_CNT_N, kColMajor>;
+        using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, 16, 16, 16, Partition, WARP_CNT_K>;
+        using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
 
         using Mainloop = MainloopSm80_v2<CTA_M,
                                          CTA_N,

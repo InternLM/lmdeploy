@@ -101,6 +101,12 @@ struct GmemIteratorSm80 {
 
     SmemAccessor<T, SmemLayout> smem_data_;
 
+    static constexpr int2 kMK0     = cs2mk<kOrder>(SmemLayout::C0, SmemLayout::S0);
+    static constexpr int  kPeriodC = ceil_div(SmemLayout::C0, Map::kDeltaC);
+    static constexpr int  kPeriodS = ceil_div(SmemLayout::S0, Map::kDeltaS);
+
+    int phases_[kPeriodS][kPeriodC];
+
     __device__ static constexpr int2 pack(int2 mk)
     {
         return Packing_v2<kPack, kOrder>::apply(mk);
@@ -143,6 +149,14 @@ struct GmemIteratorSm80 {
             }
         }
 
+        PRAGMA_UNROLL
+        for (int s = 0; s < kPeriodS; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < kPeriodC; ++c) {
+                phases_[s][c] = SmemLayout::apply(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
+            }
+        }
+
         src_offset_ = src_offset * bitsof<T> / bitsof<char>;
         src_step_c_ = Map::kDeltaC * bitsof<T> / bitsof<char>;
         src_step_s_ = Map::kDeltaS * stride_s * bitsof<T> / bitsof<char>;
@@ -178,7 +192,14 @@ struct GmemIteratorSm80 {
         for (int s = begin; s < begin + count && s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                auto dst = &smem_data_(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
+                // auto dst = &smem_data_(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
+
+                const int i0  = SmemLayout::apply(  //
+                    s / kPeriodS * kPeriodS * Map::kDeltaS,
+                    c / kPeriodC * kPeriodC * Map::kDeltaC);
+                const int i1  = phases_[s % kPeriodS][c % kPeriodC];
+                auto      dst = &smem_data_.ptr_[i0 + i1];
+
                 CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, tile_mask && g_mask && pred_(s, c));
             }
             src_data_ += src_step_s_;

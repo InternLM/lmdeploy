@@ -114,10 +114,13 @@ struct MainloopSm80_v2 {
     using SmemLayoutU = typename OperandU::SmemLayout;
     using SmemLayoutV = typename OperandV::SmemLayout;
 
-    using SmemCopyA = SmemCopy<OperandA, MMA_Map::kFootprintM, MMA_Map::kDeltaM>;
-    using SmemCopyU = SmemCopy<OperandU, MMA_Map::kFootprintM, MMA_Map::kDeltaM>;
-    using SmemCopyB = SmemCopy<OperandB, MMA_Map::kFootprintN, MMA_Map::kDeltaN>;
-    using SmemCopyV = SmemCopy<OperandV, MMA_Map::kFootprintN, MMA_Map::kDeltaN>;
+    // static constexpr int2 delta_k_u = _delta_k(OperandU::kGroupSize);
+    // static constexpr int2 delta_k_v = _delta_k(OperandV::kGroupSize);
+
+    using SmemCopyA = SmemCopy<OperandA, MMA_Map::kIterM, MMA_Map::kIterK, MMA_Map::kDeltaM, MMA_Map::kDeltaK>;
+    using SmemCopyU = SmemCopy<OperandU, MMA_Map::kIterM, MMA_Map::kIterK, MMA_Map::kDeltaM, MMA_Map::kDeltaK>;
+    using SmemCopyB = SmemCopy<OperandB, MMA_Map::kIterN, MMA_Map::kIterK, MMA_Map::kDeltaN, MMA_Map::kDeltaK>;
+    using SmemCopyV = SmemCopy<OperandV, MMA_Map::kIterN, MMA_Map::kIterK, MMA_Map::kDeltaN, MMA_Map::kDeltaK>;
 
     using SmemAccessorA = SmemAccessor<Ta, SmemLayoutA>;
     using SmemAccessorB = SmemAccessor<Tb, SmemLayoutB>;
@@ -306,23 +309,26 @@ struct MainloopSm80_v2 {
         const int  offset_n   = offset_mnk.y;
         const int  offset_k   = offset_mnk.z;
 
+        SmemCopyA smem_copy_A{{offset_m, offset_k}};
+        SmemCopyU smem_copy_U{{offset_m, offset_k}};
+        SmemCopyB smem_copy_B{{offset_n, offset_k}};
+        SmemCopyV smem_copy_V{{offset_n, offset_k}};
+
         auto preload = [&](int k) {
             // if (threadIdx.x == 0) {
             //     printf("k = %d\n", k);
             // }
             // __syncthreads();
-            const int curr_k = offset_k + k * MMA_Atom::K;
+            // const int curr_k = offset_k + k * MMA_Atom::K;
 
-            const int curr_k_U = curr_k / GroupSizeU_;
-            const int curr_k_V = curr_k / GroupSizeV_;
+            // const int curr_k_U = curr_k / GroupSizeU_;
+            // const int curr_k_V = curr_k / GroupSizeV_;
 
-            SmemCopyA::copy(smem_A.pointer, data_A[k], {offset_m, curr_k});
-            SmemCopyU::copy(
-                smem_U.pointer, data_U[k / UU], int2{offset_m, curr_k_U}, k % UU == 0 && (bool)smem_group_iter_U);
+            smem_copy_A(smem_A.pointer, data_A[k], k);
+            smem_copy_U(smem_U.pointer, data_U[k / UU], k, k % UU == 0 && (bool)smem_group_iter_U);
 
-            SmemCopyB::copy(smem_B.pointer, data_B[k], {offset_n, curr_k});
-            SmemCopyV::copy(
-                smem_V.pointer, data_V[k / VV], int2{offset_n, curr_k_V}, k % VV == 0 && (bool)smem_group_iter_V);
+            smem_copy_B(smem_B.pointer, data_B[k], k);
+            smem_copy_V(smem_V.pointer, data_V[k / VV], k, k % VV == 0 && (bool)smem_group_iter_V);
         };
 
         PRAGMA_UNROLL

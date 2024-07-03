@@ -17,10 +17,10 @@ struct GetSmemLayout {
     static constexpr auto apply(pair<M, K>)
     {
         if constexpr (order == kRowMajor) {
-            return SmemLayoutV2<M, K>{};
+            return SmemLayoutV2<M, K, 1, 1>{};
         }
         else {
-            return SmemLayoutV2<K, M>{};
+            return SmemLayoutV2<K, M, 1, 1>{};
         }
     }
 };
@@ -44,7 +44,7 @@ template<class T>
 struct Operand_B_T {
     using Dtype = T;
 
-    static constexpr int Pack_M = 2;
+    static constexpr int Pack_M = 1;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | Pack_M;
     static constexpr Order kOrder = Order::kRowMajor;
