@@ -146,11 +146,11 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     const size_t runtime_top_p_size = runtime_top_p.size();
     const Tensor runtime_top_k = runtime_args->isExist("runtime_top_k") ? runtime_args->at("runtime_top_k") : Tensor();
     const size_t runtime_top_k_size = runtime_top_k.size();
-    uint         top_k              = runtime_top_k_size > 0 ? runtime_top_k.max<uint>() : 0;
-    float        top_p              = runtime_top_p_size == 0 ? 0.0f : runtime_top_p.max<float>();
+    uint         max_top_k          = runtime_top_k_size > 0 ? runtime_top_k.max<uint>() : 0;
+    float        min_top_p          = runtime_top_p_size > 0 ? runtime_top_p.min<float>() : 0.0f;
     skip_all_                       = false;
 
-    if (top_k == 0 && top_p != 0.0f) {
+    if (max_top_k == 0 && min_top_p != 0.0f) {
         skip_all_ = true;
         return;
     }
@@ -162,6 +162,9 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
         h_runtime_top_k.resize(batch_size);
         h_runtime_top_p.resize(batch_size);
     }
+
+    uint  top_k = runtime_top_k_size > 0 ? runtime_top_k.max<uint>() : 0;
+    float top_p = runtime_top_p_size > 0 ? runtime_top_p.getVal<float>() : 0.0f;
 
     if (runtime_top_k_size > 1) {
         FT_CHECK_WITH_INFO(
@@ -185,7 +188,7 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
                                   runtime_top_p_size,
                                   skip_decode_);
 
-    runtime_max_top_k_ = *std::max_element(h_runtime_top_k.begin(), h_runtime_top_k.end());
+    runtime_max_top_k_ = *std::max_element(h_runtime_top_k.begin(), h_runtime_top_k.begin() + batch_size);
     cudaAutoCpy(runtime_top_k_buf_, h_runtime_top_k.data(), batch_size, stream_);
     cudaAutoCpy(runtime_top_p_buf_, h_runtime_top_p.data(), batch_size, stream_);
     cudaAutoCpy(skip_decode_buf_, skip_decode_, batch_size, stream_);

@@ -157,7 +157,7 @@ void TopPSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
         h_runtime_top_p.resize(batch_size);
     }
 
-    uint  top_k = runtime_top_k.getVal<uint>();
+    uint  top_k = runtime_top_k_size > 0 ? runtime_top_k.getVal<uint>() : 0;
     float top_p = runtime_top_p.getVal<float>();
 
     if (runtime_top_k_size > 1) {
@@ -178,7 +178,7 @@ void TopPSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
                           runtime_top_p_size,
                           skip_decode_);
 
-    runtime_max_top_p_ = *std::max_element(h_runtime_top_p.begin(), h_runtime_top_p.end());
+    runtime_max_top_p_ = *std::max_element(h_runtime_top_p.begin(), h_runtime_top_p.begin() + batch_size);
     cudaAutoCpy(runtime_top_k_buf_, h_runtime_top_k.data(), batch_size, stream_);
     cudaAutoCpy(runtime_top_p_buf_, h_runtime_top_p.data(), batch_size, stream_);
     cudaAutoCpy(skip_decode_buf_, skip_decode_, batch_size, stream_);
