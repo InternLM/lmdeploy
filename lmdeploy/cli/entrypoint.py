@@ -11,7 +11,6 @@ def run():
     """The entry point of running LMDeploy CLI."""
     args = sys.argv[1:]
     CLI.add_parsers()
-    CLI.add_parser_chat()
     SubCliServe.add_parsers()
     SubCliLite.add_parsers()
     parser = CLI.parser
