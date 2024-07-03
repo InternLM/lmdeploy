@@ -115,7 +115,6 @@ class TurbomindEngineConfig:
     """TurboMind Engine config.
 
     Args:
-        model_name (str): the name of the deployed model, deprecated and has no effect when version > 0.2.1
         model_format (str): the layout of the deployed model. It can be one of the following values [hf, meta_llama, awq],
             `hf` meaning huggingface model(.bin, .safetensors), `meta_llama` being meta llama's format(.pth), awq` meaning the quantized model by AWQ.
         tp (int): the number of GPU cards used in tensor parallelism, default to 1
@@ -136,7 +135,6 @@ class TurbomindEngineConfig:
         max_prefill_iters(int): the max number of forward pass during prefill stage
     """  # noqa: E501
 
-    model_name: Optional[str] = None
     model_format: Optional[str] = None
     tp: int = 1
     session_len: Optional[int] = None
@@ -169,7 +167,6 @@ class PytorchEngineConfig:
     """PyTorch Engine Config.
 
     Args:
-        model_name (str): name of the given model.
         tp (int): Tensor Parallelism. default 1.
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. Default 128.
@@ -197,7 +194,6 @@ class PytorchEngineConfig:
             It can be a branch name, a tag name, or a commit id.
             If unspecified, will use the default version.
     """
-    model_name: str = ''
     tp: int = 1
     session_len: int = None
     max_batch_size: int = 128

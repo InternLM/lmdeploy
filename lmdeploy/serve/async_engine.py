@@ -20,43 +20,24 @@ from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
 logger = get_logger('lmdeploy')
 
 
-def get_model_name_from_workspace_model(model_dir: str):
-    """Get model name from workspace model."""
+def get_names_from_model(model_path: str, model_name):
+    """Get model name and chat template name from workspace model."""
     from configparser import ConfigParser
-    triton_model_path = os.path.join(model_dir, 'triton_models', 'weights')
+    triton_model_path = os.path.join(model_path, 'triton_models', 'weights')
     if not os.path.exists(triton_model_path):
-        return None
-    ini_path = os.path.join(triton_model_path, 'config.ini')
-    # load cfg
-    with open(ini_path, 'r') as f:
-        parser = ConfigParser()
-        parser.read_file(f)
-    return parser['llama']['model_name']
-
-
-def deduce_a_name(
-        model_path: str,
-        model_name: Optional[str] = None,
-        backend_config: Optional[Union[TurbomindEngineConfig,
-                                       PytorchEngineConfig]] = None,
-        chat_template_config: Optional[ChatTemplateConfig] = None) -> str:
-    """Deduce a model name from all the possible arguments."""
-
-    def _config_model_name(config):
-        if config and config.model_name:
-            return config.model_name
-        return None
-
-    backend_config_model_name = _config_model_name(backend_config)
-    chat_template_config_model_name = _config_model_name(chat_template_config)
-    model_name = model_name or backend_config_model_name or chat_template_config_model_name  # noqa
-    if model_name is None:
-        # model maybe from workspace for turbomind
-        model_name = get_model_name_from_workspace_model(model_path)
-    # may get a model name from model_path
-    if model_name is None:
-        model_name = model_path
-    return model_name
+        model_name = model_name if model_name else model_path
+        chat_template_name = best_match_model(model_path)
+    else:
+        # `model_path` refers to a turbomind model, reading model_name
+        # and chat_template_name from the config
+        ini_path = os.path.join(triton_model_path, 'config.ini')
+        with open(ini_path, 'r') as f:
+            parser = ConfigParser()
+            parser.read_file(f)
+        model_name = parser['llama']['model_name']
+        # TODO: bc breaking warning
+        chat_template_name = parser['llama']['chat_template_name']
+    return model_name, chat_template_name
 
 
 @dataclasses.dataclass
@@ -156,19 +137,13 @@ class AsyncEngine(LogitsMixin):
                  backend_config: Optional[Union[TurbomindEngineConfig,
                                                 PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
-                 tp: int = 1,
                  **kwargs) -> None:
         logger.info(
             f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'input chat_template_config={chat_template_config}')
 
-        self.model_name = deduce_a_name(model_path, model_name, backend_config,
-                                        chat_template_config)
-        # build chat template config
-        if self.model_name in MODELS.module_dict.keys():
-            chat_template_name = self.model_name
-        else:
-            chat_template_name = best_match_model(model_path)
+        self.model_name, chat_template_name = get_names_from_model(
+            model_path, model_name)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(chat_template_name)
         elif chat_template_config.model_name is None:
@@ -188,7 +163,6 @@ class AsyncEngine(LogitsMixin):
         if backend == 'turbomind':
             self._build_turbomind(model_path=model_path,
                                   backend_config=backend_config,
-                                  tp=tp,
                                   **kwargs)
         elif backend == 'pytorch':
             self._build_pytorch(model_path=model_path,
@@ -225,8 +199,7 @@ class AsyncEngine(LogitsMixin):
             **kwargs):
         """Innter build method for turbomind backend."""
         if backend_config is None:
-            backend_config = TurbomindEngineConfig(model_name=self.model_name,
-                                                   tp=tp)
+            backend_config = TurbomindEngineConfig(tp=tp)
         assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
             ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
             'turbomind backend'
@@ -245,7 +218,7 @@ class AsyncEngine(LogitsMixin):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
         if backend_config is None:
-            backend_config = PytorchEngineConfig(self.model_name)
+            backend_config = PytorchEngineConfig()
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
             'use PytorchEngineConfig imported from lmdeploy.messages for ' \
             'pytorch backend'

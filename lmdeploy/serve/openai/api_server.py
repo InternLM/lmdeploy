@@ -1142,24 +1142,25 @@ async def chat_interactive_v1(request: GenerateRequest,
         return JSONResponse(ret)
 
 
-def serve(model_path: str,
-          model_name: Optional[str] = None,
-          backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-          backend_config: Optional[Union[PytorchEngineConfig,
-                                         TurbomindEngineConfig]] = None,
-          chat_template_config: Optional[ChatTemplateConfig] = None,
-          server_name: str = '0.0.0.0',
-          server_port: int = 23333,
-          tp: int = 1,
-          allow_origins: List[str] = ['*'],
-          allow_credentials: bool = True,
-          allow_methods: List[str] = ['*'],
-          allow_headers: List[str] = ['*'],
-          log_level: str = 'ERROR',
-          api_keys: Optional[Union[List[str], str]] = None,
-          ssl: bool = False,
-          qos_config_path: str = '',
-          **kwargs):
+def serve(
+        model_path: str,
+        model_name: Optional[str] = None,
+        backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+        backend_config: Optional[Union[PytorchEngineConfig,
+                                       TurbomindEngineConfig]] = None,
+        chat_template_config: Optional[ChatTemplateConfig] = None,
+        server_name: str = '0.0.0.0',
+        server_port: int = 23333,
+        #   tp: int = 1,
+        allow_origins: List[str] = ['*'],
+        allow_credentials: bool = True,
+        allow_methods: List[str] = ['*'],
+        allow_headers: List[str] = ['*'],
+        log_level: str = 'ERROR',
+        api_keys: Optional[Union[List[str], str]] = None,
+        ssl: bool = False,
+        qos_config_path: str = '',
+        **kwargs):
     """An example to perform model inference through the command line
     interface.
 
@@ -1177,8 +1178,9 @@ def serve(model_path: str,
                     on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
-        model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "InternLM/internlm-chat-7b"
+        model_name (str): the name of the served model. It can be accessed
+            by the RESTful API `/v1/models`. If it is not specified,
+            `model_path` will be adopted
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
@@ -1221,7 +1223,7 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
-    pipeline_type, pipeline_class = get_task(model_path)
+    _, pipeline_class = get_task(model_path)
 
     VariableInterface.async_engine = pipeline_class(
         model_path=model_path,
@@ -1229,7 +1231,6 @@ def serve(model_path: str,
         backend=backend,
         backend_config=backend_config,
         chat_template_config=chat_template_config,
-        tp=tp,
         **kwargs)
 
     if qos_config_path:
