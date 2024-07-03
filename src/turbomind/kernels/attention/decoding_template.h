@@ -74,7 +74,12 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
 
     auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
 
-    kernel_func<<<grid, block, kSmemSize, params.stream>>>(
+    size_t smem_size = kSmemSize;
+    if (split_cnt > 1 && !Kernel::need_separate_reduce(split_cnt)) {
+        smem_size = std::max(smem_size, sizeof(typename Kernel::ReduceOp::SharedStorage));
+    }
+
+    kernel_func<<<grid, block, smem_size, params.stream>>>(
         params, cache_iter_factory, CtaMap{}, q_group_size, q_head_per_cta, cta_per_q_group);
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {

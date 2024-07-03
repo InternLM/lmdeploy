@@ -64,7 +64,12 @@ void invokeAttention(const typename Kernel::ParamType& params)
 
     const int q_group_size = params.num_heads / params.num_kv_heads;
 
-    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params,
+    size_t smem_size = kSmemSize;
+    if (split_cnt > 1 && !Kernel::need_separate_reduce(split_cnt)) {
+        smem_size = std::max(smem_size, sizeof(typename Kernel::ReduceOp::SharedStorage));
+    }
+
+    kernel_func<<<grid, block, smem_size, params.stream>>>(params,
                                                            cache_iter_factory,
                                                            cta_map,
                                                            q_group_size,
