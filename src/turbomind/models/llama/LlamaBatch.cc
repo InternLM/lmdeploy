@@ -1134,6 +1134,7 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
         }
     }
     outputs_ = std::move(outputs);
+    sync_check_cuda_error();
 }
 
 template<typename T>
