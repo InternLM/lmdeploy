@@ -282,6 +282,12 @@ class PatchedChatGLMModel(nn.Module):
             past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
                                             ...]] = None,
             inputs_embeds: Optional[torch.Tensor] = None):
+        assert input_ids is not None
+        context = self.context.context
+        # get inputs from context
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
+
         # chatglm2/chaglm3 uses hidden_states in shape of [sq,b,h]
         # while glm uses hidden_states in shape of [b,sq,h]
         if not hasattr(self, '_is_chatglm'):
@@ -299,6 +305,14 @@ class PatchedChatGLMModel(nn.Module):
         if inputs_embeds is None:
             inputs_embeds = self.embedding(input_ids)
 
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            # multi-modality
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
+
+        hidden_states = inputs_embeds
+
         if getattr(self, 'pre_seq_len', None) is not None:
             if past_key_values is None:
                 past_key_values = self.get_prompt(batch_size=batch_size,
@@ -307,12 +321,13 @@ class PatchedChatGLMModel(nn.Module):
 
         # Rotary positional embeddings
         rotary_pos_emb = self.rotary_pos_emb(self.seq_length)
-        if position_ids is not None:
-            context = self.context.context
-            position_ids_1d = context.position_ids_1d
-            rotary_pos_emb = rotary_pos_emb[position_ids_1d[None]]
+        if 'glm-4v' in self.config._name_or_path:
+            from .cogvlm import _get_cogvlm_position_ids
+            position_ids_1d = _get_cogvlm_position_ids(context)
         else:
-            rotary_pos_emb = rotary_pos_emb[None, :seq_length]
+            position_ids_1d = context.position_ids_1d
+
+        rotary_pos_emb = rotary_pos_emb[position_ids_1d[None]]
 
         # Run encoder.
         (hidden_states, presents, all_hidden_states,

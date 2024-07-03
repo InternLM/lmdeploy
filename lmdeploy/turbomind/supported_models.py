@@ -91,5 +91,8 @@ def is_supported(model_path: str):
                 # internvl2-4b phi3 is not working yet
                 support_by_turbomind = cfg.llm_config.architectures[
                     0] != 'Phi3ForCausalLM'
-
+            if arch == 'ChatGLMModel' and getattr(cfg, 'vision_config',
+                                                  None) is not None:
+                # glm-4v-8b not supported
+                support_by_turbomind = False
     return support_by_turbomind
