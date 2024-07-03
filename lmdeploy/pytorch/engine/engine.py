@@ -499,7 +499,6 @@ class Engine:
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos)
         logits = logits_processor(history_ids, split_logits)
         next_token_ids = logits_processor.sampling(logits)
-        next_token_ids = next_token_ids
 
         return next_token_ids
 
