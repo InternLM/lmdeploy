@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import asdict, dataclass
-from typing import Dict, List
+from typing import List
 
 import torch
 from transformers.generation.logits_process import LogitsWarper
@@ -97,6 +97,7 @@ def _multinomial_sampling(scores: torch.Tensor,
 class SamplingInputs:
     temperature: torch.Tensor = None
     bad_words: torch.LongTensor = None
+    stop_words: torch.LongTensor = None
     repetition_penalty: torch.Tensor = None
     top_k: torch.LongTensor = None
     top_p: torch.Tensor = None
@@ -114,6 +115,7 @@ class SamplingInputs:
         top_k = [None] * batch_size
         top_p = [None] * batch_size
         bad_words = [None] * batch_size
+        stop_words = [None] * batch_size
         random_seeds = [torch.seed() & 0xffffffff] * batch_size
         random_offsets = [None] * batch_size
 
@@ -130,10 +132,12 @@ class SamplingInputs:
                     random_seeds[idx] = param.random_seed & 0xffffffff
 
                 bw = param.bad_words
+                sw = param.stop_words
                 if (not param.ignore_eos
                         and seq.num_new_tokens < param.min_new_tokens):
-                    bw = bw + param.stop_words
+                    bw = bw + sw
                 bad_words[idx] = bw
+                stop_words[idx] = sw
 
         def __get_topp(top_p):
             """get topp."""
@@ -144,8 +148,13 @@ class SamplingInputs:
                 top_p = torch.tensor(top_p)
             return top_p, min_top_p
 
-        def __get_bad_words(bad_words, max_bw_len):
+        def __get_bad_words(bad_words):
             """get bad words."""
+            max_bw_len = max(len(bw) for bw in bad_words)
+            if max_bw_len == 0:
+                return None
+            if all(len(bw) == max_bw_len for bw in bad_words):
+                return torch.tensor(bad_words)
             ret = torch.full((batch_size, max_bw_len), -1, dtype=torch.int64)
             for idx, bw in enumerate(bad_words):
                 bw_len = len(bw)
@@ -164,14 +173,8 @@ class SamplingInputs:
 
         temperature = torch.tensor(temperature)
 
-        max_bw_len = max(len(bw) for bw in bad_words)
-        if max_bw_len == 0:
-            bad_words = None
-        else:
-            if all(len(bw) == max_bw_len for bw in bad_words):
-                bad_words = torch.tensor(bad_words)
-            else:
-                bad_words = __get_bad_words(bad_words, max_bw_len)
+        bad_words = __get_bad_words(bad_words)
+        stop_words = __get_bad_words(stop_words)
 
         max_top_k = max(top_k)
         if max_top_k == 1:
@@ -188,6 +191,7 @@ class SamplingInputs:
         sampling_input = cls(
             temperature=temperature,
             bad_words=bad_words,
+            stop_words=stop_words,
             repetition_penalty=repetition_penalty,
             top_k=top_k,
             top_p=top_p,
@@ -210,32 +214,13 @@ class SamplingInputs:
         return SamplingInputs(**out_dict)
 
 
-class SeedManager:
-    """random seed manager."""
-
-    def __init__(self):
-        self._generators: Dict[int, torch.Generator] = dict()
-
-    def new_generator(self, seed: int, device: str = 'cuda'):
-        """new generator."""
-        return torch.Generator(device=device).manual_seed(seed)
-
-    def get(self, seed: int, device: str = 'cuda'):
-        """get generator."""
-        if seed not in self._generators:
-            generator = self.new_generator(seed, device)
-            self._generators[seed] = generator
-        return self._generators[seed]
-
-
-SEED_MANAGER = SeedManager()
-
-
 class FusedLogitsProcessor(LogitsWarper):
     """Custom logits processor."""
 
-    def __init__(self, sampling_inputs: SamplingInputs):
+    def __init__(self, sampling_inputs: SamplingInputs,
+                 ignore_eos: torch.Tensor):
         self.sampling_inputs: SamplingInputs = sampling_inputs
+        self.ignore_eos = ignore_eos
 
     def __call__(self, input_ids: torch.LongTensor,
                  scores: torch.FloatTensor) -> torch.FloatTensor:
@@ -268,6 +253,11 @@ class FusedLogitsProcessor(LogitsWarper):
         bad_words = sampling_inputs.bad_words
         if bad_words is not None:
             scores = _process_bad_words(scores, bad_words)
+
+        stop_words = sampling_inputs.stop_words
+        if stop_words is not None:
+            stop_words = stop_words * self.ignore_eos[:, None]
+            scores = _process_bad_words(scores, stop_words)
 
         return scores
 

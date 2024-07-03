@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/BlockManager.h"
+#include "src/turbomind/models/llama/BlockTrie.h"
 #include <functional>
 
 namespace turbomind {
@@ -23,6 +24,8 @@ struct Sequence {
     UniqueIds block_unique_ids;
 
     int input_length = 0;
+
+    mutable std::vector<int> prompt;
 
     mutable std::vector<int> tokens;  // update by user
 
@@ -73,6 +76,7 @@ public:
                              const BlockConfig& block_config,
                              double             block_count,
                              int                chunk_size,
+                             bool               enable_prefix_caching,
                              int                rank,
                              IAllocator*        allocator,
                              GetFreeMemSize     get_free_size);
@@ -103,6 +107,8 @@ public:
                                       const std::vector<uint64_t>& priorities,
                                       int                          step_length,
                                       AdjustInputCount             adjust);
+
+    void CacheIfEnabled(const Sequences& sequences, int active_size);
 
     [[nodiscard]] void* GetBlockPtr(int block_id)
     {
@@ -141,7 +147,8 @@ private:
     // Use `std::map` to avoid reference invalidation
     std::map<uint64_t, Sequence> sequences_;
 
-    std::unique_ptr<BlockManager> block_manager_;
+    std::shared_ptr<BlockManager> block_manager_;
+    std::shared_ptr<BlockTrie>    block_trie_;
 
     BlockIds unlocked_;
     BlockIds freed_;

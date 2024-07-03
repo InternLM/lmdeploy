@@ -18,8 +18,7 @@ class PackedLoRAInput:
     q_seqlens: torch.Tensor
     adapter_ids: torch.Tensor
     scaling: torch.Tensor
-    rank_page_table: torch.Tensor
-    rank_page_start: torch.Tensor
+    rank_offset: torch.Tensor
     ranks: torch.Tensor
     max_seq_len: int
     max_rank: int
@@ -30,13 +29,14 @@ class LoRALinear(torch.nn.Module):
 
     def _make_packed_lora_input(self, x):
         context = self.context.context
+        adapter_info = context.adapter_params[self.target_name]
 
         # adapter cache
-        global_adapter_ids = context.global_adapter_ids
         layer_idx = self.layer_idx
-        ranks = self.ranks[global_adapter_ids]
-        block_starts = self.block_starts[global_adapter_ids]
-        scaling = self.scaling[global_adapter_ids]
+        ranks = adapter_info.ranks
+        scaling = adapter_info.scalings
+        rank_offset = adapter_info.rank_offsets
+        max_rank = adapter_info.max_rank
         k_cache, v_cache = context.kv_caches[layer_idx]
         cache_len = k_cache.size(0)
         a_cache = k_cache.view(cache_len, -1)
@@ -49,11 +49,10 @@ class LoRALinear(torch.nn.Module):
                                q_seqlens=context.q_seq_length,
                                adapter_ids=context.local_adapter_ids,
                                scaling=scaling,
-                               rank_page_table=context.adapter_offsets,
-                               rank_page_start=block_starts,
+                               rank_offset=rank_offset,
                                ranks=ranks,
                                max_seq_len=context.max_q_seq_length,
-                               max_rank=context.max_rank,
+                               max_rank=max_rank,
                                is_decoding=context.is_decoding)
 
     def _lora_forward_local(self, x):
@@ -68,8 +67,7 @@ class LoRALinear(torch.nn.Module):
                          q_start_loc=lora_input.q_start_loc,
                          q_seqlens=lora_input.q_seqlens,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_page_table=lora_input.rank_page_table,
-                         rank_page_start=lora_input.rank_page_start,
+                         rank_offset=lora_input.rank_offset,
                          ranks=lora_input.ranks,
                          max_seq_len=lora_input.max_seq_len,
                          max_rank=lora_input.max_rank)
@@ -79,8 +77,7 @@ class LoRALinear(torch.nn.Module):
                                q_seqlens=lora_input.q_seqlens,
                                adapter_ids=lora_input.adapter_ids,
                                scaling=lora_input.scaling,
-                               rank_page_table=lora_input.rank_page_table,
-                               rank_page_start=lora_input.rank_page_start,
+                               rank_offset=lora_input.rank_offset,
                                ranks=lora_input.ranks,
                                max_seq_len=lora_input.max_seq_len,
                                max_rank=lora_input.max_rank,
@@ -89,16 +86,14 @@ class LoRALinear(torch.nn.Module):
             xa = mbgmv_a(lora_input.x,
                          lora_input.a_cache,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_page_table=lora_input.rank_page_table,
-                         rank_page_start=lora_input.rank_page_start,
+                         rank_offset=lora_input.rank_offset,
                          ranks=lora_input.ranks,
                          max_rank=lora_input.max_rank)
             lora_out = mbgmv_b(xa,
                                lora_input.b_cache,
                                adapter_ids=lora_input.adapter_ids,
                                scaling=lora_input.scaling,
-                               rank_page_table=lora_input.rank_page_table,
-                               rank_page_start=lora_input.rank_page_start,
+                               rank_offset=lora_input.rank_offset,
                                ranks=lora_input.ranks,
                                max_rank=lora_input.max_rank,
                                out_size=out_size)
@@ -122,8 +117,7 @@ class LoRALinear(torch.nn.Module):
                          q_start_loc=lora_input.q_start_loc,
                          q_seqlens=lora_input.q_seqlens,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_page_table=lora_input.rank_page_table,
-                         rank_page_start=lora_input.rank_page_start,
+                         rank_offset=lora_input.rank_offset,
                          ranks=lora_input.ranks,
                          max_seq_len=lora_input.max_seq_len,
                          max_rank=lora_input.max_rank)
@@ -133,8 +127,7 @@ class LoRALinear(torch.nn.Module):
                                q_seqlens=lora_input.q_seqlens,
                                adapter_ids=lora_input.adapter_ids,
                                scaling=lora_input.scaling,
-                               rank_page_table=lora_input.rank_page_table,
-                               rank_page_start=lora_input.rank_page_start,
+                               rank_offset=lora_input.rank_offset,
                                ranks=lora_input.ranks,
                                max_seq_len=lora_input.max_seq_len,
                                max_rank=lora_input.max_rank,
@@ -143,16 +136,14 @@ class LoRALinear(torch.nn.Module):
             xa = mbgmv_a(lora_input.x,
                          lora_input.a_cache,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_page_table=lora_input.rank_page_table,
-                         rank_page_start=lora_input.rank_page_start,
+                         rank_offset=lora_input.rank_offset,
                          ranks=lora_input.ranks,
                          max_rank=lora_input.max_rank)
             lora_out = mbgmv_b(xa,
                                lora_input.b_cache,
                                adapter_ids=lora_input.adapter_ids,
                                scaling=lora_input.scaling,
-                               rank_page_table=lora_input.rank_page_table,
-                               rank_page_start=lora_input.rank_page_start,
+                               rank_offset=lora_input.rank_offset,
                                ranks=lora_input.ranks,
                                max_rank=lora_input.max_rank,
                                out_size=out_size)
@@ -188,8 +179,7 @@ class LoRALinear(torch.nn.Module):
                          q_start_loc=lora_input.q_start_loc,
                          q_seqlens=lora_input.q_seqlens,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_page_table=lora_input.rank_page_table,
-                         rank_page_start=lora_input.rank_page_start,
+                         rank_offset=lora_input.rank_offset,
                          ranks=lora_input.ranks,
                          max_seq_len=lora_input.max_seq_len,
                          max_rank=lora_input.max_rank,
@@ -211,8 +201,7 @@ class LoRALinear(torch.nn.Module):
                                q_seqlens=lora_input.q_seqlens,
                                adapter_ids=lora_input.adapter_ids,
                                scaling=lora_input.scaling,
-                               rank_page_table=lora_input.rank_page_table,
-                               rank_page_start=lora_input.rank_page_start,
+                               rank_offset=lora_input.rank_offset,
                                ranks=lora_input.ranks,
                                max_seq_len=lora_input.max_seq_len,
                                max_rank=lora_input.max_rank,
@@ -221,8 +210,7 @@ class LoRALinear(torch.nn.Module):
             xa = mbgmv_a(lora_input.x,
                          lora_input.a_cache,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_page_table=lora_input.rank_page_table,
-                         rank_page_start=lora_input.rank_page_start,
+                         rank_offset=lora_input.rank_offset,
                          ranks=lora_input.ranks,
                          max_rank=lora_input.max_rank,
                          rank_step=world_size)
@@ -241,8 +229,7 @@ class LoRALinear(torch.nn.Module):
                                lora_input.b_cache,
                                adapter_ids=lora_input.adapter_ids,
                                scaling=lora_input.scaling,
-                               rank_page_table=lora_input.rank_page_table,
-                               rank_page_start=lora_input.rank_page_start,
+                               rank_offset=lora_input.rank_offset,
                                ranks=lora_input.ranks,
                                max_rank=lora_input.max_rank,
                                out_size=out_size)
@@ -274,7 +261,8 @@ class LoRALinear(torch.nn.Module):
     def forward(self, x):
         """forward."""
         context = self.context.context
-        max_rank = context.max_rank
+        adapter_info = context.adapter_params[self.target_name]
+        max_rank = adapter_info.max_rank
 
         if max_rank == 0:
             return self.origin_mod.forward(x)

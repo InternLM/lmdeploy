@@ -35,7 +35,7 @@ LMDeploy 支持两种添加对话模板的形式：
   在使用 CLI 工具时，可以通过 `--chat-template` 传入自定义对话模板，比如：
 
   ```shell
-  lmdeploy serve api_server internlm/internlm2-chat-7b --chat-template ${JSON_FILE}
+  lmdeploy serve api_server internlm/internlm2_5-7b-chat --chat-template ${JSON_FILE}
   ```
 
   也可以在通过接口函数传入，比如：
@@ -43,7 +43,7 @@ LMDeploy 支持两种添加对话模板的形式：
   ```python
   from lmdeploy import ChatTemplateConfig, serve
 
-  serve('internlm/internlm2-chat-7b',
+  serve('internlm/internlm2_5-7b-chat',
         chat_template_config=ChatTemplateConfig.from_json('${JSON_FILE}'))
   ```
 
@@ -82,7 +82,7 @@ LMDeploy 支持两种添加对话模板的形式：
   from lmdeploy import ChatTemplateConfig, pipeline
 
   messages = [{'role': 'user', 'content': 'who are you?'}]
-  pipe = pipeline('internlm/internlm2-chat-7b',
+  pipe = pipeline('internlm/internlm2_5-7b-chat',
                   chat_template_config=ChatTemplateConfig('customized_model'))
   for response in pipe.stream_infer(messages):
       print(response.text, end='')

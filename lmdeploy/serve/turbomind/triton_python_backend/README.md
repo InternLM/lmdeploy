@@ -43,6 +43,8 @@ You can find more details of the model repository in the [Triton Inference Serve
 
 ### Step 2: Run the Triton Server
 
+The [memory leak](https://github.com/triton-inference-server/python_backend/pull/309) issue in TIS Python Backend prior to version r23.10 occurs when the backend is in decoupled mode. It's strongly recommended to upgrade to TIS Python Backend version [r23.10](https://github.com/triton-inference-server/python_backend/tree/r23.10) or higher to mitigate this issue.
+
 Use the following command to start the Triton Inference Server with the specified model repository:
 
 ```

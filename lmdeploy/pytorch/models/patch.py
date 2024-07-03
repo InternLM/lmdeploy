@@ -7,17 +7,17 @@ from typing import Any, Dict, Sequence
 
 import torch
 from addict import Addict
-from torch.distributed._tensor import DeviceMesh
 
 from lmdeploy.utils import get_logger
 
-from ..dist_utils import partition_module, replicate_module
-from .module_map import MODULE_MAP
+from ..devices import get_device_manager
+from .module_map import DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP
 
 logger = get_logger('lmdeploy')
 
 
-def _get_rewrite_qualname(origin_qualname: str) -> str:
+def _get_rewrite_qualname(origin_qualname: str, module_map: Dict[str,
+                                                                 str]) -> str:
     """get rewrite module from origin module name.
 
     Args:
@@ -26,9 +26,9 @@ def _get_rewrite_qualname(origin_qualname: str) -> str:
     Returns:
         str: The rewrite qualname.
     """
-    if origin_qualname in MODULE_MAP:
-        return MODULE_MAP[origin_qualname]
-    for key, value in MODULE_MAP.items():
+    if origin_qualname in module_map:
+        return module_map[origin_qualname]
+    for key, value in module_map.items():
         if re.search(key, origin_qualname):
             return value
     return None
@@ -54,26 +54,26 @@ def _class_from_qualname(qualname: str) -> Any:
     return cls_type
 
 
-def _find_rewrite_module_qualname(model):
+def _find_rewrite_module_qualname(model, module_map: Dict[str, str]):
     """find rewrite module."""
     module_name = inspect.getmodule(model).__name__
     class_name = model.__class__.__name__
 
     def _find_fullname():
         origin_qualname = f'{module_name}.{class_name}'
-        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname, module_map)
         return rewrite_qualname
 
     def _find_classname():
         origin_qualname = class_name
-        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname, module_map)
         return rewrite_qualname
 
     def _find_submodulename():
         # name with first module
         mod_name = module_name[module_name.rfind('.') + 1:]
         origin_qualname = f'{mod_name}.{class_name}'
-        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname, module_map)
         return rewrite_qualname
 
     rewrite_qualname = _find_fullname()
@@ -112,7 +112,9 @@ def _update_module_type(model: Any, cls_type: type, custom_attrs: dict = None):
     return model
 
 
-def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
+def _patch(model: torch.nn.Module,
+           context: Addict,
+           module_map: Dict[str, str] = None) -> torch.nn.Module:
     """patch the model with rewrite module.
 
     Args:
@@ -123,15 +125,19 @@ def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
         Module: The patched model
     """
 
+    if module_map is None:
+        module_map = MODULE_MAP
+
     def _recursive_children(context, named_children):
         """recursive children."""
         for name, child in named_children:
-            patched_child = _patch(child, context)
+            patched_child = _patch(child, context, module_map=module_map)
             if patched_child != child:
                 model.register_module(name, patched_child)
 
     _recursive_children(context, model.named_children())
-    rewrite_qualname = _find_rewrite_module_qualname(model)
+    rewrite_qualname = _find_rewrite_module_qualname(model,
+                                                     module_map=module_map)
 
     if rewrite_qualname is not None:
         cls_type = _class_from_qualname(rewrite_qualname)
@@ -154,74 +160,35 @@ def _update_model(model: torch.nn.Module):
         model._update_model_fn()
 
 
-def _dist_model(model: torch.nn.Module,
-                rank: int = 0,
-                device_mesh: DeviceMesh = None):
+def update_model(model: torch.nn.Module):
+    """update model."""
+    return _update_model(model)
+
+
+def _dist_model(model: torch.nn.Module, rank: int = 0):
     """distribute model parameters."""
-
-    def _init_params():
-        """init params."""
-        device = torch.device(f'cuda:{rank}')
-        for name, param in model.named_parameters(recurse=False):
-            if device != param.device:
-                if rank == 0:
-                    new_param = param.to(device)
-                    model.register_parameter(
-                        name, torch.nn.Parameter(new_param,
-                                                 requires_grad=False))
-                else:
-                    new_param = torch.empty_like(param, device=device)
-                    model.register_parameter(
-                        name, torch.nn.Parameter(new_param,
-                                                 requires_grad=False))
-
-        for name, param in model.named_buffers(recurse=False):
-            if device != param.device:
-                if rank == 0:
-                    new_param = param.to(device)
-                    model.register_buffer(name, new_param)
-                else:
-                    new_param = torch.empty_like(param, device=device)
-                    model.register_buffer(name, new_param)
-        torch.cuda.synchronize()
-
-    def _dist_params():
-        """dist params."""
-        if hasattr(model, '_distribute_partition_fn'):
-            partition_module(
-                model,
-                device_mesh=device_mesh,
-                func=model._distribute_partition_fn,
-                to_local=True,
-            )
-        else:
-            replicate_module(model, device_mesh=device_mesh)
-        torch.cuda.empty_cache()
 
     def _register_hooks():
         """register hooks."""
         if hasattr(model, '_distribute_input_fn'):
             input_fn = model._distribute_input_fn
             model.register_forward_pre_hook(
-                lambda _, inputs, inputs_dict: input_fn(
-                    inputs, inputs_dict, device_mesh),
+                lambda _, inputs, inputs_dict: input_fn(inputs, inputs_dict),
                 with_kwargs=True,
             )
 
         if hasattr(model, '_distribute_output_fn'):
             output_fn = model._distribute_output_fn
             model.register_forward_hook(
-                lambda mod, inputs, outputs: output_fn(outputs, device_mesh))
+                lambda mod, inputs, outputs: output_fn(outputs))
 
     for name, child in model.named_children():
         if rank == 0:
             logger.debug(f'Distribute module: <{name}>')
-        new_child = _dist_model(child, rank, device_mesh)
+        new_child = _dist_model(child, rank)
         if new_child != child:
             model.register_module(name, child)
 
-    _init_params()
-    _dist_params()
     _register_hooks()
 
     return model
@@ -247,6 +214,7 @@ class PatchedForward:
         return output
 
 
+@torch.inference_mode()
 def patch(
     model: torch.nn.Module,
     extra_args: Sequence[str] = None,
@@ -267,21 +235,24 @@ def patch(
     Returns:
         Module: The patched model.
     """
+    if rank == 0:
+        logger.info('Patching model.')
 
     if extra_args is None:
         extra_args = []
 
     _patch_context = Addict()
 
-    model = _patch(model, _patch_context)
+    module_map = MODULE_MAP.copy()
+    device_type = get_device_manager().current_context().device_type
+    if device_type != 'cuda':
+        device_map = DEVICE_SPECIAL_MODULE_MAP.get(device_type, dict())
+        module_map.update(device_map)
+
+    model = _patch(model, _patch_context, module_map=module_map)
 
     if world_size > 1:
-        if rank == 0:
-            logger.info('distribute model parameters.')
-        device_mesh = DeviceMesh('cuda', list(range(world_size)))
-        model = _dist_model(model, rank, device_mesh=device_mesh)
-
-    _update_model(model)
+        model = _dist_model(model, rank)
 
     patched_forward = PatchedForward(model,
                                      _patch_context,

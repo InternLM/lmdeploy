@@ -15,7 +15,7 @@
  */
 
 // Copied from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/gpt_gemm.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/gpt_gemm.cc
 
 #include "src/turbomind/utils/gemm_test/gpt_gemm_func.h"
 #include "src/turbomind/utils/memory_utils.h"
@@ -87,7 +87,9 @@ int main(int argc, char* argv[])
         ft::deviceMalloc(reinterpret_cast<char**>(&gemm_test_buf), buf_size_in_byte, false);
     }
 
-    if (data_type == ft::FLOAT_DATATYPE) {
+    if (0) {}
+#ifdef ENABLE_FP32
+    else if (data_type == ft::FLOAT_DATATYPE) {
         ft::generate_gpt_gemm_config<float>(batch_size,
                                             beam_width,
                                             max_input_len,
@@ -99,6 +101,7 @@ int main(int argc, char* argv[])
                                             gemm_test_buf,
                                             is_append);
     }
+#endif
     else if (data_type == ft::HALF_DATATYPE) {
         ft::generate_gpt_gemm_config<half>(batch_size,
                                            beam_width,

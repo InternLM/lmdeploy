@@ -16,10 +16,11 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
 
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "3rdparty/INIReader.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaInstanceComm.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
@@ -60,12 +61,32 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
 #endif
     }
     else {
+#ifdef ENABLE_FP32
         return std::make_shared<LlamaTritonModel<float>>(
             reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
             model_dir);
+#else
+        TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF32");
+        ft::FT_CHECK(false);
+#endif
     }
+}
+
+template<typename T>
+std::map<std::string, std::pair<std::regex, T>> getLoraPattern(std::string pattern, T (*func)(const std::string& s))
+{
+    std::map<std::string, std::pair<std::regex, T>> res;
+    std::stringstream                               ss(pattern);
+    std::string                                     kv;
+    while (std::getline(ss, kv, ',')) {
+        auto pos = kv.rfind(":");
+        auto k   = kv.substr(0, pos);
+        auto v   = func(kv.substr(pos + 1));
+        res.emplace(k, std::make_pair(std::regex(k), v));
+    }
+    return res;
 }
 
 template<typename T>
@@ -199,11 +220,20 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
 
     engine_params_.cache_max_block_count = reader.GetFloat("llama", "cache_max_entry_count", 0);
     engine_params_.cache_chunk_size      = reader.GetInteger("llama", "cache_chunk_size", 0);
+    engine_params_.enable_prefix_caching = reader.GetBoolean("llama", "enable_prefix_caching", false);
 
     engine_params_.num_tokens_per_iter   = reader.GetInteger("llama", "num_tokens_per_iter", 0);
     engine_params_.extra_tokens_per_iter = reader.GetInteger("llama", "extra_tokens_per_iter", 0);
     engine_params_.max_prefill_iters     = reader.GetInteger("llama", "max_prefill_iters", 1);
 
+    lora_params_.policy        = ft::getLoraPolicy(reader.Get("llama", "lora_policy", ""));
+    lora_params_.r             = reader.GetInteger("llama", "lora_r", 0);
+    lora_params_.scale         = reader.GetFloat("llama", "lora_scale", 0);
+    lora_params_.max_wo_r      = reader.GetInteger("llama", "lora_max_wo_r", 0);
+    lora_params_.rank_pattern  = getLoraPattern<int>(reader.Get("llama", "lora_rank_pattern", ""),
+                                                    [](const std::string& s) { return std::stoi(s); });
+    lora_params_.scale_pattern = getLoraPattern<float>(reader.Get("llama", "lora_scale_pattern", ""),
+                                                       [](const std::string& s) { return std::stof(s); });
     handleMissingParams();
 
     shared_state_          = std::make_shared<typename ft::LlamaV2<T>::SharedState>();
@@ -250,7 +280,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
 
     /// TODO: this stream handle is leaked
     cudaStream_t stream{};
-    ft::check_cuda_error(cudaStreamCreate(&stream));
+    ft::check_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
     allocator->setStream(stream);
 
@@ -272,9 +302,11 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     if (std::is_same<T, half>::value) {
         cublas_wrapper->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
     }
+#ifdef ENABLE_FP32
     else if (std::is_same<T, float>::value) {
         cublas_wrapper->setFP32GemmConfig();
     }
+#endif
 #ifdef ENABLE_BF16
     else if (std::is_same<T, __nv_bfloat16>::value) {
         cublas_wrapper->setBF16GemmConfig();
@@ -301,6 +333,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   quant_policy_,
                                                   use_context_fmha_,
                                                   engine_params_,
+                                                  lora_params_,
                                                   shared_state_,
                                                   shared_weights_[device_id].get(),
                                                   tensor_para,
@@ -367,6 +400,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                       attn_bias_,
                                                                       weight_type_,
                                                                       group_size_,
+                                                                      lora_params_,
                                                                       tensor_para_size_,
                                                                       tensor_para_rank);
     // model inited with model_dir
@@ -402,6 +436,7 @@ std::string LlamaTritonModel<T>::toString()
        << "\nsession_len: " << engine_params_.session_len << "\nstep_length: " << engine_params_.step_length
        << "\ncache_max_entry_count: " << engine_params_.cache_max_block_count
        << "\ncache_block_seq_len: " << cache_block_seq_len_ << "\ncache_chunk_size: " << engine_params_.cache_chunk_size
+       << "\nenable_prefix_caching: " << engine_params_.enable_prefix_caching
        << "\nuse_context_fmha: " << use_context_fmha_ << "\nstart_id: " << start_id_
        << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
        << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
@@ -467,7 +502,9 @@ int LlamaTritonModel<T>::getPipelineParaSize()
     return pipeline_para_size_;
 }
 
+#ifdef ENABLE_FP32
 template struct LlamaTritonModel<float>;
+#endif
 template struct LlamaTritonModel<half>;
 #ifdef ENABLE_BF16
 template struct LlamaTritonModel<__nv_bfloat16>;

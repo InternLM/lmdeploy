@@ -101,9 +101,9 @@ struct AttentionCtaMap {
 #endif
 
 struct DecodingCtaMap {
-    static __host__ dim3 get_grid_shape(int head_num, int batch_size, int split_count, int cta_h)
+    static __host__ dim3 get_grid_shape(int kv_head_num, int batch_size, int split_count, int cta_per_q_group)
     {
-        return dim3(head_num / cta_h, batch_size, split_count);
+        return dim3(cta_per_q_group * kv_head_num, batch_size, split_count);
     }
     __device__ int query_idx() const
     {

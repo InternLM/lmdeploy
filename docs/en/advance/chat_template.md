@@ -36,14 +36,14 @@ LMDeploy supports two methods of adding chat templates:
   When using the CLI tool, you can pass in a custom chat template with `--chat-template`, for example.
 
   ```shell
-  lmdeploy serve api_server internlm/internlm2-chat-7b --chat-template ${JSON_FILE}
+  lmdeploy serve api_server internlm/internlm2_5-7b-chat --chat-template ${JSON_FILE}
   ```
 
   You can also pass it in through the interface function, for example.
 
   ```python
   from lmdeploy import ChatTemplateConfig, serve
-  serve('internlm/internlm2-chat-7b',
+  serve('internlm/internlm2_5-7b-chat',
         chat_template_config=ChatTemplateConfig.from_json('${JSON_FILE}'))
   ```
 
@@ -81,7 +81,7 @@ LMDeploy supports two methods of adding chat templates:
   from lmdeploy import ChatTemplateConfig, pipeline
 
   messages = [{'role': 'user', 'content': 'who are you?'}]
-  pipe = pipeline('internlm/internlm2-chat-7b',
+  pipe = pipeline('internlm/internlm2_5-7b-chat',
                   chat_template_config=ChatTemplateConfig('customized_model'))
   for response in pipe.stream_infer(messages):
       print(response.text, end='')

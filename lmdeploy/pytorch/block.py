@@ -1,7 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# modify from: https://github.com/vllm-project/vllm
-from dataclasses import dataclass
-
 import numpy as np
 
 
@@ -27,6 +24,7 @@ class LogicalTokenBlocks:
             assert blocks.ndim == 1
             self._blocks = blocks
             self._num_real = len(blocks)
+        self.last_shared_node = None
 
     def reserve(self, size: int):
         """reserve cache size."""
@@ -55,7 +53,7 @@ class LogicalTokenBlocks:
         slice_start = self._num_real
         slice_end = slice_start + num_blocks
         self._num_real += num_blocks
-        self.__setitem__(slice(slice_start, slice_end), blocks)
+        self._blocks[slice_start:slice_end] = blocks
 
     def __len__(self):
         """get length."""
@@ -69,19 +67,10 @@ class LogicalTokenBlocks:
     def reset(self):
         """reset."""
         self.resize(0)
+        self.last_shared_node = None
 
     def clone(self):
         """clone logical blocks."""
         ret = LogicalTokenBlocks()
-        ret.append(self[:])
+        ret.append(self.get_real_blocks())
         return ret
-
-
-@dataclass
-class PhysicalTokenBlock:
-    """Physical block used to schedule key value cache."""
-
-    device: str
-    block_id: int
-    block_size: int
-    ref_count: int = 0

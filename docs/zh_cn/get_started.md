@@ -10,19 +10,19 @@ LMDeploy提供了快速安装、模型量化、离线批处理、在线推理服
 pip install lmdeploy
 ```
 
-LMDeploy的预编译包默认是基于 CUDA 11.8 编译的。如果需要在 CUDA 12+ 下安装 LMDeploy，请执行以下命令：
+LMDeploy的预编译包默认是基于 CUDA 12 编译的。如果需要在 CUDA 11+ 下安装 LMDeploy，请执行以下命令：
 
 ```shell
-export LMDEPLOY_VERSION=0.2.0
+export LMDEPLOY_VERSION=0.5.0
 export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## 离线批处理
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
+pipe = lmdeploy.pipeline("internlm/internlm2_5-7b-chat")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
@@ -40,7 +40,7 @@ LMDeploy 提供了多种部署模型推理服务的方式，总有一款适合�
 ## 模型量化
 
 - [INT4 权重量化](quantization/w4a16.md)
-- [K/V 量化](quantization/kv_int8.md)
+- [K/V 量化](quantization/kv_quant.md)
 - [W8A8 量化](quantization/w8a8.md)
 
 ## 好用的工具
@@ -50,7 +50,7 @@ LMDeploy CLI 提供了如下便捷的工具，方便用户快速体验模型对�
 ### 控制台交互式对话
 
 ```shell
-lmdeploy chat internlm/internlm-chat-7b
+lmdeploy chat internlm/internlm2_5-7b-chat
 ```
 
 ### WebUI 交互式对话
@@ -61,7 +61,7 @@ LMDeploy 使用 gradio 开发了在线对话 demo。
 # 安装依赖
 pip install lmdeploy[serve]
 # 启动
-lmdeploy serve gradio internlm/internlm-chat-7b
+lmdeploy serve gradio internlm/internlm2_5-7b-chat
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)

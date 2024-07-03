@@ -16,7 +16,7 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
 
 #pragma once
 
@@ -101,6 +101,7 @@ private:
     bool                            attn_bias_;
     int                             quant_policy_;
     int                             group_size_;
+    turbomind::LoraParams           lora_params_;
 
     // shared weights for each device
     std::vector<std::shared_ptr<ft::LlamaWeight<T>>> shared_weights_;

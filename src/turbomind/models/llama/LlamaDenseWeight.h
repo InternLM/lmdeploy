@@ -15,12 +15,10 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/DenseWeight.h
+// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/DenseWeight.h
 
 #pragma once
 
-#include "src/turbomind/layers/FfnWeight.h"
-#include "src/turbomind/layers/attention_layers/AttentionWeight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -54,11 +52,34 @@ inline size_t getBitSize(WeightType type)
     return 0;
 }
 
+enum class LoraPolicy : int
+{
+    kNull,
+    kPlora,
+};
+
+inline LoraPolicy getLoraPolicy(const std::string& policy)
+{
+    if (policy == "plora") {
+        return LoraPolicy::kPlora;
+    }
+    return LoraPolicy::kNull;
+}
+
+struct LoraWeight {
+    LoraPolicy policy;
+    int        r;
+    float      scale;
+    void*      a;
+    void*      b;
+};
+
 template<typename T>
 struct LlamaDenseWeight {
     size_t     input_dims;
     size_t     output_dims;
     void*      kernel;
+    LoraWeight lora;
     WeightType type;
     T*         bias;
     T*         scales_and_zeros;

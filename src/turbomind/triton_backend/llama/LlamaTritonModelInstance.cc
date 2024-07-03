@@ -16,13 +16,14 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
 
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/triton_backend/triton_utils.hpp"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <algorithm>
 #include <functional>
@@ -176,6 +177,37 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
                                           d_cum_log_probs_}});
     }
 
+    if (input_tensors->count("logprobs")) {
+        size_t max_logprob_length = std::min((int)max_request_output_len, instance_->session_len) + 1;
+        h_logprob_vals_           = (float*)std::realloc(
+            h_logprob_vals_, sizeof(float) * request_batch_size * beam_width * max_logprob_length * ft::kMaxLogProb);
+        h_logprob_indexes_ = (uint32_t*)std::realloc(h_logprob_indexes_,
+                                                     sizeof(uint32_t) * request_batch_size * beam_width
+                                                         * max_logprob_length * ft::kMaxLogProb);
+        h_logprob_nums_    = (uint32_t*)std::realloc(
+            h_logprob_nums_, sizeof(uint32_t) * request_batch_size * beam_width * max_logprob_length);
+
+        output_tensors.insert(
+            {{"logprob_vals",
+              ft::Tensor{ft::MEMORY_CPU,
+                         ft::TYPE_FP32,
+                         std::vector<size_t>{request_batch_size, beam_width, max_logprob_length, ft::kMaxLogProb},
+                         h_logprob_vals_}}});
+
+        output_tensors.insert(
+            {{"logprob_indexes",
+              ft::Tensor{ft::MEMORY_CPU,
+                         ft::TYPE_UINT32,
+                         std::vector<size_t>{request_batch_size, beam_width, max_logprob_length, ft::kMaxLogProb},
+                         h_logprob_indexes_}}});
+
+        output_tensors.insert({{"logprob_nums",
+                                ft::Tensor{ft::MEMORY_CPU,
+                                           ft::TYPE_UINT32,
+                                           std::vector<size_t>{request_batch_size, beam_width, max_logprob_length},
+                                           h_logprob_nums_}}});
+    }
+
     if (is_return_logits) {
         output_tensors.insert(
             {"logits",
@@ -219,10 +251,10 @@ void LlamaTritonModelInstance<T>::allocateBuffer(const size_t request_batch_size
     d_output_ids_ = (int*)std::realloc(d_output_ids_, sizeof(int) * request_batch_size * beam_width * session_len);
     d_sequence_lengths_ = (int*)std::realloc(d_sequence_lengths_, sizeof(int) * request_batch_size * beam_width);
 
-    d_output_log_probs_ = (float*)(allocator_->reMalloc(
-        d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * session_len, false));
-    d_cum_log_probs_ =
-        (float*)(allocator_->reMalloc(d_cum_log_probs_, sizeof(float) * request_batch_size * beam_width, false));
+    // d_output_log_probs_ = (float*)(allocator_->reMalloc(
+    //     d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * session_len, false));
+    // d_cum_log_probs_ =
+    //     (float*)(allocator_->reMalloc(d_cum_log_probs_, sizeof(float) * request_batch_size * beam_width, false));
     if (is_return_logits) {
         d_output_logits_ = (float*)allocator_->reMalloc(
             d_output_logits_, sizeof(float) * request_batch_size * max_input_len * instance_->llm->vocab_size(), false);
@@ -237,9 +269,14 @@ void LlamaTritonModelInstance<T>::freeBuffer()
     allocator_->free((void**)(&d_output_log_probs_));
     allocator_->free((void**)(&d_cum_log_probs_));
     std::free(h_total_output_lengths_);
+    std::free(h_logprob_vals_);
+    std::free(h_logprob_indexes_);
+    std::free(h_logprob_nums_);
 }
 
+#ifdef ENABLE_FP32
 template struct LlamaTritonModelInstance<float>;
+#endif
 template struct LlamaTritonModelInstance<half>;
 #ifdef ENABLE_BF16
 template struct LlamaTritonModelInstance<__nv_bfloat16>;

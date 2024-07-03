@@ -40,7 +40,7 @@ In this section, we take [internlm/internlm-7b](https://huggingface.co/internlm/
 Before launching the server, the LLM model must be converted to the turbomind format in advance.
 
 ```shell
-lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b
+lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b --trust-remote-code
 ```
 
 Then, the triton inference server can be launched by:

@@ -7,6 +7,7 @@ from glob import glob
 import torch
 from safetensors.torch import load_file
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.tokenizer import Tokenizer
 
 from .base import INPUT_MODELS, BaseInputModel, BaseReader
@@ -15,6 +16,7 @@ from .base import INPUT_MODELS, BaseInputModel, BaseReader
 class LlamaReader(BaseReader):
     """LlamaReader."""
 
+    attn_layer_prefix = 'model.layers'
     attn_layer_patten = r'model.layers.([0-9]+).'
     tok_embeddings_key = 'model.embed_tokens.weight'
     norm_weight_key = 'model.norm.weight'
@@ -27,6 +29,9 @@ class LlamaReader(BaseReader):
         self.params.update(new_params)
         self.last_bin = last_bin
         self.model_cfg = model_cfg
+        tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
+        if tie_word_embeddings:
+            self.output_weight_key = self.tok_embeddings_key
         self.init_layer_id()
 
     def init_layer_id(self):
@@ -64,7 +69,7 @@ class LlamaReader(BaseReader):
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params.get(
-                f'model.layers.{i}.self_attn.{key}_proj.{kind}')
+                f'{self.attn_layer_prefix}.{i}.self_attn.{key}_proj.{kind}')
             if not allow_none:
                 assert tensor is not None
             result.append(tensor)
@@ -88,13 +93,15 @@ class LlamaReader(BaseReader):
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
-        return self.params[f'model.layers.{i}.input_layernorm.weight']
+        return self.params[
+            f'{self.attn_layer_prefix}.{i}.input_layernorm.weight']
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         result = []
         for key in ['gate', 'down', 'up']:
-            tensor = self.params[f'model.layers.{i}.mlp.{key}_proj.{kind}']
+            tensor = self.params[
+                f'{self.attn_layer_prefix}.{i}.mlp.{key}_proj.{kind}']
             result.append(tensor)
         return (*result, )
 
@@ -112,10 +119,11 @@ class LlamaReader(BaseReader):
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
-        return self.params[f'model.layers.{i}.post_attention_layernorm.weight']
+        return self.params[
+            f'{self.attn_layer_prefix}.{i}.post_attention_layernorm.weight']
 
 
-@INPUT_MODELS.register_module(name='hf')
+@INPUT_MODELS.register_module(name='llama')
 class LlamaModel(BaseInputModel):
     """Llama model in hf format."""
 
@@ -128,6 +136,8 @@ class LlamaModel(BaseInputModel):
             ckpt_path = model_path
         self.ckpt_path = ckpt_path
         self.ckpt_files = self.get_ckpt()
+        _, self.model_config = get_model_arch(model_path)
+        self.model_config = self.model_config.to_dict()
 
     def get_ckpt(self):
         """Get weight files."""
@@ -160,7 +170,7 @@ class LlamaModel(BaseInputModel):
                 else:
                     new_params = load_file(osp.join(self.ckpt_path, ckpt))
                 ret = self.Reader(new_params, unused_params,
-                                  i == self.nmgrs - 1, self.model_info())
+                                  i == self.nmgrs - 1, self.model_config)
                 yield ret
                 ret.clean_up(is_last_bin)
         except GeneratorExit:

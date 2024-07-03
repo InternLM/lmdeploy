@@ -20,7 +20,27 @@ It may have been caused by the following reasons.
 pip install lmdeploy[all]
 ```
 
-2. If you have installed it and still encounter this issue, it is probably because you are executing turbomind-related command in the root directory of lmdeploy source code. Switching to another directory will fix it
+If you want to install the nightly build of LMDeploy's whl package, you can download and install it from the latest release at https://github.com/zhyncs/lmdeploy-build according to your CUDA and Python versions. Currently the update frequency of whl is once a day.
+
+2. If you have installed it and still encounter this issue, it is probably because you are executing turbomind-related command in the root directory of lmdeploy source code. Switching to another directory will fix it.
+
+But if you are a developer, you often need to develop and compile locally. The efficiency of installing whl every time is too low. You can specify the path of lib after compilation through symbolic links.
+
+```shell
+# mkdir and build locally
+mkdir bld && cd bld && bash ../generate.sh && ninja -j$(nproc)
+
+# go to the lmdeploy subdirectory from bld and set symbolic links
+cd ../lmdeploy && ln -s ../bld/lib .
+
+# go to the lmdeploy root directory
+cd ..
+
+# use the python command such as check_env
+python3 -m lmdeploy check_env
+```
+
+If you still encounter problems finding turbomind so, it means that maybe there are multiple Python environments on your local machine, and the version of Python does not match during compilation and execution. In this case, you need to set `PYTHON_EXECUTABLE` in `lmdeploy/generate.sh` according to the actual situation, such as `-DPYTHON_EXECUTABLE=/usr/local/bin/python3`. And it needs to be recompiled.
 
 ## Libs
 
@@ -55,7 +75,7 @@ from lmdeploy import pipeline, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
 
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
@@ -65,13 +85,18 @@ If OOM occurs when you run CLI tools, please pass `--cache-max-entry-count` to d
 
 ```shell
 # chat command
-lmdeploy chat internlm/internlm2-chat-7b --cache-max-entry-count 0.2
+lmdeploy chat internlm/internlm2_5-7b-chat --cache-max-entry-count 0.2
 
 # server command
-lmdeploy serve api_server internlm/internlm2-chat-7b --cache-max-entry-count 0.2
+lmdeploy serve api_server internlm/internlm2_5-7b-chat --cache-max-entry-count 0.2
 ```
 
 ## Serve
+
+### Api Server Fetch Timeout
+
+The image URL fetch timeout for the API server can be configured via the environment variable `LMDEPLOY_FETCH_TIMEOUT`.
+By default, requests may take up to 10 seconds before timing out. See [lmdeploy/vl/utils.py](https://github.com/InternLM/lmdeploy/blob/7b6876eafcb842633e0efe8baabe5906d7beeeea/lmdeploy/vl/utils.py#L31) for usage.
 
 ## Quantization
 

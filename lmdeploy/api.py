@@ -57,18 +57,21 @@ def pipeline(model_path: str,
     """ # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
-    from lmdeploy.utils import get_logger
+    from lmdeploy.utils import get_logger, get_model
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
 
-    pipeline_type, pipeline_class = get_task(model_path)
-    if pipeline_type == 'vlm':
-        assert (type(backend_config) is TurbomindEngineConfig) or \
-            (backend_config is None), \
-            f'{pipeline_type} model only support turbomind backend.'
+    # model_path is not local path.
+    if not os.path.exists(model_path):
+        download_dir = backend_config.download_dir \
+            if backend_config is not None else None
+        revision = backend_config.revision \
+            if backend_config is not None else None
+        model_path = get_model(model_path, download_dir, revision)
 
-    if pipeline_type == 'llm' and type(
-            backend_config) is not PytorchEngineConfig:
+    _, pipeline_class = get_task(model_path)
+
+    if type(backend_config) is not PytorchEngineConfig:
         # set auto backend mode
         backend_config = autoget_backend_config(model_path, backend_config)
     backend = 'pytorch' if type(

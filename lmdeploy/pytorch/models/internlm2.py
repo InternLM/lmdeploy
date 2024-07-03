@@ -5,30 +5,33 @@ import torch
 import torch.distributed as dist
 from einops import rearrange
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from ..dist_utils import (colwise_parallelize_linear_fn,
-                          rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
+from ..weight_loader.dist_utils import (colwise_parallelize_linear,
+                                        rowwise_parallelize_linear)
 
 
 class PatchedInternLM2Attention(nn.Module):
 
-    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['wqkv']:
-            colwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
-        elif mod_name in ['wo']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        for mod_name in ['wqkv']:
+            colwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
+        for mod_name in ['wo']:
+            rowwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs
@@ -53,6 +56,7 @@ class PatchedInternLM2Attention(nn.Module):
         kv_seq_length = context.kv_seq_length
         block_offsets = context.block_offsets
         max_q_seq_length = context.max_q_seq_length
+        position_ids_1d = context.position_ids_1d
         max_kv_seq_length = context.max_kv_seq_length
 
         def __qkv_proj(hidden_states):
@@ -72,11 +76,41 @@ class PatchedInternLM2Attention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-            cos, sin = self.rotary_emb(value_states.transpose(0, 1),
-                                       seq_len=max_kv_seq_length)
+            # compat
+            if not hasattr(self, '_use_old_rotary_emb'):
+                import inspect
+                args = inspect.getargspec(self.rotary_emb.forward)[0]
+                self._use_old_rotary_emb = 'seq_len' in args
+
+            if not hasattr(context, '_cos'):
+                if self._use_old_rotary_emb:
+                    kwargs = dict(seq_len=max_kv_seq_length)
+                else:
+                    kwargs = dict(position_ids=position_ids_1d[None])
+
+                cos, sin = self.rotary_emb(value_states.transpose(0, 1),
+                                           **kwargs)
+                context._cos = cos
+                context._sin = sin
+            else:
+                cos = context._cos
+                sin = context._sin
+
+            if self._use_old_rotary_emb:
+                _position_ids_1d = position_ids_1d
+            else:
+                _position_ids_1d = torch.arange(0,
+                                                len(position_ids_1d),
+                                                device=query_states.device)
             query_states, key_states = apply_rotary_pos_emb(
-                query_states, key_states, cos, sin, position_ids,
-                context.position_ids_1d)
+                query_states,
+                key_states,
+                cos,
+                sin,
+                position_ids,
+                position_ids_1d=_position_ids_1d,
+                q_embed=query_states,
+                k_embed=key_states)
             return query_states, key_states, value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
@@ -121,7 +155,7 @@ class PatchedInternLM2Attention(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: bool = False,
-        use_cache: bool = False,
+        **kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """forward."""
@@ -139,21 +173,24 @@ class PatchedInternLM2Attention(nn.Module):
 
 class PatchedInternLM2MLP(nn.Module):
 
-    @classmethod
-    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
-                                 device_mesh: DeviceMesh):
-        """Distribution partition callback."""
-        if mod_name in ['w1', 'w3']:
-            colwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
-        elif mod_name in ['w2']:
-            rowwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        for mod_name in ['w1', 'w3']:
+            colwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
+        for mod_name in ['w2']:
+            rowwise_parallelize_linear(getattr(self, mod_name),
+                                       loader,
+                                       rank=rank,
+                                       world_size=world_size,
+                                       prefix=mod_name)
 
     @classmethod
-    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+    def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs
@@ -170,13 +207,20 @@ class PatchedInternLM2Model(nn.Module):
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite implementation of LlamaModel.forward."""
+        context = self.context.context
+        # get inputs from context
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
 
         if inputs_embeds is None:
             inputs_embeds = self.tok_embeddings(input_ids)
+
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
 
         # Attention mask is not necessary in continuous batching
         attention_mask = None
@@ -214,8 +258,7 @@ class PatchedInternLM2Model(nn.Module):
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
+        **kwargs,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite of LlamaModel.forward."""
         return self._continuous_batching_forward(
@@ -226,6 +269,4 @@ class PatchedInternLM2Model(nn.Module):
             inputs_embeds,
             use_cache,
             output_attentions,
-            output_hidden_states,
-            return_dict,
         )

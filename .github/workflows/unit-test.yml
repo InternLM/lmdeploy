@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 4320 # 72hours
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=2,3"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=2,3 --pull never"
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
         - /nvme/share_data/github-actions/packages:/root/packages
@@ -60,6 +60,7 @@ jobs:
           python3 -m pip install -r requirements/build.txt
           mkdir build
           cd build
+          cp -r /root/packages/_deps _deps
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
               -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \

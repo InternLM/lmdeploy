@@ -13,7 +13,7 @@
 
 [English](README.md) | 简体中文
 
-👋 join us on [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=wechat&label=WeChat)](https://r.vansin.top/?r=internwx)
+👋 join us on [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=wechat&label=WeChat)](https://cdn.vansin.top/internlm/lmdeploy.jpg)
 [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=twitter&label=Twitter)](https://twitter.com/intern_lm)
 [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=discord&label=Discord)](https://discord.gg/xa29JuW87d)
 
@@ -26,6 +26,14 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/06\] PyTorch engine 支持了 DeepSeek-V2 和若干 VLM 模型推理, 比如 CogVLM2，Mini-InternVL，LlaVA-Next
+- \[2024/05\] 在多 GPU 上部署 VLM 模型时，支持把视觉部分的模型均分到多卡上
+- \[2024/05\] 支持InternVL v1.5, LLaVa, InternLMXComposer2 等 VLMs 模型的 4bit 权重量化和推理
+- \[2024/04\] 支持 Llama3 和 InternVL v1.1, v1.2，MiniGemini，InternLM-XComposer2 等 VLM 模型
+- \[2024/04\] TurboMind 支持 kv cache int4/int8 在线量化和推理，适用已支持的所有型号显卡。详情请参考[这里](docs/zh_cn/quantization/kv_quant.md)
+- \[2024/04\] TurboMind 引擎升级，优化 GQA 推理。[internlm2-20b](https://huggingface.co/internlm/internlm2-20b) 推理速度达 16+ RPS，约是 vLLM 的 1.8 倍
+- \[2024/04\] 支持 Qwen1.5-MOE 和 dbrx.
+- \[2024/03\] 支持 DeepSeek-VL 的离线推理 pipeline 和推理服务
 - \[2024/03\] 支持视觉-语言模型（VLM）的离线推理 pipeline 和推理服务
 - \[2024/02\] 支持 Qwen 1.5、Gemma、Mistral、Mixtral、Deepseek-MOE 等模型
 - \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) 发布，支持无缝接入[LMDeploy Serving Service](./docs/zh_cn/serving/api_server.md)
@@ -85,34 +93,68 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 
 # 支持的模型
 
-|       Model        |    Size    |
-| :----------------: | :--------: |
-|       Llama        |  7B - 65B  |
-|       Llama2       |  7B - 70B  |
-|      InternLM      |  7B - 20B  |
-|     InternLM2      |  7B - 20B  |
-| InternLM-XComposer |     7B     |
-|        QWen        |  7B - 72B  |
-|      QWen-VL       |     7B     |
-|      QWen1.5       | 0.5B - 72B |
-|    QWen1.5-MoE     |   A2.7B    |
-|      Baichuan      |  7B - 13B  |
-|     Baichuan2      |  7B - 13B  |
-|     Code Llama     |  7B - 34B  |
-|      ChatGLM2      |     6B     |
-|       Falcon       | 7B - 180B  |
-|         YI         |  6B - 34B  |
-|      Mistral       |     7B     |
-|    DeepSeek-MoE    |    16B     |
-|      Mixtral       |    8x7B    |
-|       Gemma        |   2B-7B    |
-|        Dbrx        |    132B    |
+<table>
+<tbody>
+<tr align="center" valign="middle">
+<td>
+  <b>LLMs</b>
+</td>
+<td>
+  <b>VLMs</b>
+</td>
+<tr valign="top">
+<td align="left" valign="top">
+<ul>
+  <li>Llama (7B - 65B)</li>
+  <li>Llama2 (7B - 70B)</li>
+  <li>Llama3 (8B, 70B)</li>
+  <li>InternLM (7B - 20B)</li>
+  <li>InternLM2 (7B - 20B)</li>
+  <li>InternLM2.5 (7B)</li>
+  <li>QWen (1.8B - 72B)</li>
+  <li>QWen1.5 (0.5B - 110B)</li>
+  <li>QWen1.5 - MoE (0.5B - 72B)</li>
+  <li>QWen2 (0.5B - 72B)</li>
+  <li>Baichuan (7B)</li>
+  <li>Baichuan2 (7B-13B)</li>
+  <li>Code Llama (7B - 34B)</li>
+  <li>ChatGLM2 (6B)</li>
+  <li>GLM4 (9B)</li>
+  <li>Falcon (7B - 180B)</li>
+  <li>YI (6B-34B)</li>
+  <li>Mistral (7B)</li>
+  <li>DeepSeek-MoE (16B)</li>
+  <li>DeepSeek-V2 (16B, 236B)</li>
+  <li>Mixtral (8x7B, 8x22B)</li>
+  <li>Gemma (2B - 7B)</li>
+  <li>Dbrx (132B)</li>
+  <li>StarCoder2 (3B - 15B)</li>
+  <li>Phi-3-mini (3.8B)</li>
+</ul>
+</td>
+<td>
+<ul>
+  <li>LLaVA(1.5,1.6) (7B-34B)</li>
+  <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
+  <li>QWen-VL (7B)</li>
+  <li>DeepSeek-VL (7B)</li>
+  <li>InternVL-Chat (v1.1-v1.5)</li>
+  <li>MiniGeminiLlama (7B)</li>
+  <li>CogVLM-Chat (17B)</li>
+  <li>CogVLM2-Chat (19B)</li>
+  <li>MiniCPM-Llama3-V-2_5</li>
+  <li>Phi-3-vision (4.2B)</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
 
 LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 
 它们在支持的模型类别、计算精度方面有所差别。用户可参考[这里](./docs/zh_cn/supported_models/supported_models.md), 查阅每个推理引擎的能力，并根据实际需求选择合适的。
 
-# 快速开始
+# 快速开始 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
 
 ## 安装
 
@@ -122,19 +164,19 @@ LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomin
 pip install lmdeploy
 ```
 
-LMDeploy的预编译包默认是基于 CUDA 11.8 编译的。如果需要在 CUDA 12+ 下安装 LMDeploy，请执行以下命令：
+自 v0.3.0 起，LMDeploy 预编译包默认基于 CUDA 12 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，请执行以下命令：
 
 ```shell
-export LMDEPLOY_VERSION=0.2.0
+export LMDEPLOY_VERSION=0.5.0
 export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## 离线批处理
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
+pipe = lmdeploy.pipeline("internlm/internlm2-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
@@ -153,8 +195,8 @@ print(response)
 为了帮助用户更进一步了解 LMDeploy，我们准备了用户指南和进阶指南，请阅读我们的[文档](https://lmdeploy.readthedocs.io/zh-cn/latest/)：
 
 - 用户指南
-  - [LLM 推理 pipeline](./docs/zh_cn/inference/pipeline.md)
-  - [VLM 推理 pipeline](./docs/zh_cn/inference/vl_pipeline.md)
+  - [LLM 推理 pipeline](./docs/zh_cn/inference/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
+  - [VLM 推理 pipeline](./docs/zh_cn/inference/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
   - [LLM 推理服务](./docs/zh_cn/serving/api_server.md)
   - [VLM 推理服务](./docs/zh_cn/serving/api_server_vl.md)
   - [模型量化](./docs/zh_cn/quantization)
@@ -170,19 +212,20 @@ print(response)
 # 社区项目
 
 - 使用LMDeploy在英伟达Jetson系列板卡部署大模型：[LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
+- 使用 LMDeploy 和 BentoML 部署大模型的示例项目：[BentoLMDeploy](https://github.com/bentoml/BentoLMDeploy)
 
-## 贡献指南
+# 贡献指南
 
 我们感谢所有的贡献者为改进和提升 LMDeploy 所作出的努力。请参考[贡献指南](.github/CONTRIBUTING.md)来了解参与项目贡献的相关指引。
 
-## 致谢
+# 致谢
 
 - [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)
 - [llm-awq](https://github.com/mit-han-lab/llm-awq)
 - [vLLM](https://github.com/vllm-project/vllm)
 - [DeepSpeed-MII](https://github.com/microsoft/DeepSpeed-MII)
 
-## 引用
+# 引用
 
 ```bibtex
 @misc{2023lmdeploy,
@@ -193,6 +236,6 @@ print(response)
 }
 ```
 
-## 开源许可证
+# 开源许可证
 
 该项目采用 [Apache 2.0 开源许可证](LICENSE)。

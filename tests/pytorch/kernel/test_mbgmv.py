@@ -28,10 +28,6 @@ class TestMBGMV:
         yield torch.tensor([2, 4]).cuda()
 
     @pytest.fixture
-    def page_start(self, ranks):
-        yield torch.zeros_like(ranks)
-
-    @pytest.fixture
     def input(self, batch_size, head_size, dtype):
         x = torch.rand(batch_size, head_size, dtype=dtype).cuda()
         x -= 0.5
@@ -44,8 +40,8 @@ class TestMBGMV:
         yield ret
 
     @pytest.fixture
-    def scaling(self, adapter_ids):
-        yield torch.ones(adapter_ids.size(0)).cuda()
+    def scaling(self, ranks):
+        yield torch.arange(ranks.size(0)).cuda() + 1
 
     @pytest.fixture
     def lora_a(self, ranks, head_size, dtype):
@@ -73,6 +69,10 @@ class TestMBGMV:
         yield pad_sequence(index, batch_first=True).cuda()
 
     @pytest.fixture
+    def rank_offset(self, page_table, head_size):
+        yield page_table * head_size
+
+    @pytest.fixture
     def paged_lora_a(self, lora_a, ranks, page_table, head_size, dtype):
         num_pages = sum(ranks)
         cache = torch.empty(num_pages, head_size, dtype=dtype).cuda()
@@ -90,25 +90,25 @@ class TestMBGMV:
         yield cache
 
     @pytest.fixture
-    def gt(self, input, adapter_ids, lora_a, lora_b):
+    def gt(self, input, adapter_ids, lora_a, lora_b, scaling):
         out = []
         for inp, r_id in zip(input, adapter_ids):
             inp = inp.unsqueeze(0)
             l_a = lora_a[r_id]
             l_b = lora_b[r_id]
-            out.append(inp @ l_a @ l_b)
+            s = scaling[r_id]
+            out.append(inp @ l_a @ l_b * s)
 
         yield torch.cat(out)
 
     def test_mbgmv(self, input, paged_lora_a, paged_lora_b, out_head_size,
-                   adapter_ids, scaling, page_table, ranks, page_start, gt):
-        max_rank = page_table.size(-1)
+                   adapter_ids, scaling, rank_offset, ranks, gt):
+        max_rank = rank_offset.size(-1)
 
         xa = mbgmv_a(input,
                      paged_lora_a,
                      adapter_ids=adapter_ids,
-                     rank_page_table=page_table,
-                     rank_page_start=page_start,
+                     rank_offset=rank_offset,
                      ranks=ranks,
                      max_rank=max_rank)
 
@@ -116,8 +116,7 @@ class TestMBGMV:
                          paged_lora_b[..., :out_head_size],
                          adapter_ids=adapter_ids,
                          scaling=scaling,
-                         rank_page_table=page_table,
-                         rank_page_start=page_start,
+                         rank_offset=rank_offset,
                          ranks=ranks,
                          max_rank=max_rank)
-        torch.testing.assert_close(gt, output, atol=2e-3, rtol=1e-5)
+        torch.testing.assert_close(gt, output, atol=4e-3, rtol=1e-5)

@@ -34,6 +34,8 @@ struct BatchState {
     std::vector<const Sequence*>          sequences;
     std::vector<std::shared_ptr<Request>> requests;
 
+    std::vector<int> errors;
+
     // |<-- existing -->|<-- swap-in -->|
     // |<----------- active ----------->|<-- inactive -->|
     int active_size;
@@ -63,8 +65,8 @@ struct GenerationState {
 template<typename T>
 class LlamaBatch {
 public:
-    void AllocateBuffer(size_t batch_size, size_t session_len);
-    void AllocatePersistantBuffer(size_t max_batch_size);
+    void AllocateBuffer(size_t batch_size, size_t session_len, int cache_block_seq_len);
+    void AllocatePersistantBuffer(size_t max_batch_size, int cache_block_seq_len);
     void FreeBuffer();
 
     using Requests = std::vector<std::shared_ptr<Request>>;
@@ -215,11 +217,19 @@ private:
     T*   decoder_output_buf_{};
     int* sequence_lengths_{};  // current sequence length
     int* init_ctx_lens_{};
+    int* lora_mask_buf_{};  // lora
 
     float* logits_buf_{};        // combined logits
     float* local_logits_buf_{};  // tensor parallel local logits
     float* context_logits_buf_{};
     float* local_context_logits_buf_{};
+
+    float*    sampled_logprobs_{};
+    uint32_t* sampled_indexes_{};
+    uint32_t* sampled_nums_{};
+    float*    h_sampled_logprobs_{};
+    uint32_t* h_sampled_indexes_{};
+    uint32_t* h_sampled_nums_{};
 
     float* rope_theta_{};
 

@@ -151,11 +151,7 @@ void invokeLengthCriterion(bool*           finished,
 
     length_criterion<<<grid, block, 0, stream>>>(
         finished, should_stop, h_pinned_finished_sum_, sequence_limit_length, batch_size, beam_width, step);
-#ifdef _MSC_VER
     cudaStreamSynchronize(stream);
-#else
-    while (((volatile int*)h_pinned_finished_sum_)[0] == -1) {};
-#endif
     sync_check_cuda_error();
 
     *should_stop = h_pinned_finished_sum_[0] == batch_size * beam_width;

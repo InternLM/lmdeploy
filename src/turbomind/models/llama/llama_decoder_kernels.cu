@@ -188,11 +188,33 @@ void invokeFusedAddBiasResidualRMSNorm(
         residual, in_out, bias, scale, eps, batch_size, n_dims);
 }
 
+template<typename T>
+__global__ void maskOutput(T* output, const int* mask, int dim)
+{
+    int batch_idx = blockIdx.x;
+    output += dim * batch_idx;
+    int masked = mask[batch_idx];
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        output[i] = (masked) ? output[i] : T();
+    }
+}
+
+template<typename T>
+void invokeMask(T* output, const int* mask, int batch_size, int dim, cudaStream_t stream)
+{
+    maskOutput<<<batch_size, 1024, 0, stream>>>(output, mask, dim);
+}
+
+#ifdef ENABLE_FP32
 template void
 invokeFusedAddBiasResidualRMSNorm(float*, float*, const float*, const float*, float, int, int, cudaStream_t);
+template void invokeMask(float* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
+#endif
 template void invokeFusedAddBiasResidualRMSNorm(half*, half*, const half*, const half*, float, int, int, cudaStream_t);
+template void invokeMask(half* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
 #ifdef ENABLE_BF16
 template void invokeFusedAddBiasResidualRMSNorm(
     __nv_bfloat16*, __nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
+template void invokeMask(__nv_bfloat16* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
 #endif
 }  // namespace turbomind

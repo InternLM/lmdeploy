@@ -7,7 +7,8 @@ import torch
 from torch import nn
 from transformers import AutoTokenizer
 
-from lmdeploy.lite.quantization import CalibrationContext
+from lmdeploy.archs import get_task
+from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
 from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
                                  load_hf_from_pretrained)
 
@@ -15,27 +16,39 @@ LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
     'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
+    'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
+    'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
+    'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
+    'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
 }
 
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
     'InternLM2ForCausalLM': 'InternLM2RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
+    'Qwen2ForCausalLM': 'Qwen2RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
+    'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
+    'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
+    'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
 }
 
 HEAD_NAME_MAP = {
     'InternLMForCausalLM': 'lm_head',
     'InternLM2ForCausalLM': 'output',
     'QWenLMHeadModel': 'lm_head',
+    'Qwen2ForCausalLM': 'lm_head',
     'BaiChuanForCausalLM': 'lm_head',  # Baichuan 7B
     'BaichuanForCausalLM': 'lm_head',  # Baichuan2 7B
     'LlamaForCausalLM': 'lm_head',
+    'LlavaLlamaForCausalLM': 'lm_head',
+    'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
+    'InternLMXComposer2ForCausalLM': 'output',
 }
 
 
@@ -94,6 +107,9 @@ def _prepare_for_calibrate(model: nn.Module,
 
         # Check if the child matches the head name
         is_head = name == head_name
+        # skip moving head layer to CPU when tie_word_embeddings is True
+        is_head = is_head and not getattr(model.config, 'tie_word_embeddings',
+                                          False)
 
         mod_name = f'{prefix}.{name}' if prefix else name
 
@@ -115,7 +131,11 @@ def calibrate(model: str,
               calib_samples: int = 128,
               calib_seqlen: int = 2048,
               work_dir: str = './work_dir',
-              device: str = 'cuda') -> None:
+              device: str = 'cuda',
+              w_bits: int = 4,
+              w_group_size: int = 128,
+              search_scale: bool = False,
+              batch_size: int = 1) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
 
@@ -131,6 +151,13 @@ def calibrate(model: str,
             Defaults to './work_dir'.
         device (str, optional): The device to be used for calculation.
             Defaults to 'cuda'.
+        w_bits (int): Bit number for weight quantization.
+        w_group_size (int): Group size for weight quantization statistics.
+        search_scale (bool): Whether search scale ratio. Default to False,
+            which means only smooth quant with 0.5 ratio will be applied.
+        batch_size (int): The batch size for running the calib samples.
+            Low GPU mem requires small batch_size. Large batch_size
+            reduces the calibration time while costs more VRAM.
 
     Returns:
         model (nn.Module): The loaded huggingface model.
@@ -141,14 +168,20 @@ def calibrate(model: str,
     assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \
         'Support only `c4`, `ptb`, `wikitext2` or `pileval`.'
 
-    # Load tokenizer and configuration
-    tokenizer = AutoTokenizer.from_pretrained(model,
-                                              use_fast=False,
-                                              trust_remote_code=True)
+    model_type, _ = get_task(model)
+    if model_type == 'llm':
+        # Load tokenizer and configuration
+        tokenizer = AutoTokenizer.from_pretrained(model,
+                                                  use_fast=False,
+                                                  trust_remote_code=True)
 
-    model = load_hf_from_pretrained(model,
-                                    torch_dtype=torch.float16,
-                                    trust_remote_code=True)
+        model = load_hf_from_pretrained(model,
+                                        torch_dtype=torch.float16,
+                                        trust_remote_code=True)
+        vl_model = None
+    elif model_type == 'vlm':
+        from lmdeploy.vl.model.builder import vl_model_with_tokenizer
+        vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model)
 
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
@@ -179,11 +212,23 @@ def calibrate(model: str,
                                         seqlen=calib_seqlen)
 
     # Initialize calibration context
-    calib_ctx = CalibrationContext(model,
-                                   tokenizer,
-                                   layer_type=layer_type,
-                                   norm_type=norm_type,
-                                   device=device)
+    if search_scale:
+        calib_ctx = CalibrationContextV2(model,
+                                         tokenizer,
+                                         layer_type=layer_type,
+                                         norm_type=norm_type,
+                                         device=device,
+                                         w_bits=w_bits,
+                                         w_group_size=w_group_size,
+                                         batch_size=batch_size,
+                                         search_scale=search_scale)
+    else:
+        calib_ctx = CalibrationContext(model,
+                                       tokenizer,
+                                       layer_type=layer_type,
+                                       norm_type=norm_type,
+                                       batch_size=batch_size,
+                                       device=device)
 
     with calib_ctx:
         all_data = torch.cat([
@@ -197,7 +242,7 @@ def calibrate(model: str,
     work_dir.mkdir(parents=True, exist_ok=True)
     calib_ctx.export(work_dir)
 
-    return model, tokenizer, work_dir
+    return vl_model, model, tokenizer, work_dir
 
 
 if __name__ == '__main__':

@@ -17,7 +17,7 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/GptContextAttentionLayer.h
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.h
 
 #pragma once
 
@@ -33,17 +33,29 @@ namespace turbomind {
 template<typename T>
 class UnifiedAttentionLayer {
 public:
-    using WeightType                      = LlamaAttentionWeight<T>;
-    static constexpr int kDecodeMaxSplits = 16;
+    using WeightType = LlamaAttentionWeight<T>;
+
+    static constexpr int kMaxKVSplits        = 128;
+    static constexpr int kMaxWorkspaceTokens = 4096;
 
     void freeBuffer();
-    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size);
+    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, const WeightType* weights);
+
+    void allocateWorkspace();
+    void freeWorkspace();
+
+    ~UnifiedAttentionLayer()
+    {
+        freeBuffer();
+        freeWorkspace();
+    }
 
     UnifiedAttentionLayer(size_t               head_num,
                           size_t               kv_head_num,
                           size_t               size_per_head,
                           LlamaAttentionParams attn_params,
                           NcclParam            tensor_para,
+                          LoraParams           lora_params,
                           cudaStream_t         stream,
                           cublasMMWrapper*     cublas_wrapper,
                           IAllocator*          allocator,
@@ -58,6 +70,7 @@ public:
         head_n_rep_(head_num / kv_head_num),
         params_(attn_params),
         tensor_para_(tensor_para),
+        lora_params_(lora_params),
         stream_(stream),
         cublas_wrapper_(cublas_wrapper),
         linear_(cublas_wrapper, stream),
@@ -75,6 +88,8 @@ public:
 
         streams_[0] = stream_;
         streams_[1] = aux_stream_;
+
+        allocateWorkspace();
     }
 
     void forward(TensorMap* outputs, const TensorMap* inputs, const LlamaAttentionWeight<T>* weights);
@@ -130,6 +145,8 @@ private:
 
     NcclParam tensor_para_;
 
+    LoraParams lora_params_;
+
     cudaStream_t     stream_;
     IAllocator*      allocator_;
     cublasMMWrapper* cublas_wrapper_;
@@ -153,11 +170,17 @@ private:
     float* qk_buf_float_{};
     T*     qkv_buf_2_{};
     T*     qkv_buf_3_{};
-    float* dc_workspace_{};
+
+    float* partial_M_{};
+    float* partial_L_{};
+    float* partial_O_{};
+    int*   split_cnt_{};
+    int*   barriers_{};  // always zero
 
     T* tmp_kv_buf_{};
 
-    bool is_allocate_buffer_ = false;
+    bool is_allocate_buffer_    = false;
+    bool is_allocate_workspace_ = false;
 };
 
 }  // namespace turbomind

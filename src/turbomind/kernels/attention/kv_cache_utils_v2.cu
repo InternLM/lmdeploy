@@ -21,11 +21,12 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                                                     const int*   cu_k_len,
                                                     const int*   cu_block_num,
                                                     const float* rope_base,
+                                                    int          rope_dim,
                                                     float        rope_ti_scale,
-                                                    int          stride_b,
-                                                    int          stride_c,
-                                                    int          stride_h,
-                                                    int          stride_s,
+                                                    int64_t      stride_b,
+                                                    int64_t      stride_c,
+                                                    int64_t      stride_h,
+                                                    int64_t      stride_s,
                                                     int          layer_id,
                                                     BlockLayout  block_layout)
 {
@@ -83,9 +84,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
     for (int s = 0; s < ITER_S; ++s) {
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
-            const int qi = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
-            const int di = offset.x + c * Map::kDeltaC;
-            const int index =
+            const int     qi = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
+            const int     di = offset.x + c * Map::kDeltaC;
+            const int64_t index =
                 (batch_idx * stride_b + qi_beg * stride_c + qi * stride_s + head_idx * stride_h) * HeadDim + di;
             if (qi < q_len) {
                 Ldg(vec_K[s][c], &k[index]);
@@ -120,11 +121,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(di,
-                          std::integral_constant<int, HeadDim>{},
-                          base,
-                          rope_ti_scale,
-                          std::integral_constant<int, kVecSize>{});
+            FastRoPE  rope(di, rope_dim, base, rope_ti_scale, std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = history_len + offset.y + s * Map::kDeltaS + token_idx;  // sequence local
@@ -195,11 +192,12 @@ void invokeProcessKV_v2(char**       blocks,
                         const int*   cu_k_len,
                         const int*   cu_block_num,
                         const float* rope_base,
+                        int          rope_dim,
                         float        rope_ti_scale,
-                        int          stride_b,
-                        int          stride_c,
-                        int          stride_h,
-                        int          stride_s,
+                        int64_t      stride_b,
+                        int64_t      stride_c,
+                        int64_t      stride_h,
+                        int64_t      stride_s,
                         int          block_seq_len,
                         int          layer_id,
                         int          max_q_len,
@@ -232,6 +230,7 @@ void invokeProcessKV_v2(char**       blocks,
                                                                               cu_k_len,
                                                                               cu_block_num,
                                                                               rope_base,
+                                                                              rope_dim,
                                                                               rope_ti_scale,
                                                                               stride_b,
                                                                               stride_c,
@@ -262,11 +261,12 @@ void invokeProcessKV_v2(char**       blocks,
                                      const int*   cu_k_len,                                                            \
                                      const int*   cu_block_num,                                                        \
                                      const float* rope_base,                                                           \
+                                     int          rope_dim,                                                            \
                                      float        rope_ti_scale,                                                       \
-                                     int          stride_b,                                                            \
-                                     int          stride_c,                                                            \
-                                     int          stride_h,                                                            \
-                                     int          stride_s,                                                            \
+                                     int64_t      stride_b,                                                            \
+                                     int64_t      stride_c,                                                            \
+                                     int64_t      stride_h,                                                            \
+                                     int64_t      stride_s,                                                            \
                                      int          block_seq_len,                                                       \
                                      int          layer_id,                                                            \
                                      int          max_q_len,                                                           \
@@ -288,11 +288,12 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                                                     const int*   cu_k_len,
                                                     const int*   cu_block_num,
                                                     const float* rope_base,
+                                                    int          rope_dim,
                                                     float        rope_ti_scale,
-                                                    int          stride_b,
-                                                    int          stride_c,
-                                                    int          stride_h,
-                                                    int          stride_s,
+                                                    int64_t      stride_b,
+                                                    int64_t      stride_c,
+                                                    int64_t      stride_h,
+                                                    int64_t      stride_s,
                                                     int          layer_id,
                                                     BlockLayout  block_layout)
 {
@@ -349,9 +350,6 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                 if constexpr (!std::is_same_v<T, Tkv>) {
                     Ldg(param_K[s], k_param);
                     Ldg(param_V[s], v_param);
-                    // if (offset.x == 0) {
-                    //     printf("dst %d %f %f\n", si, (float)param_V[s][0], (float)param_V[s][1]);
-                    // }
                 }
             });
         }
@@ -373,11 +371,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(di,
-                          std::integral_constant<int, HeadDim>{},
-                          base,
-                          rope_ti_scale,
-                          std::integral_constant<int, kVecSize>{});
+            FastRoPE  rope(di, rope_dim, base, rope_ti_scale, std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
@@ -390,9 +384,9 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
     for (int s = 0; s < ITER_S; ++s) {
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
-            const int si = offset.y + s * Map::kDeltaS + token_idx;
-            const int di = offset.x + c * Map::kDeltaC;
-            const int index =
+            const int     si = offset.y + s * Map::kDeltaS + token_idx;
+            const int     di = offset.x + c * Map::kDeltaC;
+            const int64_t index =
                 (batch_idx * stride_b + ti_beg * stride_c + si * stride_s + head_idx * stride_h) * HeadDim + di;
             if (si < seq_len) {
                 Store(&k[index], out_K[s][c]);
@@ -409,11 +403,12 @@ void invokeFlattenKV_v2(T*           k,
                         const int*   cu_k_len,
                         const int*   cu_block_num,
                         const float* rope_base,
+                        int          rope_dim,
                         float        rope_ti_scale,
-                        int          stride_b,
-                        int          stride_c,
-                        int          stride_h,
-                        int          stride_s,
+                        int64_t      stride_b,
+                        int64_t      stride_c,
+                        int64_t      stride_h,
+                        int64_t      stride_s,
                         int          block_seq_len,
                         int          layer_id,
                         int          max_seq_len,
@@ -443,6 +438,7 @@ void invokeFlattenKV_v2(T*           k,
                                                                             cu_k_len,
                                                                             cu_block_num,
                                                                             rope_base,
+                                                                            rope_dim,
                                                                             rope_ti_scale,
                                                                             stride_b,
                                                                             stride_c,
@@ -470,11 +466,12 @@ void invokeFlattenKV_v2(T*           k,
                                      const int*   cu_k_len,                                                            \
                                      const int*   cu_block_num,                                                        \
                                      const float* rope_base,                                                           \
+                                     int          rope_dim,                                                            \
                                      float        rope_ti_scale,                                                       \
-                                     int          stride_b,                                                            \
-                                     int          stride_c,                                                            \
-                                     int          stride_h,                                                            \
-                                     int          stride_s,                                                            \
+                                     int64_t      stride_b,                                                            \
+                                     int64_t      stride_c,                                                            \
+                                     int64_t      stride_h,                                                            \
+                                     int64_t      stride_s,                                                            \
                                      int          block_seq_len,                                                       \
                                      int          layer_id,                                                            \
                                      int          max_seq_len,                                                         \

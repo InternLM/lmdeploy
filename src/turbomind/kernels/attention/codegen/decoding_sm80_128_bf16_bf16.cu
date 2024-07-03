@@ -11,12 +11,12 @@ template bool
 invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 1, 128>>(const AttentionParams<nv_bfloat16>& params);
 
 template bool
-invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 4, 128>>(const AttentionParams<nv_bfloat16>& params);
-
-template bool
-invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 6, 128>>(const AttentionParams<nv_bfloat16>& params);
+invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 2, 128>>(const AttentionParams<nv_bfloat16>& params);
 
 template bool
 invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, 128>>(const AttentionParams<nv_bfloat16>& params);
+
+template bool
+invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 16, 128>>(const AttentionParams<nv_bfloat16>& params);
 
 }  // namespace turbomind

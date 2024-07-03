@@ -33,7 +33,9 @@ RUN /opt/conda/bin/conda create -n py38 python=3.8 -yq && \
     /opt/conda/bin/conda create -n py310 python=3.10 -yq && \
     /opt/conda/envs/py310/bin/pip install pybind11 && \
     /opt/conda/bin/conda create -n py311 python=3.11 -yq && \
-    /opt/conda/envs/py311/bin/pip install pybind11
+    /opt/conda/envs/py311/bin/pip install pybind11 && \
+    /opt/conda/bin/conda create -n py312 python=3.12 -yq && \
+    /opt/conda/envs/py312/bin/pip install pybind11
 
 FROM base as mpi
 ADD manywheel/scripts/install_openmpi.sh install_openmpi.sh

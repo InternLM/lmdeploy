@@ -7,6 +7,11 @@ Currently, it supports the following models.
 - [Qwen-VL-Chat](https://huggingface.co/Qwen/Qwen-VL-Chat)
 - LLaVA series: [v1.5](https://huggingface.co/collections/liuhaotian/llava-15-653aac15d994e992e2677a7e), [v1.6](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2)
 - [Yi-VL](https://huggingface.co/01-ai/Yi-VL-6B)
+- [DeepSeek-VL](https://huggingface.co/deepseek-ai/deepseek-vl-7b-chat)
+- [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
+- [MGM](https://huggingface.co/YanweiLi/MGM-7B)
+- [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
+- [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/en/multi_modal/cogvlm.md)
 
 We genuinely invite the community to contribute new VLM support to LMDeploy. Your involvement is truly appreciated.
 
@@ -97,22 +102,69 @@ response = pipe(('describe this image', image), gen_config=gen_config)
 print(response)
 ```
 
+### Customize image token position
+
+By default, LMDeploy inserts the special image token into the user prompt following the chat template defined by the upstream algorithm repository. However, for certain models where the image token's position is unrestricted, such as deepseek-vl, or when users require a customized image token placement, manual insertion of the special image token into the prompt is necessary. LMDeploy use `<IMAGE_TOKEN>` as the special image token.
+
+```python
+from lmdeploy import pipeline
+from lmdeploy.vl import load_image
+from lmdeploy.vl.constants import IMAGE_TOKEN
+
+pipe = pipeline('deepseek-ai/deepseek-vl-1.3b-chat')
+
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe((f'describe this image{IMAGE_TOKEN}', image))
+print(response)
+```
+
 ### Set chat template
 
-While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, [liuhaotian/llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) employs the 'vicuna' chat template, but the name 'vicuna' cannot be ascertained from the model's path. We can specify it by setting 'vicuna' to `ChatTemplateConfig` as follows:
+While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, [liuhaotian/llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) employs the ['llava-v1'](https://github.com/haotian-liu/LLaVA/blob/v1.2.2/llava/conversation.py#L325-L335) chat template, if user have a custom folder name instead of the official 'llava-v1.5-7b', the user needs to specify it by setting 'llava-v1' to `ChatTemplateConfig` as follows:
 
 ```python
 from lmdeploy import pipeline, ChatTemplateConfig
 from lmdeploy.vl import load_image
-pipe = pipeline('liuhaotian/llava-v1.5-7b',
-                chat_template_config=ChatTemplateConfig(model_name='vicuna'))
-
+pipe = pipeline('local_model_folder',
+                chat_template_config=ChatTemplateConfig(model_name='llava-v1'))
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))
 print(response)
 ```
 
 For more information about customizing a chat template, please refer to [this](../advance/chat_template.md) guide
+
+### Setting vision model parameters
+
+The default parameters of the visual model can be modified by setting `VisionConfig`.
+
+```python
+from lmdeploy import pipeline, VisionConfig
+from lmdeploy.vl import load_image
+vision_config=VisionConfig(max_batch_size=16)
+pipe = pipeline('liuhaotian/llava-v1.5-7b', vision_config=vision_config)
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image))
+print(response)
+```
+
+### Calculate logits
+
+We provide support for custom inputs. Users can utilize 'prepare_inputs' to understand how the inputs are organized.
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+from lmdeploy.vl import load_image
+pipe = pipeline('internlm/internlm-xcomposer2-7b', backend_config=TurbomindEngineConfig(cache_max_entry_count=0.5))
+
+# logits
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+inputs = pipe.prepare_inputs(('describe this image', image))
+input_ids = inputs['input_ids']
+embeddings = inputs['input_embeddings']
+embedding_ranges = inputs['input_embedding_ranges']
+logits = pipe.get_logits(input_ids, embeddings, embedding_ranges)
+```
 
 ## Multi-images inference
 

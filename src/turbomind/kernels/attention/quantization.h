@@ -9,6 +9,11 @@
 
 namespace turbomind {
 
+#define TM_ROUND_USE_CVT_RNI 1
+
+inline constexpr bool kFuseU4F16Dequant  = false;
+inline constexpr bool kForceIntZeroPoint = false;
+
 template<class T>
 __device__ T Infinity()
 {
@@ -38,7 +43,7 @@ __device__ constexpr T Max(T a, T b)
 
 #if __CUDA_ARCH__ >= 800
     if constexpr (std::is_same_v<T, nv_bfloat16>) {
-        return __hmin(a, b);
+        return __hmax(a, b);
     }
 #endif
 
@@ -200,6 +205,8 @@ inline __device__ Array<nv_bfloat16, 8> cvt_bf16x8_u4(const Array<uint4_t, 8>& s
 #endif
 }
 
+#if TM_ROUND_USE_CVT_RNI
+
 template<class T>
 inline __device__ T round(float x)
 {
@@ -238,12 +245,58 @@ inline __device__ T round(half x)
     return y;
 }
 
-template<class T, class B>
-inline __device__ T quant(float x, B n_bits)
+#else
+
+template<class T>
+inline __device__ T round(float x)
 {
-    auto y = round<T>(x);
-    if constexpr (n_bits < sizeof(T) * 8) {
-        return min(y, T((1 << n_bits) - 1));
+    x += .5f;
+
+    uint32_t y{};
+    if constexpr (std::is_same_v<T, uint8_t>) {
+        asm("cvt.rzi.sat.u8.f32 %0, %1;\n" : "=r"(y) : "f"(x));
+    }
+    else if constexpr (std::is_same_v<T, uint16_t>) {
+        asm("cvt.rzi.sat.u16.f32 %0, %1;\n" : "=r"(y) : "f"(x));
+    }
+    else if constexpr (std::is_same_v<T, uint32_t>) {
+        asm("cvt.rzi.sat.u32.f32 %0, %1;\n" : "=r"(y) : "f"(x));
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>, "not implemented");
+    }
+    return y;
+}
+
+template<class T>
+inline __device__ T round(half x)
+{
+    x += half(.5f);
+
+    uint32_t y{};
+    if constexpr (std::is_same_v<T, uint8_t>) {
+        asm("cvt.rzi.sat.u8.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
+    }
+    else if constexpr (std::is_same_v<T, uint16_t>) {
+        asm("cvt.rzi.sat.u16.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
+    }
+    else if constexpr (std::is_same_v<T, uint32_t>) {
+        asm("cvt.rzi.sat.u32.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>, "not implemented");
+    }
+    return y;
+}
+
+#endif
+
+template<class To, class Ti, class B>
+inline __device__ To quant(Ti x, B n_bits)
+{
+    auto y = round<To>(x);
+    if constexpr (n_bits < sizeof(To) * 8) {  // saturate operation for sub-byte type
+        return min(y, To((1 << n_bits) - 1));
     }
     else {
         return y;
@@ -291,7 +344,15 @@ __device__ void warp_stats(Array<P, 2> (&param)[S], const Array<T, N> (&x)[S][C]
         param[s][0]           = (P)scale;
         param[s][1]           = (P)stats[0];
 
-        param[s][1] = (P)(rintf((float)stats[0] / scale) * scale);
+        if constexpr (kForceIntZeroPoint) {
+#if TM_ROUND_USE_CVT_RNI
+            // rintf -> cvt.rni.f32.f32
+            param[s][1] = (P)(rintf((float)stats[0] / scale) * scale);
+#else
+            // roundf -> cvt.rzi.f32.f32(x + 0.5)
+            param[s][1] = (P)(roundf((float)stats[0] / scale) * scale);
+#endif
+        }
     }
 }
 
@@ -418,7 +479,6 @@ struct ConvertKvCache<T, uint4_t> {
         return vo;
     }
 };
-
 template<>
 struct ConvertKvCache<uint4_t, half> {
 
@@ -482,8 +542,12 @@ struct ConvertKvCache<uint4_t, half> {
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 8) {
             auto& v = (Array<half, 8>&)vo[i];
-            // v       = cvt_f16x8_u4_biased((Array<uint4_t, 8>&)vi[i]);
-            v = cvt_f16x8_u4((Array<uint4_t, 8>&)vi[i]);
+            if constexpr (kFuseU4F16Dequant) {
+                v = cvt_f16x8_u4_biased((Array<uint4_t, 8>&)vi[i]);
+            }
+            else {
+                v = cvt_f16x8_u4((Array<uint4_t, 8>&)vi[i]);
+            }
         }
         return vo;
     }
@@ -639,7 +703,9 @@ inline __device__ void StoreQuantParam(T* dst, Array<T, 2> src)
 template<>
 inline __device__ void StoreQuantParam<uint4_t, half>(half* dst, Array<half, 2> src)
 {
-    // src[1] = src[1] - src[0] * __ushort_as_half(0x5400);
+    if constexpr (kFuseU4F16Dequant) {
+        src[1] = src[1] - src[0] * __ushort_as_half(0x5400);
+    }
     Store(dst, src);
 }
 

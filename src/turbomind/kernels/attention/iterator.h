@@ -5,6 +5,7 @@
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/pipe_iter.h"
 #include <type_traits>
 
 namespace turbomind {

@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #pragma once
+#include <cstdint>
 #include <cuda_runtime.h>
 
 namespace turbomind {
@@ -22,11 +23,11 @@ struct BlockIteratorParams {
 template<typename T>
 struct AttentionParams {
     // token-level buffers, [B, qH + 2kvH, D] or [B, kvH, D]
-    T*  out;
-    T*  q;
-    T*  k;
-    T*  v;
-    int stride;
+    T*      out;
+    T*      q;
+    T*      k;
+    T*      v;
+    int64_t stride;
 
     // bias, [qH, D] or [kvH, D]
     T* q_bias;

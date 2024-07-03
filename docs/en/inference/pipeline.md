@@ -11,7 +11,7 @@ You can overview the detailed pipeline API in [this](https://lmdeploy.readthedoc
 ```python
 from lmdeploy import pipeline
 
-pipe = pipeline('internlm/internlm2-chat-7b')
+pipe = pipeline('internlm/internlm2_5-7b-chat')
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
@@ -30,7 +30,7 @@ There have been alterations to the strategy for setting the k/v cache ratio thro
    # decrease the ratio of the k/v cache occupation to 20%
    backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
 
-   pipe = pipeline('internlm/internlm2-chat-7b',
+   pipe = pipeline('internlm/internlm2_5-7b-chat',
                    backend_config=backend_config)
    response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
    print(response)
@@ -46,7 +46,7 @@ There have been alterations to the strategy for setting the k/v cache ratio thro
 from lmdeploy import pipeline, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
@@ -62,7 +62,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
@@ -79,7 +79,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -103,7 +103,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -114,6 +114,26 @@ prompts = [[{
 }]]
 for item in pipe.stream_infer(prompts, gen_config=gen_config):
     print(item)
+```
+
+- **An example to cauculate logits & ppl:**
+
+```python
+from transformers import AutoTokenizer
+from lmdeploy import pipeline
+model_repoid_or_path='internlm/internlm2_5-7b-chat'
+pipe = pipeline(model_repoid_or_path)
+tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
+
+# logits
+messages = [
+   {"role": "user", "content": "Hello, how are you?"},
+]
+input_ids = tokenizer.apply_chat_template(messages)
+logits = pipe.get_logits(input_ids)
+
+# ppl
+ppl = pipe.get_ppl(input_ids)
 ```
 
 - **Below is an example for pytorch backend. Please install triton first.**
@@ -130,7 +150,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -140,6 +160,27 @@ prompts = [[{
     'content': 'Shanghai is'
 }]]
 response = pipe(prompts, gen_config=gen_config)
+print(response)
+```
+
+- **An example for slora.**
+
+```python
+from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
+
+backend_config = PytorchEngineConfig(session_len=2048,
+                                     adapters=dict(lora_name_1='chenchi/lora-chatglm2-6b-guodegang'))
+gen_config = GenerationConfig(top_p=0.8,
+                              top_k=40,
+                              temperature=0.8,
+                              max_new_tokens=1024)
+pipe = pipeline('THUDM/chatglm2-6b',
+                backend_config=backend_config)
+prompts = [[{
+    'role': 'user',
+    'content': '您猜怎么着'
+}]]
+response = pipe(prompts, gen_config=gen_config, adapter_name='lora_name_1')
 print(response)
 ```
 
@@ -156,3 +197,5 @@ print(response)
   Generally, in the context of multi-threading or multi-processing, it might be necessary to ensure that initialization code is executed only once. In this case, `if __name__ == '__main__':` can help to ensure that these initialization codes are run only in the main program, and not repeated in each newly created process or thread.
 
 - To customize a chat template, please refer to [chat_template.md](../advance/chat_template.md).
+
+- If the weight of lora has a corresponding chat template, you can first register the chat template to lmdeploy, and then use the chat template name as the adapter name.

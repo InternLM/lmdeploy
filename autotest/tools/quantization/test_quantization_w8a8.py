@@ -2,20 +2,15 @@ import os
 
 import allure
 import pytest
-from utils.config_utils import get_cuda_prefix_by_workerid
+from utils.config_utils import (get_cuda_prefix_by_workerid,
+                                get_quantization_model_list)
 from utils.quantization_utils import quantization
-
-model_list = [
-    'meta-llama/Llama-2-7b-chat-hf', 'internlm/internlm-chat-20b',
-    'internlm/internlm2-chat-20b', 'internlm/internlm2-chat-7b',
-    '01-ai/Yi-6B-Chat', 'internlm/internlm2-20b'
-]
 
 
 @pytest.mark.order(2)
 @pytest.mark.quantization_w8a8
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize('model', model_list)
+@pytest.mark.parametrize('model', get_quantization_model_list('w8a8'))
 def test_quantization_w8a8(config, model, worker_id):
     quantization_w8a8(config, model + '-inner-w8a8', model,
                       get_cuda_prefix_by_workerid(worker_id))

@@ -1,11 +1,10 @@
 
 #include "src/turbomind/models/llama/unified_decoder.h"
-#include "src/turbomind/kernels/bert_preprocess_kernels.h"
-#include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
+#include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -41,6 +40,7 @@ void UnifiedDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
                                                size_per_head_,
                                                attn_params,
                                                tensor_para_,
+                                               lora_params_,
                                                stream_,
                                                cublas_wrapper_,
                                                allocator_,
@@ -155,6 +155,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                              stream_);
     sync_check_cuda_error();
 
+    count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm0", 0), 2);
+
     for (size_t layer = 0; layer < num_layer_; ++layer) {
 
         // Compare(decoder_output, token_num * hidden_units_, "attn_input", kCmpRead, stream_);
@@ -169,6 +171,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                         layer,
                         &weights->at(layer)->self_attn_weights);
 
+        count_and_fix(decoder_output, token_num * hidden_units_, Concat("attn_block", layer), 2);
+
         invokeFusedAddBiasResidualRMSNorm(decoder_input_output,
                                           decoder_output,
                                           weights->at(layer)->self_attn_weights.output.bias,
@@ -179,11 +183,22 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                                           stream_);
         sync_check_cuda_error();
 
+        count_and_fix(decoder_input_output, token_num * hidden_units_, Concat("residual0", layer), 2);
+        count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm1", layer), 2);
+
         ////////////////////////////////////////////
         /// feed-forward network
-        TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
+        int       layer_id = layer;  // int is needed
+        TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}},
+                             {"layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id}}};
         TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
+        if (inputs->isExist("lora_mask")) {
+            ffn_inputs.insert({"lora_mask", inputs->at("lora_mask")});
+        }
+
         ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &weights->at(layer)->ffn_weights);
+
+        count_and_fix(decoder_output, token_num * hidden_units_, Concat("ffn_block", layer), 2);
 
         const bool is_last_layer = layer == num_layer_ - 1;
 
@@ -198,6 +213,9 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                                           hidden_units_,
                                           stream_);
         sync_check_cuda_error();
+
+        count_and_fix(decoder_input_output, token_num * hidden_units_, Concat("residual1", layer), 2);
+        count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm0", layer + 1), 2);
     }
 
     if (dc_batch_size) {
@@ -206,6 +224,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                                          sizeof(T) * dc_batch_size * hidden_units_,
                                          cudaMemcpyDefault,
                                          stream_));
+        count_and_fix(last_token_hidden_units, dc_batch_size * hidden_units_, "dc_out", 2);
     }
 
     if (pf_batch_size) {
@@ -216,6 +235,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                                     pf_batch_size,
                                     stream_);
         sync_check_cuda_error();
+        count_and_fix(last_token_hidden_units + pf_offset * hidden_units_, pf_batch_size * hidden_units_, "pf_out", 2);
     }
 
     if (is_free_buffer_after_forward_) {
@@ -223,7 +243,9 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     }
 }
 
+#ifdef ENABLE_FP32
 template class UnifiedDecoder<float>;
+#endif
 template class UnifiedDecoder<half>;
 #ifdef ENABLE_BF16
 template class UnifiedDecoder<__nv_bfloat16>;

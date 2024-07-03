@@ -32,6 +32,8 @@ protected:
 
     NcclParam tensor_para_;
 
+    LoraParams lora_params_;
+
     int* cu_q_len_{};
     int* cu_k_len_{};
 
@@ -67,6 +69,7 @@ public:
                    cudaStream_t                stream,
                    cublasMMWrapper*            cublas_wrapper,
                    IAllocator*                 allocator,
+                   const LoraParams&           lora_params,
                    bool                        is_free_buffer_after_forward,
                    bool                        use_fmha,
                    int                         cache_block_seq_len,
@@ -74,6 +77,7 @@ public:
         stream_(stream),
         cublas_wrapper_(cublas_wrapper),
         allocator_(allocator),
+        lora_params_(lora_params),
         is_free_buffer_after_forward_(is_free_buffer_after_forward),
         head_num_(head_num),
         size_per_head_(size_per_head),

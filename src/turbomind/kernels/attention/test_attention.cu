@@ -14,6 +14,7 @@
 #include <iostream>
 #include <numeric>
 #include <random>
+#include <thrust/device_vector.h>
 #include <thrust/universal_vector.h>
 #include <utility>
 
@@ -71,6 +72,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                 const size_t                       head_dim,
                 const size_t                       block_seq_len,
                 const size_t                       batch_size,
+                const int                          rope_dim,
                 int                                quant_policy)
 {
     const size_t seq_len  = k_cache.size() / (head_dim * head_num * batch_size);
@@ -145,6 +147,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            cu_seq_lens.data().get(),
                            cu_block_cnts.data().get(),
                            nullptr,
+                           rope_dim,
                            1.,
                            2 * head_num * seq_len,
                            0,
@@ -170,6 +173,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            cu_seq_lens.data().get(),
                            cu_block_cnts.data().get(),
                            nullptr,
+                           rope_dim,
                            1.,
                            2 * head_num * seq_len,
                            0,
@@ -198,7 +202,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
 #define KV_INT4 0
 
-#define DECODING 0
+#define DECODING 1
 
 template<class T>
 int test_attention()
@@ -210,24 +214,27 @@ int test_attention()
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
-    constexpr size_t kHeadNum   = 80;
-    constexpr size_t KvHeadNum  = kHeadNum / 8;
-    constexpr size_t kBatchSize = 256;
+    constexpr size_t kHeadNum   = 32;
+    constexpr size_t KvHeadNum  = kHeadNum / 4;
+    constexpr size_t kBatchSize = 1;
     constexpr size_t kInputLen  = 1;
     // constexpr size_t kSequenceLen = 63;
     // constexpr size_t kSequenceLen = 4095;
     // constexpr size_t kSequenceLen = 511;
-    constexpr size_t kSequenceLen = 2047;
+    // constexpr size_t kSequenceLen = 2047;
+    // constexpr size_t kSequenceLen = 4095;
+    // constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;
+    constexpr size_t kSequenceLen = 200000;
     // constexpr size_t kSequenceLen = 262143;
     // constexpr size_t kSequenceLen = (1 << 20) - 1;  // 1M
     // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
     // constexpr size_t kSequenceLen = (1 << 24) - 1;  // 16M
     // constexpr int kSequenceLen = 2047;
     constexpr int kBlockSz   = 128;
-    constexpr int kMaxSplitK = 1;
+    constexpr int kMaxSplitK = 128;
 #else
 
     // append
@@ -246,14 +253,14 @@ int test_attention()
     // constexpr int    kMaxSplitK   = 1;
 
     // prefill
-    constexpr size_t kHeadNum     = 32;
-    constexpr size_t KvHeadNum    = kHeadNum;
-    constexpr size_t kBatchSize   = 1;
-    constexpr size_t kInputLen    = 16384;
+    constexpr size_t kHeadNum     = 16;
+    constexpr size_t KvHeadNum    = kHeadNum / 1;
+    constexpr size_t kBatchSize   = 2;
+    constexpr size_t kInputLen    = 8192;
     constexpr size_t kSequenceLen = 0;
     constexpr int    kMaxSplitK   = 1;
 
-    constexpr int kBlockSz     = 128;
+    constexpr int kBlockSz     = 64;
 
 #endif
 
@@ -275,6 +282,7 @@ int test_attention()
     constexpr int    kTestIter   = 10;
 
     constexpr float kRoPEBase = 10000.f;
+    constexpr int   kRoPEDim  = kHeadDim / 2;
     constexpr int   kDump     = 0;
 
     RNG rng{};
@@ -282,7 +290,8 @@ int test_attention()
     thrust::universal_vector<T> k_cache(kBatchSize * KvHeadNum * kContextLen * kHeadDim);
     thrust::universal_vector<T> v_cache(kBatchSize * KvHeadNum * kContextLen * kHeadDim);
 
-    thrust::universal_vector<T> kv_cache(KvHeadNum * 2 * kBatchSize * kContextLen * kHeadDim);
+    // flattened float point KV cache
+    thrust::device_vector<T> kv_cache(KvHeadNum * 2 * (kBatchSize * kContextLen + MAX_CTA_S) * kHeadDim);
 
     thrust::universal_vector<T> qkv(kBatchSize * kInputLen * (kHeadNum + KvHeadNum * 2) * kHeadDim);
     thrust::universal_vector<T> output(kBatchSize * kInputLen * kHeadNum * kHeadDim);
@@ -295,19 +304,16 @@ int test_attention()
     thrust::universal_vector<int>   cu_seqlens(kBatchSize + 1);
     thrust::universal_vector<int>   cu_kv_lens(kBatchSize + 1);
 
-    thrust::universal_vector<float> partial_M(kTokenNum * kHeadNum * kMaxSplitK);
-    thrust::universal_vector<float> partial_L(kTokenNum * kHeadNum * kMaxSplitK);
-    thrust::universal_vector<float> partial_O(kTokenNum * kHeadNum * kMaxSplitK * kHeadDim);
-    thrust::universal_vector<int>   split_cnt(kTokenNum);
-    thrust::universal_vector<int>   semaphores(kTokenNum * kHeadNum * kMaxSplitK);
-
-    thrust::universal_vector<T> kv_cache_quant_data(kBatchSize * KvHeadNum * 2 * kContextLen * 2);
-    thrust::fill(kv_cache_quant_data.begin(), kv_cache_quant_data.end(), T{0.});
+    thrust::device_vector<float> partial_M(kTokenNum * kHeadNum * kMaxSplitK);
+    thrust::device_vector<float> partial_L(kTokenNum * kHeadNum * kMaxSplitK);
+    thrust::device_vector<float> partial_O(kTokenNum * kHeadNum * kMaxSplitK * kHeadDim);
+    thrust::device_vector<int>   split_cnt(kTokenNum);
+    thrust::device_vector<int>   semaphores(kTokenNum * kHeadNum * kMaxSplitK);
 
     thrust::universal_vector<float> qk_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
     thrust::universal_vector<T>     pr_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
 
-    std::fill(semaphores.begin(), semaphores.end(), 0);
+    thrust::fill(semaphores.begin(), semaphores.end(), 0);
 
     rng.GenerateNormal(qkv.data().get(), qkv.size(), 1.f, 0.f);
 
@@ -329,7 +335,7 @@ int test_attention()
                           kBatchSize * KvHeadNum);
     }
 
-    invokeApplyRotaryEmbedding(k_cache.data().get(), kContextLen, KvHeadNum, kHeadDim, kRoPEBase, kBatchSize);
+    invokeApplyRotaryEmbedding(k_cache.data().get(), kContextLen, KvHeadNum, kHeadDim, kRoPEBase, kRoPEDim, kBatchSize);
 
     thrust::universal_vector<T> k_cache_ref = k_cache;
     thrust::universal_vector<T> v_cache_ref = v_cache;
@@ -338,12 +344,25 @@ int test_attention()
     thrust::universal_vector<char*> k_ptrs;
     thrust::universal_vector<int>   cu_block_cnts;
 
-    TestBlocks<Tkv>(
-        k_cache, v_cache, blocks, k_ptrs, cu_block_cnts, KvHeadNum, kHeadDim, kBlockSz, kBatchSize, kQuantPolicy);
+    TestBlocks<Tkv>(k_cache,
+                    v_cache,
+                    blocks,
+                    k_ptrs,
+                    cu_block_cnts,
+                    KvHeadNum,
+                    kHeadDim,
+                    kBlockSz,
+                    kBatchSize,
+                    kRoPEDim,
+                    kQuantPolicy);
 
     thrust::universal_vector<T>     output_ref = output;
     thrust::universal_vector<void*> k_cache_ref_ptrs(kBatchSize);
     thrust::universal_vector<void*> v_cache_ref_ptrs(kBatchSize);
+
+    thrust::universal_vector<T> bias_QKV(kHeadNum * kHeadDim + 2 * KvHeadNum * kHeadDim);
+
+    rng.GenerateNormal(bias_QKV.data().get(), bias_QKV.size(), 0.1f, 0.f);
 
     cudaDeviceSynchronize();
 
@@ -368,6 +387,10 @@ int test_attention()
     params.k   = params.q + kHeadNum * kHeadDim;
     params.v   = params.k + KvHeadNum * kHeadDim;
 
+    params.q_bias = bias_QKV.data().get();
+    params.k_bias = params.q_bias + kHeadNum * kHeadDim;
+    params.v_bias = params.k_bias + KvHeadNum * kHeadDim;
+
     params.stride = (kHeadNum + 2 * KvHeadNum) * kHeadDim;
 
     params.token_num  = kTokenNum;
@@ -386,8 +409,6 @@ int test_attention()
 
     params.quant_policy = kQuantPolicy;
 
-    // std::copy_n(quant_params_kv.data(), 4, &params.kv_quant_params[0]);
-
     params.finished   = finished.data().get();
     params.rope_theta = rope_base.data().get();
     params.cu_q_len   = cu_seqlens.data().get();
@@ -398,7 +419,7 @@ int test_attention()
     params.size_per_head = kHeadDim;
     params.inv_sqrt_dh   = (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
 
-    params.rotary_embedding_dim  = kHeadDim;
+    params.rotary_embedding_dim  = kRoPEDim;
     params.rotary_embedding_base = kRoPEBase;
     params.rope_ti_scale         = 1.;
 
@@ -419,7 +440,13 @@ int test_attention()
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
 
     for (int i = 0; i < 1; ++i) {
-        reference.Execute(params.out, k_cache_ref.data().get(), v_cache_ref.data().get(), qkv.data().get());
+        reference.Execute(params.out,  //
+                          k_cache_ref.data().get(),
+                          v_cache_ref.data().get(),
+                          qkv.data().get(),
+                          bias_QKV.data().get(),
+                          kRoPEBase,
+                          kRoPEDim);
     }
 
     cudaDeviceSynchronize();
@@ -502,6 +529,7 @@ int test_attention()
                        cu_kv_lens.data().get(),
                        cu_block_cnts.data().get(),
                        nullptr,  // DECODING ? nullptr : params.rope_theta,
+                       kRoPEDim,
                        1.,
                        KvHeadNum * kContextLen,
                        0,

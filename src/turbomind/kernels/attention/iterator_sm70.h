@@ -19,6 +19,9 @@ struct Sm70GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     using Base::offset_s_;
     using Base::smem_;
 
+    using Base::partial_c_;
+    using Base::pred_c_;
+
     using Base::Base;
 
     template<bool is_residue, class TileIter>
@@ -31,8 +34,14 @@ struct Sm70GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
                 copy(Array<T, Map::kAccessC>{}, rmem[s][c]);
-                if (!is_residue || offset_s + s * Map::kDeltaS < max_s) {
-                    Ldg(rmem[s][c], &src_data[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+                auto src = &src_data[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC];
+                if constexpr (partial_c_) {  // Only quant params is partial C
+                    if (pred_c_) {
+                        Ldg(rmem[s][c], src);
+                    }
+                }
+                else if (!is_residue || offset_s + s * Map::kDeltaS < max_s) {
+                    Ldg(rmem[s][c], src);
                 }
             }
         }
@@ -43,14 +52,13 @@ struct Sm70GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
         typename SmemLayout::Swizzle swizzle{};
 
         SmemAccessor<T, SmemLayout> data{smem_};
-
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                // Store(&smem_[swizzle(dst_offset_ + s * Map::kDeltaS * SmemLayout::kStride + c * Map::kDeltaC)],
-                //       rmem[s][c]);
-                Store(&data(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC), rmem[s][c]);
+                if (!partial_c_ || pred_c_) {
+                    Store(&data(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC), rmem[s][c]);
+                }
             }
         }
     }

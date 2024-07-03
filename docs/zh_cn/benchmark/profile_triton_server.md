@@ -43,7 +43,7 @@ $$
 启动服务之前，必须先把模型转换为 turbomind 模型格式：
 
 ```shell
-lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b
+lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b --trust-remote-code
 ```
 
 然后，执行如下命令，启动服务：

@@ -9,6 +9,7 @@ from collections import OrderedDict
 from typing import List
 
 import fire
+import pandas as pd
 from mmengine.config import Config
 
 
@@ -74,6 +75,7 @@ def add_summary(csv_path: str):
         for line in lines[1:]:
             line = '|' + line.strip().replace(',', '|') + '|'
             _append_summary(line)
+        _append_summary('\n')
 
 
 def _load_hf_results(test_results: dict, model_name: str):
@@ -98,7 +100,7 @@ def _load_hf_results(test_results: dict, model_name: str):
     return out
 
 
-def evaluate(models: List[str], workspace: str):
+def evaluate(models: List[str], datasets: List[str], workspace: str):
     """Evaluate models from lmdeploy using opencompass.
 
     Args:
@@ -141,18 +143,27 @@ def evaluate(models: List[str], workspace: str):
             logging.error(
                 f'Model {target_model} not found in configuration file')
             continue
-        model_cfg = cfg[target_model]
-        hf_model_path = model_cfg['path']
-        if not os.path.exists(hf_model_path):
-            logging.error(f'Model path not exists: {hf_model_path}')
-            continue
-        logging.info(f'Start evaluating {target_model} ...\\nn{model_cfg}\n\n')
+        if engine_type != 'hf':
+            model_cfg = cfg[target_model]
+            hf_model_path = model_cfg['path']
+            if not os.path.exists(hf_model_path):
+                logging.error(f'Model path not exists: {hf_model_path}')
+                continue
+            logging.info(
+                f'Start evaluating {target_model} ...\\nn{model_cfg}\n\n')
+        else:
+            hf_model_path = target_model
+
         with open(config_path_new, 'a') as f:
-            f.write(f'\nmodels = [ {target_model} ]\n')
+            f.write(f'\ndatasets = {datasets}\n')
+            if engine_type == 'hf':
+                f.write(f'\nmodels = [ *{target_model} ]\n')
+            else:
+                f.write(f'\nmodels = [ {target_model} ]\n')
 
         work_dir = os.path.join(workspace, target_model)
         cmd_eval = [
-            f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir}'
+            f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
         ret = run_cmd(cmd_eval, log_path=eval_log, cwd=lmdeploy_dir)
@@ -233,6 +244,72 @@ def create_model_links(src_dir: str, dst_dir: str):
             os.symlink(src, dst)
         else:
             logging.warning(f'Model_path exists: {dst}')
+
+
+def generate_benchmark_report(report_path: str):
+    # write to github action summary
+    _append_summary('## Evaluation Results Start')
+    subfolders = [f.path for f in os.scandir(report_path) if f.is_dir()]
+    for dir_path in subfolders:
+        second_subfolders = [
+            f.path for f in os.scandir(dir_path) if f.is_dir()
+        ]
+        for sec_dir_path in second_subfolders:
+            model = sec_dir_path.replace(report_path + '/', '')
+            print('-' * 25, model, '-' * 25)
+            _append_summary('-' * 25 + model + '-' * 25 + '\n')
+
+            benchmark_subfolders = [
+                f.path for f in os.scandir(sec_dir_path) if f.is_dir()
+            ]
+            for benchmark_subfolder in benchmark_subfolders:
+                backend_subfolders = [
+                    f.path for f in os.scandir(benchmark_subfolder)
+                    if f.is_dir()
+                ]
+                for backend_subfolder in backend_subfolders:
+                    benchmark_type = backend_subfolder.replace(
+                        sec_dir_path + '/', '')
+                    print('*' * 10, benchmark_type, '*' * 10)
+                    _append_summary('-' * 10 + benchmark_type + '-' * 10 +
+                                    '\n')
+                    merged_csv_path = os.path.join(backend_subfolder,
+                                                   'summary.csv')
+                    csv_files = glob.glob(
+                        os.path.join(backend_subfolder, '*.csv'))
+                    average_csv_path = os.path.join(backend_subfolder,
+                                                    'average.csv')
+                    if merged_csv_path in csv_files:
+                        csv_files.remove(merged_csv_path)
+                    if average_csv_path in csv_files:
+                        csv_files.remove(average_csv_path)
+                    merged_df = pd.DataFrame()
+
+                    if len(csv_files) > 0:
+                        for f in csv_files:
+                            df = pd.read_csv(f)
+                            merged_df = pd.concat([merged_df, df],
+                                                  ignore_index=True)
+
+                        merged_df = merged_df.sort_values(
+                            by=merged_df.columns[0])
+
+                        grouped_df = merged_df.groupby(merged_df.columns[0])
+                        if 'generation' not in benchmark_subfolder:
+                            average_values = grouped_df.pipe(
+                                (lambda group: {
+                                    'mean': group.mean().round(decimals=3)
+                                }))['mean']
+                            average_values.to_csv(average_csv_path, index=True)
+                            avg_df = pd.read_csv(average_csv_path)
+                            merged_df = pd.concat([merged_df, avg_df],
+                                                  ignore_index=True)
+                            add_summary(average_csv_path)
+                        merged_df.to_csv(merged_csv_path, index=False)
+                        if 'generation' in benchmark_subfolder:
+                            add_summary(merged_csv_path)
+                        print(merged_df)
+    _append_summary('## Evaluation Results End')
 
 
 if __name__ == '__main__':
