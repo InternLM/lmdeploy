@@ -12,7 +12,8 @@ namespace turbomind {
 template<class Kernel>
 bool invokeDecoding(const typename Kernel::ParamType& params)
 {
-    static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
+    static const size_t kSmemSize =
+        std::max(sizeof(typename Kernel::SharedStorage), sizeof(typename Kernel::ReduceOp::SharedStorage));
 
     if constexpr (1) {
         [[maybe_unused]] static const int _ = [&] {
@@ -64,22 +65,11 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
 
     grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, split_cnt, cta_per_q_group);
 
-    auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
-    if (err) {
-        std::cout << cudaGetErrorString(err) << "\n";
-        std::abort();
-    }
-
     // Print(typename Kernel::Impl::ThreadMapKVp{});
 
     auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
 
-    size_t smem_size = kSmemSize;
-    if (split_cnt > 1 && !Kernel::need_separate_reduce(split_cnt)) {
-        smem_size = std::max(smem_size, sizeof(typename Kernel::ReduceOp::SharedStorage));
-    }
-
-    kernel_func<<<grid, block, smem_size, params.stream>>>(
+    kernel_func<<<grid, block, kSmemSize, params.stream>>>(
         params, cache_iter_factory, CtaMap{}, q_group_size, q_head_per_cta, cta_per_q_group);
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
