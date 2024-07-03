@@ -321,6 +321,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.PatchedInternVLChatModel'
 })
 
+# awq
+MODULE_MAP.update({
+    'awq.modules.linear.gemm.WQLinear_GEMM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.awq_modules.PatchedWQLinear_GEMM'
+})
+
 # ascend module
 ASCEND_MODULE_MAP = dict()
 
