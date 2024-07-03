@@ -9,6 +9,7 @@ import fire
 import torch
 
 from lmdeploy.archs import get_model_arch
+from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_model
 
 from ...utils import _get_and_verify_max_len
@@ -199,6 +200,7 @@ def pack_model_repository(workspace_path: str):
 def main(model_path: str,
          model_name: str = None,
          model_format: str = None,
+         chat_template_name: str = None,
          tokenizer_path: str = None,
          dst_path: str = 'workspace',
          tp: int = 1,
@@ -219,7 +221,8 @@ def main(model_path: str,
             ['meta_llama', 'hf', 'awq', None]. 'meta_llama' stands for META's
             llama format, 'hf' means huggingface llama format, and 'awq' means
             llama(hf) model quantized by lmdeploy/lite/quantization/awq.py.
-            the default value is None
+            The default value is None
+        chat_template_name (str): the name of the chat template.
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism, should be 2^n
@@ -235,7 +238,11 @@ def main(model_path: str,
             default to the default cache directory of huggingface.
         kwargs (dict): other params for convert
     """
-
+    if chat_template_name is None:
+        chat_template_name = best_match_model(model_path)
+    assert chat_template_name in MODELS.module_dict.keys(), \
+        f"chat template '{chat_template_name}' is not registered. " \
+        f'The supported chat templates are: {MODELS.module_dict.keys()}'
     assert is_supported(model_path), (
         f'turbomind does not support {model_path}. '
         'Plz try pytorch engine instead.')
@@ -274,6 +281,7 @@ def main(model_path: str,
         exit(-1)
 
     cfg.model_name = model_name
+    cfg.chat_template_name = chat_template_name
     cfg.tensor_para_size = tp
 
     create_workspace(dst_path)
