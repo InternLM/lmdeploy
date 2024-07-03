@@ -95,13 +95,6 @@ void TopPSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
         reinterpret_cast<uint*>(allocator_->reMalloc(runtime_top_k_buf_, sizeof(uint) * batch_size, false));
     runtime_top_p_buf_ =
         reinterpret_cast<float*>(allocator_->reMalloc(runtime_top_p_buf_, sizeof(float) * batch_size, false));
-    initial_top_p_buf_ =
-        reinterpret_cast<float*>(allocator_->reMalloc(initial_top_p_buf_, sizeof(float) * batch_size, false));
-    top_p_decay_buf_ =
-        reinterpret_cast<float*>(allocator_->reMalloc(top_p_decay_buf_, sizeof(float) * batch_size, false));
-    top_p_min_buf_ = reinterpret_cast<float*>(allocator_->reMalloc(top_p_min_buf_, sizeof(float) * batch_size, false));
-    top_p_reset_ids_buf_ =
-        reinterpret_cast<int32_t*>(allocator_->reMalloc(top_p_reset_ids_buf_, sizeof(int32_t) * batch_size, false));
     topp_id_vals_buf_ = reinterpret_cast<int*>(
         allocator_->reMalloc(topp_id_vals_buf_, sizeof(int) * batch_size * vocab_size_padded_, false));
     topp_offset_buf_ =
@@ -122,10 +115,6 @@ void TopPSamplingLayer<T>::freeBuffer()
         allocator_->free((void**)(&begin_topp_offset_buf_));
         allocator_->free((void**)(&runtime_top_k_buf_));
         allocator_->free((void**)(&runtime_top_p_buf_));
-        allocator_->free((void**)(&initial_top_p_buf_));
-        allocator_->free((void**)(&top_p_decay_buf_));
-        allocator_->free((void**)(&top_p_min_buf_));
-        allocator_->free((void**)(&top_p_reset_ids_buf_));
     }
     BaseSamplingLayer<T>::freeBuffer();
     is_allocate_buffer_ = false;
@@ -283,16 +272,6 @@ void TopPSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
         skip_decode_buf_ + ite * local_batch_size);
     sync_check_cuda_error();
 
-    // invokeComputeToppDecay(
-    //     runtime_top_p_buf_ + ite * local_batch_size,
-    //     initial_top_p_buf_ + ite * local_batch_size,
-    //     output_tensors->getPtrWithOffset<int>("output_ids", step * batch_size + ite * local_batch_size),
-    //     top_p_decay_buf_ + ite * local_batch_size,
-    //     top_p_min_buf_ + ite * local_batch_size,
-    //     top_p_reset_ids_buf_ + ite * local_batch_size,
-    //     local_batch_size,
-    //     stream_);
-    // sync_check_cuda_error();
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 

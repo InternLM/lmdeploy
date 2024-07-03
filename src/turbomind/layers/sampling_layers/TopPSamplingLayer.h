@@ -34,13 +34,9 @@ private:
     std::vector<uint>  h_runtime_top_k;
     std::vector<float> h_runtime_top_p;
 
-    uint*    runtime_top_k_buf_ = nullptr;
-    float*   runtime_top_p_buf_ = nullptr;
-    float    runtime_max_top_p_;
-    float*   initial_top_p_buf_   = nullptr;
-    float*   top_p_decay_buf_     = nullptr;
-    float*   top_p_min_buf_       = nullptr;
-    int32_t* top_p_reset_ids_buf_ = nullptr;
+    uint*  runtime_top_k_buf_ = nullptr;
+    float* runtime_top_p_buf_ = nullptr;
+    float  runtime_max_top_p_;
 
     int*   topp_id_vals_buf_      = nullptr;
     int*   topp_offset_buf_       = nullptr;
