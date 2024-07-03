@@ -47,6 +47,7 @@ private:
     using BaseSamplingLayer<T>::skip_decode_buf_;
     using BaseSamplingLayer<T>::skip_decode_;
     using BaseSamplingLayer<T>::skip_any_;
+    using BaseSamplingLayer<T>::skip_all_;
     using BaseSamplingLayer<T>::runtime_logits_buf_;
 
     using BaseSamplingLayer<T>::stream_;

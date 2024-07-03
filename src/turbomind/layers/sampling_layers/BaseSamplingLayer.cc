@@ -260,6 +260,10 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
     const int max_input_length = input_tensors->at("max_input_length").getVal<int>();
     T*        logits           = input_tensors->at("logits").getPtr<T>();
 
+    if (skip_all_) {
+        return;
+    }
+
 #define ALL_OF(p_, sz_, dt_, v_) (std::all_of(p_, p_ + sz_, [&](dt_ b) { return b == v_; }))
 
     bool* skip_decode = skip_decode_ + ite * local_batch_size;

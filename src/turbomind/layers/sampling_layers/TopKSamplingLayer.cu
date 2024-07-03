@@ -142,23 +142,26 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     //     temperature [1] or [batch_size] on cpu, optional
     //     repetition_penalty [1] or [batch_size] on cpu, optional
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+    const Tensor runtime_top_p = runtime_args->isExist("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
+    const size_t runtime_top_p_size = runtime_top_p.size();
+    const Tensor runtime_top_k = runtime_args->isExist("runtime_top_k") ? runtime_args->at("runtime_top_k") : Tensor();
+    const size_t runtime_top_k_size = runtime_top_k.size();
+    uint         top_k              = runtime_top_k_size > 0 ? runtime_top_k.max<uint>() : 0;
+    float        top_p              = runtime_top_p_size == 0 ? 0.0f : runtime_top_p.max<float>();
+    skip_all_                       = false;
+
+    if (top_k == 0 && top_p != 0.0f) {
+        skip_all_ = true;
+        return;
+    }
+
+    // skip topk setup & forward if all top_k is zero and all top_p is not zero
     BaseSamplingLayer<T>::setup(batch_size, beam_width, runtime_args);
 
     if (h_runtime_top_k.size() < batch_size) {
         h_runtime_top_k.resize(batch_size);
         h_runtime_top_p.resize(batch_size);
     }
-
-    uint         tmp_top_k     = 0;
-    const Tensor runtime_top_k = runtime_args->isExist("runtime_top_k") ?
-                                     runtime_args->at("runtime_top_k") :
-                                     Tensor(MEMORY_CPU, TYPE_UINT32, {1}, &tmp_top_k);
-    const Tensor runtime_top_p = runtime_args->isExist("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
-    const size_t runtime_top_k_size = runtime_top_k.size();
-    const size_t runtime_top_p_size = runtime_top_p.size();
-
-    uint  top_k = runtime_top_k.max<uint>();
-    float top_p = runtime_top_p_size == 0 ? 0.0f : runtime_top_p.getVal<float>();
 
     if (runtime_top_k_size > 1) {
         FT_CHECK_WITH_INFO(
