@@ -327,3 +327,20 @@ def test_internvl_phi3():
             os.remove('conversation.py')
     except ImportError:
         pass
+
+
+def test_internvl2():
+    model = MODELS.get('internvl2')()
+    messages = [{
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }]
+    expected = '<|im_start|>system\n你是由上海人工智能实验室联合商汤科技开发的'\
+        '书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。'\
+        '<|im_end|>\n<|im_start|>user\nwho are you<|im_end|>\n<|im_start|>'\
+        'assistant\nI am an AI<|im_end|>\n<|im_start|>assistant\n'
+    res = model.messages2prompt(messages)
+    assert res == expected
