@@ -28,10 +28,6 @@ class DeepSeekVisionModel(VisonModel):
 
     _arch = 'MultiModalityCausalLM'
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.build_model()
-
     def build_model(self):
         check_deepseek_vl_install()
         # empty init
