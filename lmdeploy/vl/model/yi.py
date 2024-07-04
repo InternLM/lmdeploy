@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 from contextlib import contextmanager
+from typing import Dict
 
 import torch.nn as nn
 
@@ -85,7 +86,11 @@ def init_yi_model():
 class YiVisionModel(LlavaVisionModel):
     """Yi visual model."""
 
-    def __init__(self, model_path, with_llm: bool = False, max_memory=None):
+    def __init__(self,
+                 model_path: str,
+                 with_llm: bool = False,
+                 max_memory: Dict[int, int] = None,
+                 **kwargs):
         super().__init__(model_path=model_path,
                          with_llm=with_llm,
                          max_memory=max_memory)

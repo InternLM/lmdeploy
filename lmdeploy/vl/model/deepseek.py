@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import warnings
-from typing import List
+from typing import Dict, List
 
 import torch
 from PIL.Image import Image
@@ -28,10 +28,14 @@ class DeepSeekVisionModel(VisonModel):
 
     _arch = 'MultiModalityCausalLM'
 
-    def __init__(self, model_path, with_llm: bool = False, max_memory=None):
-        self.with_llm = with_llm
-        self.max_memory = max_memory
-        self.model_path = model_path
+    def __init__(self,
+                 model_path: str,
+                 with_llm: bool = False,
+                 max_memory: Dict[int, int] = None,
+                 **kwargs):
+        super().__init__(model_path=model_path,
+                         with_llm=with_llm,
+                         max_memory=max_memory)
         self.build_model()
 
     def build_model(self):

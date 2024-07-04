@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import List, Union
+from typing import Dict, List, Union
 
 import PIL
 import torch
@@ -12,6 +12,15 @@ VISION_MODELS = Registry('vision_model')
 class VisonModel(ABC):
     """Visual model which extract image feature."""
     _arch: Union[str, List[str]] = None
+
+    def __init__(self,
+                 model_path: str,
+                 with_llm: bool = False,
+                 max_memory: Dict[int, int] = None):
+        """init."""
+        self.model_path = model_path
+        self.with_llm = with_llm
+        self.max_memory = max_memory
 
     @abstractmethod
     def forward(self, images: List[PIL.Image.Image]) -> List[torch.Tensor]:

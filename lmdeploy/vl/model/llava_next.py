@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import warnings
-from typing import List
+from typing import Dict, List
 
 import torch
 from PIL.Image import Image
@@ -17,10 +17,14 @@ class LlavaNextVisionModel(VisonModel):
 
     _arch = 'LlavaNextForConditionalGeneration'
 
-    def __init__(self, model_path, with_llm: bool = False, max_memory=None):
-        self.model_path = model_path
-        self.with_llm = with_llm
-        self.max_memory = max_memory
+    def __init__(self,
+                 model_path: str,
+                 with_llm: bool = False,
+                 max_memory: Dict[int, int] = None,
+                 **kwargs):
+        super().__init__(model_path=model_path,
+                         with_llm=with_llm,
+                         max_memory=max_memory)
         self.hf_config = AutoConfig.from_pretrained(model_path,
                                                     trust_remote_code=True)
         self.build_model()

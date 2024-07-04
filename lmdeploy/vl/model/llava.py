@@ -3,7 +3,7 @@
 # https://github.com/haotian-liu/LLaVA.git
 import warnings
 from contextlib import contextmanager
-from typing import List, Union
+from typing import Dict, List, Union
 
 import torch
 from PIL.Image import Image
@@ -57,12 +57,19 @@ def init_llava_vision_tower(config):
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path, with_llm: bool = False, max_memory=None):
-        self.model_path = model_path
-        self.with_llm = with_llm
-        self.max_memory = max_memory
-        from lmdeploy.utils import get_hf_config_content
-        config = get_hf_config_content(model_path)
+    def __init__(self,
+                 model_path: str,
+                 with_llm: bool = False,
+                 max_memory: Dict[int, int] = None,
+                 config: Dict = None,
+                 **kwargs):
+        super().__init__(model_path=model_path,
+                         with_llm=with_llm,
+                         max_memory=max_memory)
+        if config is None:
+            from lmdeploy.archs import get_model_arch
+            _, config = get_model_arch(model_path)
+            config = config.to_dict()
         self.arch = config['architectures'][0]
         self.build_model()
 
@@ -71,7 +78,9 @@ class LlavaVisionModel(VisonModel):
         """check whether the config match the model."""
         arch = config['architectures'][0]
         if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
+            # internvl-llava has vision_tower of OpenGVLab/xxx
             mm_vision_tower = config.get('mm_vision_tower', '')
+            # yi-vl has projector type of xxx_Norm
             projector_type = config.get('mm_projector_type', 'linear')
             if '_Norm' in projector_type:
                 return False

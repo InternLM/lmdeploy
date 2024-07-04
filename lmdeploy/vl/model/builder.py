@@ -2,8 +2,9 @@
 import os
 from typing import Optional, Union
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
-from lmdeploy.utils import get_hf_config_content, get_logger, get_model
+from lmdeploy.utils import get_logger, get_model
 from lmdeploy.vl.model.base import VISION_MODELS
 
 from .cogvlm import CogVLMVisionModel  # noqa F401
@@ -41,12 +42,16 @@ def load_vl_model(model_path: str,
         tp = getattr(backend_config, 'tp', 1)
         max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)}
 
-    kwargs = dict(with_llm=with_llm, max_memory=max_memory)
-    config = get_hf_config_content(model_path)
+    _, config = get_model_arch(model_path)
+    config = config.to_dict()
+    kwargs = dict(model_path=model_path,
+                  with_llm=with_llm,
+                  max_memory=max_memory,
+                  config=config)
     for name, module in VISION_MODELS.module_dict.items():
         if module.match(config):
             logger.info(f'matching vision model: {name}')
-            return module(model_path, **kwargs)
+            return module(**kwargs)
 
     raise ValueError(f'unsupported vl model with config {config}')
 
