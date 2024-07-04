@@ -394,8 +394,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
     - tools (List): A list of tools the model may call. Currently, only
-        internlm2 functions are supported as a tool. Use this to provide
-        a list of functions the model may generate JSON inputs for.
+        internlm2 functions are supported as a tool. Use this to specify a
+        list of functions for which the model can generate JSON inputs.
     - tool_choice (str | object): Controls which (if any) tool is called by
         the model. `none` means the model will not call any tool and instead
         generates a message. Specifying a particular tool via {"type":
