@@ -45,7 +45,7 @@ ______________________________________________________________________
 <details close>
 <summary><b>2023</b></summary>
 
-- \[2023/12\] Turbomind 支持多模态输入。[Gradio Demo](./examples/vl/README.md)
+- \[2023/12\] Turbomind 支持多模态输入
 - \[2023/11\] Turbomind 支持直接读取 Huggingface 模型。点击[这里](docs/zh_cn/inference/load_hf.md)查看使用方法
 - \[2023/11\] TurboMind 重磅升级。包括：Paged Attention、更快的且不受序列最大长度限制的 attention kernel、2+倍快的 KV8 kernels、Split-K decoding (Flash Decoding) 和 支持 sm_75 架构的 W4A16
 - \[2023/09\] TurboMind 支持 Qwen-14B
