@@ -20,7 +20,7 @@ from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
 logger = get_logger('lmdeploy')
 
 
-def get_names_from_model(model_path: str, model_name):
+def get_names_from_model(model_path: str, model_name: str = None):
     """Get model name and chat template name from workspace model."""
     from configparser import ConfigParser
     triton_model_path = os.path.join(model_path, 'triton_models', 'weights')
