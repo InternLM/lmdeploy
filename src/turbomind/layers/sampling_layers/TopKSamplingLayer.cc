@@ -163,7 +163,7 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
         h_runtime_top_p_.resize(batch_size);
     }
 
-    uint  top_k = runtime_top_k_size > 0 ? runtime_top_k.max<uint>() : 0;
+    uint  top_k = runtime_top_k_size > 0 ? runtime_top_k.getVal<uint>() : 0;
     float top_p = runtime_top_p_size > 0 ? runtime_top_p.getVal<float>() : 0.0f;
 
     if (runtime_top_k_size > 1) {
