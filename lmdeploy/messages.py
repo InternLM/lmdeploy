@@ -22,6 +22,11 @@ class GenerationConfig:
             tokens with top_p probability mass
         top_k (int): An alternative to sampling with temperature, where
             the model considers the top_k tokens with the highest probability
+        min_p (float): Minimum token probability, which will be scaled by the
+            probability of the most likely token. It must be a value between
+            0 and 1. Typical values are in the 0.01-0.2 range, comparably
+            selective as setting `top_p` in the 0.99-0.8 range (use the
+            opposite of normal `top_p` values).
         temperature (float): Sampling temperature
         repetition_penalty (float): Penalty to prevent the model from
             generating repeated words or phrases. A value larger than
@@ -39,8 +44,10 @@ class GenerationConfig:
 
     n: int = 1
     max_new_tokens: int = 512
+    do_sample: bool = True
     top_p: float = 1.0
     top_k: int = 1
+    min_p: float = 0.0
     temperature: float = 0.8
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
@@ -91,7 +98,9 @@ class EngineGenerationConfig(GenerationConfig):
             logprobs=gen_config.logprobs,
             max_new_tokens=gen_config.max_new_tokens,
             min_new_tokens=gen_config.min_new_tokens,
+            do_sample=gen_config.do_sample,
             top_p=gen_config.top_p,
+            min_p=gen_config.min_p,
             top_k=gen_config.top_k,
             temperature=gen_config.temperature,
             repetition_penalty=gen_config.repetition_penalty,
@@ -108,6 +117,10 @@ class EngineGenerationConfig(GenerationConfig):
         assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
+        assert 0 <= self.min_p <= 1, \
+            f'min_p should be in range [0, 1], but found {self.min_p}'
+        if self.do_sample is False:
+            self.top_k = 1
 
 
 @pydantic_dataclass

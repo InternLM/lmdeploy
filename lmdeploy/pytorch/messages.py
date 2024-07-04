@@ -38,6 +38,7 @@ class SamplingParam:
     """Sampling parameter."""
     top_p: float = 1.0
     top_k: int = 1
+    min_p: float = 0.0
     temperature: float = 0.8
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
@@ -60,6 +61,7 @@ class SamplingParam:
 
         top_k = gen_config.top_k
         top_p = gen_config.top_p
+        min_p = gen_config.min_p
         temperature = gen_config.temperature
         repetition_penalty = gen_config.repetition_penalty
         max_new_tokens = gen_config.max_new_tokens
@@ -68,6 +70,10 @@ class SamplingParam:
             logger.warning('`top_p` has to be a float > 0 and < 1'
                            f' but is {top_p}')
             top_p = 1.0
+        if min_p < 0 or min_p > 1.0:
+            logger.warning('`min_p` has to be a float > 0 and < 1'
+                           f' but is {min_p}')
+            min_p = 0.0
         if temperature == 0:
             logger.warning('`temperature` is 0, set to 1e-6')
             temperature = 1e-6
@@ -90,6 +96,7 @@ class SamplingParam:
             min_new_tokens = 0
         return SamplingParam(top_p=top_p,
                              top_k=top_k,
+                             min_p=min_p,
                              temperature=temperature,
                              repetition_penalty=repetition_penalty,
                              ignore_eos=gen_config.ignore_eos,

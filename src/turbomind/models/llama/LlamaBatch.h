@@ -250,6 +250,7 @@ private:
     int*   h_min_length_{};
     int*   h_runtime_top_k_{};
     float* h_runtime_top_p_{};
+    float* h_runtime_min_p_{};
     float* h_temperature_{};
     float* h_repetition_penalty_{};
     int*   h_stop_words_{};  // [batch_size, 2, kMaxStopWordsLen]

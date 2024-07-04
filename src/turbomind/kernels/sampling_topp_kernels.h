@@ -70,6 +70,7 @@ void invokeBatchTopPSampling(void*           workspace,
                              const int*      end_ids,
                              const float     max_top_p,
                              const float*    top_ps,
+                             const float*    min_ps,
                              cudaStream_t    stream,
                              cudaDeviceProp* cuda_device_prop,
                              const bool*     skip_decode);

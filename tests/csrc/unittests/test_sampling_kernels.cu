@@ -41,6 +41,7 @@ struct SamplingKernelTestParam {
     uint   top_k;
     float  top_p;
     size_t output_len;
+    float  min_p;
 
     std::string toString()
     {
@@ -116,6 +117,7 @@ template<typename T>
 void computeSampledLogProb(T*     logits,
                            int*   top_ks,
                            float* top_ps,
+                           float* min_ps,
                            float* uniform,
                            float* sampled_logprobs,
                            int*   sampled_indexes,
@@ -153,12 +155,25 @@ void computeSampledLogProb(T*     logits,
                 break;
             }
         }
+        sum_v *= sampled_sum;
+
+        // filter min_p
+        sampled_sum        = items[0].first / sum_v;
+        float scaled_top_p = items[0].first / sum_v * min_ps[i];
+        for (int j = 1; j < sampled_n; j++) {
+            if (items[j].first / sum_v < scaled_top_p) {
+                sampled_n = j;
+                sum_v *= sampled_sum;
+                break;
+            }
+            sampled_sum += items[j].first / sum_v;
+        }
         sampled_n = std::min(sampled_n, kMaxLogProb);
 
         // output
         sampled_nums[i] = sampled_n;
         for (int j = 0; j < sampled_n; j++) {
-            sampled_logprobs[j] = logf(items[j].first) - logf(sampled_sum * sum_v);
+            sampled_logprobs[j] = logf(items[j].first) - logf(sum_v);
             sampled_indexes[j]  = items[j].second;
         }
 
@@ -406,6 +421,7 @@ public:
                                    nullptr,  // top_ks
                                    1.0f,
                                    nullptr,
+                                   nullptr,
                                    vocab_size,
                                    nullptr,  // end_ids
                                    stream,
@@ -463,6 +479,7 @@ public:
                                     top_ks,
                                     1.0f,
                                     nullptr,
+                                    nullptr,
                                     vocab_size,
                                     end_ids,
                                     stream,
@@ -513,15 +530,19 @@ public:
 
         int   top_k = param.top_k;
         float top_p = param.top_p;
+        float min_p = param.min_p;
 
         std::vector<int>   _h_top_ks(batch_size);
         std::vector<float> _h_top_ps(batch_size);
+        std::vector<float> _h_min_ps(batch_size);
 
         int*   h_top_ks = _h_top_ks.data();
         float* h_top_ps = _h_top_ps.data();
+        float* h_min_ps = _h_min_ps.data();
         for (size_t i = 0; i < batch_size; ++i) {
             h_top_ks[i] = top_k;
             h_top_ps[i] = top_p;
+            h_min_ps[i] = min_p;
         }
         int max_top_k = *std::max_element(h_top_ks, h_top_ks + batch_size);
 
@@ -552,6 +573,7 @@ public:
         computeSampledLogProb(h_logits,
                               h_top_ks,
                               h_top_ps,
+                              h_min_ps,
                               h_uniforms,
                               expected_sampled_logprobs.data(),
                               expected_sampled_indexes.data(),
@@ -577,6 +599,7 @@ public:
                                    nullptr,  // top_ks
                                    1.0f,
                                    nullptr,
+                                   nullptr,
                                    vocab_size,
                                    nullptr,  // end_ids
                                    stream,
@@ -587,6 +610,7 @@ public:
 
         int*   top_ks = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size));
         float* top_ps = reinterpret_cast<float*>(allocator->malloc(sizeof(float) * batch_size));
+        float* min_ps = reinterpret_cast<float*>(allocator->malloc(sizeof(float) * batch_size));
 
         int* output_ids = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * seq_len * batch_size));
         T*   logits     = reinterpret_cast<T*>(allocator->malloc(sizeof(T) * batch_size * vocab_size, true));
@@ -598,6 +622,7 @@ public:
         // Initialize.
         cudaAutoCpy(top_ks, h_top_ks, batch_size, stream);
         cudaAutoCpy(top_ps, h_top_ps, batch_size, stream);
+        cudaAutoCpy(min_ps, h_min_ps, batch_size, stream);
 
         deviceFill(output_ids, seq_len * batch_size, 0, stream);
         cudaAutoCpy(logits, h_logits, batch_size * vocab_size, stream);
@@ -622,6 +647,7 @@ public:
                                 top_ks,  // top_ks
                                 1.0f,
                                 top_ps,
+                                min_ps,
                                 vocab_size,
                                 nullptr,  // end_ids
                                 stream,
@@ -710,9 +736,12 @@ TYPED_TEST(TopKSamplingKernelTest, BatchCorrectnessTopKTopP)
 
 TYPED_TEST(TopKSamplingKernelTest, BatchCorrectnessTopKTopPLogprobs)
 {
-    this->runBatchLogprobTest({32, 8000, 1, 40, 0.8f, 1});
-    this->runBatchLogprobTest({32, 8000, 1, 40, 1.0f, 1});
-    this->runBatchLogprobTest({32, 8000, 1, 1024, 0.9f, 1});
+    this->runBatchLogprobTest({32, 8000, 1, 40, 0.8f, 1, 0.f});
+    this->runBatchLogprobTest({32, 8000, 1, 40, 1.0f, 1, 0.f});
+    this->runBatchLogprobTest({32, 8000, 1, 1024, 0.9f, 1, 0.f});
+    this->runBatchLogprobTest({32, 8000, 1, 40, 0.8f, 1, 0.05f});
+    this->runBatchLogprobTest({32, 8000, 1, 40, 1.0f, 1, 0.05f});
+    this->runBatchLogprobTest({32, 8000, 1, 1024, 0.9f, 1, 0.05f});
 };
 
 template<typename T>
@@ -945,6 +974,7 @@ public:
                                    nullptr,
                                    max_top_p,
                                    top_ps,
+                                   nullptr,
                                    stream,
                                    &device_prop,
                                    nullptr);
@@ -992,6 +1022,7 @@ public:
                                        end_ids,
                                        max_top_p,
                                        top_ps,
+                                       nullptr,
                                        stream,
                                        &device_prop,
                                        skip_decode);
@@ -1040,15 +1071,19 @@ public:
 
         int   top_k = param.top_k;
         float top_p = param.top_p;
+        float min_p = param.min_p;
 
         std::vector<int>   _h_top_ks(batch_size);
         std::vector<float> _h_top_ps(batch_size);
+        std::vector<float> _h_min_ps(batch_size);
 
         int*   h_top_ks = _h_top_ks.data();
         float* h_top_ps = _h_top_ps.data();
+        float* h_min_ps = _h_min_ps.data();
         for (size_t i = 0; i < batch_size; ++i) {
             h_top_ks[i] = top_k;
             h_top_ps[i] = top_p;
+            h_min_ps[i] = min_p;
         }
         float max_top_p = *std::max_element(h_top_ps, h_top_ps + batch_size);
 
@@ -1081,6 +1116,7 @@ public:
         computeSampledLogProb(h_logits,
                               h_top_ks,
                               h_top_ps,
+                              h_min_ps,
                               h_uniforms,
                               expected_sampled_logprobs.data(),
                               expected_sampled_indexes.data(),
@@ -1097,6 +1133,7 @@ public:
         int*   end_offsets      = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * (batch_size + 1)));
         int*   topp_id_vals_buf = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size * vocab_size));
         float* top_ps           = reinterpret_cast<float*>(allocator->malloc(sizeof(float) * batch_size));
+        float* min_ps           = reinterpret_cast<float*>(allocator->malloc(sizeof(float) * batch_size));
         int*   output_ids       = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * seq_len * batch_size));
         T*     probs            = reinterpret_cast<T*>(allocator->malloc(sizeof(T) * batch_size * vocab_size, true));
 
@@ -1132,6 +1169,7 @@ public:
                                    nullptr,
                                    max_top_p,
                                    top_ps,
+                                   min_ps,
                                    stream,
                                    &device_prop,
                                    nullptr);
@@ -1142,6 +1180,7 @@ public:
         cudaAutoCpy(top_ps, h_top_ps, batch_size, stream);
         deviceFill(output_ids, seq_len * batch_size, 0, stream);
         cudaAutoCpy(top_ps, h_top_ps, batch_size, stream);
+        cudaAutoCpy(min_ps, h_min_ps, batch_size, stream);
 
         computeProb(h_probs, h_logits, batch_size, vocab_size);
         cudaAutoCpy(probs, h_probs, batch_size * vocab_size, stream);
@@ -1172,6 +1211,7 @@ public:
                                    nullptr,
                                    max_top_p,
                                    top_ps,
+                                   min_ps,
                                    stream,
                                    &device_prop,
                                    nullptr);
@@ -1247,8 +1287,10 @@ TYPED_TEST(TopPSamplingKernelTest, BatchCorrectnessLargeP2)
 };
 TYPED_TEST(TopPSamplingKernelTest, BatchCorrectnessTopPLogprobs)
 {
-    this->runBatchLogprobTest({32, 4000, 1, 0, 0.1f, 1});
-    this->runBatchLogprobTest({32, 4000, 1, 0, 0.8f, 1});
+    this->runBatchLogprobTest({32, 4000, 1, 0, 0.1f, 1, 0.f});
+    this->runBatchLogprobTest({32, 4000, 1, 0, 0.8f, 1, 0.f});
+    this->runBatchLogprobTest({32, 4000, 1, 0, 0.1f, 1, 0.05f});
+    this->runBatchLogprobTest({32, 4000, 1, 0, 0.8f, 1, 0.05f});
 };
 
 __global__ void generateRandomNumber(unsigned int* vals, curandState_t* states, const int batch_size)

@@ -203,6 +203,19 @@ __global__ void topk_stage1(const T* __restrict log_probs,
     }
 }
 
+struct PrefixSumOp {
+    float sum;
+
+    __device__ PrefixSumOp(float sum): sum(sum) {}
+
+    __device__ float operator()(float val)
+    {
+        float old_sum = sum;
+        sum += val;
+        return old_sum;
+    }
+};
+
 template<typename T, int BLOCK_SIZE_, int BLOCKS_PER_BEAM_>
 __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                      T*             topk_tmp_val_buf,
@@ -218,6 +231,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                      const int*     top_ks,
                                      const float    top_p,
                                      const float*   top_ps,
+                                     const float*   min_ps,
                                      curandState_t* curandstate,
                                      const int*     end_ids,
                                      const int      vocab_size,
@@ -234,6 +248,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
 
     const int   k              = (top_ks != nullptr) ? top_ks[batch_id] : max_top_k;
     const float prob_threshold = (top_ps != nullptr) ? top_ps[batch_id] : top_p;
+    const float min_p          = (min_ps != nullptr) ? min_ps[batch_id] : 0.f;
     const int   size           = k * BLOCKS_PER_BEAM_;
     const int   stride         = max_top_k * BLOCKS_PER_BEAM_;
 
@@ -283,13 +298,60 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
         __syncthreads();
     }
 
-    int selected_i;
+    // top_p
+    typedef cub::BlockScan<float, BLOCK_SIZE_> BlockScan;
+    __shared__ typename BlockScan::TempStorage scan_temp_storage;
+    PrefixSumOp                                prefix_op(0.f);
+    int                                        end        = ((k + BLOCK_SIZE_ - 1) / BLOCK_SIZE_) * BLOCK_SIZE_;
+    float                                      prefix_sum = 0.f;
+    __shared__ int                             s_keeped_n;
+    float                                      top1 = s_val2[0];
+    for (int vi = tid; vi < end; vi += BLOCK_SIZE_) {
+        float exp_logit = (vi < k) ? static_cast<float>(s_val2[vi]) / s_sum : 0.f;
+        BlockScan(scan_temp_storage).InclusiveSum(exp_logit, prefix_sum, prefix_op);
+        auto count = __syncthreads_count(prefix_sum > prob_threshold);
+        if (count != 0 || vi + BLOCK_SIZE_ >= end) {
+            if (tid == min(BLOCK_SIZE_ - count, BLOCK_SIZE_ - 1)) {
+                s_keeped_n = min(vi + 1, k);
+                s_sum *= prefix_sum;
+            }
+            break;
+        }
+    }
+    __syncthreads();
+
+    // min_p
+    int keeped_n = s_keeped_n;
+    if (min_p != 0.f) {
+        float local_sum    = s_sum;
+        float scaled_min_p = top1 / local_sum * min_p;
+        prefix_sum         = 0.f;
+        end                = ((keeped_n + BLOCK_SIZE_ - 1) / BLOCK_SIZE_) * BLOCK_SIZE_;
+        prefix_op          = PrefixSumOp(0);
+
+        for (int vi = tid; vi < end; vi += BLOCK_SIZE_) {
+            float exp_logit = (vi < keeped_n) ? static_cast<float>(s_val2[vi]) / local_sum : 0.f;
+            BlockScan(scan_temp_storage).ExclusiveSum(exp_logit, prefix_sum, prefix_op);
+            auto count = __syncthreads_count(exp_logit < scaled_min_p);
+            if (count != 0 || vi + BLOCK_SIZE_ >= end) {
+                if (tid == min(BLOCK_SIZE_ - count, BLOCK_SIZE_ - 1)) {
+                    s_keeped_n = vi;
+                    s_sum *= prefix_sum;
+                }
+                break;
+            }
+        }
+        __syncthreads();
+    }
+
+    // sampling
+    keeped_n = s_keeped_n;
     if (tid == 0) {
-        rand_num = (float)curand_uniform(curandstate + blockIdx.x) * prob_threshold * s_sum;
-        for (int i = 0; i < k; i++) {
+        rand_num = (float)curand_uniform(curandstate + blockIdx.x) * s_sum;
+        for (int i = 0; i < keeped_n; i++) {
             float exp_logit = s_val2[i];
             rand_num        = rand_num - exp_logit;
-            if (rand_num <= 0.0f || i == k - 1) {
+            if (rand_num <= 0.0f || i == keeped_n - 1) {
                 ids[batch_id] = topk_tmp_id_buf[batch_id * stride + s_id[i]] % vocab_size;
                 if (cum_log_probs != nullptr || output_log_probs != nullptr) {
                     float log_prob = logf(exp_logit);
@@ -306,7 +368,6 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                         output_log_probs[batch_id] = log_prob - logf(s_sum);
                     }
                 }
-                selected_i = i;
                 break;
             }
         }
@@ -317,27 +378,11 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
     }
 
     if (sampled_logprobs != nullptr && sampled_indexes != nullptr && sampled_nums != nullptr) {
-        __shared__ int   sampled_n;
-        __shared__ float cum_probs;
-
         if (tid == 0) {
-            float _cum_probs = 0.0f;
-            sampled_n        = k;
-            cum_probs        = s_sum;
-            for (int i = 0; i < k; i++) {
-                _cum_probs += s_val2[i] / s_sum;
-                if (_cum_probs > prob_threshold && i >= selected_i) {
-                    cum_probs = _cum_probs * s_sum;
-                    sampled_n = i + 1;
-                    break;
-                }
-            }
-            sampled_nums[batch_id] = sampled_n;
+            sampled_nums[batch_id] = keeped_n;
         }
-        __syncthreads();
-
-        int   local_sampled_n = sampled_n;
-        float local_cum_probs = cum_probs;
+        int   local_sampled_n = keeped_n;
+        float local_cum_probs = s_sum;
         for (int ite = tid; ite < local_sampled_n; ite += BLOCK_SIZE_) {
             sampled_logprobs[batch_id * kMaxLogProb + ite] = logf(s_val2[ite]) - logf(local_cum_probs);
             sampled_indexes[batch_id * kMaxLogProb + ite] = topk_tmp_id_buf[batch_id * stride + s_id[ite]] % vocab_size;
@@ -374,6 +419,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                                                                                  top_ks,               \
                                                                                                  top_p,                \
                                                                                                  top_ps,               \
+                                                                                                 min_ps,               \
                                                                                                  curandstate,          \
                                                                                                  end_ids,              \
                                                                                                  vocab_size,           \
@@ -409,6 +455,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                                                                                  top_ks,               \
                                                                                                  top_p,                \
                                                                                                  top_ps,               \
+                                                                                                 min_ps,               \
                                                                                                  curandstate,          \
                                                                                                  end_ids,              \
                                                                                                  vocab_size,           \
@@ -433,6 +480,7 @@ void invokeBatchTopKSampling(void*          workspace,
                              const int*     top_ks,
                              const float    top_p,
                              const float*   top_ps,
+                             const float*   min_ps,
                              const int      vocab_size_padded,
                              const int*     end_ids,
                              cudaStream_t   stream,
@@ -500,6 +548,7 @@ template void invokeBatchTopKSampling(void*          workspace,
                                       const int*     top_ks,
                                       const float    top_p,
                                       const float*   top_ps,
+                                      const float*   min_ps,
                                       const int      vocab_size_padded,
                                       const int*     end_ids,
                                       cudaStream_t   stream,
@@ -561,6 +610,7 @@ void invokeTopKSampling(void*          workspace,
                             top_k,
                             nullptr,
                             top_p,
+                            nullptr,
                             nullptr,
                             vocab_size_padded,
                             end_ids,

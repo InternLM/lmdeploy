@@ -30,8 +30,11 @@ private:
     void allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p) override;
     void freeBuffer() override;
 
+    std::vector<float> runtime_min_p_;
+
     uint*    runtime_top_k_buf_ = nullptr;
     float*   runtime_top_p_buf_ = nullptr;
+    float*   runtime_min_p_buf_ = nullptr;
     float    runtime_max_top_p_;
     float*   initial_top_p_buf_   = nullptr;
     float*   top_p_decay_buf_     = nullptr;

@@ -116,6 +116,8 @@ void TopKSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
         reinterpret_cast<uint*>(allocator_->reMalloc(runtime_top_k_buf_, sizeof(uint) * batch_size, false));
     runtime_top_p_buf_ =
         reinterpret_cast<float*>(allocator_->reMalloc(runtime_top_p_buf_, sizeof(float) * batch_size, false));
+    runtime_min_p_buf_ =
+        reinterpret_cast<float*>(allocator_->reMalloc(runtime_min_p_buf_, sizeof(float) * batch_size, false));
     is_allocate_buffer_ = true;
 }
 
@@ -127,6 +129,7 @@ void TopKSamplingLayer<T>::freeBuffer()
         allocator_->free((void**)(&sampling_workspace_));
         allocator_->free((void**)(&runtime_top_k_buf_));
         allocator_->free((void**)(&runtime_top_p_buf_));
+        allocator_->free((void**)(&runtime_min_p_buf_));
     }
     BaseSamplingLayer<T>::freeBuffer();
     is_allocate_buffer_ = false;
@@ -152,6 +155,19 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     const Tensor runtime_top_p = runtime_args->isExist("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
     const size_t runtime_top_k_size = runtime_top_k.size();
     const size_t runtime_top_p_size = runtime_top_p.size();
+
+    const Tensor runtime_min_p = runtime_args->isExist("runtime_min_p") ? runtime_args->at("runtime_min_p") : Tensor();
+    const size_t runtime_min_p_size = runtime_min_p.size();
+    if (batch_size > runtime_min_p_.size()) {
+        runtime_min_p_.resize(batch_size);
+    }
+    if (runtime_min_p_size > 0) {
+        // we always pass an array of runtime_min_p
+        std::copy_n(runtime_min_p.getPtr<float>(), batch_size, runtime_min_p_.data());
+    }
+    else {
+        std::fill_n(runtime_min_p_.data(), batch_size, 0.0f);
+    }
 
     uint  top_k = runtime_top_k.max<uint>();
     float top_p = runtime_top_p_size == 0 ? 0.0f : runtime_top_p.getVal<float>();
@@ -183,6 +199,7 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     cudaAutoCpy(skip_decode_, skip_decode_buf_, batch_size, stream_);
     uint* runtime_top_ks = new uint[batch_size];
     cudaAutoCpy(runtime_top_ks, runtime_top_k_buf_, batch_size, stream_);
+    cudaAutoCpy(runtime_min_p_buf_, runtime_min_p_.data(), batch_size, stream_);
     cudaStreamSynchronize(stream_);
     runtime_max_top_k_ = static_cast<int>(*std::max_element(runtime_top_ks, runtime_top_ks + batch_size));
     delete[] runtime_top_ks;
@@ -273,6 +290,7 @@ void TopKSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
         (int*)(runtime_top_k_buf_ + ite * local_batch_size),
         1.0f,  // useless because runtime_top_p_buf_ is never nullptr. Keep for legacy.
         runtime_top_p_buf_ + ite * local_batch_size,
+        runtime_min_p_buf_ + ite * local_batch_size,
         vocab_size_padded_,
         input_tensors->at("end_id").getPtr<int>(),
         stream_,

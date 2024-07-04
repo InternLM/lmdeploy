@@ -32,9 +32,12 @@ private:
     void allocateBuffer() override;
     void allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p) override;
 
+    std::vector<float> runtime_min_p_;
+
     uint   runtime_max_top_k_ = 1;
     uint*  runtime_top_k_buf_ = nullptr;
     float* runtime_top_p_buf_ = nullptr;
+    float* runtime_min_p_buf_ = nullptr;
     using BaseSamplingLayer<T>::vocab_size_;
     using BaseSamplingLayer<T>::vocab_size_padded_;
 
