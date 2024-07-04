@@ -1,11 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import warnings
-from typing import Dict, List
+from typing import List
 
 import torch
 from PIL.Image import Image
-from transformers import AutoConfig, AutoProcessor
+from transformers import AutoProcessor
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
@@ -16,18 +16,6 @@ class LlavaNextVisionModel(VisonModel):
     """Llava hf vision model."""
 
     _arch = 'LlavaNextForConditionalGeneration'
-
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
-                 **kwargs):
-        super().__init__(model_path=model_path,
-                         with_llm=with_llm,
-                         max_memory=max_memory)
-        self.hf_config = AutoConfig.from_pretrained(model_path,
-                                                    trust_remote_code=True)
-        self.build_model()
 
     def build_model(self):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch

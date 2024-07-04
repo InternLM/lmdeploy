@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 from contextlib import contextmanager
-from typing import Dict
 
 import torch.nn as nn
 
@@ -86,22 +85,12 @@ def init_yi_model():
 class YiVisionModel(LlavaVisionModel):
     """Yi visual model."""
 
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
-                 **kwargs):
-        super().__init__(model_path=model_path,
-                         with_llm=with_llm,
-                         max_memory=max_memory,
-                         **kwargs)
-
     @classmethod
     def match(cls, config: dict):
         """check whether the config match the model."""
-        arch = config['architectures'][0]
+        arch = config.architectures[0]
         if arch == 'LlavaLlamaForCausalLM':
-            projector_type = config.get('mm_projector_type', 'linear')
+            projector_type = getattr(config, 'mm_projector_type', 'linear')
             if '_Norm' in projector_type:
                 return True
         return False

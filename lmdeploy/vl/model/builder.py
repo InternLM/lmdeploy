@@ -42,22 +42,21 @@ def load_vl_model(model_path: str,
         tp = getattr(backend_config, 'tp', 1)
         max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)}
 
-    _, config = get_model_arch(model_path)
-    config = config.to_dict()
+    _, hf_config = get_model_arch(model_path)
     kwargs = dict(model_path=model_path,
                   with_llm=with_llm,
                   max_memory=max_memory,
-                  config=config)
+                  hf_config=hf_config)
     for name, module in VISION_MODELS.module_dict.items():
         try:
-            if module.match(config):
+            if module.match(hf_config):
                 logger.info(f'matching vision model: {name}')
                 return module(**kwargs)
         except Exception:
             logger.error(f'matching vision model: {name} failed')
             raise
 
-    raise ValueError(f'unsupported vl model with config {config}')
+    raise ValueError(f'unsupported vl model with config {hf_config}')
 
 
 def vl_model_with_tokenizer(model_path: str, with_llm: bool = True):

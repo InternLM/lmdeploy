@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import warnings
-from typing import Dict, List
+from typing import List
 
 import torch
 from PIL.Image import Image
@@ -18,16 +18,6 @@ class MiniCPMVModel(VisonModel):
     """MiniCPMV vision model."""
 
     _arch = 'MiniCPMV'
-
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
-                 **kwargs):
-        super().__init__(model_path=model_path,
-                         with_llm=with_llm,
-                         max_memory=max_memory)
-        self.build_model()
 
     def build_model(self):
         """build model & load weights."""

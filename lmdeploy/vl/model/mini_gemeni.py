@@ -3,7 +3,7 @@
 import os.path as osp
 import warnings
 from contextlib import contextmanager
-from typing import Dict, List
+from typing import List
 
 import torch
 from PIL.Image import Image
@@ -169,18 +169,8 @@ class MiniGeminiVisionModel(VisonModel):
 
     _arch = ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']
 
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
-                 **kwargs):
-        super().__init__(model_path=model_path,
-                         with_llm=with_llm,
-                         max_memory=max_memory)
-        check_mini_gemini_install()
-        self.build_model()
-
     def build_model(self):
+        check_mini_gemini_install()
         # empty init
         from accelerate import init_empty_weights
         from mgm.mm_utils import process_images

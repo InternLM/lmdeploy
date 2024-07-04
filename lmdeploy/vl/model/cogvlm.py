@@ -1,10 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import warnings
-from typing import Dict, List
+from typing import List
 
 import torch
 from PIL.Image import Image
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
@@ -16,18 +16,8 @@ class CogVLMVisionModel(VisonModel):
 
     _arch = 'CogVLMForCausalLM'
 
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
-                 **kwargs):
-        super().__init__(model_path=model_path,
-                         with_llm=with_llm,
-                         max_memory=max_memory)
+    def build_model(self):
         from torchvision import transforms
-        self.hf_config = AutoConfig.from_pretrained(model_path,
-                                                    trust_remote_code=True)
-        self.build_model()
         self.image_transform = transforms.Compose([
             transforms.Resize(
                 (self.hf_config.vision_config['image_size'], ) * 2,
@@ -37,7 +27,6 @@ class CogVLMVisionModel(VisonModel):
                                  (0.26862954, 0.26130258, 0.27577711)),
         ])
 
-    def build_model(self):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         with init_empty_weights(), warnings.catch_warnings():

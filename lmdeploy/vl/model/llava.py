@@ -3,7 +3,7 @@
 # https://github.com/haotian-liu/LLaVA.git
 import warnings
 from contextlib import contextmanager
-from typing import Dict, List, Union
+from typing import List, Union
 
 import torch
 from PIL.Image import Image
@@ -57,31 +57,15 @@ def init_llava_vision_tower(config):
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
-                 config: Dict = None,
-                 **kwargs):
-        super().__init__(model_path=model_path,
-                         with_llm=with_llm,
-                         max_memory=max_memory)
-        if config is None:
-            from lmdeploy.archs import get_model_arch
-            _, config = get_model_arch(model_path)
-            config = config.to_dict()
-        self.arch = config['architectures'][0]
-        self.build_model()
-
     @classmethod
     def match(cls, config: dict):
         """check whether the config match the model."""
-        arch = config['architectures'][0]
+        arch = config.architectures[0]
         if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
             # internvl-llava has vision_tower of OpenGVLab/xxx
-            mm_vision_tower = config.get('mm_vision_tower', '')
+            mm_vision_tower = getattr(config, 'mm_vision_tower', '')
             # yi-vl has projector type of xxx_Norm
-            projector_type = config.get('mm_projector_type', 'linear')
+            projector_type = getattr(config, 'mm_projector_type', 'linear')
             if '_Norm' in projector_type:
                 return False
             if 'OpenGVLab' in mm_vision_tower:
@@ -94,6 +78,7 @@ class LlavaVisionModel(VisonModel):
         # check llava install
         check_llava_install()
 
+        self.arch = self.hf_config.architectures[0]
         model = None
         if self.arch == 'LlavaLlamaForCausalLM':
             from llava.model.language_model.llava_llama import LlavaConfig

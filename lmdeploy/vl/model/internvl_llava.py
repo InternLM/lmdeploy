@@ -2,11 +2,11 @@
 
 import warnings
 from contextlib import contextmanager
-from typing import Dict, List, Union
+from typing import List, Union
 
 import torch
 from PIL.Image import Image
-from transformers import AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
@@ -68,31 +68,20 @@ def init_empty_vit():
 class InternVLLlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
-                 **kwargs):
-        super().__init__(model_path=model_path,
-                         with_llm=with_llm,
-                         max_memory=max_memory)
-        # check llava install
-        check_llava_install()
-        self.build_model()
-
     @classmethod
-    def match(cls, config: dict):
+    def match(cls, config: AutoConfig):
         """check whether the config match the model."""
-        arch = config['architectures'][0]
+        arch = config.architectures[0]
         if arch == 'LlavaLlamaForCausalLM':
-            mm_vision_tower = config.get('mm_vision_tower', '')
+            mm_vision_tower = getattr(config, 'mm_vision_tower', '')
             if 'OpenGVLab' in mm_vision_tower:
                 return True
         return False
 
     def build_model(self):
         """build model & load weights."""
-
+        # check llava install
+        check_llava_install()
         # currently, only support llava llama
         from llava.model.language_model.llava_llama import (  # noqa
             LlavaConfig, LlavaLlamaForCausalLM)

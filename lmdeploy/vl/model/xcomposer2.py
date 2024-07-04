@@ -2,7 +2,7 @@
 
 import warnings
 from contextlib import contextmanager
-from typing import Dict, List
+from typing import List
 
 import torch
 from PIL.Image import Image
@@ -37,23 +37,13 @@ def init_empty_vit():
 class Xcomposer2VisionModel(VisonModel):
     """InternLM-Xcomposer2 vision model."""
 
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
-                 **kwargs):
-        super().__init__(model_path=model_path,
-                         with_llm=with_llm,
-                         max_memory=max_memory)
-        self.build_model()
-
     @classmethod
     def match(cls, config: dict):
         """check whether the config match the model."""
         target = 'InternLMXComposer2ForCausalLM'
-        if config['architectures'][0] == target:
+        if config.architectures[0] == target:
             return True
-        for _, v in config.get('auto_map', {}).items():
+        for _, v in getattr(config, 'auto_map', {}).items():
             if target in v:
                 return True
         return False
