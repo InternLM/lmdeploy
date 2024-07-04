@@ -4,7 +4,7 @@ from typing import List
 
 import torch
 from PIL.Image import Image
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
@@ -19,8 +19,7 @@ class QwenVisionModel(VisonModel):
     def build_model(self):
         from accelerate import init_empty_weights
         with init_empty_weights():
-            config = AutoConfig.from_pretrained(self.model_path,
-                                                trust_remote_code=True)
+            config = self.hf_config
             config.quantization_config = {}  # disable vision part quantization
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)

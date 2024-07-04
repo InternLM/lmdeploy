@@ -38,7 +38,7 @@ class Xcomposer2VisionModel(VisonModel):
     """InternLM-Xcomposer2 vision model."""
 
     @classmethod
-    def match(cls, config: dict):
+    def match(cls, config: AutoConfig):
         """check whether the config match the model."""
         target = 'InternLMXComposer2ForCausalLM'
         if config.architectures[0] == target:
@@ -52,8 +52,7 @@ class Xcomposer2VisionModel(VisonModel):
         from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings(), init_empty_vit():
             warnings.simplefilter('ignore')
-            config = AutoConfig.from_pretrained(self.model_path,
-                                                trust_remote_code=True)
+            config = self.hf_config
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)
             model.vit.load_model()

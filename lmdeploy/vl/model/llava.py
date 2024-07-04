@@ -7,7 +7,7 @@ from typing import List, Union
 
 import torch
 from PIL.Image import Image
-from transformers import AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
@@ -58,7 +58,7 @@ class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
     @classmethod
-    def match(cls, config: dict):
+    def match(cls, config: AutoConfig):
         """check whether the config match the model."""
         arch = config.architectures[0]
         if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:

@@ -4,7 +4,7 @@ from typing import List
 
 import torch
 from PIL.Image import Image
-from transformers import AutoConfig, AutoModel, CLIPImageProcessor
+from transformers import AutoModel, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
@@ -84,8 +84,7 @@ class InternVLVisionModel(VisonModel):
         """Load model."""
         from accelerate import init_empty_weights
         with init_empty_weights():
-            config = AutoConfig.from_pretrained(self.model_path,
-                                                trust_remote_code=True)
+            config = self.hf_config
             # transformers below 4.37.0 may raise error about flash_attn
             config.llm_config.attn_implementation = 'eager'
             model = AutoModel.from_config(config, trust_remote_code=True)

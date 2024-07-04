@@ -3,6 +3,7 @@ import os
 from contextlib import contextmanager
 
 import torch.nn as nn
+from transformers import AutoConfig
 
 from lmdeploy.vl.model.base import VISION_MODELS
 from lmdeploy.vl.model.llava import LlavaVisionModel, check_llava_install
@@ -86,7 +87,7 @@ class YiVisionModel(LlavaVisionModel):
     """Yi visual model."""
 
     @classmethod
-    def match(cls, config: dict):
+    def match(cls, config: AutoConfig):
         """check whether the config match the model."""
         arch = config.architectures[0]
         if arch == 'LlavaLlamaForCausalLM':
