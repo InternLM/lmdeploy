@@ -34,7 +34,6 @@ private:
     std::vector<uint>  h_runtime_top_k_;
     std::vector<float> h_runtime_top_p_;
 
-    uint*  runtime_top_k_buf_ = nullptr;
     float* runtime_top_p_buf_ = nullptr;
     float  runtime_max_top_p_;
 

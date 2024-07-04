@@ -90,8 +90,6 @@ void TopPSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
                           cuda_device_prop_,
                           skip_decode_buf_);
     sampling_workspace_ = allocator_->reMalloc(sampling_workspace_, sampling_workspace_size_, true);
-    runtime_top_k_buf_ =
-        reinterpret_cast<uint*>(allocator_->reMalloc(runtime_top_k_buf_, sizeof(uint) * batch_size, false));
     runtime_top_p_buf_ =
         reinterpret_cast<float*>(allocator_->reMalloc(runtime_top_p_buf_, sizeof(float) * batch_size, false));
     topp_id_vals_buf_ = reinterpret_cast<int*>(
@@ -112,7 +110,6 @@ void TopPSamplingLayer<T>::freeBuffer()
         allocator_->free((void**)(&topp_id_vals_buf_));
         allocator_->free((void**)(&topp_offset_buf_));
         allocator_->free((void**)(&begin_topp_offset_buf_));
-        allocator_->free((void**)(&runtime_top_k_buf_));
         allocator_->free((void**)(&runtime_top_p_buf_));
     }
     BaseSamplingLayer<T>::freeBuffer();
@@ -178,7 +175,6 @@ void TopPSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
                           skip_decode_);
 
     runtime_max_top_p_ = *std::max_element(h_runtime_top_p_.begin(), h_runtime_top_p_.begin() + batch_size);
-    cudaAutoCpy(runtime_top_k_buf_, h_runtime_top_k_.data(), batch_size, stream_);
     cudaAutoCpy(runtime_top_p_buf_, h_runtime_top_p_.data(), batch_size, stream_);
     cudaAutoCpy(skip_decode_buf_, skip_decode_, batch_size, stream_);
     sync_check_cuda_error();
