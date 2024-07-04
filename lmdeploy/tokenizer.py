@@ -196,6 +196,7 @@ class HuggingFaceTokenizer:
     """
 
     def __init__(self, model_dir: str):
+        self._check_transformers_version(model_dir)
         from transformers import AutoTokenizer
         self.logger = get_logger('lmdeploy')
         self.model = AutoTokenizer.from_pretrained(model_dir,
@@ -219,6 +220,42 @@ class HuggingFaceTokenizer:
         self._indexes_tokens_deque = deque(maxlen=10)
         self.max_indexes_num = 5
         self.token2id = {}
+
+    def _check_transformers_version(self, model_dir: str):
+        import transformers
+        from packaging import version
+        from transformers import AutoConfig
+
+        from lmdeploy.utils import get_hf_config_content
+
+        logger = get_logger('lmdeploy')
+
+        current_transformers_version = version.parse(transformers.__version__)
+        cfg = get_hf_config_content(model_dir, trust_remote_code=True)
+        required_transformers_version = version.parse(
+            cfg['transformers_version'])
+        if current_transformers_version < required_transformers_version:
+            logger.warning(
+                f'The current version of `transformers` is {current_transformers_version}, '  # noqa: E501
+                f'which is lower than the required version {required_transformers_version}. '  # noqa: E501
+                'Please upgrade to the required version.')
+        try:
+            AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
+        except Exception as e:
+            message = (
+                f'Load model config with transformers=={current_transformers_version}'  # noqa: E501
+                ' failed. '
+                f'Please upgrade to transformers=={required_transformers_version}.'  # noqa: E501
+            )
+            red_color = '\033[31m'
+            reset_color = '\033[0m'
+            logger.debug('Exception', exc_info=1)
+            logger.error(f'{type(e).__name__}: {e}')
+            logger.error(f'{red_color}'
+                         '`transformers` test failed.\n'
+                         f'{message}'
+                         f'{reset_color}')
+            exit(1)
 
     @property
     def vocab_size(self):
