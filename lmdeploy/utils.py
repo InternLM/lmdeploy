@@ -159,17 +159,20 @@ def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
 
 
 # TODO remove stop_word_offsets stuff and make it clean
-def _stop_words(stop_words: List[str], tokenizer: object):
+def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
     """return list of stop-words to numpy.ndarray."""
     import numpy as np
     if stop_words is None:
         return None
     assert isinstance(stop_words, List) and \
-        all(isinstance(elem, str) for elem in stop_words), \
+        all(isinstance(elem, (str, int)) for elem in stop_words), \
         f'stop_words must be a list but got {type(stop_words)}'
     stop_indexes = []
     for stop_word in stop_words:
-        stop_indexes += tokenizer.indexes_containing_token(stop_word)
+        if isinstance(stop_word, str):
+            stop_indexes += tokenizer.indexes_containing_token(stop_word)
+        elif isinstance(stop_word, int):
+            stop_indexes.append(stop_word)
     assert isinstance(stop_indexes, List) and all(
         isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
     # each id in stop_indexes represents a stop word
@@ -261,7 +264,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
     return __inner
 
 
-# copy from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
+# modified from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
 def _get_and_verify_max_len(
     hf_tm_config: Union[PretrainedConfig,
                         TypeVar('TurbomindModelConfig')],
@@ -272,6 +275,11 @@ def _get_and_verify_max_len(
         # `hf_tm_config` is TurbomindModelConfig
         session_len = getattr(hf_tm_config, 'session_len')
         return max_model_len if max_model_len else session_len
+
+    # vl configs hide session-len inside llm configs
+    llm_keys = ['language_config', 'llm_config']
+    for key in llm_keys:
+        hf_tm_config = getattr(hf_tm_config, key, hf_tm_config)
 
     logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')

@@ -64,15 +64,14 @@ class SamplingParam:
         repetition_penalty = gen_config.repetition_penalty
         max_new_tokens = gen_config.max_new_tokens
 
-        if top_k <= 0:
-            logger.warning('`top_k` has to be a strictly'
-                           f' positive value, but is {top_k}')
-            top_k = 1
         if top_p < 0 or top_p > 1.0:
             logger.warning('`top_p` has to be a float > 0 and < 1'
                            f' but is {top_p}')
             top_p = 1.0
-        if temperature <= 0:
+        if temperature == 0:
+            logger.warning('`temperature` is 0, set to 1e-6')
+            temperature = 1e-6
+        if temperature < 0:
             logger.warning('`temperature` has to be a strictly'
                            f' positive value, but is {temperature}')
             temperature = 1.0
@@ -268,8 +267,8 @@ class HistoryEmbeddings:
             if history_image_num < num_all_images:
                 emb = self._embeddings[history_image_num]
                 # for case step in middle of an image
-                if emb.start - 1 <= step:
-                    real_step = emb.start - 1
+                if emb.start < step:
+                    real_step = emb.start
         num_images = num_all_images - history_image_num
         return real_step, history_image_num, num_images
 

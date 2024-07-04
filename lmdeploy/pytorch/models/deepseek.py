@@ -155,7 +155,55 @@ class PatchedDeepseekAttention(nn.Module):
         )
 
 
+def _div_up(a, b):
+    """div up."""
+    return (a + b - 1) // b
+
+
 class PatchedDeepseekMoE(nn.Module):
+
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+
+        def __load_mlp(exp_id, exp):
+            """load mlp."""
+            with loader.prefix_context(f'experts.{exp_id}'):
+                loader.load_model_weights(
+                    exp,
+                    rank=rank,
+                    world_size=world_size,
+                    device=device,
+                    load_only=True,
+                )
+
+        def __drop_mlp(exp_id, exp):
+            """drop mlp."""
+            for name, _ in exp.named_parameters(recurse=True):
+                loader.pop(f'experts.{exp_id}.{name}')
+
+        num_experts = len(self.experts)
+        exp_per_rank = _div_up(num_experts, world_size)
+        first_exp = rank * exp_per_rank
+        last_exp = min(num_experts, first_exp + exp_per_rank)
+        for exp_id, exp in enumerate(self.experts):
+            if first_exp <= exp_id < last_exp:
+                __load_mlp(exp_id, exp)
+            else:
+                __drop_mlp(exp_id, exp)
+        self.experts = self.experts[first_exp:last_exp]
+        with loader.prefix_context('gate'):
+            loader.load_model_weights(self.gate,
+                                      rank=rank,
+                                      world_size=world_size,
+                                      device=device)
+
+        if self.config.n_shared_experts is not None:
+            with loader.prefix_context('shared_experts'):
+                loader.load_model_weights(self.shared_experts,
+                                          rank=rank,
+                                          world_size=world_size,
+                                          device=device)
 
     def _update_model_fn(self):
         """update model."""
@@ -200,6 +248,15 @@ class PatchedDeepseekMoE(nn.Module):
         self.register_buffer('down_weights', down_weights)
 
     def forward(self, hidden_states):
+        """forward."""
+        world_size = 1
+        rank = 0
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+            rank = dist.get_rank()
+        exp_per_rank = self.gate_up_weights.size(0)
+        expert_offset = rank * exp_per_rank
+
         identity = hidden_states
         orig_shape = hidden_states.shape
         topk_idx, topk_weight, _ = self.gate(hidden_states)
@@ -211,6 +268,8 @@ class PatchedDeepseekMoE(nn.Module):
                       topk_weight,
                       flat_topk_idx,
                       topk=self.num_experts_per_tok,
+                      expert_offset=expert_offset,
+                      num_experts=world_size * exp_per_rank,
                       renormalize=False).view(*orig_shape)
         if self.config.n_shared_experts is not None:
             y = y + self.shared_experts.forward(identity)

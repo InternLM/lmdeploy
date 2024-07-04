@@ -49,7 +49,7 @@ class MiniCPMVModel(VisonModel):
         model.resampler.pos_embed = model.resampler.pos_embed.to(
             device=model.resampler.proj.device)
         self.config = config
-        self.model = model
+        self.model = model.eval()
 
         if hasattr(config, 'vision_config'):
             self._forward_func = self._forward_v2_5

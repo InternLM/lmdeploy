@@ -7,7 +7,7 @@ pip install lmdeploy[serve]
 lmdeploy serve gradio {model_path}
 ```
 
-把上面命令中的 `{model_path}` 换成 huggingface hub 上的模型 id，比如 internlm/internlm2-chat-7b，或者换成模型的本地路径就可以了。
+把上面命令中的 `{model_path}` 换成 huggingface hub 上的模型 id，比如 internlm/internlm2_5-7b-chat，或者换成模型的本地路径就可以了。
 
 关于命令的详细参数，请使用 `lmdeploy serve gradio --help` 查阅。
 
@@ -22,14 +22,14 @@ lmdeploy serve gradio {model_path}
 
 ### 第二步：编写 demo 入口代码 app.py
 
-以 `internlm/internlm2-chat-7b` 模型为例，将 space 空间中的`app.py`内容填写为：
+以 `internlm/internlm2_5-7b-chat` 模型为例，将 space 空间中的`app.py`内容填写为：
 
 ```python
 from lmdeploy.serve.gradio.turbomind_coupled import run_local
 from lmdeploy.messages import TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(max_batch_size=8)
-model_path = 'internlm/internlm2-chat-7b'
+model_path = 'internlm/internlm2_5-7b-chat'
 run_local(model_path, backend_config=backend_config, server_name="huggingface-space")
 ```
 

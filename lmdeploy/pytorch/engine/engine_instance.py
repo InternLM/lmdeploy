@@ -93,8 +93,21 @@ class EngineInstance:
     """
 
     def __init__(self, engine: Engine):
+
+        def __get_max_input_len(engine):
+            """get max input len."""
+            cache_config = engine.cache_config
+            max_input_len = (cache_config.block_size *
+                             cache_config.num_gpu_blocks)
+            window_size = cache_config.window_size
+            if window_size > 0 and window_size <= max_input_len:
+                max_input_len = (1 << 63) - 1
+            return max_input_len
+
         self.engine = engine
         self.req_sender = engine.req_manager.build_sender()
+
+        self.max_input_len = __get_max_input_len(self.engine)
 
     def __del__(self):
         """Destructor."""
@@ -138,6 +151,9 @@ class EngineInstance:
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
+        if len(input_ids) > self.max_input_len:
+            yield EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
+            return
         gen_config = gen_config or EngineGenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         await async_try_add_session(self.req_sender, session_id)
@@ -229,6 +245,9 @@ class EngineInstance:
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
+        if len(input_ids) > self.max_input_len:
+            yield EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
+            return
 
         def __call_async():
             """call async."""
@@ -460,6 +479,8 @@ class EngineInstance:
 
     def decode(self,
                input_ids,
+               input_embeddings: List[InputEmbeddingType] = None,
+               input_embedding_ranges: List[InputEmbeddingRangeType] = None,
                steps: List[int] = None,
                sequence_start: bool = True,
                sequence_end: bool = True,
@@ -469,6 +490,10 @@ class EngineInstance:
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
             steps (List[int]): the offset of the k/v cache
+            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
+                embeddings features
+            input_embedding_ranges: (List[List[Tuple[int, int]]]):
+                the begin/end offsets of input_embeddings to input_ids
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             adapter_names (List[str]): The name of the adapters.
@@ -477,15 +502,34 @@ class EngineInstance:
         logger.debug('Decoding logits.')
         batch_size = len(input_ids)
 
-        def __add_messages(session_ids, input_ids, adapter_names):
+        def __add_messages(session_ids, input_ids, adapter_names,
+                           input_embeddings, input_embedding_ranges):
             add_msgs = []
             sampling_param = SamplingParam(max_new_tokens=0)
-            for session_id, token_id, adapter_name in zip(
-                    session_ids, input_ids, adapter_names):
+            batch_size = len(input_ids)
+            if input_embeddings is None:
+                input_embeddings = [None] * batch_size
+                input_embedding_ranges = [None] * batch_size
+            for (session_id, token_id, adapter_name, input_emb,
+                 input_ranges) in zip(session_ids, input_ids, adapter_names,
+                                      input_embeddings,
+                                      input_embedding_ranges):
+                if len(token_id) > self.max_input_len:
+                    raise RuntimeError(
+                        f'Expect input length<={self.max_input_len} '
+                        f'but get {len(token_id)}')
+                cur_input_embeddings: List[InputEmbeddings] = None
+                if input_emb is not None and len(input_emb) > 0:
+                    assert len(input_emb) == len(input_ranges)
+                    cur_input_embeddings = [
+                        InputEmbeddings(emb, rg[0], rg[1])
+                        for emb, rg in zip(input_emb, input_ranges)
+                    ]
                 msg = dict(token_ids=token_id,
                            session_id=session_id,
                            sampling_param=sampling_param,
                            adapter_name=adapter_name,
+                           input_embeddings=cur_input_embeddings,
                            return_logits=True)
                 add_msgs.append(msg)
             req_types = [RequestType.ADD_MESSAGE] * batch_size
@@ -496,9 +540,17 @@ class EngineInstance:
         if steps is not None:
             assert batch_size == len(steps)
 
-        if adapter_names is None:
+        if adapter_names is not None:
+            assert len(adapter_names) == batch_size
+        else:
             adapter_names = [None] * batch_size
-        assert batch_size == len(adapter_names)
+
+        if input_embeddings is not None:
+            assert len(input_embeddings) == batch_size
+            assert len(input_embedding_ranges) == batch_size
+        else:
+            input_embeddings = [None] * batch_size
+            input_embedding_ranges = [None] * batch_size
 
         session_ids = tuple(range(batch_size))
         if sequence_start:
@@ -507,7 +559,8 @@ class EngineInstance:
                                      dict(session_id=sid))
                 self._try_add_session(sid)
 
-        req_ids = __add_messages(session_ids, input_ids, adapter_names)
+        req_ids = __add_messages(session_ids, input_ids, adapter_names,
+                                 input_embeddings, input_embedding_ranges)
         req_idx_map = dict(zip(req_ids, range(len(req_ids))))
 
         finish_count = batch_size

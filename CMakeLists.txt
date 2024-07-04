@@ -341,13 +341,13 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:mpi_utils>
   $<TARGET_OBJECTS:nccl_utils>
   $<TARGET_OBJECTS:nvtx_utils>
+  $<TARGET_OBJECTS:anomaly_handler>
   $<TARGET_OBJECTS:sampling_penalty_kernels>
   $<TARGET_OBJECTS:sampling_topk_kernels>
   $<TARGET_OBJECTS:sampling_topp_kernels>
   $<TARGET_OBJECTS:stop_criteria>
   $<TARGET_OBJECTS:tensor>
   $<TARGET_OBJECTS:unfused_attention_kernels>
-  $<TARGET_OBJECTS:word_list>
 )
 
 if (BUILD_MULTI_GPU)

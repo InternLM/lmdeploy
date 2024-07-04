@@ -88,6 +88,25 @@ class ArgumentHelper:
             'meaning `meta_llama`, `awq` meaning the quantized model by awq')
 
     @staticmethod
+    def revision(parser, default: str = None):
+        return parser.add_argument(
+            '--revision',
+            type=str,
+            default=default,
+            help='The specific model version to use. '
+            'It can be a branch name, a tag name, or a commit id. '
+            'If unspecified, will use the default version.')
+
+    @staticmethod
+    def download_dir(parser, default: str = None):
+        return parser.add_argument(
+            '--download-dir',
+            type=str,
+            default=default,
+            help='Directory to download and load the weights, '
+            'default to the default cache directory of huggingface.')
+
+    @staticmethod
     def tp(parser):
         """Add argument tp to parser."""
 
@@ -360,7 +379,8 @@ class ArgumentHelper:
             '--cache-max-entry-count',
             type=float,
             default=0.8,
-            help='The percentage of gpu memory occupied by the k/v cache')
+            help='The percentage of free gpu memory occupied by the k/v '
+            'cache, excluding weights ')
 
     @staticmethod
     def adapters(parser):

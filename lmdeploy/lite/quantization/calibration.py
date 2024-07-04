@@ -171,16 +171,25 @@ class CalibrationContext():
                     version = digit_version(transformers.__version__)
                     use_new_cache = type(mod).__name__ in ('LlamaDecoderLayer',
                                                            'Qwen2DecoderLayer')
+                    if type(mod).__name__ == 'InternLM2DecoderLayer':
+                        use_new_cache = hasattr(mod.attention, 'layer_idx')
                     if version > digit_version('4.36.0') and use_new_cache:
                         from transformers.cache_utils import DynamicCache
                         batch_kwargs[i]['past_key_value'] = DynamicCache()
 
-                        ori_idx = mod.self_attn.layer_idx
-                        mod.self_attn.layer_idx = 0
+                        if hasattr(mod, 'self_attn'):
+                            self_attn = mod.self_attn
+                        elif hasattr(mod, 'attention'):
+                            self_attn = mod.attention
+                        else:
+                            raise RuntimeError('Attention layer not found')
+
+                        ori_idx = self_attn.layer_idx
+                        self_attn.layer_idx = 0
 
                         out = self._ori_forwards[mod](*batch_args[i],
                                                       **batch_kwargs[i])
-                        mod.self_attn.layer_idx = ori_idx
+                        self_attn.layer_idx = ori_idx
 
                         out = list(out)
                         cache = out.pop(-1)
@@ -396,6 +405,11 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
         if module2inspect is None:
             assert len(layers) == 1
             module2inspect = layers[0]
+        # internlm-xcomposer2-vl applies plora, which requires im_mask arg
+        if module2inspect._get_name() == 'InternLM2MLP':
+            from inspect import signature
+            if 'im_mask' in signature(module2inspect.forward).parameters:
+                kwargs['im_mask'] = None
 
         best_ratio = _search_module_scale(module2inspect, layers, inp.value,
                                           kwargs)

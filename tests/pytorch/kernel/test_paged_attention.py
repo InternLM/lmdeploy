@@ -110,8 +110,8 @@ class TestPagedAttention:
         yield torch.float16
 
     @pytest.fixture
-    def feat_dim(self):
-        yield 16
+    def feat_dim(self, request):
+        yield request.param
 
     @pytest.fixture
     def feat_dim_v(self, request):
@@ -227,6 +227,7 @@ class TestPagedAttention:
     def conti_gt(self, gt, seq_lens):
         yield _conti_input(gt, seq_lens)
 
+    @pytest.mark.parametrize('feat_dim', [48, 32], indirect=True)
     @pytest.mark.parametrize('feat_dim_v', [32], indirect=True)
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(8, 2), (2, 2)],
                              indirect=True)
@@ -270,6 +271,7 @@ class TestPagedAttention:
                                       kv_lens,
                                       window_size=(win_size, win_size))
 
+    @pytest.mark.parametrize('feat_dim', [16], indirect=True)
     @pytest.mark.parametrize('feat_dim_v', [16], indirect=True)
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(4, 2)],
                              indirect=True)

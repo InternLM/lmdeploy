@@ -179,11 +179,15 @@ struct RotaryEmbedding {
 
     Array<float, N> cs_;
 
+    bool is_valid_;
+
     __device__ RotaryEmbedding(float base, int dims, int timestep, int2 offset)
     {
+        const int idx = offset.x;
+        is_valid_     = idx < dims;
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
-            const float2 tmp = get_coefficient(offset.x + i, dims, base, timestep);
+            const float2 tmp = get_coefficient(idx + i, dims, base, timestep);
             cs_[i]           = tmp.x;
             cs_[i + 1]       = tmp.y;
         }
@@ -201,12 +205,15 @@ struct RotaryEmbedding {
     template<typename T>
     __device__ void apply(Array<T, N>& x)
     {
+
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
             float tmp0 = cs_[i] * (float)x[i] - cs_[i + 1] * (float)x[i + 1];
             float tmp1 = cs_[i] * (float)x[i + 1] + cs_[i + 1] * (float)x[i];
-            x[i]       = (T)tmp0;
-            x[i + 1]   = (T)tmp1;
+            if (is_valid_) {
+                x[i]     = (T)tmp0;
+                x[i + 1] = (T)tmp1;
+            }
         }
     }
 };
@@ -233,10 +240,12 @@ struct FastRoPE {
     static_assert(N % 2 == 0);
 
     Array<float, N / 2> inv_freq_;
+    bool                is_valid_;
 
     __device__ FastRoPE(int idx, D dims, float base, float ti_scale, std::integral_constant<int, N>)
     {
-        // ! Check compiler CSE
+        is_valid_ = idx < dims;
+        /// TODO: Take this away from device code
         const float scale_factor = -log2f(base) / dims;
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
@@ -253,8 +262,10 @@ struct FastRoPE {
             sincosf(timestep * inv_freq_[i / 2], &s, &c);
             float tmp0 = c * (float)x[i] - s * (float)x[i + 1];
             float tmp1 = c * (float)x[i + 1] + s * (float)x[i];
-            x[i]       = (T)tmp0;
-            x[i + 1]   = (T)tmp1;
+            if (is_valid_) {
+                x[i]     = (T)tmp0;
+                x[i + 1] = (T)tmp1;
+            }
         }
     }
 };

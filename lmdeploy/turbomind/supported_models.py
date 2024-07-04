@@ -13,8 +13,6 @@ SUPPORTED_ARCHS = dict(
     InternLMForCausalLM='llama',
     # internlm2
     InternLM2ForCausalLM='internlm2',
-    # internlm-xcomposer
-    InternLMXComposerForCausalLM='llama',
     # llama, llama2, alpaca, vicuna, codellama, ultracm, yi,
     # deepseek-coder, deepseek-llm
     LlamaForCausalLM='llama',
@@ -37,7 +35,9 @@ SUPPORTED_ARCHS = dict(
     MiniCPMV='minicpmv',
     # mini gemini
     MGMLlamaForCausalLM='llama',
-    MiniGeminiLlamaForCausalLM='llama')
+    MiniGeminiLlamaForCausalLM='llama',
+    # chatglm2/3, glm4
+    ChatGLMModel='glm4')
 
 
 def is_supported(model_path: str):
@@ -84,4 +84,8 @@ def is_supported(model_path: str):
                 # by turbomind yet
                 if hidden_size // num_attn_head != 128:
                     support_by_turbomind = False
+            elif arch == 'ChatGLMModel':
+                # chatglm1/2/3 is not working yet
+                support_by_turbomind = cfg.num_layers == 40
+
     return support_by_turbomind

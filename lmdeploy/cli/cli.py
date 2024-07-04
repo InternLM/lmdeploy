@@ -43,6 +43,8 @@ class CLI(object):
         ArgumentHelper.model_format(parser)
         ArgumentHelper.tp(parser)
         # other args
+        ArgumentHelper.revision(parser)
+        ArgumentHelper.download_dir(parser)
         parser.add_argument('--tokenizer-path',
                             type=str,
                             default=None,
@@ -107,6 +109,9 @@ class CLI(object):
         ArgumentHelper.meta_instruction(parser)
         ArgumentHelper.cap(parser)
         ArgumentHelper.chat_template(parser)
+        # model args
+        ArgumentHelper.revision(parser)
+        ArgumentHelper.download_dir(parser)
         #
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -116,7 +121,6 @@ class CLI(object):
         tp_act = ArgumentHelper.tp(pt_group)
         model_name_act = ArgumentHelper.model_name(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
-        max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
 
@@ -126,7 +130,6 @@ class CLI(object):
         tb_group._group_actions.append(tp_act)
         tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
-        tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(prefix_caching_act)
         ArgumentHelper.model_format(tb_group)
@@ -263,7 +266,10 @@ class CLI(object):
             from lmdeploy.turbomind.chat import main as run_chat
             kwargs = convert_args(args)
             kwargs.pop('chat_template')
-            kwargs['chat_template_cfg'] = chat_template_config
+            kwargs.pop('meta_instruction')
+            kwargs.pop('trust_remote_code')
+            kwargs.pop('backend')
+            kwargs['chat_template_config'] = chat_template_config
             run_chat(**kwargs)
 
     @staticmethod
@@ -272,3 +278,4 @@ class CLI(object):
         CLI.add_parser_convert()
         CLI.add_parser_list()
         CLI.add_parser_checkenv()
+        CLI.add_parser_chat()

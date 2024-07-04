@@ -34,6 +34,8 @@ struct BatchState {
     std::vector<const Sequence*>          sequences;
     std::vector<std::shared_ptr<Request>> requests;
 
+    std::vector<int> errors;
+
     // |<-- existing -->|<-- swap-in -->|
     // |<----------- active ----------->|<-- inactive -->|
     int active_size;

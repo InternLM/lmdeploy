@@ -15,6 +15,7 @@ from ..weight_loader.dist_utils import (colwise_parallelize_linear,
                                         rowwise_parallelize_linear)
 
 TRANSFORMERS_VERSION = version.parse(transformers.__version__)
+VERSION_4_38_0 = version.parse('4.38.0')
 
 
 class LlamaRMSNorm(nn.Module):
@@ -156,7 +157,7 @@ class LlamaAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding."""
-            if TRANSFORMERS_VERSION >= version.parse('4.38.0'):
+            if TRANSFORMERS_VERSION >= VERSION_4_38_0:
                 return __rotary_emb_fn_438(query_states, key_states,
                                            value_states)
             else:
@@ -203,30 +204,6 @@ class LlamaAttention(nn.Module):
 
         return attn_output, None, past_key_value
 
-    def _contiguous_batching_forward_impl(
-        self,
-        hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        attention_mask: Optional[torch.Tensor] = None,
-        world_size: int = 1,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """Rewrite implementation of LlamaAttention.forward.
-
-        Add continuous batching support. Add paged attention support. TP
-        support.
-        """
-        assert not output_attentions
-        return self._contiguous_batching_forward_default_impl(
-            hidden_states,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            attention_mask=attention_mask,
-            world_size=world_size)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -242,7 +219,7 @@ class LlamaAttention(nn.Module):
         world_size = 1
         if dist.is_initialized():
             world_size = dist.get_world_size()
-        return self._contiguous_batching_forward_impl(
+        return self._contiguous_batching_forward_default_impl(
             hidden_states,
             position_ids,
             past_key_value,
