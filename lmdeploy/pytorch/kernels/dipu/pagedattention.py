@@ -108,7 +108,8 @@ def paged_attention_fwd(
     q_seqlens: Tensor,
     kv_seqlens: Tensor,
     max_seqlen: int,
-    context: None,
+    window_size: int = 1,
+    context=None,
 ):
     is_decoding = query_states.shape[-3] == q_seqlens.size(0)
     block_num, block_size, head, dim = key_cache.size()
