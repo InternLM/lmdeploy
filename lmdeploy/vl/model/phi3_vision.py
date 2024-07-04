@@ -122,6 +122,8 @@ def _process_image_embedding(self, pixel_values: torch.Tensor,
 class Phi3VisionModel(VisonModel):
     """Llava hf vision model."""
 
+    _arch = 'Phi3VForCausalLM'
+
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,

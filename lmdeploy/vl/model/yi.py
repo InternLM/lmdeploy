@@ -93,7 +93,8 @@ class YiVisionModel(LlavaVisionModel):
                  **kwargs):
         super().__init__(model_path=model_path,
                          with_llm=with_llm,
-                         max_memory=max_memory)
+                         max_memory=max_memory,
+                         **kwargs)
 
     @classmethod
     def match(cls, config: dict):

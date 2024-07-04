@@ -49,9 +49,13 @@ def load_vl_model(model_path: str,
                   max_memory=max_memory,
                   config=config)
     for name, module in VISION_MODELS.module_dict.items():
-        if module.match(config):
-            logger.info(f'matching vision model: {name}')
-            return module(**kwargs)
+        try:
+            if module.match(config):
+                logger.info(f'matching vision model: {name}')
+                return module(**kwargs)
+        except Exception:
+            logger.error(f'matching vision model: {name} failed')
+            raise
 
     raise ValueError(f'unsupported vl model with config {config}')
 
