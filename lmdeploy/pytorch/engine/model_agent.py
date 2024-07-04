@@ -843,10 +843,10 @@ def _tp_build_model(
             _remove_unused_modules(model, model_config)
             if rank == 0:
                 device_map = _create_device_map(model, world_size)
-            _add_adapters(model, adapters)
-            if rank == 0:
-                # adapter would remove weight of linear.
-                device_map = _create_device_map(model, world_size, device_map)
+        _add_adapters(model, adapters)
+        if rank == 0:
+            # adapter would remove weight of linear.
+            device_map = _create_device_map(model, world_size, device_map)
 
         model.eval()
         model.config.use_cache = True
