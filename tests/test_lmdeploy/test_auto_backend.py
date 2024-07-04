@@ -26,7 +26,7 @@ class TestAutoBackend:
             ('internlm/internlm-chat-7b', True, True),
             ('internlm/internlm2-chat-7b', True, True),
             ('internlm/internlm-xcomposer2-7b', False, True),
-            ('internlm/internlm-xcomposer-7b', False, True),
+            ('internlm/internlm-xcomposer-7b', False, False),
             ('THUDM/chatglm2-6b', True, False),
             ('THUDM/chatglm3-6b', True, False),
             ('deepseek-ai/deepseek-moe-16b-chat', True, False),
