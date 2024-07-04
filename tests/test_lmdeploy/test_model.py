@@ -330,7 +330,7 @@ def test_internvl_phi3():
 
 
 def test_internvl2():
-    model = MODELS.get('internvl2')()
+    model = MODELS.get('internvl2-internlm2')()
     messages = [{
         'role': 'user',
         'content': 'who are you'
