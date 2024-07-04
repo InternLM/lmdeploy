@@ -33,8 +33,8 @@ private:
     void allocateBuffer() override;
     void allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p) override;
 
-    std::vector<uint>  h_runtime_top_k;
-    std::vector<float> h_runtime_top_p;
+    std::vector<uint>  h_runtime_top_k_;
+    std::vector<float> h_runtime_top_p_;
 
     uint   runtime_max_top_k_ = 1;
     uint*  runtime_top_k_buf_ = nullptr;
