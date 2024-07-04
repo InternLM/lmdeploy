@@ -18,7 +18,6 @@
 #include <algorithm>
 #include <float.h>
 
-#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
 #include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
