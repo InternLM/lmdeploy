@@ -200,6 +200,8 @@ MODULE_MAP.update({
 # peft
 MODULE_MAP.update({
     'peft.tuners.lora.layer.Linear':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear',
+    'peft.tuners.lora.awq.AwqLoraLinear':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear'
 })
 

@@ -21,6 +21,15 @@ except ImportError:
 
 
 try:
+    from peft.tuners.lora.awq import AwqLoraLinear
+except ImportError:
+    logger.debug('load peft.tuners.lora.awq.AwqLoraLinear failed.')
+
+    class AwqLoraLinear:
+        pass
+
+
+try:
     from awq.modules.linear.gemm import WQLinear_GEMM
 except ImportError:
     logger.debug('load awq.modules.linear.gemm.WQLinearGEMM failed.')
@@ -170,7 +179,7 @@ def colwise_parallelize_linear(module: torch.nn.Module,
                                                 rank=rank,
                                                 world_size=world_size,
                                                 prefix=prefix)
-    elif isinstance(module, LoRALinear):
+    elif isinstance(module, (LoRALinear, AwqLoraLinear)):
         return colwise_parallelize_loralinear(module,
                                               loader,
                                               rank=rank,
@@ -299,7 +308,7 @@ def rowwise_parallelize_linear(module: torch.nn.Module,
                                                 rank=rank,
                                                 world_size=world_size,
                                                 prefix=prefix)
-    elif isinstance(module, LoRALinear):
+    elif isinstance(module, (LoRALinear, AwqLoraLinear)):
         return rowwise_parallelize_loralinear(module,
                                               loader,
                                               rank=rank,
@@ -449,7 +458,7 @@ def colwise_split_parallelize_linear(module: torch.nn.Module,
                                                       rank=rank,
                                                       world_size=world_size,
                                                       prefix=prefix)
-    elif isinstance(module, LoRALinear):
+    elif isinstance(module, (LoRALinear, AwqLoraLinear)):
         return colwise_split_parallelize_loralinear(module,
                                                     sections,
                                                     loader,
@@ -504,9 +513,9 @@ def default_load_linear(module: torch.nn.Module,
                         rank: int = 0,
                         prefix: str = ''):
     """default load linear."""
-    if isinstance(module, (torch.nn.Linear, QLinear)):
+    if isinstance(module, (torch.nn.Linear, QLinear, WQLinear_GEMM)):
         load_no_recursive(module, loader, rank=rank, prefix=prefix)
-    elif isinstance(module, LoRALinear):
+    elif isinstance(module, (LoRALinear, AwqLoraLinear)):
         raise NotImplementedError('Not implemented, please contact us.')
     else:
         raise TypeError(f'Unsupported module: {type(module)}')
