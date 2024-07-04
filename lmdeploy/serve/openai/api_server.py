@@ -546,9 +546,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             action = json.loads(action)
             tool_calls = [
                 ToolCall(id=request_id,
-                         function=FunctionResponse(
-                             name=action['name'],
-                             arguments=action['parameters']))
+                         function=FunctionResponse(name=action['name'],
+                                                   arguments=json.dumps(
+                                                       action['parameters'])))
             ]
         except Exception as e:
             logger.error(f'Exception: {e}')

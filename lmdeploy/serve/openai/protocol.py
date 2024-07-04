@@ -133,7 +133,7 @@ class ChatCompletionRequest(BaseModel):
 class FunctionResponse(BaseModel):
     """Function response."""
     name: str
-    arguments: object
+    arguments: str
 
 
 class ToolCall(BaseModel):
