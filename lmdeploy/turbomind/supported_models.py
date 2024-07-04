@@ -89,5 +89,9 @@ def is_supported(model_path: str):
             elif arch == 'ChatGLMModel':
                 # chatglm1/2/3 is not working yet
                 support_by_turbomind = cfg.num_layers == 40
+            elif arch == 'InternVLChatModel':
+                # internvl2-4b phi3 is not working yet
+                support_by_turbomind = cfg.llm_config.architectures[
+                    0] != 'Phi3ForCausalLM'
 
     return support_by_turbomind

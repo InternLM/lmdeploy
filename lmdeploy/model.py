@@ -575,9 +575,7 @@ class InternVL2InternLM2(InternLM2Chat7B):
     def __init__(
             self,
             meta_instruction='你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。',
-            stop_words=[
-                '<|endoftext|>', '<|im_start|>', '<|im_end|>', '<|im_sep|>'
-            ],
+            stop_words=['<|im_start|>', '<|im_end|>'],
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
                          stop_words=stop_words,
@@ -592,7 +590,7 @@ class InternVL2InternLM2(InternLM2Chat7B):
         """
         path = model_path.lower()
         if 'internvl2' in path and 'internvl2-4b' not in path:
-            return 'internvl2'
+            return 'internvl2-internlm2'
 
 
 @MODELS.register_module(name='internlm-xcomposer2')
@@ -1506,7 +1504,7 @@ class InternVL2Phi3(Phi3Instruct):
         """
         path = model_path.lower()
         if 'internvl2-4b' in path:
-            return 'internvl2'
+            return 'internvl2-phi3'
 
 
 @MODELS.register_module(name='glm4')
