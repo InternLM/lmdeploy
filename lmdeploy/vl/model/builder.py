@@ -14,6 +14,7 @@ from .llava_hf import LlavaHfVisionModel
 from .llava_next import LlavaNextVisionModel
 from .mini_gemeni import MiniGeminiVisionModel
 from .minicpmv import MiniCPMVModel
+from .phi3_vision import Phi3VisionModel
 from .qwen import QwenVisionModel
 from .xcomposer2 import Xcomposer2VisionModel
 from .yi import YiVisionModel
@@ -63,6 +64,8 @@ def load_vl_model(model_path: str,
         return LlavaHfVisionModel(model_path, with_llm)
     if arch == 'LlavaNextForConditionalGeneration':
         return LlavaNextVisionModel(model_path, with_llm)
+    if arch == 'Phi3VForCausalLM':
+        return Phi3VisionModel(model_path, with_llm)
     raise ValueError(f'unsupported vl model with arch {arch}')
 
 

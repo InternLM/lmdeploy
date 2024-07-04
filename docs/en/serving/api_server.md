@@ -11,12 +11,12 @@ Finally, we showcase how to integrate the service into a WebUI, providing you wi
 
 ## Launch Service
 
-Take the [internlm2-chat-7b](https://huggingface.co/internlm/internlm2-chat-7b) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
+Take the [internlm2_5-7b-chat](https://huggingface.co/internlm/internlm2_5-7b-chat) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
 
 ### Option 1: Launching with lmdeploy CLI
 
 ```shell
-lmdeploy serve api_server internlm/internlm2-chat-7b --server-port 23333
+lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333
 ```
 
 The arguments of `api_server` can be viewed through the command `lmdeploy serve api_server -h`, for instance, `--tp` to set tensor parallelism, `--session-len` to specify the max length of the context window, `--cache-max-entry-count` to adjust the GPU mem ratio for k/v cache etc.
@@ -32,14 +32,14 @@ docker run --runtime nvidia --gpus all \
     -p 23333:23333 \
     --ipc=host \
     openmmlab/lmdeploy:latest \
-    lmdeploy serve api_server internlm/internlm2-chat-7b
+    lmdeploy serve api_server internlm/internlm2_5-7b-chat
 ```
 
 The parameters of `api_server` are the same with that mentioned in "[option 1](#option-1-launching-with-lmdeploy-cli)" section
 
 ### Option 3: Deploying to Kubernetes cluster
 
-Connect to a running Kubernetes cluster and deploy the internlm2-chat-7b model service with [kubectl](https://kubernetes.io/docs/reference/kubectl/) command-line tool (replace `<your token>` with your huggingface hub token):
+Connect to a running Kubernetes cluster and deploy the internlm2_5-7b-chat model service with [kubectl](https://kubernetes.io/docs/reference/kubectl/) command-line tool (replace `<your token>` with your huggingface hub token):
 
 ```shell
 sed 's/{{HUGGING_FACE_HUB_TOKEN}}/<your token>/' k8s/deployment.yaml | kubectl create -f - \

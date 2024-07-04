@@ -600,6 +600,7 @@ async def completions_v1_qos(request: CompletionRequestQos,
         index: int,
         text: str,
         finish_reason: Optional[str] = None,
+        usage: Optional[UsageInfo] = None,
     ) -> str:
         choice_data = CompletionResponseStreamChoice(
             index=index,
@@ -611,6 +612,7 @@ async def completions_v1_qos(request: CompletionRequestQos,
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=usage,
         )
         response_json = response.model_dump_json()
 
@@ -620,9 +622,22 @@ async def completions_v1_qos(request: CompletionRequestQos,
         # First chunk with role
         for generator in generators:
             async for res in generator:
+                usage = None
+                if res.finish_reason is not None:
+                    final_res = res
+                    total_tokens = sum([
+                        final_res.history_token_len, final_res.input_token_len,
+                        final_res.generate_token_len
+                    ])
+                    usage = UsageInfo(
+                        prompt_tokens=final_res.input_token_len,
+                        completion_tokens=final_res.generate_token_len,
+                        total_tokens=total_tokens,
+                    )
                 response_json = create_stream_response_json(
                     index=0,
                     text=res.response,
+                    usage=usage,
                 )
                 yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
@@ -755,11 +770,11 @@ async def completions_v1(request: CompletionRequest,
             adapter_name=adapter_name)
         generators.append(result_generator)
 
-    def create_stream_response_json(
-            index: int,
-            text: str,
-            finish_reason: Optional[str] = None,
-            logprobs: Optional[LogProbs] = None) -> str:
+    def create_stream_response_json(index: int,
+                                    text: str,
+                                    finish_reason: Optional[str] = None,
+                                    logprobs: Optional[LogProbs] = None,
+                                    usage: Optional[UsageInfo] = None) -> str:
         choice_data = CompletionResponseStreamChoice(
             index=index,
             text=text,
@@ -770,6 +785,7 @@ async def completions_v1(request: CompletionRequest,
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=usage,
         )
         response_json = response.model_dump_json()
 
@@ -783,17 +799,30 @@ async def completions_v1(request: CompletionRequest,
             state = DetokenizeState()
             async for res in generator:
                 logprobs = None
+                usage = None
                 if request.logprobs and res.logprobs:
                     logprobs, offset, all_token_ids, state = _create_completion_logprobs(  # noqa E501
                         VariableInterface.async_engine.tokenizer,
                         res.token_ids, res.logprobs,
                         gen_config.skip_special_tokens, offset, all_token_ids,
                         state)
+                if res.finish_reason is not None:
+                    final_res = res
+                    total_tokens = sum([
+                        final_res.history_token_len, final_res.input_token_len,
+                        final_res.generate_token_len
+                    ])
+                    usage = UsageInfo(
+                        prompt_tokens=final_res.input_token_len,
+                        completion_tokens=final_res.generate_token_len,
+                        total_tokens=total_tokens,
+                    )
                 response_json = create_stream_response_json(
                     index=0,
                     text=res.response,
                     finish_reason=res.finish_reason,
-                    logprobs=logprobs)
+                    logprobs=logprobs,
+                    usage=usage)
                 yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 

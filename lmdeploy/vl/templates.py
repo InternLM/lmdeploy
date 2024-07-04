@@ -308,7 +308,7 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
     elif arch in [
             'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM',
             'LlavaForConditionalGeneration',
-            'LlavaNextForConditionalGeneration'
+            'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM'
     ]:
         return LlavaVLChatTemplateWrapper(chat_template)
     elif arch == 'MultiModalityCausalLM':  # deepseek-vl

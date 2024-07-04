@@ -327,6 +327,22 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.awq_modules.PatchedWQLinear_GEMM'
 })
 
+# phi3 vision
+MODULE_MAP.update({
+    'modeling_phi3_v.Phi3Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
+    'modeling_phi3_v.Phi3FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
+    'modeling_phi3_v.Phi3SdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
+    'modeling_phi3_v.Phi3VModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Model',
+    'modeling_phi3_v.Phi3MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3MLP',
+    'modeling_phi3_v.Phi3RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})
+
 # ascend module
 ASCEND_MODULE_MAP = dict()
 
