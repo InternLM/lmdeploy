@@ -20,7 +20,7 @@ def command_line_test(config,
     elif type == 'triton_client':
         cmd = 'lmdeploy serve triton_client ' + extra
     else:
-        cmd = get_command_with_extra('lmdeploy chat turbomind ' + dst_path +
+        cmd = get_command_with_extra('lmdeploy chat ' + dst_path +
                                      '/workspace_' + model_case,
                                      config,
                                      model_case,
@@ -52,7 +52,7 @@ def hf_command_line_test(config,
         model_path = model_case
 
     cmd = get_command_with_extra(' '.join(
-        ['lmdeploy chat', type, model_path, extra]),
+        ['lmdeploy chat', model_path, '--backend', type, extra]),
                                  config,
                                  model_case,
                                  need_tp=True,
