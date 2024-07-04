@@ -79,11 +79,15 @@ def colwise_parallelize_loralinear(module: torch.nn.Module,
                                    world_size: int,
                                    prefix: str = ''):
     """colwise parallelize loralinear."""
-    colwise_parallelize_linear_naive(module.base_layer,
-                                     loader,
-                                     rank=rank,
-                                     world_size=world_size,
-                                     prefix=prefix)
+    if isinstance(module.base_layer, WQLinear_GEMM):
+        parallel_base_func = colwise_parallelize_wqlinear
+    else:
+        parallel_base_func = colwise_parallelize_linear_naive
+    parallel_base_func(module.base_layer,
+                       loader,
+                       rank=rank,
+                       world_size=world_size,
+                       prefix=prefix)
     for key, mod in module.lora_A.items():
         ada_loader = loader.adapter(key)
         colwise_parallelize_linear_naive(mod,
@@ -216,11 +220,15 @@ def rowwise_parallelize_loralinear(module: LoRALinear,
                                    world_size: int,
                                    prefix: str = ''):
     """colwise parallelize loralinear."""
-    rowwise_parallelize_linear_naive(module.base_layer,
-                                     loader,
-                                     rank=rank,
-                                     world_size=world_size,
-                                     prefix=prefix)
+    if isinstance(module.base_layer, WQLinear_GEMM):
+        parallel_base_func = rowwise_parallelize_wqlinear
+    else:
+        parallel_base_func = rowwise_parallelize_linear_naive
+    parallel_base_func(module.base_layer,
+                       loader,
+                       rank=rank,
+                       world_size=world_size,
+                       prefix=prefix)
     for key, mod in module.lora_A.items():
         ada_loader = loader.adapter(key)
         rowwise_parallelize_linear_naive(mod,
@@ -344,12 +352,16 @@ def colwise_split_parallelize_loralinear(module: LoRALinear,
                                          world_size: int,
                                          prefix: str = ''):
     """colwise split loralinear."""
-    colwise_split_parallelize_linear_naive(module.base_layer,
-                                           sections,
-                                           loader,
-                                           rank=rank,
-                                           world_size=world_size,
-                                           prefix=prefix)
+    if isinstance(module.base_layer, WQLinear_GEMM):
+        parallel_base_func = colwise_split_parallelize_wqlinear
+    else:
+        parallel_base_func = colwise_split_parallelize_linear_naive
+    parallel_base_func(module.base_layer,
+                       sections,
+                       loader,
+                       rank=rank,
+                       world_size=world_size,
+                       prefix=prefix)
     for key, mod in module.lora_A.items():
         ada_loader = loader.adapter(key)
         colwise_parallelize_linear_naive(mod,
