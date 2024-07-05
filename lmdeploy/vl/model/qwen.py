@@ -4,25 +4,22 @@ from typing import List
 
 import torch
 from PIL.Image import Image
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM
 
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 
+@VISION_MODELS.register_module()
 class QwenVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
-        self.with_llm = with_llm
-        self.model_path = model_path
-        self.build_model()
+    _arch = 'QWenLMHeadModel'
 
     def build_model(self):
         from accelerate import init_empty_weights
         with init_empty_weights():
-            config = AutoConfig.from_pretrained(self.model_path,
-                                                trust_remote_code=True)
+            config = self.hf_config
             config.quantization_config = {}  # disable vision part quantization
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)
@@ -36,6 +33,7 @@ class QwenVisionModel(VisonModel):
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
             model,
+            max_memory=self.max_memory,
             dtype=torch.half,
             no_split_module_classes=['VisualAttentionBlock', 'Resampler'])
         device_map = infer_auto_device_map(
