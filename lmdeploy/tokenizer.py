@@ -237,8 +237,8 @@ class HuggingFaceTokenizer:
             cfg['transformers_version'])
         if current_transformers_version < required_transformers_version:
             logger.warning(
-                f'The current version of `transformers` is {current_transformers_version}, '  # noqa: E501
-                f'which is lower than the required version {required_transformers_version}. '  # noqa: E501
+                f'The current version of `transformers` is transformers=={current_transformers_version}, '  # noqa: E501
+                f'which is lower than the required version transformers=={required_transformers_version}. '  # noqa: E501
                 'Please upgrade to the required version.')
 
         model_type = cfg['model_type']
