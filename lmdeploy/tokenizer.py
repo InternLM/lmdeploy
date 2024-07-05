@@ -224,28 +224,20 @@ class HuggingFaceTokenizer:
     def _check_transformers_version(self, model_dir: str):
         import transformers
         from packaging import version
-        from transformers.models.auto.configuration_auto import \
-            CONFIG_MAPPING_NAMES
 
-        from lmdeploy.utils import get_hf_config_content
+        from lmdeploy.archs import get_model_arch
 
         logger = get_logger('lmdeploy')
 
         current_transformers_version = version.parse(transformers.__version__)
-        cfg = get_hf_config_content(model_dir, trust_remote_code=True)
+        cfg = get_model_arch(model_dir)[1]
         required_transformers_version = version.parse(
-            cfg['transformers_version'])
+            getattr(cfg, 'transformers_version', 'str'))
         if current_transformers_version < required_transformers_version:
             logger.warning(
                 f'The current version of `transformers` is transformers=={current_transformers_version}, '  # noqa: E501
                 f'which is lower than the required version transformers=={required_transformers_version}. '  # noqa: E501
                 'Please upgrade to the required version.')
-
-        model_type = cfg['model_type']
-        if model_type not in CONFIG_MAPPING_NAMES.keys():
-            logger.warning(
-                f'The model_type={model_type} is not supported with transformers=={current_transformers_version}.'  # noqa: E501
-            )
 
     @property
     def vocab_size(self):
