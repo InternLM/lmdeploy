@@ -5,7 +5,7 @@ import sys
 from configparser import ConfigParser
 from queue import LifoQueue, Queue
 from threading import Thread
-from typing import Dict, Iterable, List, Optional, Union
+from typing import Dict, Iterable, List, Union
 
 import numpy as np
 import torch
@@ -15,13 +15,11 @@ import lmdeploy
 from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
                                ResponseType, TurbomindEngineConfig)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_hf_config_content, get_logger, get_model
+from lmdeploy.utils import get_logger, get_model
 
-from .deploy.converter import (SUPPORTED_FORMATS,
-                               get_input_model_registered_name,
-                               get_output_model_registered_name_and_config)
-from .deploy.source_model.base import INPUT_MODELS
-from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
+from ..archs import get_model_arch
+from .deploy.converter import SUPPORTED_FORMATS, get_tm_model
+from .deploy.target_model.base import TurbomindModelConfig
 from .supported_models import is_supported
 from .utils import ModelSource, get_model_source
 
@@ -89,37 +87,15 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
+                 model_name: str = None,
+                 chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
                  model_source: ModelSource = ModelSource.WORKSPACE,
-                 model_format: Optional[str] = None,
-                 group_size: Optional[int] = None,
-                 tp: Optional[int] = None,
                  **kwargs):
-        # if loading from workspace and engine_config is None, use config.ini
-        # and ignore passed args like model_format, tp, etc.
-        if model_source == ModelSource.WORKSPACE and engine_config is None:
+        self.model_name = model_name
+        self.chat_template_name = chat_template_name
 
-            def _catch_args(**kwargs):
-                args = []
-                for k, v in kwargs.items():
-                    if v and hasattr(TurbomindEngineConfig, k):
-                        args.append(k)
-                return args
-
-            args = _catch_args(**kwargs, model_format=model_format, tp=tp)
-            if len(args) > 0:
-                logger.warning(
-                    f'loading from workspace, ignore args {args} '
-                    'please use TurbomindEngineConfig or modify config.ini')
-
-        else:
-            engine_config = _update_engine_config(engine_config,
-                                                  model_format=model_format,
-                                                  group_size=group_size,
-                                                  tp=tp,
-                                                  **kwargs)
-
-        tp = engine_config.tp if engine_config is not None else 1
+        tp = 1 if engine_config is None else engine_config.tp
         assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
         self.gpu_count = tp
 
@@ -192,16 +168,14 @@ class TurboMind:
         """Load model which is in hf format."""
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
+        if engine_config is None:
+            logger.warning('input engine config is None, using the defult')
+            engine_config = TurbomindEngineConfig()
         assert engine_config.model_format in SUPPORTED_FORMATS, \
             f'The model format should be in {SUPPORTED_FORMATS}'
 
-        # update model_format if not supplied and outputs_stats.pth exists
-        if osp.exists(osp.join(model_path, 'outputs_stats.pth')) and \
-                engine_config.model_format is None:
-            engine_config.model_format = 'awq'
-
         if engine_config.model_format is None:
-            cfg = get_hf_config_content(model_path)
+            _, cfg = get_model_arch(model_path)
             quant_config = cfg.get('quantization_config')
             if quant_config:
                 quant_method = quant_config.get('quant_method')
@@ -216,20 +190,12 @@ class TurboMind:
             'Plz try pytorch engine instead.')
 
         # convert transformers model into turbomind model format
-        input_model_name = get_input_model_registered_name(
-            model_path, engine_config.model_format)
-        input_model = INPUT_MODELS.get(input_model_name)(
-            model_path=model_path, tokenizer_path=model_path, ckpt_path=None)
+        tm_model = get_tm_model(model_path, self.model_name,
+                                self.chat_template_name,
+                                engine_config.model_format,
+                                engine_config.group_size, engine_config.tp)
 
-        output_model_name, cfg = get_output_model_registered_name_and_config(
-            model_path=model_path,
-            model_format=engine_config.model_format,
-            group_size=0)
-        cfg.update_from_engine_config(engine_config)
-        output_model = OUTPUT_MODELS.get(output_model_name)(
-            input_model=input_model, cfg=cfg, to_file=False, out_dir='')
-
-        self.config = output_model.cfg
+        self.config = tm_model.cfg
         logger.info(f'model_config:\n\n{self.config.toini()}')
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
@@ -242,10 +208,10 @@ class TurboMind:
         self._create_weight(model_comm)
 
         # copy hf model weight to turbomind weight
-        tm_params = output_model.tm_params
+        tm_params = tm_model.tm_params
         self._get_model_params(model_comm, tm_params)
         logger.warning(f'get {len(tm_params)} model params')
-        output_model.export()
+        tm_model.export()
         # there should be no left turbomind params.
         if len(tm_params) > 0:
             uninitialized = list(tm_params.keys())
@@ -278,8 +244,11 @@ class TurboMind:
         if engine_config is not None:
             engine_config.tp = cfg.tensor_para_size
             cfg.update_from_engine_config(engine_config)
-
-        # update cls
+        if self.model_name:
+            cfg.model_name = self.model_name
+        if self.chat_template_name:
+            cfg.chat_template_name = self.chat_template_name
+        # update cfg
         self.config = cfg
 
         # create model
@@ -298,10 +267,9 @@ class TurboMind:
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
+                        model_name: str = None,
+                        chat_template_name: str = None,
                         engine_config: TurbomindEngineConfig = None,
-                        model_format: Optional[str] = None,
-                        group_size: Optional[int] = None,
-                        tp: Optional[int] = None,
                         **kwargs):
         """LMDeploy's turbomind inference engine.
 
@@ -321,18 +289,16 @@ class TurboMind:
                       and so on.
             model_format (str): model format
             group_size (int): group size
-            tp (int): tensor parallel size
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
         """
         model_source = get_model_source(pretrained_model_name_or_path)
         logger.info(f'model_source: {model_source}')
         return cls(model_path=pretrained_model_name_or_path,
+                   model_name=model_name,
+                   chat_template_name=chat_template_name,
                    engine_config=engine_config,
                    model_source=model_source,
-                   model_format=model_format,
-                   group_size=group_size,
-                   tp=tp,
                    **kwargs)
 
     def create_instance(self, cuda_stream_id=0):
