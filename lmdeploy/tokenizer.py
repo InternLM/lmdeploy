@@ -224,7 +224,8 @@ class HuggingFaceTokenizer:
     def _check_transformers_version(self, model_dir: str):
         import transformers
         from packaging import version
-        from transformers import AutoConfig
+        from transformers.models.auto.configuration_auto import \
+            CONFIG_MAPPING_NAMES
 
         from lmdeploy.utils import get_hf_config_content
 
@@ -239,23 +240,12 @@ class HuggingFaceTokenizer:
                 f'The current version of `transformers` is {current_transformers_version}, '  # noqa: E501
                 f'which is lower than the required version {required_transformers_version}. '  # noqa: E501
                 'Please upgrade to the required version.')
-        try:
-            AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
-        except Exception as e:
-            message = (
-                f'Load model config with transformers=={current_transformers_version}'  # noqa: E501
-                ' failed. '
-                f'Please upgrade to transformers=={required_transformers_version}.'  # noqa: E501
+
+        model_type = cfg['model_type']
+        if model_type not in CONFIG_MAPPING_NAMES.keys():
+            logger.warning(
+                f'The model_type={model_type} is not supported with transformers=={current_transformers_version}.'  # noqa: E501
             )
-            red_color = '\033[31m'
-            reset_color = '\033[0m'
-            logger.debug('Exception', exc_info=1)
-            logger.error(f'{type(e).__name__}: {e}')
-            logger.error(f'{red_color}'
-                         '`transformers` test failed.\n'
-                         f'{message}'
-                         f'{reset_color}')
-            exit(1)
 
     @property
     def vocab_size(self):
