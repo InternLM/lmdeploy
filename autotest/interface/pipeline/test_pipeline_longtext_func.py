@@ -88,7 +88,7 @@ def test_long_test_passkey_tp1(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     p = Process(target=passkey_retrival,
-                args=(config, model, backend, log_name))
+                args=(config, model, backend, log_name, 1))
     p.start()
     p.join()
 
@@ -107,7 +107,7 @@ def test_long_test_passkey_tp2(config, model, backend, worker_id):
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
     p = Process(target=passkey_retrival,
-                args=(config, model, backend, log_name))
+                args=(config, model, backend, log_name, 2))
     p.start()
     p.join()
 
@@ -123,7 +123,7 @@ def test_long_test_passkey_tp4(config, model, backend, worker_id):
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=4)
     p = Process(target=passkey_retrival,
-                args=(config, model, backend, log_name,
+                args=(config, model, backend, log_name, 4,
                       SESSION_LEN_PASSKEY_1M))
     p.start()
     p.join()
@@ -135,8 +135,8 @@ def passkey_retrival(config,
                      model,
                      backend,
                      log_name,
+                     tp_num,
                      session_len: int = SESSION_LEN_PASSKEY):
-    tp_num = get_tp_num(config, model)
     model_path = '/'.join([config.get('model_path'), model])
     if backend == 'turbomind':
         if 'internlm2_5' in model and '-1m' in model:
