@@ -124,6 +124,8 @@ class PatchedGemmaAttention(nn.Module):
             block_offsets=block_offsets,
         )
 
+        window_size = getattr(self, 'sliding_window', None)
+        sm_scale = getattr(self, 'scaling', None)
         attn_output = query_states
         paged_attention_fwd(
             query_states,
@@ -135,6 +137,8 @@ class PatchedGemmaAttention(nn.Module):
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
             max_seqlen=max_q_seq_length,
+            window_size=window_size,
+            sm_scale=sm_scale,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1],
                                           hidden_size)

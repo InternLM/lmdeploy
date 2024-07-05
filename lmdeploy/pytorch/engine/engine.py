@@ -512,7 +512,8 @@ class Engine:
             if msg.status != MessageStatus.RUNNING:
                 continue
             update_token = token
-            if stop or token in eos_token_id:
+            stop = stop or token in eos_token_id
+            if stop:
                 update_token = _EMPTY_TOKEN
             else:
                 msg.num_new_tokens += 1
