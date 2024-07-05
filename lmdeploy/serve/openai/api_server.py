@@ -544,8 +544,10 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         action = action[action.find('{'):]
         try:  # TODO add json_schema guidance to turbomind
             action = json.loads(action)
+            action_id = [tool.function.name
+                         for tool in request.tools].index(action['name'])
             tool_calls = [
-                ToolCall(id=request_id,
+                ToolCall(id=str(action_id),
                          function=FunctionResponse(name=action['name'],
                                                    arguments=json.dumps(
                                                        action['parameters'])))
