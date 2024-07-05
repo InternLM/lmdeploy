@@ -1040,7 +1040,7 @@ def _check_context_alive(mp_context: mp.ProcessContext):
 def _find_available_port() -> bool:
     """find available port."""
     import socket
-    port = 29500
+    port = int(os.environ.get("MASTER_PORT",29500))
     while True:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             if s.connect_ex(('localhost', port)) != 0:
