@@ -104,7 +104,8 @@ def check_awq(hf_config):
     except Exception:
         logger.debug('Exception:', exc_info=1)
         logger.warning('Failed to import `awq_ext`. '
-                       'Fix it to get better performance.')
+                       'Try reinstall it from source: '
+                       'https://github.com/casper-hansen/AutoAWQ')
 
 
 def check_transformers_version(model_path: str,
