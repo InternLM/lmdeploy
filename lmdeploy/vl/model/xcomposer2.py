@@ -137,8 +137,20 @@ class Xcomposer2VisionModel(VisonModel):
         self.model = model.eval()
 
     def _forward_2d5(self, images: List[Image]) -> List[torch.Tensor]:
-        """internlm-xcomposer2d5-7b forward."""
-        return self._forward_4khd_7b(images)
+        """internlm-xcomposer2d5-7b vit forward."""
+        outputs = [x.convert('RGB') for x in images]
+        hd_num = 6 if len(images) > 1 else 24
+        outputs = [self.HD_transform(x, hd_num=hd_num) for x in outputs]
+        outputs = [
+            self.model.vis_processor(x).unsqueeze(0).to(dtype=torch.half)
+            for x in outputs
+        ]
+        embeds, split = self.model.vit(outputs, self.model.plora_glb_GN,
+                                       self.model.plora_sub_GN)
+        embeds = self.model.vision_proj(embeds)
+        embeds = torch.split(embeds, split, dim=1)
+        embeds = [x.squeeze() for x in embeds]
+        return embeds
 
     def _forward_7b(self, images: List[Image]) -> List[torch.Tensor]:
         """internlm-xcomposer2-7b vit forward."""
