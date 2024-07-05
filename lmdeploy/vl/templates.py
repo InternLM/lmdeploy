@@ -302,7 +302,7 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
     if model_name == 'yi-vl':
         return YiVLChatTemplateWrapper(chat_template)
 
-    arch, config = get_model_arch(model_path)
+    arch, _ = get_model_arch(model_path)
     if arch == 'QWenLMHeadModel':
         return QwenVLChatTemplateWrapper(chat_template)
     elif arch in [

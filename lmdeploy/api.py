@@ -145,27 +145,20 @@ def serve(model_path: str,
         backend_config = autoget_backend_config(model_path, backend_config)
     backend = 'pytorch' if type(
         backend_config) is PytorchEngineConfig else 'turbomind'
-    # if 'tp' in kwargs:
-    #     tp = kwargs['tp']
-    #     kwargs.pop('tp')
-    # else:
-    #     tp = 1 if backend_config is None else backend_config.tp
-    task = Process(
-        target=serve,
-        args=(model_path, ),
-        kwargs=dict(
-            model_name=model_name,
-            backend=backend,
-            backend_config=backend_config,
-            chat_template_config=chat_template_config,
-            server_name=server_name,
-            server_port=server_port,
-            #    tp=tp,
-            log_level=log_level,
-            api_keys=api_keys,
-            ssl=ssl,
-            **kwargs),
-        daemon=True)
+
+    task = Process(target=serve,
+                   args=(model_path, ),
+                   kwargs=dict(model_name=model_name,
+                               backend=backend,
+                               backend_config=backend_config,
+                               chat_template_config=chat_template_config,
+                               server_name=server_name,
+                               server_port=server_port,
+                               log_level=log_level,
+                               api_keys=api_keys,
+                               ssl=ssl,
+                               **kwargs),
+                   daemon=True)
     task.start()
     client = APIClient(f'http://{server_name}:{server_port}')
     while True:
