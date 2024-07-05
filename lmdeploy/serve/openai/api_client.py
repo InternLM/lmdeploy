@@ -425,7 +425,7 @@ def get_streaming_response(
             yield output, tokens, finish_reason
 
 
-def main(api_server_url: str = 'http://127.0.0.1:23333',
+def main(api_server_url: str = 'http://0.0.0.0:23333',
          session_id: int = 0,
          api_key: Optional[str] = None):
     """Main function to chat in terminal."""
