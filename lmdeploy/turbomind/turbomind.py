@@ -174,9 +174,10 @@ class TurboMind:
         assert engine_config.model_format in SUPPORTED_FORMATS, \
             f'The model format should be in {SUPPORTED_FORMATS}'
 
+        group_size = 0
         if engine_config.model_format is None:
             _, cfg = get_model_arch(model_path)
-            quant_config = cfg.get('quantization_config')
+            quant_config = getattr(cfg, 'quantization_config', None)
             if quant_config:
                 quant_method = quant_config.get('quant_method')
                 group_size = int(quant_config.get('group_size', 0))
@@ -192,8 +193,8 @@ class TurboMind:
         # convert transformers model into turbomind model format
         tm_model = get_tm_model(model_path, self.model_name,
                                 self.chat_template_name,
-                                engine_config.model_format,
-                                engine_config.group_size, engine_config.tp)
+                                engine_config.model_format, group_size,
+                                engine_config.tp)
 
         self.config = tm_model.cfg
         logger.info(f'model_config:\n\n{self.config.toini()}')

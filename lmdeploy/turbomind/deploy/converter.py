@@ -197,8 +197,13 @@ def pack_model_repository(workspace_path: str):
                dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
-def get_tm_model(model_path, model_name, chat_template_name, model_format,
-                 group_size, tp, out_dir):
+def get_tm_model(model_path,
+                 model_name,
+                 chat_template_name,
+                 model_format,
+                 group_size,
+                 tp,
+                 out_dir: str = None):
     if model_format == 'awq' and group_size <= 0:
         raise RuntimeError(
             'group_size should be specified when the model is awq')
@@ -222,7 +227,7 @@ def get_tm_model(model_path, model_name, chat_template_name, model_format,
     cfg.tensor_para_size = tp
 
     output_model = OUTPUT_MODELS.get(output_model_name)(
-        input_model=input_model, cfg=cfg, out_dir='')
+        input_model=input_model, cfg=cfg, out_dir=out_dir)
 
     return output_model
 
