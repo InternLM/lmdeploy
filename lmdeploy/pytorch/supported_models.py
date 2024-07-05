@@ -60,6 +60,8 @@ _SUPPORTED_ARCHS = dict(
     DeepseekV2ForCausalLM=True,
     # internvl
     InternVLChatModel=True,
+    # gemma2
+    Gemma2ForCausalLM=True,
 )
 
 
