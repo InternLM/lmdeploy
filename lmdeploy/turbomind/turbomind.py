@@ -194,6 +194,21 @@ class TurboMind:
                     tm_params[k] = []
                 tm_params[k].append(v)
 
+    def _prepare_model(self, model_comm):
+        """Get turbomind model params when loading from hf."""
+
+        def _prepare(device_id):
+            rank = self.node_id * self.gpu_count + device_id
+            model_comm.prepare(device_id, rank)
+
+        threads = []
+        for device_id in range(self.gpu_count):
+            t = Thread(target=_prepare, args=(device_id, ))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
+
     def _from_hf(self, model_source: ModelSource, model_path: str,
                  engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
@@ -264,6 +279,7 @@ class TurboMind:
                 'the model may not be loaded successfully '
                 f'with {len(tm_params)} uninitialized params:\n{uninitialized}'
             )
+        self._prepare_model(model_comm)
 
         return model_comm
 
