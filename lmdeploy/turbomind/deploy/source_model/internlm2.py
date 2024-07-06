@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import List
+
 import torch
 
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
-from .llama_awq import ensure_fp16orint32
 
 
 class InternLM2Reader(LlamaReader):
@@ -91,28 +92,54 @@ class InternLM2Model(LlamaModel):
         super().__init__(model_path, tokenizer_path, **kwargs)
 
 
+def get_u4_slices(x: torch.Tensor, dtype: torch.dtype) -> List[torch.Tensor]:
+    assert x.dtype == torch.int32
+    xs = []
+    for _ in range(8):
+        xs.append((x & 15).to(dtype))
+        x = x >> 4
+    return xs
+
+
+def unpack_awq_gemm(x: torch.Tensor) -> torch.Tensor:
+    xs = get_u4_slices(x, torch.uint8)
+    order = [0, 4, 1, 5, 2, 6, 3, 7]
+    ys = [xs[i] for i in order]
+    return torch.stack(ys, dim=-1).view(*x.shape[:-1], -1)
+
+
 class InternLM2AwqReader(InternLM2Reader):
     """read weights from internlm2 awq model."""
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict):
         super().__init__(new_params, unused_params, last_bin, model_cfg)
+        for k, v in new_params.items():
+            print(k, v.shape, v.dtype)
+
+    def transform(self, x: torch.Tensor):
+        x = x.cuda()
+        if x.dtype != torch.int32:
+            return x.T
+        return unpack_awq_gemm(x).T
 
     def _attn(self, i: int, kind: str):
-        """Get q, k, v, o qweight for layer i."""
+        """Get q, k, v, o kind for layer i."""
         kv_head_num = self.model_cfg['num_key_value_heads']
         gs = int(self.model_cfg['num_attention_heads'] / kv_head_num)
         qkv = self.params[
             f'{self.attn_layer_prefix}.{i}.attention.wqkv.{kind}']
-        hidden_dim = qkv.shape[0]
-        qkv = qkv.view(hidden_dim, kv_head_num, gs + 2, -1)
-        q, k, v = torch.split(qkv, [gs, 1, 1], dim=-2)
-        q = q.reshape(hidden_dim, -1)
-        k = k.reshape(hidden_dim, -1)
-        v = v.reshape(hidden_dim, -1)
+        qkv = self.transform(qkv)
+        qkv = qkv.view(kv_head_num, gs + 2, 128, -1)
+        hidden_dim = qkv.shape[-1]
+        q, k, v = torch.split(qkv, [gs, 1, 1], dim=1)
+        q = q.reshape(-1, hidden_dim)
+        k = k.reshape(-1, hidden_dim)
+        v = v.reshape(-1, hidden_dim)
         o = self.params.get(
             f'{self.attn_layer_prefix}.{i}.attention.wo.{kind}')
-        return ensure_fp16orint32((q, k, v, o))
+        o = self.transform(o)
+        return q, k, v, o
 
     def attn(self, i: int):
         """Get q, k, v, o qweight for layer i."""
@@ -128,15 +155,15 @@ class InternLM2AwqReader(InternLM2Reader):
 
     def ffn(self, i: int):
         """Get ffn qweight for layer i."""
-        return ensure_fp16orint32(self._ffn(i, 'qweight'))
+        return tuple(map(self.transform, self._ffn(i, 'qweight')))
 
     def ffn_zero(self, i: int):
         """Get ffn qzeros for layer i."""
-        return ensure_fp16orint32(self._ffn(i, 'qzeros'))
+        return tuple(map(self.transform, self._ffn(i, 'qzeros')))
 
     def ffn_scale(self, i: int):
         """Get ffn scales for layer i."""
-        return ensure_fp16orint32(self._ffn(i, 'scales'))
+        return tuple(map(self.transform, self._ffn(i, 'scales')))
 
 
 @INPUT_MODELS.register_module(name='internlm2-awq')

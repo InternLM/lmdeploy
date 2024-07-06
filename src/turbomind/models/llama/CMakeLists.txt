@@ -23,6 +23,7 @@ set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Llama PUBLIC CUDA::cudart
         gemm_s4_f16
+        gemm2
         cublasMMWrapper
         DynamicDecodeLayer
         activation_kernels

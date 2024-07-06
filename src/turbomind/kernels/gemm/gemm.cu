@@ -365,7 +365,7 @@ private:
     Registry                       registry_;
 };
 
-// implmenetation of GEMM interfaces
+// implementation of GEMM interfaces
 
 Gemm::Gemm(): impl_{new Impl{}} {}
 
@@ -447,9 +447,9 @@ int Gemm::Run(const Operation&    operation,
     spec = impl_->Dispatch(operation.dispatch, desc, workspace.barriers_size, workspace.partials_size);
 
     if (spec.kernel) {
-        std::cout << "[Gemm] dispatch: " << spec.kernel->name()  //
-                  << " split_k=" << spec.splits                  //
-                  << " swizzle=" << spec.swizzle << std::endl;
+        // std::cout << "[Gemm] dispatch: " << spec.kernel->name()  //
+        //           << " split_k=" << spec.splits                  //
+        //           << " swizzle=" << spec.swizzle << std::endl;
         return launch(spec, stream);
     }
 

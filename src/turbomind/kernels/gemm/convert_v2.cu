@@ -89,8 +89,9 @@ void Convert_v2_Impl(const void* S, const MatrixLayout& Sdesc, void* D, const Ma
     constexpr int threads = Config::BLOCK_SIZE;
     const int     blocks  = ceil_div(Sdesc.rows, CTA_M);
 
-    std::cout << __PRETTY_FUNCTION__ << "\nThreadMap:\n";
-    Print(typename Kernel::GmemIter::ThreadMap{});
+    std::cout << __PRETTY_FUNCTION__ << std::endl;
+    // std::cout << __PRETTY_FUNCTION__ << "\nThreadMap:\n";
+    // Print(typename Kernel::GmemIter::ThreadMap{});
 
     convert_kernel<Kernel><<<blocks, threads, kSmemSize, stream>>>(param);
 }
@@ -114,7 +115,7 @@ int Convert(const void*         S,  //
 
         if constexpr (GetOperand<mma, operand, Stype, order, false>::value) {  // is operand exist?
 
-            // Make args constexpr explictly, some compilers failed to see const-ness of the args
+            // Make args constexpr explicitly, some compilers failed to see const-ness of the args
             constexpr int pack_num_tag = pack_num;
 
             using Operand = typename GetOperand<mma, operand, Stype, order, false>::Operand;

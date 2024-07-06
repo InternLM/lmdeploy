@@ -109,6 +109,7 @@ public:
 
         if (splits > 1 && workspace.barriers == nullptr && workspace.partials == nullptr) {
             GetWorkspaceSizes(m, n, tiles.x, tiles.y, splits, workspace.barriers_size, workspace.partials_size);
+            std::cout << "not enough workspace for " << splits << " splits\n";
             return -1;
         }
 
@@ -161,9 +162,9 @@ public:
             ldb = mk2cs<Gemm::kOrderB>(Packing_v2<Gemm::kPackB, Gemm::kOrderB>::apply({n, k})).x;
         }
 
-        std::cout << "lda=" << lda << ", ldb=" << ldb << ", ldc=" << Cdesc.ld << "\n";
+        // std::cout << "lda=" << lda << ", ldb=" << ldb << ", ldc=" << Cdesc.ld << "\n";
 
-        std::cout << "C: " << C << ", D: " << D << "\n";
+        // std::cout << "C: " << C << ", D: " << D << "\n";
 
         typename Gemm::Epilogue::Param epilogue{m,
                                                 n,

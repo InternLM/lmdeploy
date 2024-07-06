@@ -19,12 +19,12 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
-enum class WeightType : int
-{
+enum class WeightType : int {
     kFP32,
     kFP16,
     kFP8,  // not supported yet
@@ -52,8 +52,7 @@ inline size_t getBitSize(WeightType type)
     return 0;
 }
 
-enum class LoraPolicy : int
-{
+enum class LoraPolicy : int {
     kNull,
     kPlora,
 };
@@ -82,8 +81,13 @@ struct LlamaDenseWeight {
     LoraWeight lora;
     WeightType type;
     T*         bias;
-    T*         scales_and_zeros;
+    T*         scales;
+    T*         zeros;
+    T*         scales_zeros;
     int        group_size;
+
+    gemm::MatrixLayout k_desc;
+    gemm::MatrixLayout q_desc;
 };
 
 template<typename T>

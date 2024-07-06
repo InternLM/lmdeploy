@@ -40,14 +40,14 @@ struct Operand_A {
     using GetGmemIter   = GetGmemIter;
 };
 
-template<class T>
-struct Operand_B_T {
+template<class T, Order order>
+struct Operand_B {
     using Dtype = T;
 
     static constexpr int Pack_M = 1;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | Pack_M;
-    static constexpr Order kOrder = Order::kRowMajor;
+    static constexpr Order kOrder = order;
 
     using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
 
@@ -78,8 +78,8 @@ struct GetOperand<HMMA_16816, OPERAND_A, T, kColMajor, true>: std::true_type {
 };
 
 template<class T>
-struct GetOperand<HMMA_16816, OPERAND_B, T, kRowMajor, true>: std::true_type {
-    using Operand = sm80_hmma_16816_pack::Operand_B_T<T>;
+struct GetOperand<HMMA_16816, OPERAND_B, T, kColMajor, true>: std::true_type {
+    using Operand = sm80_hmma_16816_pack::Operand_B<T, kColMajor>;
 };
 
 template<>

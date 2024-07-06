@@ -4,6 +4,7 @@
 
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include <cuda_runtime.h>
 #include <memory>
 
 namespace turbomind::gemm {

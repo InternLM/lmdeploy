@@ -39,7 +39,7 @@ public:
                        Workspace&          workspace,
                        cudaStream_t        stream) = 0;
 
-    // virtual because different implemntation may have different workspace requeirements
+    // virtual because different implementation may have different workspace requeirements
     virtual int GetMaxSplits(int m, int n, size_t barrier_size, size_t partials_size) = 0;
 
     // true if this kernel can be used to compute the gemm

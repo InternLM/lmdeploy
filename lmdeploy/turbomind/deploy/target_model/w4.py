@@ -68,6 +68,21 @@ def get_cuda_tensor(tensors):
     return (*result, )
 
 
+def transpose_tensor(tensors):
+    """Get cuda tensor."""
+    result = map(lambda x: x.cuda().t() if x is not None else x, tensors)
+    return (*result, )
+
+
+def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
+    assert x.dtype == torch.uint8
+    xs = x.view(*x.shape[:-1], -1, 8).split(1, dim=-1)
+    a = torch.zeros(xs[0].shape, dtype=torch.int32, device=x.device)
+    for t in reversed(xs):
+        a = (a << 4) | t
+    return a.squeeze(dim=-1)
+
+
 @OUTPUT_MODELS.register_module(name='w4')
 class TurbomindW4Model(BaseOutputModel):
     """Export to turbomind w4a16 format."""
@@ -90,7 +105,7 @@ class TurbomindW4Model(BaseOutputModel):
             for i in range(bin.start_layer_id, bin.end_layer_id):
                 visit = True
                 w1s, _, _ = bin.ffn_scale(i)
-                inter_size = w1s.shape[-1]
+                inter_size = w1s.shape[0]
                 qb, _, _, _ = bin.attn_bias(i)
                 if qb is not None:
                     attn_bias = 1
@@ -102,35 +117,44 @@ class TurbomindW4Model(BaseOutputModel):
 
     def export_transformer_block(self, bin: BaseReader, i: int):
         """Export transformer layer i."""
-        group_size = self.cfg.group_size
         tp = self.cfg.tensor_para_size
         size_per_head = self.cfg.size_per_head
         # attn
-        q_qw, k_qw, v_qw, o_qw = get_cuda_tensor(bin.attn(i))
-        q_qz, k_qz, v_qz, o_qz = get_cuda_tensor(bin.attn_zero(i))
-        q_s, k_s, v_s, o_s = get_cuda_tensor(bin.attn_scale(i))
+        q_w, k_w, v_w, o_w = transpose_tensor(bin.attn(i))
+        q_z, k_z, v_z, o_z = transpose_tensor(bin.attn_zero(i))
+        q_s, k_s, v_s, o_s = transpose_tensor(bin.attn_scale(i))
 
-        q_qw = transpose_qk_s4(q_qw, group_size)
-        k_qw = transpose_qk_s4(k_qw, group_size)
-        q_qz = transpose_qk_s4(q_qz, group_size)
-        k_qz = transpose_qk_s4(k_qz, group_size)
+        # print(q_w.shape, k_w.shape, q_z.shape, k_z.shape, q_s.shape, k_s.shape)
+
+        q_w = permute(q_w, size_per_head)
+        k_w = permute(k_w, size_per_head)
+        q_z = permute(q_z, size_per_head)
+        k_z = permute(k_z, size_per_head)
         q_s = permute(q_s, size_per_head)
         k_s = permute(k_s, size_per_head)
 
-        qkv_qw = merge_qkv(q_qw, k_qw, v_qw, tp, dim=2)
-        qkv_qz = merge_qkv(q_qz, k_qz, v_qz, tp, dim=2)
+        # print(q_w.shape, k_w.shape, q_z.shape, q_z.shape, q_s.shape, k_s.shape)
+
+        qkv_w = merge_qkv(q_w, k_w, v_w, tp, dim=2)
+        qkv_z = merge_qkv(q_z, k_z, v_z, tp, dim=2)
         qkv_s = merge_qkv(q_s, k_s, v_s, tp, dim=2)
 
-        qkv_qw, qkv_sz = convert_s4(qkv_qw, qkv_qz, qkv_s, group_size)
-        qkv_qw = tp_m_s4(qkv_qw, tp)
-        self.save_split(qkv_qw, f'layers.{i}.attention.w_qkv.qweight', -1)
-        self.save_split(qkv_sz, f'layers.{i}.attention.w_qkv.scales_zeros', -1)
 
-        o_qw, o_sz = convert_s4(o_qw, o_qz, o_s, group_size)
-        self.save_split(o_qw, f'layers.{i}.attention.wo.qweight', 0)
-        self.save_split(o_sz, f'layers.{i}.attention.wo.scales_zeros', 0)
+        qkv_z = qkv_z.to(qkv_s.dtype)
+        qkv_w = pack_u4_row(qkv_w)
 
-        q_b, k_b, v_b, o_b = get_cuda_tensor(bin.attn_bias(i))
+        self.save_split(qkv_w, f'layers.{i}.attention.w_qkv.qweight', -1)
+        self.save_split(qkv_s, f'layers.{i}.attention.w_qkv.scales', -1)
+        self.save_split(qkv_z, f'layers.{i}.attention.w_qkv.zeros', -1)
+
+        o_z = o_z.to(o_s.dtype)
+        o_w = pack_u4_row(o_w)
+
+        self.save_split(o_w, f'layers.{i}.attention.wo.qweight', 0)
+        self.save_split(o_s, f'layers.{i}.attention.wo.scales', 0)
+        self.save_split(o_z, f'layers.{i}.attention.wo.zeros', 0)
+
+        q_b, k_b, v_b, o_b = transpose_tensor(bin.attn_bias(i))
         if q_b is not None:
             q_b = permute(q_b, size_per_head)
             k_b = permute(k_b, size_per_head)
@@ -139,21 +163,29 @@ class TurbomindW4Model(BaseOutputModel):
             self.save_split(o_b, f'layers.{i}.attention.wo.bias', copy=True)
 
         # ffn weights
-        w1_qw, w2_qw, w3_qw = get_cuda_tensor(bin.ffn(i))
-        w1_qz, w2_qz, w3_qz = get_cuda_tensor(bin.ffn_zero(i))
-        w1_s, w2_s, w3_s = get_cuda_tensor(bin.ffn_scale(i))
+        w1_w, w2_w, w3_w = transpose_tensor(bin.ffn(i))
+        w1_z, w2_z, w3_z = transpose_tensor(bin.ffn_zero(i))
+        w1_s, w2_s, w3_s = transpose_tensor(bin.ffn_scale(i))
 
-        w13_qw, w13_qz, w13_s = fuse_w1_w3_s4(w1_qw, w1_qz, w1_s, w3_qw, w3_qz,
-                                              w3_s)
-        w13_qw, w13_sz = convert_s4(w13_qw, w13_qz, w13_s, group_size)
-        w13_qw = tp_m_s4(w13_qw, tp)
-        self.save_split(w13_qw, f'layers.{i}.feed_forward.w13.qweight', -1)
-        self.save_split(w13_sz, f'layers.{i}.feed_forward.w13.scales_zeros',
-                        -1)
+        w1_w = pack_u4_row(w1_w)
+        w3_w = pack_u4_row(w3_w)
+        w2_w = pack_u4_row(w2_w)
 
-        w2_qw, w2_sz = convert_s4(w2_qw, w2_qz, w2_s, group_size)
-        self.save_split(w2_qw, f'layers.{i}.feed_forward.w2.qweight', 0)
-        self.save_split(w2_sz, f'layers.{i}.feed_forward.w2.scales_zeros', 0)
+        self.save_split(w1_w, f'layers.{i}.feed_forward.w1.qweight', -1)
+        self.save_split(w3_w, f'layers.{i}.feed_forward.w3.qweight', -1)
+        self.save_split(w2_w, f'layers.{i}.feed_forward.w2.qweight', 0)
+
+        self.save_split(w1_s, f'layers.{i}.feed_forward.w1.scales', -1)
+        self.save_split(w3_s, f'layers.{i}.feed_forward.w3.scales', -1)
+        self.save_split(w2_s, f'layers.{i}.feed_forward.w2.scales', 0)
+
+        w1_z = w1_z.to(w1_s.dtype)
+        w3_z = w3_z.to(w3_s.dtype)
+        w2_z = w2_z.to(w2_s.dtype)
+
+        self.save_split(w1_z, f'layers.{i}.feed_forward.w1.zeros', -1)
+        self.save_split(w3_z, f'layers.{i}.feed_forward.w3.zeros', -1)
+        self.save_split(w2_z, f'layers.{i}.feed_forward.w2.zeros', 0)
 
         # norm
         attn_norm = bin.attn_norm(i)

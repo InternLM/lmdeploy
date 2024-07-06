@@ -56,6 +56,8 @@ struct LlamaTritonModel: public AbstractTransformerModel {
 
     TensorMap getParams(int deviceId, int rank) override;
 
+    void prepare(int deviceId, int rank) override;
+
     void createCustomComms(std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms,
                            int                                                   world_size) override;
 

@@ -67,14 +67,15 @@ struct Operand_A {
 };
 
 // (n, k)
-template<class T>
-struct Operand_B_T {
+template<class T, Order order>
+struct Operand_B {
     using Dtype = T;
 
     static constexpr Pack  kPack  = 0;
-    static constexpr Order kOrder = Order::kRowMajor;
+    static constexpr Order kOrder = order;
 
-    using SmemCopyAtom = SmemCopy_MMA_16816_B<T, false>;
+    using SmemCopyAtom =
+        std::conditional_t<order == kRowMajor, SmemCopy_MMA_16816_B<T, false>, SmemCopy_MMA_16816_A<T, true>>;
 
     using GetSmemLayout = GetSmemLayoutV2<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -183,9 +184,9 @@ struct GetOperand<HMMA_16816, OPERAND_A, T, order, false>: std::true_type {
     using Operand = sm80_hmma_16816::Operand_A<T, order>;
 };
 
-template<class T>
-struct GetOperand<HMMA_16816, OPERAND_B, T, kRowMajor, false>: std::true_type {
-    using Operand = sm80_hmma_16816::Operand_B_T<T>;
+template<class T, Order order>
+struct GetOperand<HMMA_16816, OPERAND_B, T, order, false>: std::true_type {
+    using Operand = sm80_hmma_16816::Operand_B<T, order>;
 };
 
 template<class T>

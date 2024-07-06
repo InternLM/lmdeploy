@@ -425,6 +425,13 @@ TensorMap LlamaTritonModel<T>::getParams(int deviceId, int rank)
 }
 
 template<typename T>
+void LlamaTritonModel<T>::prepare(int deviceId, int rank) {
+    ft::check_cuda_error(cudaSetDevice(deviceId));
+    ft::FT_CHECK(shared_weights_[deviceId] != nullptr);
+    shared_weights_[deviceId]->prepare();
+}
+
+template<typename T>
 std::string LlamaTritonModel<T>::toString()
 {
     std::stringstream ss;

@@ -170,10 +170,10 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     // [L, 2, H, s, D]
     const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
 
-    // static int count = 0;
+    static int count = 0;
 
     // if (layer_id == 0 && count == 0) {
-    //     Compare(attention_input, num_token * weights->qkv.input_dims, "qkv_input", kCmpRead, stream_);
+    //     Compare(attention_input, token_num * weights->qkv.input_dims, "qkv_input", compare_mode, stream_);
     // }
 
     int* lora_mask = inputs->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
@@ -185,8 +185,32 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     count_and_fix(qkv_buf_, token_num * weights->qkv.output_dims, Concat("qkv", layer_id), 3);
 
     // if (layer_id == 0 && count == 0) {
-    //     Compare(qkv_buf_, num_token * weights->qkv.output_dims, "qkv_buf", kCmpRead, stream_);
+    //     Compare(qkv_buf_, token_num * weights->qkv.output_dims, "qkv_buf", compare_mode, stream_);
     // }
+
+    if constexpr (0) {
+        std::vector<T> tmp(token_num * weights->qkv.output_dims);
+        cudaMemcpyAsync(tmp.data(), qkv_buf_, sizeof(T) * tmp.size(), cudaMemcpyDefault, stream_);
+        cudaStreamSynchronize(stream_);
+        int i = 0;
+        for (auto& x : tmp) {
+            std::cout << (float)x << " ";
+            if (++i == 256) {
+                break;
+            }
+        }
+        std::cout << "\n";
+        i = 0;
+        for (auto it = tmp.rbegin(); it != tmp.rend(); ++it) {
+            std::cout << (float)*it << " ";
+            if (++i == 256) {
+                break;
+            }
+        }
+        std::cout << "\n";
+    }
+
+    // FT_CHECK(0);
 
     auto stream_ptr = streams_.data();
 

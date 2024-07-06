@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/gemm/gemm.h"
+#include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm_s_f16/gemm_s4_f16.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
@@ -9,6 +11,7 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/gemm.h"
 #include "src/turbomind/utils/logger.h"
 #include <type_traits>
 
@@ -17,8 +20,7 @@ namespace turbomind {
 template<typename T>
 class LlamaLinear {
 public:
-    enum Type
-    {
+    enum Type {
         kGemm,
         kFusedSiluFfn,
         kFusedAdd
@@ -105,34 +107,57 @@ private:
 
     void forwardInt4(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
     {
-        GemmS4F16::Type gemm_type = GemmS4F16::kGemm;
-        if (type == kFusedAdd)
-            gemm_type = GemmS4F16::kFusedAdd;
-        if (type == kFusedSiluFfn)
-            gemm_type = GemmS4F16::kFusedSiluFfn;
-        if constexpr (std::is_same_v<T, half>) {
-            gemm_s4_f16_.Run(output_data,
-                             (const uint*)weight.kernel,
-                             input_data,
-                             (const half2*)weight.scales_and_zeros,
-                             weight.output_dims,
-                             batch_size,
-                             weight.input_dims,
-                             weight.group_size,
-                             gemm_type,
-                             -1,
-                             stream_);
-            sync_check_cuda_error();
-        }
-        else {
-            FT_CHECK_WITH_INFO(0, "Not implemented");
+        // GemmS4F16::Type gemm_type = GemmS4F16::kGemm;
+        // if (type == kFusedAdd)
+        //     gemm_type = GemmS4F16::kFusedAdd;
+        // if (type == kFusedSiluFfn)
+        //     gemm_type = GemmS4F16::kFusedSiluFfn;
+
+        FT_CHECK(type == kGemm);
+
+        using namespace gemm;
+
+        const Operation operation{gemm::DispatchPolicy::kDefault,
+                                  Epilogue::kNone,
+                                  {QuantType::kNone},
+                                  {QuantType::kAsym_FMA, weight.group_size}};
+
+        const MatrixLayout a_desc{
+            get_data_type_v<T>, kRowMajor, batch_size, (int)weight.input_dims, (int)weight.input_dims};
+
+        const MatrixLayout c_desc{
+            get_data_type_v<T>, kRowMajor, batch_size, (int)weight.output_dims, (int)weight.output_dims};
+
+        auto ec = gemm_.Run(operation,
+                            nullptr,
+                            input_data,
+                            a_desc,
+                            nullptr,
+                            {},
+                            weight.kernel,
+                            weight.k_desc,
+                            weight.scales_zeros,
+                            weight.q_desc,
+                            nullptr,
+                            output_data,
+                            c_desc,
+                            output_data,
+                            c_desc,
+                            {},
+                            stream_);
+        sync_check_cuda_error();
+
+        if (ec) {
+            TM_LOG_ERROR("%s: %d", __PRETTY_FUNCTION__, ec);
+            // std::abort();
         }
     }
 
 private:
     cublasMMWrapper* cublas_wrapper_;
     cudaStream_t     stream_{};
-    GemmS4F16        gemm_s4_f16_;
+    // GemmS4F16        gemm_s4_f16_;
+    gemm::Gemm gemm_;
 };
 
 }  // namespace turbomind

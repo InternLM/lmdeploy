@@ -179,7 +179,7 @@ struct Tiled_MMA_v2 {
 
             PRAGMA_UNROLL
             for (int k = 0; k < Map::kGroupK; ++k) {
-                // `vec` is a array in C's continguous dim
+                // `vec` is a array in C's contiguous dim
                 _foreach_C(frag_C, [&](auto& vec, int mi, int ni, int tm, int tn) {
                     auto       smem_ptr = &smem_C(mi - offset_mn.x, ni - offset_mn.y);
                     const int  mm       = kRaked ? tm : mi - offset_mn.x;

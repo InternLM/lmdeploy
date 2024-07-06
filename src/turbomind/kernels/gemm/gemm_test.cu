@@ -50,7 +50,7 @@ void Run(int m, int n, int k, int g = 128)
     constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
     constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
     auto&          test =
-        gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
+        gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kRowMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
 
     // constexpr Pack kPackA = 0;
     // constexpr Pack kPackU = 0;
@@ -102,6 +102,8 @@ void Test(int bsz, int tp)
     // Run<T, Tb>(16, 16, 64);
 
     Run<T, Tb>(16384, 16384, 16384);
+
+    // Run<T, Tb>(102, 6144, 4096);
 
     // Run<T, Tb>(8192, 8192, 8192);
 

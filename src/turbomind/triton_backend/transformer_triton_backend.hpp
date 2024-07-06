@@ -328,6 +328,8 @@ struct AbstractTransformerModel {
 
     virtual TensorMap getParams(int deviceId, int rank) = 0;
 
+    virtual void prepare(int deviceId, int rank) = 0;
+
     virtual std::string toString()            = 0;
     virtual int         getTensorParaSize()   = 0;
     virtual int         getPipelineParaSize() = 0;

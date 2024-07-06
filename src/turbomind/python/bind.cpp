@@ -450,6 +450,12 @@ PYBIND11_MODULE(_turbomind, m)
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
             "rank"_a)
+        .def(
+            "prepare",
+            [](AbstractTransformerModel* model, int deviceId, int rank) { model->prepare(deviceId, rank); },
+            py::call_guard<py::gil_scoped_release>(),
+            "device_id"_a,
+            "rank"_a)
         .def("__str__", &AbstractTransformerModel::toString)
         .def("__repr__", &AbstractTransformerModel::toString)
         .def("get_tensor_para_size", &AbstractTransformerModel::getTensorParaSize)
