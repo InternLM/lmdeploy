@@ -1514,12 +1514,12 @@ class ChatGLM3(BaseChatTemplate):
     """Chat template of chatglm3 model."""
 
     def __init__(self,
-                 system='<|system|> \n ',
+                 system='<|system|>\n ',
                  meta_instruction=None,
                  eosys='',
-                 user='<|user|> \n ',
+                 user='<|user|>\n ',
                  eoh='',
-                 assistant='<|assistant|> \n ',
+                 assistant='<|assistant|>\n ',
                  eoa='',
                  separator='',
                  stop_words=['<|user|>', '<|endoftext|>', '<|observation|>'],

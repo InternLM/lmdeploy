@@ -9,6 +9,7 @@ from lmdeploy.vl.model.base import VISION_MODELS
 
 from .cogvlm import CogVLMVisionModel  # noqa F401
 from .deepseek import DeepSeekVisionModel  # noqa F401
+from .glm_4v import GLM4VisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
 from .internvl_llava import InternVLLlavaVisionModel  # noqa F401
 from .llava import LlavaVisionModel  # noqa F401
@@ -20,8 +21,6 @@ from .phi3_vision import Phi3VisionModel  # noqa F401
 from .qwen import QwenVisionModel  # noqa F401
 from .xcomposer2 import Xcomposer2VisionModel  # noqa F401
 from .yi import YiVisionModel  # noqa F401
-from .glm_4v import GLM4VisionModel  # noqa F401
-
 
 logger = get_logger('lmdeploy')
 
