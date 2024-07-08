@@ -93,6 +93,6 @@ def is_supported(model_path: str):
                     0] != 'Phi3ForCausalLM'
             if arch == 'ChatGLMModel' and getattr(cfg, 'vision_config',
                                                   None) is not None:
-                # glm-4v-8b not supported
+                # glm-4v-9b not supported
                 support_by_turbomind = False
     return support_by_turbomind
