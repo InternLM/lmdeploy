@@ -219,14 +219,17 @@ class CLI(object):
             import subprocess
             import sys
             if sys.platform.startswith('linux'):
-                res = subprocess.run(['nvidia-smi', 'topo', '-m'],
-                                     stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE,
-                                     text=True,
-                                     check=True)
-                if res.returncode == 0:
-                    return '\n' + res.stdout
-                else:
+                try:
+                    res = subprocess.run(['nvidia-smi', 'topo', '-m'],
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE,
+                                         text=True,
+                                         check=True)
+                    if res.returncode == 0:
+                        return '\n' + res.stdout
+                    else:
+                        return None
+                except FileNotFoundError:
                     return None
             else:
                 return None
