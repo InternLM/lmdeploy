@@ -72,6 +72,7 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
         ft::FT_CHECK(false);
 #endif
     }
+    return nullptr;
 }
 
 template<typename T>
@@ -425,7 +426,8 @@ TensorMap LlamaTritonModel<T>::getParams(int deviceId, int rank)
 }
 
 template<typename T>
-void LlamaTritonModel<T>::prepare(int deviceId, int rank) {
+void LlamaTritonModel<T>::prepare(int deviceId, int rank)
+{
     ft::check_cuda_error(cudaSetDevice(deviceId));
     ft::FT_CHECK(shared_weights_[deviceId] != nullptr);
     shared_weights_[deviceId]->prepare();

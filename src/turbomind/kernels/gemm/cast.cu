@@ -31,8 +31,8 @@ struct Cast<Ti, uint4_t> {
             uint32_t& v = (uint32_t&)vo[i];
             v           = 0;
             PRAGMA_UNROLL
-            for (int j = 0; j < 8; ++j) {
-                v = ((v << 4) | (vi[i + j] & 0xf));
+            for (int j = 7; j >= 0; --j) {
+                v = (v << 4) | vi[i + j];
             }
         }
         return vo;
@@ -56,6 +56,15 @@ struct Cast<uint4_t, To> {
             }
         }
         return vo;
+    }
+};
+
+template<>
+struct Cast<uint4_t, uint4_t> {
+    template<int N>
+    __device__ static Array<uint4_t, N> apply(const Array<uint4_t, N>& vi)
+    {
+        return vi;
     }
 };
 
@@ -129,5 +138,56 @@ void fuse_scales_and_zeros(half* fused, const half* scales, half* zeros, size_t 
 {
     fuse_scales_and_zeros_kernel<4><<<256, 256, 0, st>>>(fused, scales, zeros, n);
 }
+
+template<int VecSize, class T>
+__global__ void
+interleave_output_dims_kernel(T* __restrict__ fused, const T* __restrict__ a, const T* __restrict__ b, int m, int k)
+{
+    using Vec1 = Array<T, VecSize>;
+
+    auto p_a = (const Vec1*)a;
+    auto p_b = (const Vec1*)b;
+
+    using Vec2 = Array<T, VecSize * 2>;
+
+    auto p_f = (Vec2*)fused;
+
+    m /= VecSize;
+
+    const int tidx = threadIdx.x + blockIdx.x * blockDim.x;
+    const int ki   = blockIdx.y;
+
+    for (int64_t mi = tidx; mi < m; mi += blockDim.x * gridDim.x) {
+        Vec1 va;
+        Vec1 vb;
+        Ldg(va, (const T*)&p_a[ki * m + mi]);
+        Ldg(vb, (const T*)&p_b[ki * m + mi]);
+        Vec2 vc;
+        PRAGMA_UNROLL
+        for (int i = 0; i < VecSize; ++i) {
+            vc[i * 2]     = va[i];
+            vc[i * 2 + 1] = vb[i];
+        }
+        Store((T*)&p_f[ki * m * 2 + mi * 2], vc);
+    }
+}
+
+template<class T>
+void interleave_output_dims_impl(T* fused, const T* a, const T* b, int m, int k, cudaStream_t st)
+{
+    constexpr int kVecSize = std::min(8, 128 / (bitsof<T> * 2));
+
+    constexpr int block = 256;
+    const dim3    grid((m + 255) / 256, k);
+
+    interleave_output_dims_kernel<kVecSize><<<grid, block, 0, st>>>(fused, a, b, m, k);
+}
+
+template void
+interleave_output_dims_impl(uint8_t* fused, const uint8_t* a, const uint8_t* b, int m, int k, cudaStream_t st);
+template void
+interleave_output_dims_impl(uint16_t* fused, const uint16_t* a, const uint16_t* b, int m, int k, cudaStream_t st);
+template void
+interleave_output_dims_impl(uint32_t* fused, const uint32_t* a, const uint32_t* b, int m, int k, cudaStream_t st);
 
 }  // namespace turbomind

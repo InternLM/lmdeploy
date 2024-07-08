@@ -214,4 +214,18 @@ int Convert(const void*         S,  //
     return dispatch() - 1;
 }
 
+std::pair<Pack, Pack> get_weight_and_scales_packing(int sm, bool force_simt)
+{
+    if (sm >= 80) {
+        return {HMMA_16816 | OPERAND_B | 1, HMMA_16816 | OPERAND_V | 1};
+    }
+    else if (sm == 75) {
+    }
+    else if (sm == 70) {
+    }
+    std::cerr << "not implemented" << std::endl;
+    std::abort();
+    return {};
+}
+
 }  // namespace turbomind::gemm

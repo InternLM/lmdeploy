@@ -63,7 +63,7 @@ private:
 
     void freeBuffer();
 
-    void activation(int num_token);
+    void activation(int token_num, bool is_chunked);
 
     size_t         head_num_;
     size_t         size_per_head_;

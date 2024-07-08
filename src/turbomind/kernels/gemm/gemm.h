@@ -48,4 +48,6 @@ int Convert(const void*         S,  //
             const MatrixLayout& Ddesc,
             cudaStream_t        stream);
 
+std::pair<Pack, Pack> get_weight_and_scales_packing(int sm, bool force_simt = false);
+
 }  // namespace turbomind::gemm

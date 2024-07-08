@@ -26,17 +26,26 @@ public:
         kFusedAdd
     };
 
+    struct Pitched {
+        const T* ptr;
+        int      pitch;
+        Pitched(const T* ptr, int pitch = 0): ptr{ptr}, pitch{pitch} {}
+    };
+
     LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream): cublas_wrapper_(cublas_wrapper), stream_(stream)
     {
     }
 
     void forward(T*                         output_data,
-                 const T*                   input_data,
+                 Pitched                    input_data,
                  int                        batch_size,
                  const LlamaDenseWeight<T>& weight,
                  Type                       type      = kGemm,
                  int*                       lora_mask = nullptr)
     {
+        if (input_data.pitch == 0) {
+            input_data.pitch = weight.input_dims;
+        }
         if (lora_mask != nullptr && weight.lora.r > 0) {
             FT_CHECK(type == kGemm);
             // output = lora(x) * scale
@@ -49,8 +58,8 @@ public:
                                   weight.input_dims,                              // k
                                   (const T*)weight.lora.a,                        // A
                                   weight.lora.r,                                  // lda
-                                  input_data,                                     // B
-                                  weight.input_dims,                              // ldb
+                                  input_data.ptr,                                 // B
+                                  input_data.pitch,                               // ldb
                                   output_data + batch_size * weight.output_dims,  // C
                                   weight.lora.r);                                 // ldc
 
@@ -75,19 +84,16 @@ public:
             case WeightType::kFP16:
             case WeightType::kFP32:
             case WeightType::kBF16:
-                forwardFp(output_data, input_data, batch_size, weight, type);
-                break;
+                return forwardFp(output_data, input_data, batch_size, weight, type);
             case WeightType::kINT4:
-                forwardInt4(output_data, input_data, batch_size, weight, type);
-                break;
-                break;
+                return forwardInt4(output_data, input_data, batch_size, weight, type);
             default:
                 FT_CHECK(0);
         }
     }
 
 private:
-    void forwardFp(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
+    void forwardFp(T* output_data, Pitched input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
     {
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
                               CUBLAS_OP_N,
@@ -96,8 +102,8 @@ private:
                               weight.input_dims,
                               (const T*)weight.kernel,
                               weight.output_dims,
-                              input_data,
-                              weight.input_dims,
+                              input_data.ptr,
+                              input_data.pitch,
                               output_data,
                               weight.output_dims,
                               1.0f,
@@ -105,7 +111,7 @@ private:
         sync_check_cuda_error();
     }
 
-    void forwardInt4(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
+    void forwardInt4(T* output_data, Pitched input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
     {
         // GemmS4F16::Type gemm_type = GemmS4F16::kGemm;
         // if (type == kFusedAdd)
@@ -113,7 +119,7 @@ private:
         // if (type == kFusedSiluFfn)
         //     gemm_type = GemmS4F16::kFusedSiluFfn;
 
-        FT_CHECK(type == kGemm);
+        // FT_CHECK(type == kGemm);
 
         using namespace gemm;
 
@@ -123,14 +129,24 @@ private:
                                   {QuantType::kAsym_FMA, weight.group_size}};
 
         const MatrixLayout a_desc{
-            get_data_type_v<T>, kRowMajor, batch_size, (int)weight.input_dims, (int)weight.input_dims};
+            get_data_type_v<T>,
+            kRowMajor,
+            batch_size,
+            (int)weight.input_dims,
+            input_data.pitch,
+        };
 
         const MatrixLayout c_desc{
-            get_data_type_v<T>, kRowMajor, batch_size, (int)weight.output_dims, (int)weight.output_dims};
+            get_data_type_v<T>,
+            kRowMajor,
+            batch_size,
+            (int)weight.output_dims,
+            (int)weight.output_dims,
+        };
 
         auto ec = gemm_.Run(operation,
                             nullptr,
-                            input_data,
+                            input_data.ptr,
                             a_desc,
                             nullptr,
                             {},
