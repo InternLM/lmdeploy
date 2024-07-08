@@ -278,3 +278,4 @@ class CLI(object):
         CLI.add_parser_convert()
         CLI.add_parser_list()
         CLI.add_parser_checkenv()
+        CLI.add_parser_chat()

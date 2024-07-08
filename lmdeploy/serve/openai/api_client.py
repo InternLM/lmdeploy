@@ -425,10 +425,14 @@ def get_streaming_response(
             yield output, tokens, finish_reason
 
 
-def main(api_server_url: str,
+def main(api_server_url: str = 'http://0.0.0.0:23333',
          session_id: int = 0,
          api_key: Optional[str] = None):
     """Main function to chat in terminal."""
+    if not api_server_url.startswith('http://'):
+        print(f'[WARNING] api_server_url of the api_server should '
+              f'start with "http://", but got "{api_server_url}"')
+        api_server_url = 'http://' + api_server_url.strip()
     api_client = APIClient(api_server_url, api_key=api_key)
     while True:
         prompt = input_prompt()

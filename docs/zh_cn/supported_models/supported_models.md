@@ -36,7 +36,7 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 
 ### PyTorch 支持的模型
 
-|        模型         |  模型规模   | FP16/BF16 | KV INT8 | W8A8 | W4A16 |
+|        Model        |    Size     | FP16/BF16 | KV INT8 | W8A8 | W4A16 |
 | :-----------------: | :---------: | :-------: | :-----: | :--: | :---: |
 |        Llama        |  7B - 65B   |    Yes    |   No    | Yes  |  Yes  |
 |       Llama2        |  7B - 70B   |    Yes    |   No    | Yes  |  Yes  |
@@ -66,3 +66,4 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |    CogVLM2-Chat     |     19B     |    Yes    |   No    |  No  |   -   |
 |   LLaVA(1.5,1.6)    |   7B-34B    |    Yes    |   No    |  No  |   -   |
 | InternVL-Chat(v1.5) |   2B-26B    |    Yes    |   No    |  No  |   -   |
+|       Gemma2        |   9B-27B    |    Yes    |   No    |  No  |   -   |

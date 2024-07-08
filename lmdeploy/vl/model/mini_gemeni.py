@@ -8,7 +8,7 @@ from typing import List
 import torch
 from PIL.Image import Image
 
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import (add_device_hook, disable_logging,
                                      disable_transformers_logging,
                                      hack_import_with)
@@ -163,16 +163,14 @@ def init_mini_gemini_model():
         yield
 
 
+@VISION_MODELS.register_module()
 class MiniGeminiVisionModel(VisonModel):
     """Qwen vision model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
-        self.with_llm = with_llm
-        self.model_path = model_path
-        check_mini_gemini_install()
-        self.build_model()
+    _arch = ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']
 
     def build_model(self):
+        check_mini_gemini_install()
         # empty init
         from accelerate import init_empty_weights
         from mgm.mm_utils import process_images
@@ -206,6 +204,7 @@ class MiniGeminiVisionModel(VisonModel):
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
             model,
+            max_memory=self.max_memory,
             dtype=torch.half,
             no_split_module_classes=['CLIPEncoderLayer', 'ConvNeXtStage'])
         device_map = infer_auto_device_map(

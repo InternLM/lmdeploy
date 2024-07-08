@@ -2,7 +2,6 @@
 import os
 import sys
 
-from .chat import SubCliChat
 from .cli import CLI
 from .lite import SubCliLite
 from .serve import SubCliServe
@@ -11,13 +10,7 @@ from .serve import SubCliServe
 def run():
     """The entry point of running LMDeploy CLI."""
     args = sys.argv[1:]
-    is_deprecated_chat_cli = len(args) > 1 and args[0] == 'chat' and \
-        args[1] in ['torch', 'turbomind']
     CLI.add_parsers()
-    if is_deprecated_chat_cli:
-        SubCliChat.add_parsers()
-    else:
-        CLI.add_parser_chat()
     SubCliServe.add_parsers()
     SubCliLite.add_parsers()
     parser = CLI.parser
@@ -50,7 +43,5 @@ def run():
                 SubCliServe.parser.print_help()
             elif command == 'lite':
                 SubCliLite.parser.print_help()
-            elif command == 'chat' and is_deprecated_chat_cli:
-                SubCliChat.parser.print_help()
             else:
                 parser.print_help()
