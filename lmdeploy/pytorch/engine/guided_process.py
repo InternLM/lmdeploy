@@ -20,7 +20,7 @@ from functools import lru_cache
 from typing import DefaultDict, Dict, List, Union
 
 import torch
-from outlines.fsm.fsm import RegexFSM
+from outlines.fsm.guide import Generate, RegexGuide, Write
 from outlines.fsm.json_schema import build_regex_from_schema
 from pydantic import BaseModel
 from transformers import PreTrainedTokenizerBase
@@ -36,7 +36,7 @@ class RegexLogitsProcessor:
             tokenizer: The model's tokenizer
         """
         tokenizer = self.adapt_tokenizer(copy.deepcopy(tokenizer))
-        fsm = RegexFSM(regex_string, tokenizer)
+        fsm = RegexGuide(regex_string, tokenizer)
         self.fsm = fsm
 
     def init_state(self):
@@ -54,10 +54,19 @@ class RegexLogitsProcessor:
         else:
             last_token = input_ids[-1]
             last_seq_id = hash(tuple(input_ids[:-1]))
-            self.fsm_state[seq_id] = self.fsm.next_state(
-                self.fsm_state[last_seq_id], last_token)
+            self.fsm_state[seq_id] = self.fsm.get_next_state(
+                state=self.fsm_state[last_seq_id], token_id=last_token)
 
-        allowed_tokens = self.fsm.allowed_token_ids(self.fsm_state[seq_id])
+        instruction = self.fsm.get_next_instruction(self.fsm_state[seq_id])
+
+        if type(instruction) == Generate:
+            allowed_tokens = instruction.tokens
+        elif type(instruction) == Write:
+            # TODO: support fast forward tokens
+            allowed_tokens = [instruction.tokens[0]]
+        else:
+            raise TypeError(
+                f'Unsupported instruction type {type(instruction)}')
 
         mask = torch.full((scores.shape[-1], ),
                           -math.inf,
