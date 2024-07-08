@@ -2,6 +2,7 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
+#include "src/turbomind/kernels/core/math.h"
 
 namespace turbomind {
 
@@ -145,30 +146,31 @@ interleave_output_dims_kernel(T* __restrict__ fused, const T* __restrict__ a, co
 {
     using Vec1 = Array<T, VecSize>;
 
-    auto p_a = (const Vec1*)a;
-    auto p_b = (const Vec1*)b;
+    const int ki = blockIdx.y;
+
+    auto p_a = reinterpret_cast<const Vec1*>(a + ki * m);
+    auto p_b = reinterpret_cast<const Vec1*>(b + ki * m);
 
     using Vec2 = Array<T, VecSize * 2>;
 
-    auto p_f = (Vec2*)fused;
+    auto p_f = reinterpret_cast<Vec2*>(fused + ki * m * 2);
 
     m /= VecSize;
 
     const int tidx = threadIdx.x + blockIdx.x * blockDim.x;
-    const int ki   = blockIdx.y;
 
     for (int64_t mi = tidx; mi < m; mi += blockDim.x * gridDim.x) {
         Vec1 va;
         Vec1 vb;
-        Ldg(va, (const T*)&p_a[ki * m + mi]);
-        Ldg(vb, (const T*)&p_b[ki * m + mi]);
+        Ldg(va, (const T*)&p_a[mi]);
+        Ldg(vb, (const T*)&p_b[mi]);
         Vec2 vc;
         PRAGMA_UNROLL
         for (int i = 0; i < VecSize; ++i) {
             vc[i * 2]     = va[i];
             vc[i * 2 + 1] = vb[i];
         }
-        Store((T*)&p_f[ki * m * 2 + mi * 2], vc);
+        Store((T*)&p_f[mi], vc);
     }
 }
 
@@ -178,7 +180,7 @@ void interleave_output_dims_impl(T* fused, const T* a, const T* b, int m, int k,
     constexpr int kVecSize = std::min(8, 128 / (bitsof<T> * 2));
 
     constexpr int block = 256;
-    const dim3    grid((m + 255) / 256, k);
+    const dim3    grid(1, k);  // x is a grid stride loop
 
     interleave_output_dims_kernel<kVecSize><<<grid, block, 0, st>>>(fused, a, b, m, k);
 }

@@ -466,8 +466,8 @@ struct Epilogue_ {
         param.combine_mat(tmp_C, cs0, delta_cs, pred);
 
         if (param.silu_act) {
-            constexpr int dc  = sizeof(Dtype) * Map::kDeltaC / 2;
-            const int     ds  = sizeof(Dtype) * Map::kDeltaS * param.ldc;
+            constexpr int dc  = sizeof(Tc) * Map::kDeltaC / 2;
+            const int     ds  = sizeof(Tc) * Map::kDeltaS * param.ldc;
             auto          ptr = reinterpret_cast<char*>(param.C + cs2idx({cs0.x / 2, cs0.y}, (int64_t)param.ldc));
             PRAGMA_UNROLL
             for (int s = 0; s < S; ++s) {

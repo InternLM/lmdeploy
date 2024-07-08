@@ -166,6 +166,8 @@ public:
 
         // std::cout << "C: " << C << ", D: " << D << "\n";
 
+        const bool silu_act = ((int)operation.epilogue & (int)Epilogue::kGatedSilu);
+
         typename Gemm::Epilogue::Param epilogue{m,
                                                 n,
                                                 (Tc*)D,
@@ -175,7 +177,7 @@ public:
                                                 (int*)workspace.barriers,
                                                 {},
                                                 {1.f, 0.f},
-                                                false};
+                                                silu_act};
 
         typename Gemm::Param param{m,
                                    n,

@@ -124,7 +124,7 @@ private:
         using namespace gemm;
 
         const Operation operation{gemm::DispatchPolicy::kDefault,
-                                  Epilogue::kNone,
+                                  type == kFusedSiluFfn ? Epilogue::kGatedSilu : Epilogue::kNone,
                                   {QuantType::kNone},
                                   {QuantType::kAsym_FMA, weight.group_size}};
 
@@ -141,7 +141,7 @@ private:
             kRowMajor,
             batch_size,
             (int)weight.output_dims,
-            (int)weight.output_dims,
+            type == kFusedSiluFfn ? (int)weight.output_dims / 2 : (int)weight.output_dims,
         };
 
         auto ec = gemm_.Run(operation,

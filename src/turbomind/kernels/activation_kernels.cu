@@ -324,8 +324,7 @@ INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
 
 // `output` may be an alias of `inter_buf`
 template<int VecSize, template<typename T> class Activation, typename T>
-__global__ void
-activation_kernel(T* inter_buf, const T* __restrict__ gate_buf, int64_t stride, int token_num, int dims)
+__global__ void activation_kernel(T* inter_buf, const T* __restrict__ gate_buf, int64_t stride, int token_num, int dims)
 {
     const int di = threadIdx.x + blockIdx.x * blockDim.x;
     const int ti = blockIdx.y;
@@ -342,7 +341,7 @@ activation_kernel(T* inter_buf, const T* __restrict__ gate_buf, int64_t stride, 
     auto p_gate  = reinterpret_cast<const Vec*>(gate_buf + ti * stride);
 
     Vec inter;
-    Ldg(inter, (T*)&p_inter[di]);
+    Load(inter, (T*)&p_inter[di]);
 
     Vec gate;
     Ldg(gate, (const T*)&p_gate[di]);

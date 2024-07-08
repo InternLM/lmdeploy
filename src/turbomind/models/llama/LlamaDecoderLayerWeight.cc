@@ -118,7 +118,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
     ffn_weights.fused_gating_intermediate.output_dims = inter_size_ / tensor_para_size_ * 2;
     ffn_weights.fused_gating_intermediate.type        = weight_type;
     ffn_weights.fused_gating_intermediate.group_size  = group_size;
-    ffn_weights.is_fused_silu                         = false;
+    ffn_weights.is_fused_silu                         = weight_type == WeightType::kINT4;
 
     ffn_weights.output.input_dims  = inter_size_ / tensor_para_size_;
     ffn_weights.output.output_dims = hidden_units_;
@@ -143,7 +143,7 @@ size_t LlamaDecoderLayerWeight<T>::workspace_size() const noexcept
     size = std::max(size, get_size(ffn_weights.gating));
 
     if (fused_up_and_gate_) {
-        size = std::max(size, get_size(ffn_weights.fused_gating_intermediate)) * 2;
+        size = std::max(size, get_size(ffn_weights.fused_gating_intermediate));
     }
 
     return size * sizeof(uint16_t);
@@ -577,24 +577,38 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size)
 template<class T>
 void interleave(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& b, void* workspace, size_t size)
 {
+    FT_CHECK(c.input_dims == a.input_dims);
+    FT_CHECK(c.input_dims == b.input_dims);
+    FT_CHECK(c.output_dims == a.output_dims * 2);
+    FT_CHECK(c.output_dims == b.output_dims * 2);
+    FT_CHECK(c.group_size == a.group_size);
+    FT_CHECK(c.group_size == b.group_size);
+
     if (a.type == WeightType::kINT4) {
-        uint8_t*   tmp_a    = (uint8_t*)workspace;
-        uint8_t*   tmp_b    = tmp_a + a.output_dims * a.input_dims;
-        uint8_t*   tmp_c    = tmp_b + b.output_dims * b.input_dims;
+        uint8_t* tmp_a = (uint8_t*)workspace;
+        uint8_t* tmp_b = tmp_a + a.output_dims * a.input_dims;
+        uint8_t* tmp_c = tmp_b + b.output_dims * b.input_dims;
+
         const auto sentinel = tmp_c + c.output_dims * c.input_dims;
-        FT_CHECK(sentinel < (uint8_t*)workspace + size);
+        FT_CHECK(sentinel <= (uint8_t*)workspace + size);
+
         extend_to_u8(tmp_a, (const uint4_t*)a.kernel, a.output_dims * a.input_dims);
         extend_to_u8(tmp_b, (const uint4_t*)b.kernel, b.output_dims * b.input_dims);
-        InterleaveOutputChannels(tmp_c, tmp_a, tmp_b, a.output_dims, a.input_dims, 0);
+
+        interleave_output_dims(tmp_c, tmp_a, tmp_b, a.output_dims, a.input_dims, 0);
+
         compact_to_u4((uint4_t*)c.kernel, tmp_c, c.output_dims * c.input_dims);
-        InterleaveOutputChannels(c.scales, a.scales, b.scales, a.output_dims, a.input_dims / a.group_size, 0);
-        InterleaveOutputChannels(c.zeros, a.zeros, b.zeros, a.output_dims, a.input_dims / a.group_size, 0);
+
+        interleave_output_dims(c.scales, a.scales, b.scales, a.output_dims, a.input_dims / a.group_size, 0);
+        interleave_output_dims(c.zeros, a.zeros, b.zeros, a.output_dims, a.input_dims / a.group_size, 0);
     }
     else {
         FT_CHECK_WITH_INFO(0, "not implemented");
-        // InterleaveOutputChannels((T*)c.kernel, (const T*)a.kernel, (const T*)b.kernel, a.output_dims, a.input_dims,
-        // 0);
+        interleave_output_dims((T*)c.kernel, (const T*)a.kernel, (const T*)b.kernel, a.output_dims, a.input_dims, 0);
     }
+
+    // Check at function level
+    sync_check_cuda_error();
 }
 
 template<class T>
@@ -620,6 +634,9 @@ void chunk(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& 
     else {
         _chunks(c.kernel, a.kernel, b.kernel, a.input_dims, sizeof(T) * a.output_dims);
     }
+
+    // Check at function level
+    sync_check_cuda_error();
 }
 
 template<typename T>
