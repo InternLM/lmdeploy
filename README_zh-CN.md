@@ -78,7 +78,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 - **有状态推理**：通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。显著提升长文本多轮对话场景中的效率。
 
-- **卓越的兼容性**: LMDeploy 支持 [KV Cache 量化](docs/zh_cn/quantization/kv_quant.md), [AWQ](docs/zh_cn/quantization/w4a16.md) 和 [Automatic Prefix Caching](docs/zh_cn/inference/turbomind_config.md#%E5%89%8D%E7%BC%80%E7%BC%93%E5%AD%98%E5%BC%80%E5%85%B3) 同时使用。
+- **卓越的兼容性**: LMDeploy 支持 [KV Cache 量化](docs/zh_cn/quantization/kv_quant.md), [AWQ](docs/zh_cn/quantization/w4a16.md) 和 [Automatic Prefix Caching](docs/zh_cn/inference/turbomind_config.md) 同时使用。
 
 # 性能
 
