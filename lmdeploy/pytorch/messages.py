@@ -2,7 +2,7 @@
 import enum
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from torch import Tensor
@@ -46,6 +46,7 @@ class SamplingParam:
     bad_words: List[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
+    response_format: Optional[str] = None
 
     @classmethod
     def from_gen_config(self, gen_config: EngineGenerationConfig):
@@ -63,6 +64,7 @@ class SamplingParam:
         temperature = gen_config.temperature
         repetition_penalty = gen_config.repetition_penalty
         max_new_tokens = gen_config.max_new_tokens
+        response_format = gen_config.response_format
 
         if top_p < 0 or top_p > 1.0:
             logger.warning('`top_p` has to be a float > 0 and < 1'
@@ -96,6 +98,7 @@ class SamplingParam:
                              random_seed=gen_config.random_seed,
                              stop_words=stop_words,
                              bad_words=bad_words,
+                             response_format=response_format,
                              max_new_tokens=max_new_tokens,
                              min_new_tokens=min_new_tokens)
 

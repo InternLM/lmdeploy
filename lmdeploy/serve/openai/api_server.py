@@ -389,6 +389,10 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
+    - response_format (Dict | None): Only pytorch backend support formatting
+        response. Examples: `{"type": "json_object", "guide": {"properties":
+        {"name": {"type": "string"}}, "required": ["name"], "type": "object"}}`
+        or `{"type": "regex_object", "guide": "call me [A-Za-z]{1,10}"}`
 
     Additional arguments supported by LMDeploy:
     - top_k (int): The number of the highest probability vocabulary
@@ -422,6 +426,13 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     gen_logprobs = None
     if request.logprobs and request.top_logprobs:
         gen_logprobs = request.top_logprobs
+    response_format = None
+    if request.response_format:
+        if VariableInterface.async_engine.backend != 'pytorch':
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                'only pytorch backend can use response_format now')
+        response_format = request.response_format.model_dump()
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens,
@@ -432,7 +443,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        skip_special_tokens=request.skip_special_tokens)
+        skip_special_tokens=request.skip_special_tokens,
+        response_format=response_format)
 
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
