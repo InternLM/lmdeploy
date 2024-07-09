@@ -659,8 +659,8 @@ def _fwd_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl.exp(qk - m_i_new[:, None])
-        alpha = tl.exp(m_i - m_i_new)
+        p = tl.math.fast_expf(qk - m_i_new[:, None])
+        alpha = tl.math.fast_expf(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
         # -- update output accumulator --
         # scale acc
