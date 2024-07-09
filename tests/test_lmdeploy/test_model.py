@@ -20,6 +20,8 @@ from lmdeploy.model import MODELS, best_match_model
      ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
      ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
      ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
+     ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
+     ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
      ('tiiuae/falcon-7b', ['falcon']), ('workspace', ['base'])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
