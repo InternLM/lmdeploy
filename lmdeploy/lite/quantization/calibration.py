@@ -169,8 +169,11 @@ class CalibrationContext():
                 if k_obs and v_obs:
                     batch_kwargs[i]['use_cache'] = True
                     version = digit_version(transformers.__version__)
-                    use_new_cache = type(mod).__name__ in ('LlamaDecoderLayer',
-                                                           'Qwen2DecoderLayer')
+                    use_new_cache = type(mod).__name__ in (
+                        'LlamaDecoderLayer',
+                        'Qwen2DecoderLayer',
+                        'Phi3DecoderLayer',
+                    )
                     if type(mod).__name__ == 'InternLM2DecoderLayer':
                         use_new_cache = hasattr(mod.attention, 'layer_idx')
                     if version > digit_version('4.36.0') and use_new_cache:

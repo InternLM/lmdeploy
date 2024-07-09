@@ -31,7 +31,11 @@ NORM_FCS_MAP = {
     'DecoderLayer': {
         'input_layernorm': ['self_attn.W_pack'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
-    }
+    },
+    'Phi3DecoderLayer': {
+        'input_layernorm': ['self_attn.qkv_proj'],
+        'post_attention_layernorm': ['mlp.gate_up_proj']
+    },
 }
 
 FC_FCS_MAP = {
@@ -57,7 +61,11 @@ FC_FCS_MAP = {
     'DecoderLayer': {
         'self_attn.W_pack': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
-    }
+    },
+    'Phi3DecoderLayer': {
+        'self_attn.qkv_proj': ['self_attn.o_proj'],
+        'mlp.gate_up_proj': ['mlp.down_proj']
+    },
 }
 
 
@@ -155,8 +163,9 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     scales = scales / (scales.max() * scales.min()).sqrt()
 
     # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
+    # phi3 fused qkv and gate_up
     if size_pre_fc > size_a and size_pre_fc % size_a == 0 \
-            and size_pre_fc // size_a == 3:
+            and size_pre_fc // size_a in [2, 3]:
 
         pre_fc.weight[-size_a:].div_(scales.view(-1, 1))
 
