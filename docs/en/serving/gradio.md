@@ -7,7 +7,7 @@ pip install lmdeploy[serve]
 lmdeploy serve gradio {model_path}
 ```
 
-All it takes is one-line command, with the `{model_path}` replaced by the model ID from huggingface hub, such as `internlm/internlm2-chat-7b`, or the local path to the model.
+All it takes is one-line command, with the `{model_path}` replaced by the model ID from huggingface hub, such as `internlm/internlm2_5-7b-chat`, or the local path to the model.
 
 For detailed parameters of the command, please turn to `lmdeploy serve gradio -h` for help.
 
@@ -28,7 +28,7 @@ from lmdeploy.serve.gradio.turbomind_coupled import run_local
 from lmdeploy.messages import TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(max_batch_size=8)
-model_path = 'internlm/internlm2-chat-7b'
+model_path = 'internlm/internlm2_5-7b-chat'
 run_local(model_path, backend_config=backend_config, server_name="huggingface-space")
 ```
 

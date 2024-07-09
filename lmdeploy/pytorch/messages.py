@@ -66,15 +66,14 @@ class SamplingParam:
         max_new_tokens = gen_config.max_new_tokens
         response_format = gen_config.response_format
 
-        if top_k <= 0:
-            logger.warning('`top_k` has to be a strictly'
-                           f' positive value, but is {top_k}')
-            top_k = 1
         if top_p < 0 or top_p > 1.0:
             logger.warning('`top_p` has to be a float > 0 and < 1'
                            f' but is {top_p}')
             top_p = 1.0
-        if temperature <= 0:
+        if temperature == 0:
+            logger.warning('`temperature` is 0, set to 1e-6')
+            temperature = 1e-6
+        if temperature < 0:
             logger.warning('`temperature` has to be a strictly'
                            f' positive value, but is {temperature}')
             temperature = 1.0

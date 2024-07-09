@@ -132,7 +132,7 @@ class VLChatTemplateWrapper:
             new_messages.append(new_item)
         return new_messages
 
-    def messages2prompt(self, messages, sequence_start=True) -> str:
+    def messages2prompt(self, messages, sequence_start=True, **kwargs) -> str:
         """convert messages to decorated prompt."""
         if isinstance(messages, str):
             return self.chat_template.messages2prompt(messages, sequence_start)
@@ -308,7 +308,7 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
     elif arch in [
             'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM',
             'LlavaForConditionalGeneration',
-            'LlavaNextForConditionalGeneration'
+            'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM'
     ]:
         return LlavaVLChatTemplateWrapper(chat_template)
     elif arch == 'MultiModalityCausalLM':  # deepseek-vl

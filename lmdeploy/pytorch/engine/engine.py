@@ -28,6 +28,8 @@ logger = get_logger('lmdeploy')
 SeqList = List[SchedulerSequence]
 AdapterList = List[SchedulerAdapter]
 
+_EMPTY_TOKEN = np.empty((0, ), dtype=np.int64)
+
 
 def _raise_exception_on_finish(task: asyncio.Task) -> None:
     """raise exception on finish."""
@@ -507,13 +509,16 @@ class Engine:
                        stopped: torch.Tensor):
         """update scheduler."""
         next_token_ids = next_token_ids.numpy()
+        eos_token_id = self.model_config.eos_token_id
         for token, msg, stop in zip(next_token_ids, running, stopped):
             if msg.status != MessageStatus.RUNNING:
                 continue
-            msg.num_new_tokens += 1
             update_token = token
+            stop = stop or token in eos_token_id
             if stop:
-                update_token = np.empty((0, ), dtype=np.int64)
+                update_token = _EMPTY_TOKEN
+            else:
+                msg.num_new_tokens += 1
             msg.update_token_ids(update_token)
             if stop:
                 msg.status = MessageStatus.STOPPED

@@ -4,10 +4,10 @@ from typing import List
 
 import torch
 from PIL.Image import Image
-from transformers import AutoConfig, AutoModel, CLIPImageProcessor
+from transformers import AutoModel, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
@@ -74,20 +74,17 @@ def dynamic_preprocess(image,
     return processed_images
 
 
+@VISION_MODELS.register_module()
 class InternVLVisionModel(VisonModel):
     """InternVL vision model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
-        self.with_llm = with_llm
-        self.model_path = model_path
-        self.build_model()
+    _arch = 'InternVLChatModel'
 
     def build_model(self):
         """Load model."""
         from accelerate import init_empty_weights
         with init_empty_weights():
-            config = AutoConfig.from_pretrained(self.model_path,
-                                                trust_remote_code=True)
+            config = self.hf_config
             # transformers below 4.37.0 may raise error about flash_attn
             config.llm_config.attn_implementation = 'eager'
             model = AutoModel.from_config(config, trust_remote_code=True)
@@ -103,6 +100,7 @@ class InternVLVisionModel(VisonModel):
                 model=model,
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
+                max_memory=self.max_memory,
                 no_split_module_classes=['InternVisionEncoderLayer'],
                 dtype=torch.half)
 

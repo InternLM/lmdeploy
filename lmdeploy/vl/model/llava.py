@@ -7,10 +7,10 @@ from typing import List, Union
 
 import torch
 from PIL.Image import Image
-from transformers import AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging, rewrite_ctx
 
 logger = get_logger('lmdeploy')
@@ -53,23 +53,32 @@ def init_llava_vision_tower(config):
         yield
 
 
+@VISION_MODELS.register_module()
 class LlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self,
-                 model_path,
-                 arch='LlavaLlamaForCausalLM',
-                 with_llm: bool = False):
-        self.model_path = model_path
-        self.arch = arch
-        self.with_llm = with_llm
-        self.build_model()
+    @classmethod
+    def match(cls, config: AutoConfig):
+        """check whether the config match the model."""
+        arch = config.architectures[0]
+        if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
+            # internvl-llava has vision_tower of OpenGVLab/xxx
+            mm_vision_tower = getattr(config, 'mm_vision_tower', '')
+            # yi-vl has projector type of xxx_Norm
+            projector_type = getattr(config, 'mm_projector_type', 'linear')
+            if '_Norm' in projector_type:
+                return False
+            if 'OpenGVLab' in mm_vision_tower:
+                return False
+            return True
+        return False
 
     def build_model(self):
         """build model & load weights."""
         # check llava install
         check_llava_install()
 
+        self.arch = self.hf_config.architectures[0]
         model = None
         if self.arch == 'LlavaLlamaForCausalLM':
             from llava.model.language_model.llava_llama import LlavaConfig
@@ -118,6 +127,7 @@ class LlavaVisionModel(VisonModel):
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
+                max_memory=self.max_memory,
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['CLIPEncoderLayer'],
