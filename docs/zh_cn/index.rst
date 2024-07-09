@@ -83,6 +83,7 @@ LMDeploy 工具箱提供以下核心功能：
 
    serving/api_server.md
    serving/api_server_vl.md
+   serving/api_server_tools.md
    serving/gradio.md
    serving/proxy_server.md
 

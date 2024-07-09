@@ -79,7 +79,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
     state_chatbot = []
     # end the session
     await InterFace.async_engine.end_session(session_id)
-    return (state_chatbot, state_chatbot, gr.Textbox.update(value=''))
+    return (state_chatbot, state_chatbot, instruction_txtbox)
 
 
 async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
@@ -125,6 +125,7 @@ def run_local(model_path: str,
               server_name: str = '0.0.0.0',
               server_port: int = 6006,
               tp: int = 1,
+              share: bool = False,
               **kwargs):
     """chat with AI assistant through web ui.
 
@@ -156,6 +157,7 @@ def run_local(model_path: str,
             "huggingface-space".
         server_port (int): the port of gradio server
         tp (int): tensor parallel for Turbomind
+        share (bool): whether to create a publicly shareable link for the app
     """
     InterFace.async_engine = AsyncEngine(
         model_path=model_path,
@@ -195,25 +197,23 @@ def run_local(model_path: str,
                                         step=0.01,
                                         label='Temperature')
 
-        send_event = instruction_txtbox.submit(chat_stream_local, [
+        instruction_txtbox.submit(chat_stream_local, [
             instruction_txtbox, state_chatbot, cancel_btn, reset_btn,
             state_session_id, top_p, temperature, request_output_len
         ], [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
-            lambda: gr.Textbox.update(value=''),
+            lambda: instruction_txtbox.postprocess(value=''),
             [],
             [instruction_txtbox],
         )
         cancel_btn.click(
             cancel_local_func,
             [state_chatbot, cancel_btn, reset_btn, state_session_id],
-            [state_chatbot, cancel_btn, reset_btn],
-            cancels=[send_event])
+            [state_chatbot, cancel_btn, reset_btn])
 
         reset_btn.click(reset_local_func,
                         [instruction_txtbox, state_chatbot, state_session_id],
-                        [state_chatbot, chatbot, instruction_txtbox],
-                        cancels=[send_event])
+                        [state_chatbot, chatbot, instruction_txtbox])
 
         def init():
             with InterFace.lock:
@@ -224,18 +224,20 @@ def run_local(model_path: str,
         demo.load(init, inputs=None, outputs=[state_session_id])
 
     if server_name == 'huggingface-space':
-        demo.queue(concurrency_count=InterFace.async_engine.instance_num,
-                   max_size=100).launch()
+        demo.queue(
+            default_concurrency_limit=InterFace.async_engine.instance_num,
+            max_size=100).launch(share=share)
     else:
         print(f'server is gonna mount on: http://{server_name}:{server_port}')
-        demo.queue(concurrency_count=InterFace.async_engine.instance_num,
-                   max_size=100,
-                   api_open=True).launch(
-                       max_threads=10,
-                       share=True,
-                       server_port=server_port,
-                       server_name=server_name,
-                   )
+        demo.queue(
+            default_concurrency_limit=InterFace.async_engine.instance_num,
+            max_size=100,
+            api_open=False).launch(
+                max_threads=10,
+                share=share,
+                server_port=server_port,
+                server_name=server_name,
+            )
 
 
 if __name__ == '__main__':
