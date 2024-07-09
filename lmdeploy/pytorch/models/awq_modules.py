@@ -37,8 +37,10 @@ def wq_gemm_forward(
             event_def.wait()
             out = torch.matmul(x, out)
         else:
-            out = awq_ext.gemm_forward_cuda(x.reshape(-1, x.shape[-1]),
-                                            qweight, scales, qzeros, 8)
+            x = x.flatten(0, -2)
+            if not x.is_contiguous():
+                x = x.contiguous()
+            out = awq_ext.gemm_forward_cuda(x, qweight, scales, qzeros, 8)
     else:
         out = dequantize_gemm(qweight, qzeros, scales, w_bit, group_size)
         out = torch.matmul(x, out)
