@@ -5,9 +5,9 @@ from typing import List
 
 import torch
 from PIL.Image import Image
-from transformers import AutoConfig, AutoProcessor
+from transformers import AutoProcessor
 
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 
@@ -118,15 +118,11 @@ def _process_image_embedding(self, pixel_values: torch.Tensor,
     return img_set_tensor
 
 
+@VISION_MODELS.register_module()
 class Phi3VisionModel(VisonModel):
     """Llava hf vision model."""
 
-    def __init__(self, model_path: str, with_llm: bool = False):
-        self.model_path = model_path
-        self.with_llm = with_llm
-        self.hf_config = AutoConfig.from_pretrained(model_path,
-                                                    trust_remote_code=True)
-        self.build_model()
+    _arch = 'Phi3VForCausalLM'
 
     def build_model(self):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
@@ -149,6 +145,7 @@ class Phi3VisionModel(VisonModel):
         no_split_module_classes = ['CLIPEncoderLayer']
         max_memory = get_balanced_memory(
             model,
+            max_memory=self.max_memory,
             dtype=torch.half,
             no_split_module_classes=no_split_module_classes)
         device_map = infer_auto_device_map(

@@ -583,6 +583,30 @@ class InternVLInternLM2Chat(InternLM2Chat7B):
             return 'internvl-internlm2'
 
 
+@MODELS.register_module(name='internvl2-internlm2')
+class InternVL2InternLM2(InternLM2Chat7B):
+
+    def __init__(
+            self,
+            meta_instruction='你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。',
+            stop_words=['<|im_start|>', '<|im_end|>'],
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'internvl2' in path and 'internvl2-4b' not in path:
+            return 'internvl2-internlm2'
+
+
 @MODELS.register_module(name='internlm-xcomposer2')
 class InternLMXComposer2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM-XComposer2-7b."""
@@ -788,8 +812,8 @@ class Llama3(BaseChatTemplate):
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
         if sequence_start and not isinstance(messages, str):
             return '<|begin_of_text|>' + super().messages2prompt(
-                messages, sequence_start, **kwargs)[:-1]
-        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
+                messages, sequence_start, **kwargs)
+        return super().messages2prompt(messages, sequence_start, **kwargs)
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -1141,11 +1165,13 @@ class Gemma(BaseChatTemplate):
                  eoh='<end_of_turn>\n',
                  assistant='<start_of_turn>model\n',
                  eoa='<end_of_turn>\n',
+                 stop_words=['<end_of_turn>'],
                  **kwargs):
         super().__init__(user=user,
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
+                         stop_words=stop_words,
                          **kwargs)
 
     @classmethod
@@ -1474,6 +1500,27 @@ class Phi3Instruct(BaseChatTemplate):
         path = model_path.lower()
         if all([c in path for c in ['phi-3', 'instruct']]):
             return 'phi-3'
+
+
+@MODELS.register_module(name='internvl2-phi3')
+class InternVL2Phi3(Phi3Instruct):
+
+    def __init__(
+            self,
+            meta_instruction='你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。',
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'internvl2-4b' in path:
+            return 'internvl2-phi3'
 
 
 @MODELS.register_module(name='glm4')

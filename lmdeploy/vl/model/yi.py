@@ -3,7 +3,9 @@ import os
 from contextlib import contextmanager
 
 import torch.nn as nn
+from transformers import AutoConfig
 
+from lmdeploy.vl.model.base import VISION_MODELS
 from lmdeploy.vl.model.llava import LlavaVisionModel, check_llava_install
 
 from .utils import disable_transformers_logging, rewrite_ctx
@@ -80,11 +82,19 @@ def init_yi_model():
         yield
 
 
+@VISION_MODELS.register_module()
 class YiVisionModel(LlavaVisionModel):
     """Yi visual model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
-        super().__init__(model_path=model_path, with_llm=with_llm)
+    @classmethod
+    def match(cls, config: AutoConfig):
+        """check whether the config match the model."""
+        arch = config.architectures[0]
+        if arch == 'LlavaLlamaForCausalLM':
+            projector_type = getattr(config, 'mm_projector_type', 'linear')
+            if '_Norm' in projector_type:
+                return True
+        return False
 
     def build_model(self):
         """build model & load weights."""
