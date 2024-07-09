@@ -174,6 +174,15 @@ def test_llama2():
         assert _prompt is None
 
 
+def test_llama3():
+    conversation = [{'role': 'user', 'content': 'Are you ok?'}]
+
+    from lmdeploy.model import Llama3
+    t = Llama3(model_name='llama', capability='chat')
+    prompt = t.messages2prompt(conversation)
+    assert prompt == '<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nAre you ok?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n'  # noqa
+
+
 def test_qwen():
     prompt = 'hello, can u introduce yourself'
     model = MODELS.get('qwen-7b')(capability='completion')
