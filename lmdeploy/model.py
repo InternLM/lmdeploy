@@ -594,7 +594,6 @@ class InternVL2InternLM2(InternLM2Chat7B):
 
 
 @MODELS.register_module(name='internlm-xcomposer2d5')
-@MODELS.register_module(name='internlm-xcomposer2-4khd')
 @MODELS.register_module(name='internlm-xcomposer2')
 class InternLMXComposer2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM-XComposer2-7b."""
@@ -636,9 +635,7 @@ class InternLMXComposer2Chat7B(InternLMChat7B):
         """
         path = model_path.lower()
         if 'internlm' in path and 'xcomposer2' in path:
-            if '4khd' in path:
-                return 'internlm-xcomposer2-4khd'
-            elif '2d5' in path:
+            if '2d5' in path:
                 return 'internlm-xcomposer2d5'
             return 'internlm-xcomposer2'
 
