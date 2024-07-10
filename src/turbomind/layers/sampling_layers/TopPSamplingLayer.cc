@@ -140,12 +140,12 @@ void TopPSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     uint         min_top_k          = runtime_top_k_size > 0 ? runtime_top_k.min<uint>() : 0;
     skip_all_                       = false;
 
+    // skip topp setup & forward if all top_k is not zero
     if (runtime_top_p_size == 0 || min_top_k > 0) {
         skip_all_ = true;
         return;
     }
 
-    // skip topp setup & forward if all top_k is not zero
     BaseSamplingLayer<T>::setup(batch_size, beam_width, runtime_args);
 
     if (h_runtime_top_k_.size() < batch_size) {
