@@ -39,6 +39,10 @@ class SubCliServe:
                             type=int,
                             default=6006,
                             help='The port of gradio server')
+        parser.add_argument('--share',
+                            action='store_true',
+                            help='Whether to create a publicly shareable link'
+                            ' for the app')
 
         # common args
         ArgumentHelper.backend(parser)
@@ -261,7 +265,8 @@ class SubCliServe:
             server_port=args.server_port,
             backend=backend,
             backend_config=backend_config,
-            chat_template_config=chat_template_config)
+            chat_template_config=chat_template_config,
+            share=args.share)
 
     @staticmethod
     def api_server(args):

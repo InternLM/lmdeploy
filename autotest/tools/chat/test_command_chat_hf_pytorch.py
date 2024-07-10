@@ -21,7 +21,7 @@ def test_hf_pytorch_chat_tp1(config, model, cli_case_config, worker_id):
         usercase,
         cli_case_config.get(usercase),
         model,
-        'torch',
+        'pytorch',
         cuda_prefix=get_cuda_prefix_by_workerid(worker_id))
     if chat_log is not None:
         allure.attach.file(chat_log,
@@ -42,7 +42,7 @@ def test_hf_pytorch_chat_tp2(config, model, cli_case_config, worker_id):
         usercase,
         cli_case_config.get(usercase),
         model,
-        'torch',
+        'pytorch',
         cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2))
     if chat_log is not None:
         allure.attach.file(chat_log,
@@ -63,7 +63,7 @@ def test_hf_pytorch_chat_pr(config, model, cli_case_config):
         usercase,
         cli_case_config.get(usercase),
         model,
-        'torch',
+        'pytorch',
         cuda_prefix='CUDA_VISIBLE_DEVICES=5,6')
     if chat_log is not None:
         allure.attach.file(chat_log,
@@ -86,7 +86,7 @@ def test_modelscope_pytorch_chat_tp1(config, model, cli_case_config,
         usercase,
         cli_case_config.get(usercase),
         model,
-        'torch',
+        'pytorch',
         cuda_prefix=get_cuda_prefix_by_workerid(worker_id),
         use_local_model=False)
     del os.environ['LMDEPLOY_USE_MODELSCOPE']
@@ -110,7 +110,7 @@ def test_pytorch_chat_with_lora_tp1(config, model, cli_case_config, worker_id):
         usercase,
         cli_case_config.get(usercase),
         model,
-        'torch',
+        'pytorch',
         cuda_prefix=get_cuda_prefix_by_workerid(worker_id),
         extra='--adapters lora/Llama2-Chinese-7b-Chat-LoRA')
 
@@ -133,7 +133,7 @@ def test_pytorch_chat_with_lora_tp2(config, model, cli_case_config, worker_id):
         usercase,
         cli_case_config.get(usercase),
         model,
-        'torch',
+        'pytorch',
         cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
         extra='--adapters a=lora/2024-01-25_self_dup b=lora/2024-01-25_self')
 

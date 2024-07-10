@@ -16,6 +16,7 @@ def run(model_path_or_server: str,
         chat_template_config: Optional[ChatTemplateConfig] = None,
         tp: int = 1,
         model_name: str = None,
+        share: bool = False,
         **kwargs):
     """chat with AI assistant through web ui.
 
@@ -35,12 +36,16 @@ def run(model_path_or_server: str,
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         tp (int): tensor parallel for Turbomind
+        share (bool): whether to create a publicly shareable link for the app
     """
     if ':' in model_path_or_server:
         if 'http:' in model_path_or_server:
             from lmdeploy.serve.gradio.api_server_backend import run_api_server
-            run_api_server(model_path_or_server, server_name, server_port,
-                           batch_size)
+            run_api_server(model_path_or_server,
+                           server_name,
+                           server_port,
+                           batch_size,
+                           share=share)
         else:
             from lmdeploy.serve.gradio.triton_server_backend import \
                 run_triton_server
@@ -64,6 +69,7 @@ def run(model_path_or_server: str,
                   model_name=model_name,
                   batch_size=batch_size,
                   tp=tp,
+                  share=share,
                   **kwargs)
 
 

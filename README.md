@@ -28,7 +28,7 @@ ______________________________________________________________________
 
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
-- \[2024/05\] Support 4-bits weight-only quantization and inference on VMLs, such as InternVL v1.5, LLaVa, InternLMXComposer2
+- \[2024/05\] Support 4-bits weight-only quantization and inference on VLMs, such as InternVL v1.5, LLaVa, InternLMXComposer2
 - \[2024/04\] Support Llama3 and more VLMs, such as InternVL v1.1, v1.2, MiniGemini, InternLMXComposer2.
 - \[2024/04\] TurboMind adds online int8/int4 KV cache quantization and inference for all supported devices. Refer [here](docs/en/quantization/kv_quant.md) for detailed guide
 - \[2024/04\] TurboMind latest upgrade boosts GQA, rocketing the [internlm2-20b](https://huggingface.co/internlm/internlm2-20b) model inference to 16+ RPS, about 1.8x faster than vLLM.
@@ -45,7 +45,7 @@ ______________________________________________________________________
 <details close>
 <summary><b>2023</b></summary>
 
-- \[2023/12\] Turbomind supports multimodal input. [Gradio Demo](./examples/vl/README.md)
+- \[2023/12\] Turbomind supports multimodal input.
 - \[2023/11\] Turbomind supports loading hf model directly. Click [here](docs/en/inference/load_hf.md) for details.
 - \[2023/11\] TurboMind major upgrades, including: Paged Attention, faster attention kernels without sequence length limitation, 2x faster KV8 kernels, Split-K decoding (Flash Decoding), and W4A16 inference for sm_75
 - \[2023/09\] TurboMind supports Qwen-14B
@@ -77,6 +77,8 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 - **Effortless Distribution Server**: Leveraging the request distribution service, LMDeploy facilitates an easy and efficient deployment of multi-model services across multiple machines and cards.
 
 - **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, the engine remembers dialogue history, thus avoiding repetitive processing of historical sessions.
+
+- **Excellent Compatibility**: LMDeploy supports [KV Cache Quant](docs/en/quantization/kv_quant.md), [AWQ](docs/en/quantization/w4a16.md) and [Automatic Prefix Caching](docs/en/inference/turbomind_config.md) to be used simultaneously.
 
 # Performance
 

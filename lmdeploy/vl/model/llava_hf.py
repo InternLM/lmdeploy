@@ -5,25 +5,20 @@ from typing import List
 
 import torch
 from PIL.Image import Image
-from transformers import AutoConfig, AutoProcessor
+from transformers import AutoProcessor
 
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 
+@VISION_MODELS.register_module()
 class LlavaHfVisionModel(VisonModel):
     """Llava hf vision model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
-        self.model_path = model_path
-        self.with_llm = with_llm
-        self.hf_config = AutoConfig.from_pretrained(model_path,
-                                                    trust_remote_code=True)
-        self.build_model()
+    _arch = 'LlavaForConditionalGeneration'
 
     def build_model(self):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
-        from accelerate.utils import get_balanced_memory, infer_auto_device_map
 
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
@@ -36,23 +31,13 @@ class LlavaHfVisionModel(VisonModel):
             else:
                 self.vl_model = model
 
-        no_split_module_classes = ['CLIPEncoderLayer']
-        max_memory = get_balanced_memory(
-            model,
-            dtype=torch.half,
-            no_split_module_classes=no_split_module_classes)
-        device_map = infer_auto_device_map(
-            model,
-            no_split_module_classes=no_split_module_classes,
-            max_memory=max_memory,
-            dtype=torch.half)
-
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
+                max_memory=self.max_memory,
                 checkpoint=self.model_path,
-                device_map=device_map if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=no_split_module_classes,
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
+                no_split_module_classes=['CLIPEncoderLayer'],
                 dtype=torch.half)
         model.eval()
         self.model = model
