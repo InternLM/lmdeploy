@@ -128,16 +128,40 @@ def test_messages2prompt4internlm2_chat():
             'content': "[{'type': 'image', 'content': 'image url'}]"
         },
     ]
+    tools = [{
+        'type': 'function',
+        'function': {
+            'name': 'add',
+            'description': 'Compute the sum of two numbers',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'a': {
+                        'type': 'int',
+                        'description': 'A number',
+                    },
+                    'b': {
+                        'type': 'int',
+                        'description': 'A number',
+                    },
+                },
+                'required': ['a', 'b'],
+            },
+        }
+    }]
+    import json
     expected_prompt = (
         model.system.strip() +
         ' name=<|interpreter|>\nYou have access to python environment.' +
+        model.eosys + model.system.strip() +
+        f' name={model.plugin}\n{json.dumps(tools, ensure_ascii=False)}' +
         model.eosys + model.user + 'use python drwa a line' + model.eoh +
         model.assistant +
         '<|action_start|><|interpreter|>\ncode<|action_end|>\n' + model.eoa +
         model.separator + model.environment.strip() +
         " name=<|interpreter|>\n[{'type': 'image', 'content': 'image url'}]" +
         model.eoenv + model.assistant)
-    actual_prompt = model.messages2prompt(messages)
+    actual_prompt = model.messages2prompt(messages, tools=tools)
     assert actual_prompt == expected_prompt
 
 
@@ -172,6 +196,15 @@ def test_llama2():
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
         assert _prompt is None
+
+
+def test_llama3():
+    conversation = [{'role': 'user', 'content': 'Are you ok?'}]
+
+    from lmdeploy.model import Llama3
+    t = Llama3(model_name='llama', capability='chat')
+    prompt = t.messages2prompt(conversation)
+    assert prompt == '<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nAre you ok?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n'  # noqa
 
 
 def test_qwen():
