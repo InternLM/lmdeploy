@@ -19,7 +19,6 @@ def assert_chat_completions_batch_return(output,
         assert len(message.get('message').get('content')) > 0
         assert message.get('message').get('role') == 'assistant'
         if check_logprobs:
-            print(message.get('logprobs'))
             len(message.get('logprobs').get('content')) == output.get(
                 'usage').get('completion_tokens')
             for logprob in message.get('logprobs').get('content'):
@@ -28,9 +27,9 @@ def assert_chat_completions_batch_return(output,
 
 def assert_logprobs(logprobs, logprobs_num):
     assert_logprob_element(logprobs)
-    assert len(logprobs.get('top_logprobs')) > 0 and type(
-        logprobs.get('top_logprobs')) == list and len(
-            logprobs.get('top_logprobs')) <= logprobs_num
+    assert len(logprobs.get('top_logprobs')) > 0
+    assert type(logprobs.get('top_logprobs')) == list
+    assert len(logprobs.get('top_logprobs')) <= logprobs_num
     for logprob_element in logprobs.get('top_logprobs'):
         assert_logprob_element(logprob_element)
 
@@ -38,8 +37,7 @@ def assert_logprobs(logprobs, logprobs_num):
 def assert_logprob_element(logprob):
     assert len(logprob.get('token')) > 0 and type(logprob.get('token')) == str
     assert len(logprob.get('bytes')) > 0 and type(logprob.get('bytes')) == list
-    assert len(logprob.get('logprob')) > 0 and type(
-        logprob.get('logprob')) == float
+    assert type(logprob.get('logprob')) == float
 
 
 def assert_chat_completions_stream_return(output,
@@ -59,7 +57,9 @@ def assert_chat_completions_stream_return(output,
         if is_last is False:
             assert message.get('finish_reason') is None
             if check_logprobs:
-                assert_logprobs(message.get('logprobs'), logprobs_num)
+                assert (len(message.get('logprobs').get('content')) == 1)
+                assert_logprobs(
+                    message.get('logprobs').get('content')[0], logprobs_num)
 
         if is_last is True:
             assert len(message.get('delta').get('content')) == 0

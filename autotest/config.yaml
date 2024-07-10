@@ -18,15 +18,18 @@ turbomind_chat_model:
     - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-7b-chat-1m
-    - internlm/internlm2-chat-1_8b
+    - internlm/internlm-xcomposer2d5-7b
     - internlm/internlm2-chat-7b
     - internlm/internlm2-chat-20b
     - internlm/internlm2-chat-7b-4bits
     - internlm/internlm2-chat-20b-4bits
     - internlm/internlm-chat-20b
     - internlm/internlm-xcomposer2-vl-7b
-    - internlm/internlm-xcomposer2-7b
     - internlm/internlm-xcomposer2-4khd-7b
+    - OpenGVLab/InternVL2-2B
+    - OpenGVLab/InternVL2-4B
+    - OpenGVLab/InternVL2-8B
+    - OpenGVLab/InternVL2-26B
     - OpenGVLab/InternVL-Chat-V1-5
     - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
     - Qwen/Qwen2-7B-Instruct
@@ -73,11 +76,12 @@ pytorch_chat_model:
     - mistralai/Mistral-7B-Instruct-v0.2
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-7b-it
+    - google/gemma-2-9b-it
     - deepseek-ai/deepseek-moe-16b-chat
     - deepseek-ai/deepseek-coder-1.3b-instruct
     - THUDM/chatglm2-6b
-    - THUDM/cogvlm-chat-hf
     - THUDM/cogvlm2-llama3-chinese-chat-19B
+    - THUDM/glm-4v-9b
     - microsoft/Phi-3-mini-4k-instruct
     - microsoft/Phi-3-vision-128k-instruct
     - bigcode/starcoder2-7b
@@ -102,10 +106,12 @@ vl_model:
     - OpenGVLab/InternVL-Chat-V1-5
     - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
     - internlm/internlm-xcomposer2-vl-7b
-    - internlm/internlm-xcomposer2-7b
+    - internlm/internlm-xcomposer2d5-7b
     - internlm/internlm-xcomposer2-4khd-7b
     - THUDM/cogvlm-chat-hf
     - THUDM/cogvlm2-llama3-chinese-chat-19B
+    - THUDM/glm-4v-9b
+    - microsoft/Phi-3-mini-4k-instruct
     - microsoft/Phi-3-vision-128k-instruct
     - openbmb/MiniCPM-Llama3-V-2_5
 
@@ -120,7 +126,7 @@ quatization_case_config:
         - internlm/internlm2-20b
         - internlm/internlm-chat-20b
         - internlm/internlm-xcomposer2-vl-7b
-        - internlm/internlm-xcomposer2-7b
+        - internlm/internlm-xcomposer2d5-7b
         - internlm/internlm-xcomposer2-4khd-7b
         - OpenGVLab/InternVL-Chat-V1-5
         - OpenGVLab/Mini-InternVL-Chat-2B-V1-5

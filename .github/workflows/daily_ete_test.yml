@@ -119,6 +119,7 @@ jobs:
         - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/shared:/mnt/shared
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -591,7 +592,7 @@ jobs:
           rm -rf allure-results
       - name: Test lmdeploy - interface pipeline case
         run: |
-          pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --alluredir=allure-results || true
+          pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --rerun 0 --alluredir=allure-results || true
           pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results || true
           pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results || true
           pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=allure-results

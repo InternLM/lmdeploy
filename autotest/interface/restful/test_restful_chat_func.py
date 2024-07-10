@@ -693,6 +693,55 @@ class TestRestfulInterfaceChatCompletions:
             'finish_reason') == 'length'
         assert length == 5 or length == 6
 
+    @pytest.mark.tmp
+    def future_test_logprobs(self):
+        api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
+        for output in api_client.chat_completions_v1(
+                model=model_name,
+                messages='Hi, pls intro yourself',
+                max_tokens=5,
+                temperature=0.01,
+                logprobs=True,
+                top_logprobs=10):
+            continue
+        assert_chat_completions_batch_return(output, model_name)
+        assert output.get('choices')[0].get('finish_reason') == 'length'
+        assert output.get('usage').get('completion_tokens') == 6 or output.get(
+            'usage').get('completion_tokens') == 5
+
+    @pytest.mark.tmp
+    def test_logprobs_streaming(self):
+        api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
+        outputList = []
+        for output in api_client.chat_completions_v1(
+                model=model_name,
+                messages='Hi, pls intro yourself',
+                stream=True,
+                max_tokens=5,
+                temperature=0.01,
+                logprobs=True,
+                top_logprobs=10):
+            outputList.append(output)
+        assert_chat_completions_stream_return(outputList[-1],
+                                              model_name,
+                                              True,
+                                              check_logprobs=True,
+                                              logprobs_num=10)
+        response = ''
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index],
+                                                  model_name,
+                                                  check_logprobs=True,
+                                                  logprobs_num=10)
+            response += outputList[index].get('choices')[0].get('delta').get(
+                'content')
+        length = api_client.encode(response, add_bos=False)[1]
+        assert outputList[-1].get('choices')[0].get(
+            'finish_reason') == 'length'
+        assert length == 5 or length == 6
+
 
 @pytest.mark.order(8)
 @pytest.mark.turbomind

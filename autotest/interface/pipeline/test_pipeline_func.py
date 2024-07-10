@@ -27,7 +27,8 @@ def test_return_with_prompt(config, model, backend, worker_id):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
         pipe = pipeline(model_path, backend_config=backend_config)
-        response = pipe('Hi, pls intro yourself')
+        gen_config = GenerationConfig(logprobs=10, max_new_tokens=5)
+        response = pipe('Hi, pls intro yourself', gen_config=gen_config)
         result, msg = assert_pipeline_single_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)
         del pipe
@@ -57,8 +58,10 @@ def test_return_with_prompt_stream(config, model, backend, worker_id):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
         pipe = pipeline(model_path, backend_config=backend_config)
+        gen_config = GenerationConfig(logprobs=10, max_new_tokens=5)
         response = []
-        for item in pipe.stream_infer('Hi, pls intro yourself'):
+        for item in pipe.stream_infer('Hi, pls intro yourself',
+                                      gen_config=gen_config):
             response.append(item)
         result, msg = assert_pipeline_single_stream_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)
@@ -261,6 +264,70 @@ def test_return_with_message_batch_stream(config, model, backend, worker_id):
         for item in pipe.stream_infer(prompts):
             response.append(item)
         result, msg = assert_pipeline_batch_stream_return(response, 2)
+        save_pipeline_common_log(config, file_name, result, response, msg)
+        del pipe
+        torch.cuda.empty_cache()
+
+    file_name = f'pipeline_log_{worker_id}.txt'
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
+                                                                     tp_num=2)
+    p = Process(target=run_pipeline_testcase,
+                args=(config, model, backend, file_name))
+
+    p.start()
+    p.join()
+    assert_pipeline_common_log(config, file_name)
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
+
+
+@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('backend', [TurbomindEngineConfig])
+def test_return_check_logprobs(config, model, backend, worker_id):
+
+    def run_pipeline_testcase(config, model, backend, file_name):
+
+        model_path = '/'.join([config.get('model_path'), model])
+        backend_config = backend(tp=2)
+        pipe = pipeline(model_path, backend_config=backend_config)
+        gen_config = GenerationConfig(logprobs=10, max_new_tokens=5, top_k=40)
+        response = pipe('Hi, pls intro yourself', gen_config=gen_config)
+        result, msg = assert_pipeline_single_return(response, logprobs_num=10)
+        save_pipeline_common_log(config, file_name, result, response, msg)
+        del pipe
+        torch.cuda.empty_cache()
+
+    file_name = f'pipeline_log_{worker_id}.txt'
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
+                                                                     tp_num=2)
+    p = Process(target=run_pipeline_testcase,
+                args=(config, model, backend, file_name))
+
+    p.start()
+    p.join()
+    assert_pipeline_common_log(config, file_name)
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
+
+
+@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('backend', [TurbomindEngineConfig])
+def test_return_check_logprobs_stream(config, model, backend, worker_id):
+
+    def run_pipeline_testcase(config, model, backend, file_name):
+
+        model_path = '/'.join([config.get('model_path'), model])
+        backend_config = backend(tp=2)
+        pipe = pipeline(model_path, backend_config=backend_config)
+        gen_config = GenerationConfig(logprobs=10, max_new_tokens=5, top_k=40)
+        response = []
+        for item in pipe.stream_infer('Hi, pls intro yourself',
+                                      gen_config=gen_config):
+            response.append(item)
+        result, msg = assert_pipeline_single_stream_return(response,
+                                                           logprobs_num=10)
         save_pipeline_common_log(config, file_name, result, response, msg)
         del pipe
         torch.cuda.empty_cache()
