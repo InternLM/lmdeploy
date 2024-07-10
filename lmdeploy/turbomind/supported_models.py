@@ -62,7 +62,7 @@ def is_supported(model_path: str):
     """  # noqa: E501
     import os
 
-    def _is_head_dim_ok(cfg):
+    def _is_head_dim_128(cfg):
         num_attn_head = cfg.num_attention_heads
         hidden_size = cfg.hidden_size
         # turbomind support head_dim=128
@@ -86,12 +86,12 @@ def is_supported(model_path: str):
             elif arch == 'Qwen2ForCausalLM':
                 # qwen2 0.5b size_per_head is 64, which hasn't been supported
                 # by turbomind yet
-                support_by_turbomind = _is_head_dim_ok(cfg)
+                support_by_turbomind = _is_head_dim_128(cfg)
             elif arch == 'ChatGLMModel':
                 # chatglm1/2/3 is not working yet
                 support_by_turbomind = cfg.num_layers == 40
             elif arch == 'InternVLChatModel':
                 # internvl2-4b,internlm2-1b are not working yet
-                support_by_turbomind = _is_head_dim_ok(cfg.llm_config)
+                support_by_turbomind = _is_head_dim_128(cfg.llm_config)
 
     return support_by_turbomind
