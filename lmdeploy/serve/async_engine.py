@@ -610,6 +610,7 @@ class AsyncEngine(LogitsMixin):
             generator = await self.get_generator(False, session_id)
             async with self.safe_run(session_id):
                 state = DetokenizeState(len(input_ids))
+                start_ids_offset = state.ids_offset
                 response = ''
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
@@ -634,7 +635,8 @@ class AsyncEngine(LogitsMixin):
                     res = res[ids_offset:]
                     logprobs = None
                     if outputs.logprobs:
-                        logprobs = outputs.logprobs[ids_offset:]
+                        log_offset = ids_offset - start_ids_offset
+                        logprobs = outputs.logprobs[log_offset:]
 
                     # response, history token len,
                     # input token len, gen token len
