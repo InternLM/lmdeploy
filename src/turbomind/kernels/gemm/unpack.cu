@@ -2,6 +2,7 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
+#include <iostream>
 
 namespace turbomind {
 
@@ -67,6 +68,16 @@ void unpack_awq_gemm(uint4_t* dst, const uint4_t* src, int rows, int cols, cudaS
 {
     Array<int, 4> shape{cols, rows / 8, 2, 4};
     permute_u4<0, 1, 3, 2><<<512, 512, 0, st>>>((uint*)dst, (const uint*)src, shape);
+}
+
+void transpose_u4(uint4_t* dst, const uint4_t* src, int s, int c, cudaStream_t st)
+{
+    if (s % 8 || c % 8) {
+        std::cerr << "transpose_u4: invalid shape (" << s << "," << c << "), must be multiple of 8" << std::endl;
+        return;
+    }
+    Array<int, 2> shape{s, c};
+    permute_u4<1, 0><<<512, 512, 0, st>>>((uint*)dst, (const uint*)src, shape);
 }
 
 // load -> unpack -> extend_to_u8 -> manipulation -> compat_to_u4 -> store

@@ -1,6 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/gemm/config/sm80_hmma_16816_pack.h"
+#include "src/turbomind/kernels/gemm/config/sm80_hmma_16816.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/transform.h"
@@ -100,8 +100,8 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
 
         // Add(std::make_unique<KernelImpl<Config::Type<16, 32, 32, 1, 1, 1, 3, false, 0, 0, 1, 128>::Kernel>>());
 
-        Add(std::make_unique<KernelImpl<Config::Type<16, 128, 32, 1, 4, 1, 5, true, 0, 0, 1, 128>::Kernel>>());
-        Add(std::make_unique<KernelImpl<Config::Type<16,  64, 64, 1, 4, 1, 3, true, 0, 0, 1, 128>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<16, 128, 32, 1, 4, 1, 5, true, 0, 0, 1, 128>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<16,  64, 64, 1, 4, 1, 3, true, 0, 0, 1, 128>::Kernel>>());
     }
 }
 

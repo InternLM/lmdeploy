@@ -160,8 +160,12 @@ extern __shared__ char smem_buf[];
 template<class Kernel>
 __global__ void gemm_kernel(typename Kernel::Param params, typename Kernel::CtaMap cta_map)
 {
-    Kernel kernel;
-    kernel(params, cta_map, smem_buf);
+#if __CUDA_ARCH__
+    if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
+        Kernel kernel;
+        kernel(params, cta_map, smem_buf);
+    }
+#endif
 }
 
 }  // namespace turbomind::gemm

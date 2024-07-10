@@ -21,7 +21,9 @@ public:
         reigster_sm80_s16816gemm_f16_f16_nn_packed();
         // reigster_sm80_s16816gemm_f16_f16_nt();
 
-        // register_sm70_s884gemm_f16_f16();
+        register_sm75_s1688gemm_f16_f16();
+
+        register_sm70_s884gemm_f16_f16();
 
 
         // reigster_sm70_sgemm_f16_f16_f16_tn();
@@ -61,6 +63,7 @@ private:
     void reigster_sm80_s16816gemm_f16_f16_nt();
 
     void reigster_sm80_s16816gemm_f16_f16_nn_packed();
+    void register_sm75_s1688gemm_f16_f16();
 
     void register_sm70_s884gemm_f16_f16_f16_tn();
     void reigster_sm70_sgemm_f16_f16_f16_tn();

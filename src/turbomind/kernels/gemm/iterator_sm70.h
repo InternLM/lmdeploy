@@ -6,7 +6,6 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
-#include "src/turbomind/kernels/core/smem.h"
 #include "src/turbomind/kernels/gemm/predicate.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
@@ -15,14 +14,8 @@
 
 namespace turbomind::gemm {
 
-#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDACC_VER_MINOR__ >= 4)
-#define L2_CACHEHINT(size) ".L2::" #size "B"
-#else
-#define L2_CACHEHINT(size)
-#endif
-
 template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS>
-struct GmemIteratorSm80 {
+struct GmemIteratorSm70 {
 
     using ThreadMap = Map;
 
@@ -42,8 +35,6 @@ struct GmemIteratorSm80 {
 
     int src_step_c_;
     int src_step_s_;
-
-    // int stride_s_;
 
     Predicate<Map::kIterS, Map::kIterC, (AlignedC && Map::kAlignedC), (AlignedS && Map::kAlignedS)> pred_;
 
@@ -67,9 +58,9 @@ struct GmemIteratorSm80 {
         return mk2cs<kOrder>(mk.x, mk.y);
     }
 
-    __device__ GmemIteratorSm80(): smem_data_{Pointer{nullptr}} {};
+    __device__ GmemIteratorSm70(): smem_data_{Pointer{nullptr}} {};
 
-    __device__ GmemIteratorSm80(Pointer data, int stride_s, int2 offset, int2 extent): smem_data_{Pointer{(T*)nullptr}}
+    __device__ GmemIteratorSm70(Pointer data, int stride_s, int2 offset, int2 extent): smem_data_{Pointer{(T*)nullptr}}
     {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
@@ -150,7 +141,7 @@ struct GmemIteratorSm80 {
                 const int i1  = phases_[s % kPeriodS][c % kPeriodC];
                 auto      dst = &smem_data_.ptr_[i0 + i1];
 
-                CpAsync(std::true_type{}, dst, src_data_ + src_step_c_ * c, tile_mask && g_mask && pred_(s, c));
+                Copy(std::true_type{}, dst, src_data_ + src_step_c_ * c, tile_mask && g_mask && pred_(s, c));
             }
             src_data_ += src_step_s_;
             if (s == Map::kIterS - 1) {
@@ -172,60 +163,19 @@ struct GmemIteratorSm80 {
         }
     }
 
-    __device__ void CpAsync(std::true_type, T* dst, const char* __restrict__ src, bool mask)
+    __device__ void Copy(std::true_type, T* dst, const char* __restrict__ src, bool mask)
     {
-#if TURBOMIND_ARCH_SM80
-        constexpr int size = sizeof(AccessType);
-        static_assert(size <= 16);
-        auto ptr = cast_smem_ptr_to_uint(dst);
-        // clang-format off
-        if constexpr (size == 16) {
-            asm volatile("{\n"
-                        "  .reg .pred p;\n"
-                        "  setp.ne.b32 p, %0, 0;\n"
-                        "  @p cp.async.cg.shared.global" L2_CACHEHINT(128) " [%1], [%2], %3;\n"
-                        "}\n" ::"r"((int)mask),
-                        "r"(ptr),
-                        "l"(src),
-                        "n"(size));
-        } else {
-            asm volatile("{\n"
-                        "  .reg .pred p;\n"
-                        "  setp.ne.b32 p, %0, 0;\n"
-                        "  @p cp.async.ca.shared.global" L2_CACHEHINT(128) " [%1], [%2], %3;\n"
-                        "}\n" ::"r"((int)mask),
-                        "r"(ptr),
-                        "l"(src),
-                        "n"(size));
+        if (mask) {
+            AccessType frag;
+            Ldg(frag, (const T*)src);
+            Store(dst, frag);
         }
-        // clang-format on
-#else
-        assert(TURBOMIND_ARCH_SM80);
-#endif
-    }
-
-    __device__ void CpAsync(std::false_type, T* dst, const char* __restrict__ src, bool)
-    {
-#if TURBOMIND_ARCH_SM80
-        auto          ptr  = cast_smem_ptr_to_uint(dst);
-        constexpr int size = sizeof(AccessType);
-        if constexpr (size == 16) {
-            asm volatile(
-                "cp.async.cg.shared.global" L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(ptr), "l"(src), "n"(size));
-        }
-        else {
-            asm volatile(
-                "cp.async.ca.shared.global" L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(ptr), "l"(src), "n"(size));
-        }
-#else
-        assert(TURBOMIND_ARCH_SM80);
-#endif
     }
 };
 
-struct IteratorSm80 {
+struct IteratorSm70 {
     template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS>
-    using Type = GmemIteratorSm80<T, Map, SmemLayout, kPack, kOrder, AlignedC, AlignedS>;
+    using Type = GmemIteratorSm70<T, Map, SmemLayout, kPack, kOrder, AlignedC, AlignedS>;
 };
 
 }  // namespace turbomind::gemm

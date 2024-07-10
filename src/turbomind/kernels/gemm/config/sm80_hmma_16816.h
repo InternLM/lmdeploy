@@ -5,11 +5,13 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/meta.h"
+#include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/epilogue.h"
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
 #include "src/turbomind/kernels/gemm/impl.h"
 #include "src/turbomind/kernels/gemm/iterator.h"
+#include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include "src/turbomind/kernels/gemm/kernel_impl.h"
 #include "src/turbomind/kernels/gemm/mainloop_sm80_v2.h"
 #include "src/turbomind/kernels/gemm/operand.h"
@@ -24,6 +26,8 @@ namespace turbomind::gemm {
 
 namespace sm80_hmma_16816 {
 
+namespace detail {
+
 struct GetSmemLayout {
     template<int S, int C>
     static constexpr auto apply(pair<S, C>)
@@ -37,17 +41,15 @@ struct GetSmemLayout {
     }
 };
 
+}  // namespace detail
+
 template<Order order>
 struct GetSmemLayoutV2 {
     template<int M, int K>
     static constexpr auto apply(pair<M, K>)
     {
-        if constexpr (order == kRowMajor) {
-            return GetSmemLayout::apply(pair<M, K>{});
-        }
-        else {
-            return GetSmemLayout::apply(pair<K, M>{});
-        }
+        constexpr int2 cs = mk2cs<order>(M, K);
+        return detail::GetSmemLayout::apply(pair<cs.y, cs.x>{});
     }
 };
 
@@ -92,7 +94,6 @@ struct Operand_C {
         static constexpr auto apply(pair<M, N>)
         {
             constexpr auto cs = mk2cs<order>(M, N);
-
             return SmemLayoutV2<cs.y, cs.x, 8, 32, Swizzle<2, 3, 2>>{};
         }
     };
@@ -128,6 +129,61 @@ struct Operand_U {
     using GetGmemIter = GetGmemIter;
 };
 
+template<Order order>
+struct GetSmemLayout_Pack {
+    template<int M, int K>
+    static constexpr auto apply(pair<M, K>)
+    {
+        constexpr int2 CS = mk2cs<order>(M, K);
+        return SmemLayoutV2<CS.y, CS.x, 1, 1>{};
+    }
+};
+
+template<class T, Order order>
+struct Operand_A_Pack {
+    using Dtype = T;
+
+    static constexpr int Pack_M = 1;
+
+    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | Pack_M;
+    static constexpr Order kOrder = order;
+
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
+
+    using GetSmemLayout = GetSmemLayout_Pack<kOrder>;
+    using GetGmemIter   = GetGmemIter;
+};
+
+template<class T, Order order>
+struct Operand_B_Pack {
+    using Dtype = T;
+
+    static constexpr int Pack_M = 1;
+
+    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | Pack_M;
+    static constexpr Order kOrder = order;
+
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
+
+    using GetSmemLayout = GetSmemLayout_Pack<kOrder>;
+    using GetGmemIter   = GetGmemIter;
+};
+
+template<class T>
+struct Operand_U_Pack {
+    using Dtype = T;
+
+    static constexpr int Pack_M = 1;
+
+    static constexpr Pack  kPack  = HMMA_16816 | OPERAND_U | Pack_M;
+    static constexpr Order kOrder = Order::kColMajor;
+
+    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 2, Pack_M, 4>;
+
+    using GetSmemLayout = GetSmemLayout_Pack<kOrder>;
+    using GetGmemIter   = GetGmemIter;
+};
+
 template<class A, class TransformA, class U, class B, class TransformB, class V, Order order_c, class Tc>
 struct SM80_HMMA_16816_F32 {
     template<int  CTA_M,
@@ -153,6 +209,7 @@ struct SM80_HMMA_16816_F32 {
                                          CTA_N,
                                          CTA_K,
                                          MMA,
+                                         IteratorSm80,
                                          A,
                                          TransformA,
                                          U,
@@ -161,7 +218,8 @@ struct SM80_HMMA_16816_F32 {
                                          TransformB,
                                          V,
                                          GroupSizeV,
-                                         Stages>;
+                                         Stages,
+                                         true>;
 
         using Epilogue = gemm::Epilogue_<Tc,
                                          CTA_M,
@@ -173,7 +231,7 @@ struct SM80_HMMA_16816_F32 {
                                          Operand_C<float, order_c>,
                                          SplitK>;
 
-        using Kernel = GemmUniversal<void, Mainloop, Epilogue, CtaMap>;
+        using Kernel = GemmUniversal<Sm80, Mainloop, Epilogue, CtaMap>;
     };
 };
 
@@ -199,6 +257,25 @@ struct GetOperand<HMMA_16816, OPERAND_V, T, kColMajor, false>: std::true_type {
     using Operand = sm80_hmma_16816::Operand_U<T>;
 };
 
+template<class T>
+struct GetOperand<HMMA_16816, OPERAND_A, T, kColMajor, true>: std::true_type {
+    using Operand = sm80_hmma_16816::Operand_A_Pack<T, kColMajor>;
+};
+
+template<class T>
+struct GetOperand<HMMA_16816, OPERAND_B, T, kColMajor, true>: std::true_type {
+    using Operand = sm80_hmma_16816::Operand_B_Pack<T, kColMajor>;
+};
+
+template<>
+struct GetOperand<HMMA_16816, OPERAND_U, uint32_t, kColMajor, true>: std::true_type {
+    using Operand = sm80_hmma_16816::Operand_U_Pack<uint32_t>;
+};
+
+template<>
+struct GetOperand<HMMA_16816, OPERAND_V, uint32_t, kColMajor, true>: std::true_type {
+    using Operand = sm80_hmma_16816::Operand_U_Pack<uint32_t>;
+};
 namespace sm80_hmma_16816 {
 
 }  // namespace sm80_hmma_16816

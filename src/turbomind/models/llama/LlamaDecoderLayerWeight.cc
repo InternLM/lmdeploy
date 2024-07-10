@@ -467,6 +467,15 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size)
 
     using namespace gemm;
 
+    auto [order_b, pack_b, order_v, pack_v] = get_weight_and_scales_layout(getSMVersion(), false);
+
+    FT_CHECK(order_v == kRowMajor);
+
+    if (order_b == kColMajor) {
+        transpose_u4((uint4_t*)workspace, (const uint4_t*)weight.kernel, weight.input_dims, weight.output_dims);
+        cudaMemcpy(weight.kernel, workspace, weight.input_dims * weight.output_dims / 2, cudaMemcpyDefault);
+    }
+
     extend_to_u16((uint16_t*)workspace, (const uint4_t*)weight.kernel, weight.input_dims * weight.output_dims);
     sync_check_cuda_error();
 
@@ -485,14 +494,12 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size)
         }
     }
 
-    auto [pack_b, pack_v] = get_weight_and_scales_packing(getSMVersion());
-
     MatrixLayout w_desc{
         gemm::DataType::F16,
-        kRowMajor,
+        order_b,
         (int)weight.input_dims,   // k
         (int)weight.output_dims,  // n
-        (int)weight.output_dims,
+        order_b == kRowMajor ? (int)weight.output_dims : (int)weight.input_dims,
     };
 
     MatrixLayout k_desc = w_desc;

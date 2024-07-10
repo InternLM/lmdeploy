@@ -4,7 +4,7 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
 // #include "src/turbomind/kernels/gemm/config/sm70_mma_simt.h"
-// #include "src/turbomind/kernels/gemm/config/sm70_mma_884.h"
+#include "src/turbomind/kernels/gemm/config/sm70_mma_884.h"
 #include "src/turbomind/kernels/gemm/config/sm80_hmma_16816.h"
 #include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/format.h"
@@ -127,6 +127,9 @@ int Convert(const void*         S,  //
                 Convert_v2_Impl<Config<Operand, Dtype, pack_num_tag>>(S, Sdesc, D, Ddesc, stream);
                 return true;
             }
+
+            std::cerr << __PRETTY_FUNCTION__ << "\n";
+            std::cerr << kPackSize << " " << unit_size(type_c<Dtype>) << "\n";
         }
 
         return false;
@@ -214,17 +217,21 @@ int Convert(const void*         S,  //
     return dispatch() - 1;
 }
 
-std::pair<Pack, Pack> get_weight_and_scales_packing(int sm, bool force_simt)
+std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(int sm, bool force_simt)
 {
     if (sm >= 80) {
-        return {HMMA_16816 | OPERAND_B | 1, HMMA_16816 | OPERAND_V | 1};
+        return {kRowMajor, HMMA_16816 | OPERAND_B | 1, kRowMajor, HMMA_16816 | OPERAND_V | 1};
     }
     else if (sm == 75) {
+        return {kRowMajor, HMMA_16816 | OPERAND_B | 1, kRowMajor, HMMA_16816 | OPERAND_V | 1};
     }
     else if (sm == 70) {
+        return {kColMajor, HMMA_884 | OPERAND_B | 2, kRowMajor, HMMA_884 | OPERAND_V | 2};
     }
-    std::cerr << "not implemented" << std::endl;
-    std::abort();
+    else {
+        std::cerr << "not implemented" << std::endl;
+        std::abort();
+    }
     return {};
 }
 

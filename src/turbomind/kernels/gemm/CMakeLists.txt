@@ -21,10 +21,13 @@ add_library(gemm2
         convert_v2.cu
         # codegen/sm80_s16816gemm_f16_f16_nn.cu
         codegen/sm80_s16816gemm_f16_f16_nn_pack.cu
+        codegen/sm75_s1688gemm_f16_f16.cu
+        codegen/sm70_s884gemm_f16_f16_f16_tn.cu
         # codegen/sm70_sgemm_f16_f16_f16_tn.cu
-        # codegen/sm70_s884gemm_f16_f16_f16_tn.cu
+
         quantization.cu
         cast.cu
+        unpack.cu
         # tmp.cu
         )
 

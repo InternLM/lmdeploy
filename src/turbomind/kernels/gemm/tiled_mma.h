@@ -45,6 +45,21 @@ struct SM80_MMA_16x8x16_F32_F16_F16_F32_TN {
     }
 };
 
+struct SM75_MMA_16x8x8_F32_F16_F16_F32_TN: SM80_MMA_16x8x16_F32_F16_F16_F32_TN {
+    static constexpr int M = 16;
+    static constexpr int N = 8;
+    static constexpr int K = 8;
+
+    using FragA = Array<half, 4>;
+    using FragB = Array<half, 2>;
+    using FragC = Array<float, 4>;
+
+    __device__ static void fma(FragC& d, const FragA& a, const FragB& b, const FragC& c)
+    {
+        mma_m16n8k8_row_col(d, a, b, (FragC&)c);
+    }
+};
+
 template<class T>
 struct SM70_MMA_SIMT {
     static constexpr int M = sm70_mma_simt::OP_M;
@@ -96,6 +111,7 @@ struct SM70_MMA_884 {
     __device__ static void fma(FragC& d, const FragA& a, const FragB& b, const FragC& c)
     {
         mma_m8n8k4_row_col(d, a, b, (FragC&)c);
+        // mma_m8n8k4_row_row(d, a, b, (FragC&)c);
     }
 
     template<class Func>

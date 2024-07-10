@@ -8,7 +8,6 @@
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
-#include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/thread_map.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -67,6 +66,7 @@ template<int M_,
          int N_,
          int K_,
          class MMA,
+         class Iterator,
          class OperandA_,
          class TransformA_,
          class OperandU_,
@@ -74,8 +74,9 @@ template<int M_,
          class OperandB_,
          class TransformB_,
          class OperandV_,
-         int GroupSizeV_,
-         int Stages_>
+         int  GroupSizeV_,
+         int  Stages_,
+         bool FusePrefetch_>
 struct MainloopSm80_v2 {
 
     using MMA_Atom = typename MMA::Atom;
@@ -95,11 +96,11 @@ struct MainloopSm80_v2 {
 
     static constexpr int WARPS = MMA::kThreadCount / WARP_SIZE;
 
-    using OperandA = MakeOperand<OperandA_, IteratorSm80, CTA_M, CTA_K, WARPS>;
-    using OperandU = MakeOperand<OperandU_, IteratorSm80, CTA_M, CTA_K, WARPS, GroupSizeU_>;
+    using OperandA = MakeOperand<OperandA_, Iterator, CTA_M, CTA_K, WARPS>;
+    using OperandU = MakeOperand<OperandU_, Iterator, CTA_M, CTA_K, WARPS, GroupSizeU_>;
 
-    using OperandB = MakeOperand<OperandB_, IteratorSm80, CTA_N, CTA_K, WARPS>;
-    using OperandV = MakeOperand<OperandV_, IteratorSm80, CTA_N, CTA_K, WARPS, GroupSizeV_>;
+    using OperandB = MakeOperand<OperandB_, Iterator, CTA_N, CTA_K, WARPS>;
+    using OperandV = MakeOperand<OperandV_, Iterator, CTA_N, CTA_K, WARPS, GroupSizeV_>;
 
     using TransformA = TransformA_;
     using TransformB = TransformB_;
@@ -131,6 +132,8 @@ struct MainloopSm80_v2 {
     using GmemIterB = typename OperandB::GmemIter;
     using GmemIterU = typename OperandU::GmemIter;
     using GmemIterV = typename OperandV::GmemIter;
+
+    static constexpr int kFusePrefetch = FusePrefetch_;
 
     static constexpr int kMaxPrefetchIter =
         std::min(ceil_div(std::max(GmemIterA::ITER_S, GmemIterB::ITER_S), 4), MMA::kTileIterK);
@@ -269,8 +272,6 @@ struct MainloopSm80_v2 {
 
         __syncthreads();
 
-        constexpr bool kFusePrefetch = true;
-
         auto prefetch_stage = [&] {
             Prefetch(gmem_iters, gmem_mask);
             __pipeline_commit();
@@ -315,15 +316,6 @@ struct MainloopSm80_v2 {
         SmemCopyV smem_copy_V{{offset_n, offset_k}};
 
         auto preload = [&](int k) {
-            // if (threadIdx.x == 0) {
-            //     printf("k = %d\n", k);
-            // }
-            // __syncthreads();
-            // const int curr_k = offset_k + k * MMA_Atom::K;
-
-            // const int curr_k_U = curr_k / GroupSizeU_;
-            // const int curr_k_V = curr_k / GroupSizeV_;
-
             smem_copy_A(smem_A.pointer, data_A[k], k);
             smem_copy_U(smem_U.pointer, data_U[k / UU], k, k % UU == 0 && (bool)smem_group_iter_U);
 

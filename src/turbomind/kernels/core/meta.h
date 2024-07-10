@@ -32,6 +32,18 @@ struct constant {
 template<auto u, auto v>
 struct pair {};
 
+template<auto u, auto v>
+constexpr auto first(pair<u, v>)
+{
+    return u;
+}
+
+template<auto u, auto v>
+constexpr auto second(pair<u, v>)
+{
+    return v;
+}
+
 template<auto u, auto v, auto w>
 struct triplet {};
 

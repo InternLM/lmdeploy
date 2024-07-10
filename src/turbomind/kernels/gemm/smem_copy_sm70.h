@@ -38,7 +38,7 @@ struct SmemCopy_MMA_884_A {
 };
 
 template<class T>
-struct SmemCopy_MMA_884_B {
+struct SmemCopy_MMA_884_B_COL {
     static constexpr int M = 16;
     static constexpr int K = 4;
 
@@ -58,6 +58,38 @@ struct SmemCopy_MMA_884_B {
     __device__ static int2 get_offset(int thread_idx)
     {
         return int2{unique(thread_idx, 0).x, 0};
+    }
+
+    template<class S, class D>
+    __device__ static void copy(S&& src_ptr, D&& dst_ptr, bool)
+    {
+        Lds(*(Frag*)dst_ptr, src_ptr);
+    }
+};
+
+template<class T>
+struct SmemCopy_MMA_884_B_ROW {
+    static constexpr int M        = 16;
+    static constexpr int K        = 4;
+    static constexpr int kFragNum = 1;
+
+    using Frag = Array<T, 4>;
+
+    __device__ static int2 unique(int thread_idx, int pack_idx)
+    {
+        const int lane_id = thread_idx % WARP_SIZE;
+        //                4                     2                 0,1
+        const int m = lane_id / 16 * 4 + (lane_id & 4) * 2 + lane_id % 4;
+        return {pack_idx * 16 + m, (lane_id & 8) >> 3};
+    }
+    __device__ static int2 get_offset(int thread_idx)
+    {
+        const int lane_id = thread_idx % WARP_SIZE;
+        //                 4                   2
+        const int m = lane_id / 16 * 4 + (lane_id & 4) * 2;
+        //                0,1
+        const int k = lane_id % 4;
+        return int2{m, k};
     }
 
     template<class S, class D>
