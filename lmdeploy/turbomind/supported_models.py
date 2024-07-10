@@ -62,6 +62,12 @@ def is_supported(model_path: str):
     """  # noqa: E501
     import os
 
+    def _is_head_dim_ok(cfg):
+        num_attn_head = cfg.num_attention_heads
+        hidden_size = cfg.hidden_size
+        # turbomind support head_dim=128
+        return (hidden_size // num_attn_head) == 128
+
     support_by_turbomind = False
     triton_model_path = os.path.join(model_path, 'triton_models')
     if os.path.exists(triton_model_path):
@@ -78,18 +84,14 @@ def is_supported(model_path: str):
                     # baichuan-13B, baichuan2-13B not supported by turbomind
                     support_by_turbomind = False
             elif arch == 'Qwen2ForCausalLM':
-                num_attn_head = cfg.num_attention_heads
-                hidden_size = cfg.hidden_size
                 # qwen2 0.5b size_per_head is 64, which hasn't been supported
                 # by turbomind yet
-                if hidden_size // num_attn_head != 128:
-                    support_by_turbomind = False
+                support_by_turbomind = _is_head_dim_ok(cfg)
             elif arch == 'ChatGLMModel':
                 # chatglm1/2/3 is not working yet
                 support_by_turbomind = cfg.num_layers == 40
             elif arch == 'InternVLChatModel':
-                # internvl2-4b phi3 is not working yet
-                support_by_turbomind = cfg.llm_config.architectures[
-                    0] != 'Phi3ForCausalLM'
+                # internvl2-4b,internlm2-1b are not working yet
+                support_by_turbomind = _is_head_dim_ok(cfg.llm_config)
 
     return support_by_turbomind

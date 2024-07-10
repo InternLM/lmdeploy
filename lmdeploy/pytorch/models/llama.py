@@ -265,10 +265,18 @@ class LlamaModel(nn.Module):
         """Rewrite implementation of LlamaModel.forward."""
         output_attentions = False
         use_cache = True
+        context = self.context.context
+        # get inputs from context
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
         # Attention mask is not necessary in continuous batching
         attention_mask = None
 
