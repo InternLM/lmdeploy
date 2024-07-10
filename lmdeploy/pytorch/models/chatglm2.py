@@ -7,7 +7,8 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.utils.checkpoint
-from transformers.modeling_outputs import BaseModelOutputWithPast
+from transformers.modeling_outputs import (BaseModelOutputWithPast,
+                                           CausalLMOutputWithPast)
 
 from ..kernels import fill_kv_cache, paged_attention_fwd
 from ..weight_loader.dist_utils import (colwise_split_parallelize_linear,
@@ -23,15 +24,7 @@ class PatchedRMSNorm(nn.Module):
         # to wrong output
         from ..kernels import rms_norm
 
-        if not hasattr(self, '_is_chatglm'):
-            setattr(self, '_is_chatglm', self.context.context._is_chatglm)
-
-        if self._is_chatglm:
-            ret = rms_norm(hidden_states.permute(1, 0, 2), self.weight,
-                           self.eps)
-            ret = ret.permute(1, 0, 2)
-        else:
-            ret = rms_norm(hidden_states, self.weight, self.eps)
+        ret = rms_norm(hidden_states, self.weight, self.eps)
         return ret
 
 
@@ -178,14 +171,6 @@ class PatchedSelfAttention(nn.Module):
             (query_layer, key_layer,
              value_layer) = split_tensor_along_last_dim(mixed_x_layer, 3)
 
-        if not hasattr(self, '_is_chatglm'):
-            setattr(self, '_is_chatglm', context._is_chatglm)
-
-        if self._is_chatglm:
-            query_layer = query_layer.transpose(0, 1)
-            key_layer = key_layer.transpose(0, 1)
-            value_layer = value_layer.transpose(0, 1)
-
         # apply relative positional encoding (rotary embedding)
         query_layer = apply_rotary_pos_emb(query_layer, rotary_pos_emb)
         key_layer = apply_rotary_pos_emb(key_layer, rotary_pos_emb)
@@ -218,8 +203,7 @@ class PatchedSelfAttention(nn.Module):
                             q_seqlens=q_seq_length,
                             kv_seqlens=kv_seq_length,
                             max_seqlen=max_q_seq_length)
-        if self._is_chatglm:
-            context_layer = context_layer.transpose(0, 1)
+
         context_layer = context_layer.flatten(-2)
 
         # =================
@@ -288,15 +272,6 @@ class PatchedChatGLMModel(nn.Module):
         vision_embeddings = context.input_embeddings
         vision_embedding_indexing = context.input_embedding_indexing
 
-        # chatglm2/chaglm3 uses hidden_states in shape of [sq,b,h]
-        # while glm uses hidden_states in shape of [b,sq,h]
-        if not hasattr(self, '_is_chatglm'):
-            _is_chatglm = False
-            if 'chatglm' in getattr(self.config, '_name_or_path', ''):
-                _is_chatglm = True
-            setattr(self, '_is_chatglm', _is_chatglm)
-            setattr(self.context.context, '_is_chatglm', _is_chatglm)
-
         output_hidden_states = False
         use_cache = True
 
@@ -321,7 +296,8 @@ class PatchedChatGLMModel(nn.Module):
 
         # Rotary positional embeddings
         rotary_pos_emb = self.rotary_pos_emb(self.seq_length)
-        if 'glm-4v' in self.config._name_or_path:
+        # glm-4v
+        if getattr(self, 'vision', None) is not None:
             from .cogvlm import _get_cogvlm_position_ids
             position_ids_1d = _get_cogvlm_position_ids(context)
         else:
@@ -366,4 +342,65 @@ class PatchedChatGLMModel(nn.Module):
             full_attention_mask=full_attention_mask,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
+        )
+
+
+class PatchedEmbedding(nn.Module):
+
+    def forward(self, input_ids):
+        """Rewrite to not transpose hidden_statens for all models."""
+        # Embeddings.
+        words_embeddings = self.word_embeddings(input_ids)
+        embeddings = words_embeddings
+        # If the input flag for fp32 residual connection is set,
+        # convert for float.
+        if self.fp32_residual_connection:
+            embeddings = embeddings.float()
+        return embeddings
+
+
+class PatchedChatGLMForConditionalGeneration(nn.Module):
+
+    def forward(self,
+                input_ids: Optional[torch.Tensor] = None,
+                position_ids: Optional[torch.Tensor] = None,
+                attention_mask: Optional[torch.Tensor] = None,
+                past_key_values: Optional[Tuple[torch.FloatTensor]] = None,
+                inputs_embeds: Optional[torch.Tensor] = None,
+                labels: Optional[torch.Tensor] = None,
+                use_cache: Optional[bool] = None,
+                output_attentions: Optional[bool] = None,
+                output_hidden_states: Optional[bool] = None,
+                return_dict: Optional[bool] = None,
+                return_last_logit: Optional[bool] = False,
+                **kwargs):
+        """rewrite to not transpose logits for all models."""
+        transformer_outputs = self.transformer(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        hidden_states = transformer_outputs[0]
+        if return_last_logit:
+            hidden_states = hidden_states[-1:]
+        lm_logits = self.transformer.output_layer(hidden_states)
+
+        loss = None
+
+        if not return_dict:
+            output = (lm_logits, ) + transformer_outputs[1:]
+            return ((loss, ) + output) if loss is not None else output
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=lm_logits,
+            past_key_values=transformer_outputs.past_key_values,
+            hidden_states=transformer_outputs.hidden_states,
+            attentions=transformer_outputs.attentions,
         )

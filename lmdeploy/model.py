@@ -1522,7 +1522,7 @@ class ChatGLM3(BaseChatTemplate):
                  assistant='<|assistant|>\n ',
                  eoa='',
                  separator='',
-                 stop_words=['<|user|>', '<|endoftext|>', '<|observation|>'],
+                 stop_words=['<eos>'],
                  **kwargs):
         super().__init__(system=system,
                          meta_instruction=meta_instruction,
