@@ -627,11 +627,11 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     g.partial_context_legnth = partial_len;
     g.unique_ids             = std::move(unique_ids);
     g.finished_count         = 0;
+    g.skip_init_sampling     = skip_init_sampling;
 
     if (!skip_init_sampling) {
         g.max_init_ctx_len = max_context_len;
         g.step             = max_context_len;
-        InitializeSampling(g);
     }
 }
 
@@ -1116,7 +1116,10 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
 
     inputs_ = std::move(inputs);
 
-    model_->dynamic_decode_layer_->setup(batch_size, 1, &inputs_);
+    {
+        NvtxScope setup("DynamicDecodeLayer.setup");
+        model_->dynamic_decode_layer_->setup(batch_size, 1, &inputs_);
+    }
 
     TensorMap outputs;
     for (int i = 0; i < batch_size; i++) {
@@ -1131,6 +1134,7 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
         }
     }
     outputs_ = std::move(outputs);
+    sync_check_cuda_error();
 }
 
 template<typename T>
@@ -1691,6 +1695,9 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 
         // TM_LOG_INFO("dyn decode bsz %d, partial %d", active_size, g.partial);
 
+        if (iter == 0 && !g.skip_init_sampling) {
+            InitializeSampling(g);
+        }
         // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is
         // not supported yet.
         model_->dynamicDecode(token_ids_buf_,
