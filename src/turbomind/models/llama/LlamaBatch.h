@@ -54,6 +54,8 @@ struct GenerationState {
 
     std::vector<uint64_t> unique_ids;
 
+    bool skip_init_sampling;
+
     int max_input_count1;
     int max_input_count2;
 

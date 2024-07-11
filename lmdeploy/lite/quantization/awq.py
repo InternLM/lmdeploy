@@ -170,15 +170,6 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
 
         if getattr(pre_fc, 'bias', None) is not None:
             pre_fc.bias[-size_a:].div_(scales)
-    # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
-    elif size_pre_fc > size_a and size_pre_fc % size_a == 0 \
-            and size_pre_fc // size_a == 2:
-
-        pre_fc.weight[:size_a].div_(scales.view(-1, 1))
-        pre_fc.weight[-size_a:].div_(scales.view(-1, 1))
-
-        if getattr(pre_fc, 'bias', None) is not None:
-            pre_fc.bias[-size_a:].div_(scales)
     else:
 
         pre_fc.weight.div_(scales.view(-1, 1))

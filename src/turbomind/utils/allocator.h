@@ -260,7 +260,6 @@ public:
                     check_cuda_error(cudaFree(*ptr));
 #else
                     check_cuda_error(cudaFreeAsync(*ptr, stream_));
-                    cudaStreamSynchronize(stream_);
 #endif
                 }
                 check_cuda_error(getSetDevice(o_device));

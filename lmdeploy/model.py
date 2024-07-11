@@ -1579,7 +1579,7 @@ class Glm4Chat(BaseChatTemplate):
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         return self.start + super(Glm4Chat, self).messages2prompt(
-            messages, sequence_start)
+            messages, sequence_start, **kwargs)
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
