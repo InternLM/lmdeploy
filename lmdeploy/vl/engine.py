@@ -2,6 +2,7 @@
 import asyncio
 import queue
 import time
+from threading import Thread
 from typing import List, Optional, Union
 
 import torch
@@ -18,7 +19,8 @@ logger = get_logger('lmdeploy')
 class Record:
     """Batching manager."""
 
-    def __init__(self):
+    def __init__(self, thread_safe):
+        self.thread_safe = thread_safe
         self.number = []
         self.waiting = []
         self.done = []
@@ -50,7 +52,10 @@ class Record:
         outputs = self.done[:num_images]
         self.done = self.done[num_images:]
         que = self.res_que.pop(0)
-        que.put_nowait(outputs)
+        if self.thread_safe:
+            que._loop.call_soon_threadsafe(que.put_nowait, outputs)
+        else:
+            que.put_nowait(outputs)
         self.log('done', num_images)
         return True
 
@@ -68,26 +73,52 @@ class ImageEncoder:
                  backend_config: Optional[Union[TurbomindEngineConfig,
                                                 PytorchEngineConfig]] = None):
         self.model = load_vl_model(model_path, backend_config=backend_config)
-        self.max_batch_size = (1 if vision_config is None else
-                               vision_config.max_batch_size)
+        if vision_config is None:
+            vision_config = VisionConfig()
+        self.vision_config = vision_config
+        self.max_batch_size = vision_config.max_batch_size
         torch.cuda.empty_cache()
         self._que: asyncio.Queue = None
         self._loop_task: asyncio.Task = None
+        if vision_config.thread_safe:
+            self._create_thread_safe_task()
+
+    def _create_thread_safe_task(self):
+        """thread safe loop task."""
+        self._loop = asyncio.new_event_loop()
+
+        def _work_thread():
+            asyncio.set_event_loop(self._loop)
+            self._que = asyncio.Queue()
+            self._loop.run_until_complete(self._forward_loop())
+
+        thread = Thread(target=_work_thread, daemon=True)
+        thread.start()
+        self._loop_thread = thread
+
+    def _create_event_loop_task(self):
+        """event loop task."""
+        task = asyncio.get_event_loop().create_task(self._forward_loop())
+        self._loop_task = task
+        self._loop = task.get_loop()
 
     @property
     def req_que(self):
+        if self.vision_config.thread_safe:
+            return self._que
         if self._que is None:
             self._que = asyncio.Queue()
         if self._loop_task is None:
-            task = asyncio.get_event_loop().create_task(self._forward_loop())
-            self._loop_task = task
-        assert asyncio.get_event_loop() == self._loop_task.get_loop()
+            self._create_event_loop_task()
+        if asyncio.get_event_loop() != self._loop:
+            raise RuntimeError('Current event loop is different from'
+                               ' the one bound to loop task!')
         return self._que
 
     async def _forward_loop(self):
         """working loop to process images."""
         logger.info('start ImageEncoder._forward_loop')
-        record = Record()
+        record = Record(self.vision_config.thread_safe)
         while True:
             while record.total == 0 or (self._que.qsize() and
                                         record.total < self.max_batch_size):
@@ -122,6 +153,9 @@ class ImageEncoder:
         """async infer."""
         outputs = asyncio.Queue()
         item = (inputs, outputs)
-        self.req_que.put_nowait(item)
+        if self.vision_config.thread_safe:
+            self._loop.call_soon_threadsafe(self._que.put_nowait, item)
+        else:
+            self.req_que.put_nowait(item)
         results = await outputs.get()
         return results
