@@ -338,4 +338,53 @@ private:
     std::string    cache_path_;
 };
 
+template<class T>
+T& gTestbed()
+{
+    static T inst{turbomind::gemm::DispatchPolicy::kDefault, "tm_cache"};
+    return inst;
+}
+
+inline decltype(auto) get_test()
+{
+    if constexpr (0) {
+        // native
+        constexpr Pack kPackA = 0;
+        constexpr Pack kPackU = 0;
+        constexpr Pack kPackB = 0;
+        constexpr Pack kPackV = 0;
+        return gTestbed<
+            gemm::Testbed<half, half, half, kRowMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
+    }
+    else if constexpr (1) {
+        // sm80 / sm75
+        constexpr Pack kPackA = 0;  // HMMA_16816 | OPERAND_A | 1;
+        constexpr Pack kPackU = 0;  // HMMA_16816 | OPERAND_U | 1;
+        constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
+        constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
+        return gTestbed<
+            gemm::Testbed<half, uint4_t, half, kRowMajor, kRowMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
+    }
+    else if constexpr (0) {
+        // sm70
+        constexpr Pack kPackA = 0;
+        constexpr Pack kPackU = 0;
+        constexpr Pack kPackB = HMMA_884 | OPERAND_B | 2;
+        constexpr Pack kPackV = HMMA_884 | OPERAND_V | 2;
+        return gTestbed<
+            gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
+    }
+    else if constexpr (0) {
+        // simt
+        constexpr Pack kPackA = 0;
+        constexpr Pack kPackU = 0;
+        constexpr Pack kPackB = HMMA_SIMT | OPERAND_B | 1;
+        constexpr Pack kPackV = HMMA_SIMT | OPERAND_V | 1;
+        return gTestbed<
+            gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
+    }
+}
+
+
 }  // namespace turbomind::gemm
+

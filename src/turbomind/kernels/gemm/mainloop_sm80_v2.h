@@ -66,12 +66,13 @@ template<int M_,
          int N_,
          int K_,
          class MMA,
-         class Iterator,
          class OperandA_,
+         class IteratorA_,
          class TransformA_,
          class OperandU_,
          int GroupSizeU_,
          class OperandB_,
+         class IteratorB_,
          class TransformB_,
          class OperandV_,
          int  GroupSizeV_,
@@ -96,11 +97,11 @@ struct MainloopSm80_v2 {
 
     static constexpr int WARPS = MMA::kThreadCount / WARP_SIZE;
 
-    using OperandA = MakeOperand<OperandA_, Iterator, CTA_M, CTA_K, WARPS>;
-    using OperandU = MakeOperand<OperandU_, Iterator, CTA_M, CTA_K, WARPS, GroupSizeU_>;
+    using OperandA = MakeOperand<OperandA_, IteratorA_, CTA_M, CTA_K, WARPS>;
+    using OperandU = MakeOperand<OperandU_, IteratorA_, CTA_M, CTA_K, WARPS, GroupSizeU_>;
 
-    using OperandB = MakeOperand<OperandB_, Iterator, CTA_N, CTA_K, WARPS>;
-    using OperandV = MakeOperand<OperandV_, Iterator, CTA_N, CTA_K, WARPS, GroupSizeV_>;
+    using OperandB = MakeOperand<OperandB_, IteratorB_, CTA_N, CTA_K, WARPS>;
+    using OperandV = MakeOperand<OperandV_, IteratorB_, CTA_N, CTA_K, WARPS, GroupSizeV_>;
 
     using TransformA = TransformA_;
     using TransformB = TransformB_;

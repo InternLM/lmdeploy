@@ -3,7 +3,8 @@
 #pragma once
 
 #include "src/turbomind/kernels/core/math.h"
-#include "src/turbomind/kernels/gemm/iterator_sm80.h"
+#include "src/turbomind/kernels/gemm/cp_async.h"
+#include "src/turbomind/kernels/gemm/iterator_sm70.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -26,7 +27,7 @@ struct ConvertOperand {
     static constexpr int M = M_;
     static constexpr int K = K_;
 
-    using Operand = MakeOperand<Operand_, IteratorSm80, M_, K_, 1>;
+    using Operand = MakeOperand<Operand_, IteratorSm70<cache_policy::Default>, M_, K_, 1>;
 
     using Ts         = typename Operand::Dtype;
     using SmemLayout = typename Operand::SmemLayout;

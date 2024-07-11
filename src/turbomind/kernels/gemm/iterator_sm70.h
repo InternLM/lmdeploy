@@ -14,7 +14,7 @@
 
 namespace turbomind::gemm {
 
-template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS>
+template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS, class Policy>
 struct GmemIteratorSm70 {
 
     using ThreadMap = Map;
@@ -108,7 +108,9 @@ struct GmemIteratorSm70 {
 
     __device__ constexpr int _src_step_k() const
     {
-        return cs2mk<kOrder>(src_step_c_ * Map::kIterC * Map::kWarpC, src_step_s_ * Map::kIterS * Map::kWarpS).y;
+        /// FIXME: this is only correct when both C & S are aligned in the thread map
+        // return cs2mk<kOrder>(src_step_c_ * Map::kIterC * Map::kWarpC, src_step_s_ * Map::kIterS * Map::kWarpS).y;
+        return cs2mk<kOrder>(src_step_c_ * Map::kWarpIterC, src_step_s_ * Map::kWarpIterS).y;
     }
 
     __device__ void ClearSmem(int pipe_iter = 0)
@@ -146,6 +148,9 @@ struct GmemIteratorSm70 {
             src_data_ += src_step_s_;
             if (s == Map::kIterS - 1) {
                 src_data_ -= src_step_s_ * Map::kIterS;
+                // if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
+                //     printf("_src_step_k = %d\n", (int)_src_step_k());
+                // }
                 src_data_ += _src_step_k();
             }
         }
@@ -173,9 +178,10 @@ struct GmemIteratorSm70 {
     }
 };
 
+template <class Policy>
 struct IteratorSm70 {
     template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS>
-    using Type = GmemIteratorSm70<T, Map, SmemLayout, kPack, kOrder, AlignedC, AlignedS>;
+    using Type = GmemIteratorSm70<T, Map, SmemLayout, kPack, kOrder, AlignedC, AlignedS, Policy>;
 };
 
 }  // namespace turbomind::gemm

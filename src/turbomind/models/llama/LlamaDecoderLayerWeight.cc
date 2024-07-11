@@ -467,7 +467,7 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size)
 
     using namespace gemm;
 
-    auto [order_b, pack_b, order_v, pack_v] = get_weight_and_scales_layout(getSMVersion(), false);
+    auto [order_b, pack_b, order_v, pack_v] = get_weight_and_scales_layout(getSMVersion(), true);
 
     FT_CHECK(order_v == kRowMajor);
 

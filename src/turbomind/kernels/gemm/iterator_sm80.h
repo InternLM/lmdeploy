@@ -7,6 +7,7 @@
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/smem.h"
+#include "src/turbomind/kernels/gemm/cp_async.h"
 #include "src/turbomind/kernels/gemm/predicate.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
@@ -21,7 +22,7 @@ namespace turbomind::gemm {
 #define L2_CACHEHINT(size)
 #endif
 
-template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS>
+template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS, class Policy>
 struct GmemIteratorSm80 {
 
     using ThreadMap = Map;
@@ -56,6 +57,8 @@ struct GmemIteratorSm80 {
     static constexpr int  kPeriodS = ceil_div(SmemLayout::S0, Map::kDeltaS);
 
     int phases_[kPeriodS][kPeriodC];
+
+    uint64_t cache_policy_{};
 
     __device__ static constexpr int2 pack(int2 mk)
     {
@@ -113,6 +116,12 @@ struct GmemIteratorSm80 {
 
         // initialize for the first tile
         src_data_ = src_ptr + src_offset_;
+
+#if TURBOMIND_ARCH_SM80
+        if constexpr (Policy::kEvictPolicy != EvictPolicy::kEvictNormal) {
+            asm volatile("createpolicy.fractional.L2::evict_first.b64 %0;\n" : "=l"(cache_policy_) :);
+        }
+#endif
     }
 
     __device__ constexpr int _src_step_k() const
@@ -177,45 +186,18 @@ struct GmemIteratorSm80 {
 #if TURBOMIND_ARCH_SM80
         constexpr int size = sizeof(AccessType);
         static_assert(size <= 16);
-        auto ptr = cast_smem_ptr_to_uint(dst);
-        // clang-format off
-        if constexpr (size == 16) {
-            asm volatile("{\n"
-                        "  .reg .pred p;\n"
-                        "  setp.ne.b32 p, %0, 0;\n"
-                        "  @p cp.async.cg.shared.global" L2_CACHEHINT(128) " [%1], [%2], %3;\n"
-                        "}\n" ::"r"((int)mask),
-                        "r"(ptr),
-                        "l"(src),
-                        "n"(size));
-        } else {
-            asm volatile("{\n"
-                        "  .reg .pred p;\n"
-                        "  setp.ne.b32 p, %0, 0;\n"
-                        "  @p cp.async.ca.shared.global" L2_CACHEHINT(128) " [%1], [%2], %3;\n"
-                        "}\n" ::"r"((int)mask),
-                        "r"(ptr),
-                        "l"(src),
-                        "n"(size));
-        }
-        // clang-format on
-#else
-        assert(TURBOMIND_ARCH_SM80);
-#endif
-    }
 
-    __device__ void CpAsync(std::false_type, T* dst, const char* __restrict__ src, bool)
-    {
-#if TURBOMIND_ARCH_SM80
-        auto          ptr  = cast_smem_ptr_to_uint(dst);
-        constexpr int size = sizeof(AccessType);
-        if constexpr (size == 16) {
-            asm volatile(
-                "cp.async.cg.shared.global" L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(ptr), "l"(src), "n"(size));
+        constexpr int prefetch_size = size * Map::kWarpThreadC % 128;
+
+        auto ptr = cast_smem_ptr_to_uint(dst);
+
+        static constexpr auto cache_op = GetCacheOp<Policy::kCacheOp, size>::value;
+
+        if constexpr (Policy::kEvictPolicy != EvictPolicy::kEvictNormal) {
+            CP_ASYNC<cache_op, size, prefetch_size>::apply(ptr, src, cache_policy_, mask);
         }
         else {
-            asm volatile(
-                "cp.async.ca.shared.global" L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(ptr), "l"(src), "n"(size));
+            CP_ASYNC<cache_op, size, prefetch_size>::apply(ptr, src, mask);
         }
 #else
         assert(TURBOMIND_ARCH_SM80);
@@ -223,9 +205,10 @@ struct GmemIteratorSm80 {
     }
 };
 
+template<class Policy>
 struct IteratorSm80 {
     template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS>
-    using Type = GmemIteratorSm80<T, Map, SmemLayout, kPack, kOrder, AlignedC, AlignedS>;
+    using Type = GmemIteratorSm80<T, Map, SmemLayout, kPack, kOrder, AlignedC, AlignedS, Policy>;
 };
 
 }  // namespace turbomind::gemm

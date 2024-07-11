@@ -74,10 +74,17 @@ struct SM70_MMA_SIMT {
 
     __device__ static void fma(FragC& d, const FragA& a, const FragB& b, const FragC& c)
     {
+        // PRAGMA_UNROLL
+        // for (int k = 0; k < K; ++k) {
+        //     d[0] = c[0] + float(a[k]) * float(b[k]);
+        // }
+
+        T acc{};
         PRAGMA_UNROLL
         for (int k = 0; k < K; ++k) {
-            d[0] = c[0] + float(a[k]) * float(b[k]);
+            acc += a[k] * b[k];
         }
+        d[0] = c[0] + float(acc);
     }
 
     template<class Func>

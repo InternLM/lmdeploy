@@ -141,7 +141,7 @@ struct Gemm::Impl {
                                               desc.k,
                                               max_split_k,
                                               props_->multiProcessorCount,
-                                              4,
+                                              8,
                                               1,
                                               l2_bytes_per_second_,
                                               fma_per_second_)

@@ -23,7 +23,7 @@ add_library(gemm2
         codegen/sm80_s16816gemm_f16_f16_nn_pack.cu
         codegen/sm75_s1688gemm_f16_f16.cu
         codegen/sm70_s884gemm_f16_f16_f16_tn.cu
-        # codegen/sm70_sgemm_f16_f16_f16_tn.cu
+        codegen/sm70_sgemm_f16_f16_f16_tn.cu
 
         quantization.cu
         cast.cu
@@ -37,7 +37,7 @@ add_library(gemm2
         # codegen/sm80_s16816gemm_f16_f16.cu
         # codegen/sm70_s884gemm_f16_f16.cu
 
-add_executable(gemm_bench gemm_bench.cu test_utils.cu cache_utils.cu)
+add_executable(gemm_bench gemm_bench.cu test_utils.cu cache_utils.cu reference.cu)
 target_link_libraries(gemm_bench PRIVATE gemm2 nvbench::nvbench cublas)
 
 target_compile_options(gemm2 PRIVATE

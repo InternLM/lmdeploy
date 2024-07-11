@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/gemm/kernel.h"
+#include "src/turbomind/kernels/gemm/kernel_impl.h"
 #include <iostream>
 
 namespace turbomind::gemm {
@@ -25,13 +26,28 @@ public:
 
         register_sm70_s884gemm_f16_f16();
 
-
-        // reigster_sm70_sgemm_f16_f16_f16_tn();
+        reigster_sm70_sgemm_f16_f16_f16_tn();
         // register_sm70_s884gemm_f16_f16_f16_tn();
     }
 
     [[maybe_unused]] bool Add(std::unique_ptr<Kernel> kernel)
     {
+        if ((int)device_prop_->sharedMemPerBlockOptin < kernel->smem_size()) {
+            return false;
+        }
+        if (arch_ < kernel->arch()) {
+            return false;
+        }
+        std::cout << "register: " << kernel->name() << "\n";
+        kernels_.push_back(std::move(kernel));
+        return true;
+    }
+
+    template<class Config>
+    [[maybe_unused]] bool Add()
+    {
+        auto kernel = std::make_unique<KernelImpl<typename Config::Kernel>>();
+
         if ((int)device_prop_->sharedMemPerBlockOptin < kernel->smem_size()) {
             return false;
         }

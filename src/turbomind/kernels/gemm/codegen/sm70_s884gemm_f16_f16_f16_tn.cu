@@ -25,7 +25,7 @@ void Registry::register_sm70_s884gemm_f16_f16()
 
         // Add(std::make_unique<KernelImpl<Config::Type<32, 32, 16, 2, 2, 1, 3, false>::Kernel>>());
 
-        Add(std::make_unique<KernelImpl<Config::Type<128, 128, 16, 2, 2, 1, 2, true>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<128, 128, 16, 2, 2, 1, 2, true>::Kernel>>());
     }
 
     {  // packed B
@@ -54,7 +54,7 @@ void Registry::register_sm70_s884gemm_f16_f16()
                                         kRowMajor,
                                         half>;
 
-        Add(std::make_unique<KernelImpl<Config::Type<128, 128, 16, 1, 4, 1, 2, false, 1, 128>::Kernel>>());
+        // Add(std::make_unique<KernelImpl<Config::Type<128, 128, 16, 1, 4, 1, 2, false, 1, 128>::Kernel>>());
     }
 
     // {  // quant B
