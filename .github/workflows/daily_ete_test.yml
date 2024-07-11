@@ -64,7 +64,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py310]
+        pyver: [py38, py310]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -106,7 +106,7 @@ jobs:
       MODELSCOPE_CACHE: /root/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
     container:
-      image: nvcr.io/nvidia/tritonserver:24.03-py3
+      image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -132,7 +132,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py310
+          name: my-artifact-${{ github.run_id }}-py38
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
@@ -142,7 +142,7 @@ jobs:
           python3 -m pip install ${{env.dependency_pkgs}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -153,7 +153,7 @@ jobs:
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py38/lmdeploy-*.whl
           python3 -m pip install -r requirements/test.txt
           pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
       - name: Check env
@@ -272,7 +272,7 @@ jobs:
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
-      image: nvcr.io/nvidia/tritonserver:24.03-py3
+      image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -293,7 +293,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py310
+          name: my-artifact-${{ github.run_id }}-py38
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
@@ -303,7 +303,7 @@ jobs:
           python3 -m pip install ${{env.dependency_pkgs}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
@@ -312,7 +312,7 @@ jobs:
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py38/lmdeploy-*.whl
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
@@ -384,7 +384,7 @@ jobs:
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
-      image: nvcr.io/nvidia/tritonserver:24.03-py3
+      image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -405,7 +405,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py310
+          name: my-artifact-${{ github.run_id }}-py38
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
@@ -415,7 +415,7 @@ jobs:
           python3 -m pip install ${{env.dependency_pkgs}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
@@ -424,7 +424,7 @@ jobs:
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py38/lmdeploy-*.whl
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
