@@ -8,7 +8,6 @@
 #include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/epilogue.h"
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
-#include "src/turbomind/kernels/gemm/impl.h"
 #include "src/turbomind/kernels/gemm/iterator.h"
 #include "src/turbomind/kernels/gemm/iterator_sm70.h"
 #include "src/turbomind/kernels/gemm/kernel_impl.h"
