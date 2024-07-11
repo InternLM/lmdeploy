@@ -1567,7 +1567,7 @@ class Glm4Chat(BaseChatTemplate):
             prompt = self.start + prompt
         return prompt
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 

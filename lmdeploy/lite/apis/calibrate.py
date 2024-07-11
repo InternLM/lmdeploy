@@ -23,6 +23,7 @@ LAYER_TYPE_MAP = {
     'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
+    'ChatGLMForConditionalGeneration': 'GLMBlock'
 }
 
 NORM_TYPE_MAP = {
@@ -36,6 +37,7 @@ NORM_TYPE_MAP = {
     'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
+    'ChatGLMForConditionalGeneration': 'RMSNorm'
 }
 
 HEAD_NAME_MAP = {
@@ -49,6 +51,7 @@ HEAD_NAME_MAP = {
     'LlavaLlamaForCausalLM': 'lm_head',
     'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'output',
+    'ChatGLMForConditionalGeneration': 'output_layer'
 }
 
 
@@ -183,6 +186,7 @@ def calibrate(model: str,
         from lmdeploy.vl.model.builder import vl_model_with_tokenizer
         vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model)
 
+    model.config.use_cache = False
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
         raise RuntimeError(

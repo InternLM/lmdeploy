@@ -110,12 +110,13 @@ class TurbomindW4Model(BaseOutputModel):
         q_qz, k_qz, v_qz, o_qz = get_cuda_tensor(bin.attn_zero(i))
         q_s, k_s, v_s, o_s = get_cuda_tensor(bin.attn_scale(i))
 
-        q_qw = transpose_qk_s4(q_qw, group_size)
-        k_qw = transpose_qk_s4(k_qw, group_size)
-        q_qz = transpose_qk_s4(q_qz, group_size)
-        k_qz = transpose_qk_s4(k_qz, group_size)
-        q_s = permute(q_s, size_per_head)
-        k_s = permute(k_s, size_per_head)
+        if self.permute_qk:
+            q_qw = transpose_qk_s4(q_qw, group_size)
+            k_qw = transpose_qk_s4(k_qw, group_size)
+            q_qz = transpose_qk_s4(q_qz, group_size)
+            k_qz = transpose_qk_s4(k_qz, group_size)
+            q_s = permute(q_s, size_per_head)
+            k_s = permute(k_s, size_per_head)
 
         qkv_qw = merge_qkv(q_qw, k_qw, v_qw, tp, dim=2)
         qkv_qz = merge_qkv(q_qz, k_qz, v_qz, tp, dim=2)
@@ -132,8 +133,12 @@ class TurbomindW4Model(BaseOutputModel):
 
         q_b, k_b, v_b, o_b = get_cuda_tensor(bin.attn_bias(i))
         if q_b is not None:
-            q_b = permute(q_b, size_per_head)
-            k_b = permute(k_b, size_per_head)
+            if self.permute_qk:
+                q_b = permute(q_b, size_per_head)
+                k_b = permute(k_b, size_per_head)
+            else:
+                q_b = q_b[None, :]
+                k_b = k_b[None, :]
             qkv_b = merge_qkv(q_b, k_b, v_b, tp, dim=1)
             self.save_split(qkv_b, f'layers.{i}.attention.w_qkv.bias', -1)
             self.save_split(o_b, f'layers.{i}.attention.wo.bias', copy=True)
