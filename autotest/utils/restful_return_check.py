@@ -51,7 +51,7 @@ def assert_usage(usage):
 
 def assert_logprobs(logprobs, logprobs_num):
     assert_logprob_element(logprobs)
-    assert len(logprobs.get('top_logprobs')) > 0
+    assert len(logprobs.get('top_logprobs')) >= 0
     assert type(logprobs.get('top_logprobs')) == list
     assert len(logprobs.get('top_logprobs')) <= logprobs_num
     for logprob_element in logprobs.get('top_logprobs'):

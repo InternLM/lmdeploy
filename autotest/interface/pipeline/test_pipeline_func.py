@@ -27,8 +27,7 @@ def test_return_with_prompt(config, model, backend, worker_id):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
         pipe = pipeline(model_path, backend_config=backend_config)
-        gen_config = GenerationConfig(logprobs=10, max_new_tokens=5)
-        response = pipe('Hi, pls intro yourself', gen_config=gen_config)
+        response = pipe('Hi, pls intro yourself')
         result, msg = assert_pipeline_single_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)
         del pipe
@@ -58,10 +57,8 @@ def test_return_with_prompt_stream(config, model, backend, worker_id):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
         pipe = pipeline(model_path, backend_config=backend_config)
-        gen_config = GenerationConfig(logprobs=10, max_new_tokens=5)
         response = []
-        for item in pipe.stream_infer('Hi, pls intro yourself',
-                                      gen_config=gen_config):
+        for item in pipe.stream_infer('Hi, pls intro yourself'):
             response.append(item)
         result, msg = assert_pipeline_single_stream_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)

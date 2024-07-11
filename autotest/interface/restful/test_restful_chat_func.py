@@ -694,8 +694,7 @@ class TestRestfulInterfaceChatCompletions:
             'finish_reason') == 'length'
         assert length == 5 or length == 6
 
-    @pytest.mark.tmp
-    def future_test_logprobs(self):
+    def test_logprobs(self):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         for output in api_client.chat_completions_v1(
@@ -711,7 +710,6 @@ class TestRestfulInterfaceChatCompletions:
         assert output.get('usage').get('completion_tokens') == 6 or output.get(
             'usage').get('completion_tokens') == 5
 
-    @pytest.mark.tmp
     def test_logprobs_streaming(self):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
@@ -1298,7 +1296,6 @@ class TestRestfulInterfaceChatInteractive:
 @pytest.mark.turbomind
 @pytest.mark.pytorch
 @pytest.mark.flaky(reruns=2)
-@pytest.mark.tmp
 class TestRestfulSeverTools:
 
     def test_one_round_prompt(self):
