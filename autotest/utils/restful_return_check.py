@@ -2,12 +2,7 @@ def assert_chat_completions_batch_return(output,
                                          model_name,
                                          check_logprobs: bool = False,
                                          logprobs_num: int = 5):
-    assert output.get('usage').get('prompt_tokens') > 0
-    assert output.get('usage').get('total_tokens') > 0
-    assert output.get('usage').get('completion_tokens') > 0
-    assert output.get('usage').get('completion_tokens') + output.get(
-        'usage').get('prompt_tokens') == output.get('usage').get(
-            'total_tokens')
+    assert_usage(output.get('usage'))
     assert output.get('id') is not None
     assert output.get('object') == 'chat.completion'
     assert output.get('model') == model_name
@@ -23,6 +18,35 @@ def assert_chat_completions_batch_return(output,
                 'usage').get('completion_tokens')
             for logprob in message.get('logprobs').get('content'):
                 assert_logprobs(logprob, logprobs_num)
+
+
+def assert_completions_batch_return(output,
+                                    model_name,
+                                    check_logprobs: bool = False,
+                                    logprobs_num: int = 5):
+    assert_usage(output.get('usage'))
+    assert output.get('id') is not None
+    assert output.get('object') == 'text_completion'
+    assert output.get('model') == model_name
+    output_message = output.get('choices')
+    assert len(output_message) == 1
+    for message in output_message:
+        assert message.get('finish_reason') in ['stop', 'length']
+        assert message.get('index') == 0
+        assert len(message.get('text')) > 0
+        if check_logprobs:
+            len(message.get('logprobs').get('content')) == output.get(
+                'usage').get('completion_tokens')
+            for logprob in message.get('logprobs').get('content'):
+                assert_logprobs(logprob, logprobs_num)
+
+
+def assert_usage(usage):
+    assert usage.get('prompt_tokens') > 0
+    assert usage.get('total_tokens') > 0
+    assert usage.get('completion_tokens') > 0
+    assert usage.get('completion_tokens') + usage.get(
+        'prompt_tokens') == usage.get('total_tokens')
 
 
 def assert_logprobs(logprobs, logprobs_num):
@@ -63,6 +87,33 @@ def assert_chat_completions_stream_return(output,
 
         if is_last is True:
             assert len(message.get('delta').get('content')) == 0
+            assert message.get('finish_reason') in ['stop', 'length']
+            if check_logprobs is True:
+                assert message.get('logprobs') is None
+
+
+def assert_completions_stream_return(output,
+                                     model_name,
+                                     is_last: bool = False,
+                                     check_logprobs: bool = False,
+                                     logprobs_num: int = 5):
+    assert output.get('id') is not None
+    assert output.get('object') == 'text_completion'
+    assert output.get('model') == model_name
+    output_message = output.get('choices')
+    assert len(output_message) == 1
+    for message in output_message:
+        assert message.get('index') == 0
+        assert len(message.get('text')) >= 0
+        if is_last is False:
+            assert message.get('finish_reason') is None
+            if check_logprobs:
+                assert (len(message.get('logprobs').get('content')) == 1)
+                assert_logprobs(
+                    message.get('logprobs').get('content')[0], logprobs_num)
+
+        if is_last is True:
+            assert len(message.get('text')) == 0
             assert message.get('finish_reason') in ['stop', 'length']
             if check_logprobs is True:
                 assert message.get('logprobs') is None

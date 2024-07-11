@@ -126,7 +126,6 @@ quatization_case_config:
         - internlm/internlm2-20b
         - internlm/internlm-chat-20b
         - internlm/internlm-xcomposer2-vl-7b
-        - internlm/internlm-xcomposer2d5-7b
         - internlm/internlm-xcomposer2-4khd-7b
         - OpenGVLab/InternVL-Chat-V1-5
         - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
