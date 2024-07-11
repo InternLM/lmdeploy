@@ -64,6 +64,8 @@ class MistralFlashAttention2(nn.Module):
         head_dim = self.head_dim
         hidden_size = num_heads * head_dim
 
+        position_ids_1d = context.position_ids_1d
+
         def __qkv_proj(hidden_states):
             """qkv proj."""
             query_states = self.q_proj(hidden_states)
@@ -74,17 +76,37 @@ class MistralFlashAttention2(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             if hasattr(self, 'rotary_emb'):
+                if not hasattr(self, '_use_old_rotary_emb'):
+                    import inspect
+                    args = inspect.getargspec(self.rotary_emb.forward)[0]
+                    self._use_old_rotary_emb = 'seq_len' in args
                 if not hasattr(context, '_cos'):
-                    cos, sin = self.rotary_emb(value_states,
-                                               seq_len=max_kv_seq_length)
+                    if self._use_old_rotary_emb:
+                        kwargs = dict(seq_len=max_kv_seq_length)
+                    else:
+                        kwargs = dict(position_ids=position_ids_1d[None])
+
+                    cos, sin = self.rotary_emb(value_states, **kwargs)
+
                     context._cos = cos
                     context._sin = sin
                 else:
                     cos = context._cos
                     sin = context._sin
+
+                if self._use_old_rotary_emb:
+                    _position_ids_1d = position_ids_1d
+                else:
+                    _position_ids_1d = torch.arange(0,
+                                                    len(position_ids_1d),
+                                                    device=query_states.device)
                 query_states, key_states = apply_rotary_pos_emb(
-                    query_states, key_states, cos, sin, position_ids,
-                    context.position_ids_1d)
+                    query_states,
+                    key_states,
+                    cos,
+                    sin,
+                    position_ids,
+                    position_ids_1d=_position_ids_1d)
             return query_states, key_states, value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
@@ -137,6 +159,7 @@ class MistralFlashAttention2(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
+        **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """Rewrite of forward."""
