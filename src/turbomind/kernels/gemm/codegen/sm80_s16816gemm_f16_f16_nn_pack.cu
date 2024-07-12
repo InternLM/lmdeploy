@@ -10,20 +10,27 @@ namespace turbomind::gemm {
 
 void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
 {
-    {
-        // using Config = sm80_hmma_16816::SM80_HMMA_16816_F32<
-        //     typename GetOperand<HMMA_16816, OPERAND_A, half, kColMajor, true>::Operand,
-        //     Transform_Default,
-        //     VoidOperand,
-        //     typename GetOperand<HMMA_16816, OPERAND_B, half, kRowMajor, true>::Operand,
-        //     Transform_Default,
-        //     VoidOperand,
-        //     kRowMajor,
-        //     half>;
+    using namespace sm80_hmma_16816;
 
-        // Add(std::make_unique<KernelImpl<Config::Type<256, 128, 64, 4, 2, 1, 3, false, 0, 0>::Kernel>>());
-        // Add(std::make_unique<KernelImpl<Config::Type<128, 128, 32, 2, 2, 1, 3, false, 0, 0>::Kernel>>());
-        // Add(std::make_unique<KernelImpl<Config::Type<16, 16, 32, 1, 1, 1, 3, false, 0, 0>::Kernel>>());
+    {
+        using Config = SM80_HMMA_16816_F32<typename GetOperand<HMMA_16816, OPERAND_A, half, kColMajor, false>::Operand,
+                                           Transform_Default,
+                                           VoidOperand,
+                                           typename GetOperand<HMMA_16816, OPERAND_B, half, kRowMajor, false>::Operand,
+                                           Transform_Default,
+                                           VoidOperand,
+                                           kColMajor,
+                                           half>;
+
+        using namespace cache_policy;
+
+        Add<Config::Type<256, 128, 64, 4, 2, 1, Default, Default, 3, false, 1, 1>>();
+
+        // Add<Config::Type<128, 128, 32, 2, 2, 1, Default, Default, 3, false, 1, 1>>();
+
+        // Add<Config::Type<128, 16, 64, 4, 1, 1, Default, Default, 3, false, 1, 1>>();
+
+        // Add<Config::Type<32, 16, 32, 1, 1, 1, Default, Default, 3, false, 1, 1>>();
     }
 
     {
@@ -83,7 +90,7 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
 
         // Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 5, false, 1, 128>::Kernel>();
         // Add<Config::Type<128, 128, 32, 1, 4, 1, 3, false, 1, 128>::Kernel>();
-        Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 5, false, 1, 128>>();
+        // Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 5, false, 1, 128>>();
         // Add<Config::Type<128, 128, 32, 1, 4, 1, 5, true, 1, 128>::Kernel>();
         // Add<Config::Type<128, 128, 32, 1, 4, 1, 3, true, 1, 128>::Kernel>();
         // Add<Config::Type<128, 128, 64, 1, 4, 1, 3, true, 1, 128>::Kernel>();

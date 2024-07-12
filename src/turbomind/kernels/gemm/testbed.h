@@ -275,7 +275,12 @@ public:
 
         // Compare(c_.data().get(), c_f_.data().get(), n_, n_, m_, 0);
 
-        Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
+        if (order_c == kRowMajor) {
+            Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
+        }
+        else {
+            Compare(c_.data().get(), c_ref_.data().get(), m_, m_, n_, 0);
+        }
     }
 
 private:
@@ -360,6 +365,15 @@ inline decltype(auto) get_test()
         // sm80 / sm75
         constexpr Pack kPackA = 0;  // HMMA_16816 | OPERAND_A | 1;
         constexpr Pack kPackU = 0;  // HMMA_16816 | OPERAND_U | 1;
+        constexpr Pack kPackB = 0;
+        constexpr Pack kPackV = 0;
+        return gTestbed<
+            gemm::Testbed<half, half, half, kColMajor, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
+    }
+    else if constexpr (0) {
+        // sm80 / sm75
+        constexpr Pack kPackA = 0;
+        constexpr Pack kPackU = 0;
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
         constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
         return gTestbed<
@@ -385,6 +399,4 @@ inline decltype(auto) get_test()
     }
 }
 
-
 }  // namespace turbomind::gemm
-

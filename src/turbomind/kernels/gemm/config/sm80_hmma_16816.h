@@ -92,8 +92,25 @@ struct Operand_C {
         template<int M, int N>
         static constexpr auto apply(pair<M, N>)
         {
-            constexpr auto cs = mk2cs<order>(M, N);
-            return SmemLayoutV2<cs.y, cs.x, 8, 32, Swizzle<2, 3, 2>>{};
+            if constexpr (order == kRowMajor) {
+                // x01  23
+                // cccccss
+                //                                    bits base shift
+                return SmemLayoutV2<M, N, 8, 32, Swizzle<2, 3, 2>>{};
+            }
+            else {
+                // 012345
+                // 234  x01
+                //   x01
+                // cccccsss
+                // return SmemLayoutV2<N, M, 8, 32, Swizzle<3, 2, 3>>{};
+
+                // 234  x01
+                // 23401x
+                // cccccsss
+                // so that x is not part of swizzling
+                return SmemLayoutV2<N, M, 8, 32, Swizzle<2, 3, 3>>{};
+            }
         }
     };
 

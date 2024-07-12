@@ -37,7 +37,7 @@ struct GemmUniversal {
 
     // col major == M-major (A)
     // row major == N-major (B)
-    static constexpr Order kOrderC = Order::kRowMajor;
+    static constexpr Order kOrderC = Epilogue::kOrder;
 
     static constexpr int CTA_M = Impl::CTA_M;
     static constexpr int CTA_N = Impl::CTA_N;

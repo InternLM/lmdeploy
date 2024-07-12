@@ -219,6 +219,25 @@ inline __device__ void Stcs(T* __restrict__ dst, const Array<T, N>& src)
 }
 
 template<typename T, int N>
+inline __device__ void Stcg(T* __restrict__ dst, const Array<T, N>& src)
+{
+    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
+
+    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
+        __stcg((uint4*)dst, (const uint4&)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
+        __stcg((uint2*)dst, (const uint2&)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint1)) {
+        __stcg((uint*)dst, (const uint&)src);
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>);
+    }
+}
+
+template<typename T, int N>
 inline __device__ void Ldg(Array<T, N>& dst, const T* src)
 {
     static_assert(sizeof(Array<T, N>) <= sizeof(uint4));

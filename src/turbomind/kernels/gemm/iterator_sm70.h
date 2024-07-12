@@ -36,6 +36,8 @@ struct GmemIteratorSm70 {
     int src_step_c_;
     int src_step_s_;
 
+    int src_step_k_;
+
     Predicate<Map::kIterS, Map::kIterC, (AlignedC && Map::kAlignedC), (AlignedS && Map::kAlignedS)> pred_;
 
     bool g_mask{true};
@@ -99,8 +101,14 @@ struct GmemIteratorSm70 {
         }
 
         src_offset_ = src_offset * bitsof<T> / bitsof<char>;
-        src_step_c_ = Map::kDeltaC * bitsof<T> / bitsof<char>;
-        src_step_s_ = Map::kDeltaS * stride_s * bitsof<T> / bitsof<char>;
+
+        src_step_c_ = bitsof<T> / bitsof<char>;
+        src_step_s_ = stride_s * bitsof<T> / bitsof<char>;
+
+        src_step_k_ = cs2mk<kOrder>(src_step_c_ * Map::kDimC, src_step_s_ * Map::kDimS).y;
+
+        src_step_c_ *= Map::kDeltaC;
+        src_step_s_ *= Map::kDeltaS;
 
         // initialize for the first tile
         src_data_ = src_ptr + src_offset_;
@@ -108,9 +116,7 @@ struct GmemIteratorSm70 {
 
     __device__ constexpr int _src_step_k() const
     {
-        /// FIXME: this is only correct when both C & S are aligned in the thread map
-        // return cs2mk<kOrder>(src_step_c_ * Map::kIterC * Map::kWarpC, src_step_s_ * Map::kIterS * Map::kWarpS).y;
-        return cs2mk<kOrder>(src_step_c_ * Map::kWarpIterC, src_step_s_ * Map::kWarpIterS).y;
+        return src_step_k_;
     }
 
     __device__ void ClearSmem(int pipe_iter = 0)
@@ -178,7 +184,7 @@ struct GmemIteratorSm70 {
     }
 };
 
-template <class Policy>
+template<class Policy>
 struct IteratorSm70 {
     template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS>
     using Type = GmemIteratorSm70<T, Map, SmemLayout, kPack, kOrder, AlignedC, AlignedS, Policy>;
