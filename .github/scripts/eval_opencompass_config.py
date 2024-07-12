@@ -547,37 +547,6 @@ pt_baichuan2_chat_7b = dict(type=LmdeployPytorchModel,
                             run_cfg=run_cfg_tp1_template,
                             end_str=None)
 
-# ===== Configs for mistralai/Mistral-7B-Instruct-v0.1 =====
-# config for pt Mistral-7B-Instruct-v0.1
-pt_mistral_chat_7b = dict(type=LmdeployPytorchModel,
-                          abbr='mistral-7b-instruct-v0.1-pytorch',
-                          path='mistralai/Mistral-7B-Instruct-v0.1',
-                          engine_config=pt_engine_config_template_max_bs_16,
-                          gen_config=gen_config_template,
-                          max_out_len=MAX_NEW_TOKENS,
-                          max_seq_len=MAX_SESSION_LEN,
-                          batch_size=16,
-                          concurrency=16,
-                          meta_template=mistral_meta_template,
-                          run_cfg=run_cfg_tp1_template,
-                          end_str='</s>')
-
-# ===== Configs for mistralai/Mixtral-8x7B-Instruct-v0.1 =====
-# config for pt Mixtral-8x7B-Instruct-v0.1
-pt_mixtral_chat_8x7b = dict(
-    type=LmdeployPytorchModel,
-    abbr='mixtral-8x7b-instruct-v0.1-pytorch',
-    path='mistralai/Mixtral-8x7B-Instruct-v0.1',
-    engine_config=pt_engine_config_template_max_bs_8_prefill_tp2,
-    gen_config=gen_config_template,
-    max_out_len=MAX_NEW_TOKENS,
-    max_seq_len=MAX_SESSION_LEN,
-    batch_size=8,
-    concurrency=8,
-    meta_template=mistral_meta_template,
-    run_cfg=run_cfg_tp2_template,
-    end_str='</s>')
-
 # ===== Configs for google/gemma-7b-it =====
 pt_gemma_chat_7b = dict(type=LmdeployPytorchModel,
                         abbr='pt_gemma_chat_7b',

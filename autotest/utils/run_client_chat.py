@@ -51,8 +51,10 @@ def hf_command_line_test(config,
     else:
         model_path = model_case
 
-    cmd = get_command_with_extra(' '.join(
-        ['lmdeploy chat', model_path, '--backend', type, extra]),
+    cmd = get_command_with_extra(' '.join([
+        'lmdeploy chat', model_path, '--backend', type, '--session-len 4096',
+        extra
+    ]),
                                  config,
                                  model_case,
                                  need_tp=True,
@@ -97,7 +99,7 @@ def command_test(config,
 
         spliter = '\n\n'
         if 'CodeLlama' in model and 'api_client' not in cmd:
-            if 'workspace' in cmd:
+            if 'workspace' in ' '.join(cmd):
                 spliter = '\n!!\n'
         # join prompt together
         prompt = ''
@@ -114,7 +116,8 @@ def command_test(config,
                    shell=True,
                    text=True,
                    encoding='utf-8') as proc:
-            # file.writelines('prompt:' + prompt + '\n')
+            print(prompt)
+            file.writelines('prompt:' + prompt + '\n')
 
             outputs, errors = proc.communicate(input=prompt)
             returncode = proc.returncode
