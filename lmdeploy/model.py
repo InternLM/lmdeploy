@@ -1619,6 +1619,45 @@ class Glm4Chat(ChatGLM3):
             return 'glm4'
 
 
+@MODELS.register_module(name='codegeex4')
+class CodeGeeX4Chat(BaseChatTemplate):
+    """Chat template of THUDM/codegeex4-all-9b model."""
+
+    def __init__(
+            self,
+            system='<|system|>\n',
+            meta_instruction='你是一位智能编程助手，你叫CodeGeeX。你会为用户回答关于编程、代码、计算机方面的任何问题，并提供格式规范、可以执行、准确安全的代码，并在必要时提供详细的解释。',
+            eosys='',
+            user='<|user|>\n',
+            eoh='',
+            assistant='<|assistant|>\n',
+            eoa='',
+            separator='',
+            stop_words=['<|endoftext|>', '<|user|>', '<|observation|>'],
+            **kwargs):
+        super().__init__(system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'codegeex4' in path:
+            return 'codegeex4'
+
+
 @MODELS.register_module(name='internvl-phi3')
 class InternVLPhi3(Phi3Instruct):
     """Chat template of InternVL Chat 4B model."""

@@ -27,6 +27,7 @@
 |       MiniCPM       | Llama3-V-2_5 |    Yes    |   Yes   |   Yes   |  Yes  |
 |   MiniGeminiLlama   |      7B      |    Yes    |   No    |   No    |  Yes  |
 |        GLM4         |      9B      |    Yes    |   Yes   |   Yes   |  No   |
+|      CodeGeeX4      |      9B      |    Yes    |   Yes   |   Yes   |  No   |
 
 “-” 表示还没有验证。
 
@@ -67,3 +68,4 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 | InternVL-Chat(v1.5) |   2B-26B    |    Yes    |   No    |  No  |
 |       Gemma2        |   9B-27B    |    Yes    |   No    |  No  |
 |        GLM4         |     9B      |    Yes    |   No    |  No  |
+|      CodeGeeX4      |     9B      |    Yes    |   No    |  No  |
