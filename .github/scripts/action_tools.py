@@ -117,7 +117,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         print(f'Start evaluating {idx+1}/{num_model} {ori_model} ...')
         model = ori_model.lower()
         model_, precision = model.rsplit('_', 1)
-        do_lite = precision in ['4bits', 'kvin4', 'kvint8']
+        do_lite = precision in ['4bits', 'kvint4', 'kvint8']
         if do_lite:
             model = model_
         engine_type, model_ = model.split('_', 1)

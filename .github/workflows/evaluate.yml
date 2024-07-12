@@ -123,13 +123,13 @@ jobs:
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl
-          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
           python3 -m pip install -e .
+          python3 -m pip install triton==2.1.0
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
