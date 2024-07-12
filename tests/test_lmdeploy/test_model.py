@@ -300,6 +300,32 @@ def test_deepseek_coder():
     assert res.startswith(ref)
 
 
+def test_chatglm3():
+    model_path_and_name = 'THUDM/chatglm3-6b'
+    deduced_name = best_match_model(model_path_and_name)
+    assert deduced_name == 'chatglm3'
+    model = MODELS.get(deduced_name)()
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name,
+                                              trust_remote_code=True)
+    ref = tokenizer.apply_chat_template(messages, tokenize=False)
+    res = model.messages2prompt(messages)
+    assert res.startswith(ref)
+
+
 def test_glm4():
     model = MODELS.get('glm4')()
     messages = [{

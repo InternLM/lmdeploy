@@ -145,6 +145,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>CogVLM2-Chat (19B)</li>
   <li>MiniCPM-Llama3-V-2_5</li>
   <li>Phi-3-vision (4.2B)</li>
+  <li>GLM-4V (9B)</li>
 </ul>
 </td>
 </tr>

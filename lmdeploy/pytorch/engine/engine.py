@@ -429,7 +429,7 @@ class Engine:
         history_image_nums = None
         history_image_token_lengths = None
         # only for cogvlm
-        if self.model_config.model_arch == 'CogVLMForCausalLM':
+        if self.model_config.cogvlm_style:
             (history_image_nums,
              history_image_token_lengths) = __get_cogvlm_image_info()
 

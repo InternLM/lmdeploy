@@ -66,3 +66,4 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |   LLaVA(1.5,1.6)    |   7B-34B    |    Yes    |   No    |  No  |
 | InternVL-Chat(v1.5) |   2B-26B    |    Yes    |   No    |  No  |
 |       Gemma2        |   9B-27B    |    Yes    |   No    |  No  |
+|        GLM4         |     9B      |    Yes    |   No    |  No  |
