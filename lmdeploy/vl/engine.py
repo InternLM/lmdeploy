@@ -16,6 +16,16 @@ from lmdeploy.vl.model.builder import load_vl_model
 logger = get_logger('lmdeploy')
 
 
+def _raise_exception_on_finish(task: asyncio.Task) -> None:
+    """raise exception on finish."""
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception as e:
+        raise e
+
+
 class Record:
     """Batching manager."""
 
@@ -127,8 +137,10 @@ class ImageEncoder:
                 item = await self._que.get()
                 record.enqueue(item[0], item[1])
             inputs = record.dequeue(self.max_batch_size)
-            outputs = await asyncio.get_event_loop().run_in_executor(
+            future = asyncio.get_event_loop().run_in_executor(
                 None, self.forward, inputs)
+            future.add_done_callback(_raise_exception_on_finish)
+            outputs = await future
             record.done.extend(outputs)
             while record.notify():
                 pass
