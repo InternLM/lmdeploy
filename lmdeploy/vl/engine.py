@@ -62,11 +62,11 @@ class Record:
         outputs = self.done[:num_images]
         self.done = self.done[num_images:]
         que = self.res_que.pop(0)
+        self.log('done', num_images)
         if self.thread_safe:
             que._loop.call_soon_threadsafe(que.put_nowait, outputs)
         else:
             que.put_nowait(outputs)
-        self.log('done', num_images)
         return True
 
     def log(self, task: str, num: int):
