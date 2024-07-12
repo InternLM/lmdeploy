@@ -162,13 +162,6 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
                 f.write(f'\nmodels = [ {target_model} ]\n')
 
         work_dir = os.path.join(workspace, target_model)
-        # delete history summary
-        for entry in os.scandir(work_dir):
-            if not entry.is_dir():
-                continue
-            if entry.name == 'summary':
-                print(f'Deleting directory: {entry.path}')
-                shutil.rmtree(entry.path)
         cmd_eval = [
             f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
         ]
