@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers==4.41.2 datasets matplotlib openai attrdict timm modelscope jmespath decord'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord'
       tools_regression:
         required: true
         description: 'Whether start a tool regression'
@@ -53,7 +53,7 @@ on:
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers==4.41.2 datasets matplotlib openai attrdict timm modelscope jmespath decord'}}
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord'}}
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
