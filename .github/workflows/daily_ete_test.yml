@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers==4.41.2 datasets matplotlib openai attrdict timm modelscope jmespath decord triton==2.1.0'
+        default: 'packaging transformers_stream_generator transformers==4.41.2 datasets matplotlib openai attrdict timm modelscope jmespath decord'
       tools_regression:
         required: true
         description: 'Whether start a tool regression'
@@ -147,12 +147,14 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
           pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
           python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
           pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
       - name: Check env
@@ -307,11 +309,13 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
           python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
@@ -419,11 +423,13 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
           python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
