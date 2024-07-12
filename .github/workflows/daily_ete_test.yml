@@ -138,7 +138,7 @@ jobs:
           python3 -m pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{env.dependency_pkgs}}
+          python3 -m pip install ${{env.dependency_pkgs}} --no-dependencies
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
@@ -299,7 +299,7 @@ jobs:
           python3 -m pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{env.dependency_pkgs}}
+          python3 -m pip install ${{env.dependency_pkgs}} --no-dependencies
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
@@ -411,7 +411,7 @@ jobs:
           python3 -m pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{env.dependency_pkgs}}
+          python3 -m pip install ${{env.dependency_pkgs}} --no-dependencies
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
