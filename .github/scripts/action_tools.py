@@ -162,6 +162,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
                 f.write(f'\nmodels = [ {target_model} ]\n')
 
         work_dir = os.path.join(workspace, target_model)
+        shutil.rmtree(f'{work_dir}/*/summary')
         cmd_eval = [
             f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
         ]
@@ -170,6 +171,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         if ret != 0:
             continue
         csv_files = glob.glob(f'{work_dir}/*/summary/summary_*.csv')
+
         if len(csv_files) != 1:
             logging.error(f'Did not find summary csv file {csv_files}')
             continue
