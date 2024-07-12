@@ -20,6 +20,7 @@
 #include "src/turbomind/layers/sampling_layers/BaseSamplingLayer.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/memory_utils.h"
+#include <vector>
 
 namespace turbomind {
 
@@ -32,6 +33,9 @@ private:
     void allocateBuffer() override;
     void allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p) override;
 
+    std::vector<uint>  h_runtime_top_k_;
+    std::vector<float> h_runtime_top_p_;
+
     uint   runtime_max_top_k_ = 1;
     uint*  runtime_top_k_buf_ = nullptr;
     float* runtime_top_p_buf_ = nullptr;
@@ -43,6 +47,7 @@ private:
     using BaseSamplingLayer<T>::skip_decode_buf_;
     using BaseSamplingLayer<T>::skip_decode_;
     using BaseSamplingLayer<T>::skip_any_;
+    using BaseSamplingLayer<T>::skip_all_;
     using BaseSamplingLayer<T>::runtime_logits_buf_;
 
     using BaseSamplingLayer<T>::stream_;
