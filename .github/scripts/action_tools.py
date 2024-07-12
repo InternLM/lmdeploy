@@ -171,10 +171,11 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
             continue
         csv_files = glob.glob(f'{work_dir}/*/summary/summary_*.csv')
 
-        if len(csv_files) != 1:
+        if len(csv_files) < 1:
             logging.error(f'Did not find summary csv file {csv_files}')
             continue
-        csv_file = csv_files[0]
+        else:
+            csv_file = max(csv_files, key=os.path.getctime)
         # print csv_txt to screen
         csv_txt = csv_file.replace('.csv', '.txt')
         if os.path.exists(csv_txt):
