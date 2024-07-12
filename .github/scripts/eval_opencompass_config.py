@@ -490,18 +490,16 @@ tb_qwen2_7b_instruct_4bits = deepcopy(tb_qwen2_7b_instruct)
 tb_qwen2_7b_instruct_kvint4 = deepcopy(tb_qwen2_7b_instruct)
 tb_qwen2_7b_instruct_kvint8 = deepcopy(tb_qwen2_7b_instruct)
 
-for model in sum([v for k, v in locals().items() if k.endswith('_4bits')], []):
+for model in [v for k, v in locals().items() if k.endswith('_4bits')]:
     model['engine_config']['model_format'] = 'awq'
     model['abbr'] = model['abbr'] + '_4bits'
     model['path'] = model['path'] + '-inner-4bits'
 
-for model in sum([v for k, v in locals().items() if k.endswith('_kvint4')],
-                 []):
+for model in [v for k, v in locals().items() if k.endswith('_kvint4')]:
     model['engine_config']['quant_policy'] = 4
     model['abbr'] = model['abbr'] + '_kvint4'
 
-for model in sum([v for k, v in locals().items() if k.endswith('_kvint8')],
-                 []):
+for model in [v for k, v in locals().items() if k.endswith('_kvint8')]:
     model['engine_config']['quant_policy'] = 8
     model['abbr'] = model['abbr'] + '_kvint8'
 
