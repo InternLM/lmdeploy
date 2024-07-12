@@ -62,18 +62,18 @@ def test_update_from_engine_config():
     config = copy.deepcopy(_config)
     config.update_from_engine_config(TurbomindEngineConfig())
     assert config.tensor_para_size == 1
-    assert config.session_len == 65544
+    assert config.session_len == 32776
     assert config.max_batch_size == 128
     assert config.cache_max_entry_count == 0.8
     assert config.quant_policy == 0
-    assert config.max_prefill_iters == 9
+    assert config.max_prefill_iters == 5
     assert config.num_tokens_per_iter == 8192
 
     config = copy.deepcopy(_config)
     config.update_from_engine_config(
         TurbomindEngineConfig(max_prefill_token_num=2048,
                               num_tokens_per_iter=0))
-    assert config.max_prefill_iters == 33
+    assert config.max_prefill_iters == 17
     assert config.num_tokens_per_iter == 2048
 
     config = copy.deepcopy(_config)
