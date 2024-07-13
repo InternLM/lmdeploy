@@ -193,13 +193,13 @@ struct CP_ASYNC<CacheOp::kAlways, size, 256> {
     __device__ static void apply(int smem_ptr, const void* __restrict__ src, bool mask)
     {
         asm volatile("{\n  .reg .pred p;\n  setp.ne.b32 p, %0, 0;\n"
-                     "  @p cp.async.cg.shared.global" L2_CACHEHINT(256) " [%1], [%2], %3;\n"
+                     "  @p cp.async.ca.shared.global" L2_CACHEHINT(256) " [%1], [%2], %3;\n"
                      "}\n" ::"r"((int)mask), "r"(smem_ptr), "l"(src), "n"(size));
     }
     __device__ static void apply(int smem_ptr, const void* __restrict__ src, uint64_t cache_policy, bool mask)
     {
         asm volatile("{\n  .reg .pred p;\n  setp.ne.b32 p, %0, 0;\n"
-                     "  @p cp.async.cg.shared.global.L2::cache_hint" L2_CACHEHINT(256) " [%1], [%2], %3, %4;\n"
+                     "  @p cp.async.ca.shared.global.L2::cache_hint" L2_CACHEHINT(256) " [%1], [%2], %3, %4;\n"
                      "}\n" ::"r"((int)mask), "r"(smem_ptr), "l"(src), "n"(size), "l"(cache_policy));
     }
     // clang-format on

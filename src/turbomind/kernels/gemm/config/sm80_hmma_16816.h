@@ -63,6 +63,12 @@ struct Operand_A {
     using SmemCopyAtom =
         std::conditional_t<order == kRowMajor, SmemCopy_MMA_16816_A<T, false>, SmemCopy_MMA_16816_B<T, true>>;
 
+    // using SmemCopyAtom = std::conditional_t<order == kRowMajor,
+    //                                         LDSM_SM75_8x8<T, 16, 16, kColMajor, kRowMajor>,
+    //                                         LDSM_SM75_8x8<T, 16, 16, kRowMajor, kColMajor>>;
+
+    // using SmemCopyAtom = LDSM_SM75_8x8<T, 16, 16, ~order, order>;
+
     using GetSmemLayout = GetSmemLayoutV2<kOrder>;
     using GetGmemIter   = GetGmemIter;
 };
@@ -77,6 +83,11 @@ struct Operand_B {
 
     using SmemCopyAtom =
         std::conditional_t<order == kRowMajor, SmemCopy_MMA_16816_B<T, false>, SmemCopy_MMA_16816_A<T, true>>;
+    // using SmemCopyAtom = std::conditional_t<order == kRowMajor,  //
+    //                                         LDSM_SM75_8x8<T, 16, 16, kRowMajor, kRowMajor>,
+    //                                         LDSM_SM75_8x8<T, 16, 16, kColMajor, kColMajor>>;
+
+    // using SmemCopyAtom = LDSM_SM75_8x8<T, 16, 16, order, order>;
 
     using GetSmemLayout = GetSmemLayoutV2<kOrder>;
     using GetGmemIter   = GetGmemIter;

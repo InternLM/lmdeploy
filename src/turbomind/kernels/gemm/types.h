@@ -18,6 +18,11 @@ enum class Order : int {
 inline constexpr Order kColMajor = Order::kColMajor;
 inline constexpr Order kRowMajor = Order::kRowMajor;
 
+constexpr Order operator~(Order a)
+{
+    return a == kColMajor ? kRowMajor : kColMajor;
+}
+
 using Pack = uint32_t;
 
 typedef enum MMA_Tag {

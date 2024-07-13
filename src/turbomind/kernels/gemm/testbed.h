@@ -279,7 +279,7 @@ public:
             Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
         }
         else {
-            Compare(c_.data().get(), c_ref_.data().get(), m_, m_, n_, 0);
+            Compare(c_.data().get(), c_ref_.data().get(), m_, m_, n_, 1);
         }
     }
 
@@ -363,12 +363,12 @@ inline decltype(auto) get_test()
     }
     else if constexpr (1) {
         // sm80 / sm75
-        constexpr Pack kPackA = 0;  // HMMA_16816 | OPERAND_A | 1;
-        constexpr Pack kPackU = 0;  // HMMA_16816 | OPERAND_U | 1;
+        constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;
+        constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
         constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
         return gTestbed<
-            gemm::Testbed<half, half, half, kColMajor, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
+            gemm::Testbed<uint4_t, half, half, kColMajor, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
     }
     else if constexpr (0) {
         // sm80 / sm75

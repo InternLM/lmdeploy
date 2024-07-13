@@ -14,9 +14,12 @@ void gemm_bench(nvbench::state& state)
 {
     const auto& weights = config["llama2-7b"];
 
-    const auto index  = state.get_int64("index");
-    const auto m      = state.get_int64("batch size");
-    const auto [n, k] = weights[index];
+    const auto index = state.get_int64("index");
+    // const auto m      = state.get_int64("batch size");
+    // const auto [n, k] = weights[index];
+
+    const auto n      = state.get_int64("batch size");
+    const auto [m, k] = weights[index];
 
     using turbomind::gemm::get_test;
 
@@ -28,7 +31,7 @@ void gemm_bench(nvbench::state& state)
     state.collect_l2_hit_rates();
 
     if constexpr (1) {
-        state.add_global_memory_reads(sizeof(half) * m * k + n * k / 2);
+        state.add_global_memory_reads(m * k / 2 + sizeof(half) * n * k);
         state.exec([&](nvbench::launch&) {  //
             get_test().Run();
         });
@@ -42,7 +45,7 @@ void gemm_bench(nvbench::state& state)
 }
 
 NVBENCH_BENCH(gemm_bench)
-    .add_int64_power_of_two_axis("batch size", nvbench::range(0, 8))
+    .add_int64_power_of_two_axis("batch size", nvbench::range(0, 3))
     .add_int64_axis("index", nvbench::range(0, 3));
 
 int main(int argc, char* argv[])

@@ -225,7 +225,7 @@ public:
         }
 
         const int tiled_m = ceil_div(m, CTA_M);
-        const int tiled_n = ceil_div(m, CTA_N);
+        const int tiled_n = ceil_div(n, CTA_N);
 
         size_t barriers_per_split{};
         size_t partials_per_split{};

@@ -230,12 +230,12 @@ struct Tiled_MMA_v2 {
                 const int2 cs       = mk2cs<order>(m01, n01);
                 const int  offset_0 = Layout::apply(cs.y, cs.x);
                 Atom::foreach_C(frag_C[m][n], [&](auto& vec, int idx, int, int) {
-                    int       offset_1 = phases[m0 % kPeriodM][n0 % kPeriodN][m1 % kPeriodM1][n1 % kPeriodN1][idx];
+                    const int offset_1 = phases[m0 % kPeriodM][n0 % kPeriodN][m1 % kPeriodM1][n1 % kPeriodN1][idx];
                     const int bm       = offset_mnk.x - offset_mn.x + m0 * Map::kDeltaM + m1 * Atom::M + thr.x;
                     const int bn       = offset_mnk.y - offset_mn.y + n0 * Map::kDeltaN + n1 * Atom::N + thr.y;
                     const int mm       = kRakedM ? m01 : bm;
                     const int nn       = kRakedN ? n01 : bn;
-                    int       mask = (TM >= Map::M || (0 <= mm && mm < TM)) && (TN >= Map::N || (0 <= nn && nn < TN));
+                    const int mask = (TM >= Map::M || (0 <= mm && mm < TM)) && (TN >= Map::N || (0 <= nn && nn < TN));
                     if ((Map::kGroupK == 1 || group_id_k == k) && mask) {
                         if (k > 0) {
                             std::remove_reference_t<decltype(vec)> tmp;

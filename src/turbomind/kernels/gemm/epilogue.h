@@ -306,8 +306,8 @@ struct Epilogue_ {
         for (int s = 0; s < S; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < C; ++c) {
+                const auto tmp = cast<T>(vec_C[s][c]);
                 if (pred(s, c)) {
-                    const auto tmp = cast<T>(vec_C[s][c]);
                     Store(reinterpret_cast<T*>(ptr), tmp);
                 }
                 ptr += dc;

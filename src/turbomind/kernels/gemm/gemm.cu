@@ -163,7 +163,7 @@ struct Gemm::Impl {
 
         for (int i = 0; i < top_k; ++i) {
             const auto& [cost, splits] = costs[idxs[i]];
-            ret.emplace_back(LaunchSpec{kernels[idxs[i]], 3, splits}, static_cast<float>(cost));
+            ret.emplace_back(LaunchSpec{kernels[idxs[i]], 0, splits}, static_cast<float>(cost));
         }
 
         return ret;
@@ -205,7 +205,7 @@ struct Gemm::Impl {
                                       l2_bytes_per_second_,
                                       fma_per_second_);
             for (const auto& [split_k, cost] : splits) {
-                for (const auto& swizzle : {3}) {
+                for (const auto& swizzle : {0,1,2,3}) {
                     specs.push_back(LaunchSpec{k, swizzle, split_k, cost});
                 }
             }
