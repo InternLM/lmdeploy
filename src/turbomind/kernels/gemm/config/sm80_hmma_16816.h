@@ -60,14 +60,14 @@ struct Operand_A {
     static constexpr Pack  kPack  = 0;
     static constexpr Order kOrder = order;
 
-    using SmemCopyAtom =
-        std::conditional_t<order == kRowMajor, SmemCopy_MMA_16816_A<T, false>, SmemCopy_MMA_16816_B<T, true>>;
+    // using SmemCopyAtom =
+    //     std::conditional_t<order == kRowMajor, SmemCopy_MMA_16816_A<T, false>, SmemCopy_MMA_16816_B<T, true>>;
 
     // using SmemCopyAtom = std::conditional_t<order == kRowMajor,
     //                                         LDSM_SM75_8x8<T, 16, 16, kColMajor, kRowMajor>,
     //                                         LDSM_SM75_8x8<T, 16, 16, kRowMajor, kColMajor>>;
 
-    // using SmemCopyAtom = LDSM_SM75_8x8<T, 16, 16, ~order, order>;
+    using SmemCopyAtom = LDSM_SM75_8x8<T, 16, 16, ~order, order>;
 
     using GetSmemLayout = GetSmemLayoutV2<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -81,13 +81,13 @@ struct Operand_B {
     static constexpr Pack  kPack  = 0;
     static constexpr Order kOrder = order;
 
-    using SmemCopyAtom =
-        std::conditional_t<order == kRowMajor, SmemCopy_MMA_16816_B<T, false>, SmemCopy_MMA_16816_A<T, true>>;
+    // using SmemCopyAtom =
+    //     std::conditional_t<order == kRowMajor, SmemCopy_MMA_16816_B<T, false>, SmemCopy_MMA_16816_A<T, true>>;
     // using SmemCopyAtom = std::conditional_t<order == kRowMajor,  //
     //                                         LDSM_SM75_8x8<T, 16, 16, kRowMajor, kRowMajor>,
     //                                         LDSM_SM75_8x8<T, 16, 16, kColMajor, kColMajor>>;
 
-    // using SmemCopyAtom = LDSM_SM75_8x8<T, 16, 16, order, order>;
+    using SmemCopyAtom = LDSM_SM75_8x8<T, 8, 16, order, order>;
 
     using GetSmemLayout = GetSmemLayoutV2<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -229,7 +229,7 @@ struct SM80_HMMA_16816_F32 {
         // using MMA_Map = RakedThreadGroupMap<CTA_M, CTA_N, CTA_K, 16, 16, 16, WARP_CNT_M, WARP_CNT_N, WARP_CNT_K>;
         // using Partition = Blocked<WARP_CNT_M, WARP_CNT_N, kColMajor>;
         using Partition = Raked<WARP_CNT_M, WARP_CNT_N, kColMajor>;
-        using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, 16, 16, 16, Partition, WARP_CNT_K>;
+        using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, 16, 8, 16, Partition, WARP_CNT_K>;
         using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
 
         using Mainloop = MainloopSm80_v2<CTA_M,

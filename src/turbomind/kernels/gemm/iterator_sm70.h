@@ -102,13 +102,10 @@ struct GmemIteratorSm70 {
 
         src_offset_ = src_offset * bitsof<T> / bitsof<char>;
 
-        src_step_c_ = bitsof<T> / bitsof<char>;
-        src_step_s_ = stride_s * bitsof<T> / bitsof<char>;
+        src_step_c_ = bitsof<T> * Map::kDeltaC / bitsof<char>;
+        src_step_s_ = bitsof<T> * Map::kDeltaS * stride_s / bitsof<char>;
 
-        src_step_k_ = cs2mk<kOrder>(src_step_c_ * Map::kDimC, src_step_s_ * Map::kDimS).y;
-
-        src_step_c_ *= Map::kDeltaC;
-        src_step_s_ *= Map::kDeltaS;
+        src_step_k_ = bitsof<T> * cs2mk<kOrder>(Map::kDimC, Map::kDimS * stride_s).y / bitsof<char>;
 
         // initialize for the first tile
         src_data_ = src_ptr + src_offset_;
