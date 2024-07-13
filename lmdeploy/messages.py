@@ -298,5 +298,9 @@ class VisionConfig:
         max_batch_size (int): the max image size passed to the model, since
             some models will use image patch, the actual running batch could
             be larger than this value.
+        thread_safe (bool): Specifies whether the engine instance is
+            thread-safe. Please set it to True when using the pipeline
+            in a multi-threaded environment.
     """
     max_batch_size: int = 1
+    thread_safe: bool = False
