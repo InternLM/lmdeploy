@@ -95,7 +95,7 @@ void Test(int bsz, int tp)
 
     // Run<T, Tb>(14336 * 2, 8, 4096);
 
-    Run<T, Tb>(128, 2, 64);
+    Run<T, Tb>(128, 8, 64);
 
     // Run<T, Tb>(1, 14336 * 2, 4096);
 

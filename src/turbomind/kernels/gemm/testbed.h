@@ -276,7 +276,7 @@ public:
         // Compare(c_.data().get(), c_f_.data().get(), n_, n_, m_, 0);
 
         if (order_c == kRowMajor) {
-            Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
+            Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 1);
         }
         else {
             Compare(c_.data().get(), c_ref_.data().get(), m_, m_, n_, 1);
@@ -368,7 +368,7 @@ inline decltype(auto) get_test()
         constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
         return gTestbed<
-            gemm::Testbed<uint4_t, half, half, kColMajor, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
+            gemm::Testbed<uint4_t, half, half, kColMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
     }
     else if constexpr (0) {
         // sm80 / sm75
