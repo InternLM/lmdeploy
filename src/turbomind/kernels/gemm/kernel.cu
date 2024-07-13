@@ -135,9 +135,9 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
 
     // printf("D\n");
 
-    if (desc.n % 8 != 0) {
-        return false;
-    }
+    // if (desc.n % 8 != 0) {
+    //     return false;
+    // }
 
     // printf("E\n");
 
