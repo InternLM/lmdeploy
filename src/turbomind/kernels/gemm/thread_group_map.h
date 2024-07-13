@@ -5,6 +5,7 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
+#include "src/turbomind/kernels/gemm/thread_map.h"
 
 #include <iostream>
 
@@ -78,6 +79,10 @@ struct MMA_Map {
     static constexpr int kDeltaM = tM_ * ArrangementMN::dM;
     static constexpr int kDeltaN = tN_ * ArrangementMN::dN;
     static constexpr int kDeltaK = tK_ * (rK ? gK : 1);
+
+    static constexpr auto kPartitionM = ArrangementMN::pM;
+    static constexpr auto kPartitionN = ArrangementMN::pN;
+    static constexpr auto kPartitionK = rK ? Partition::kRaked : Partition::kBlocked;
 
     __device__ static int3 get_offset(int group_id)
     {

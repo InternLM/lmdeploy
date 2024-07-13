@@ -9,6 +9,7 @@
 #include "src/turbomind/kernels/core/smem.h"
 #include "src/turbomind/kernels/gemm/simt.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
+#include "src/turbomind/kernels/gemm/thread_map.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 
@@ -150,10 +151,10 @@ struct SM70_MMA_884 {
     }
 };
 
-template<class MMA_Atom_, class ThreadGroupMap>
+template<class MMA_Atom_, class MMA_Map_>
 struct Tiled_MMA_v2 {
     using Atom = MMA_Atom_;
-    using Map  = ThreadGroupMap;
+    using Map  = MMA_Map_;
 
     static constexpr int kGroupCount  = Map::kGroupCount;
     static constexpr int kThreadCount = kGroupCount * Atom::kThreadCount;
@@ -187,7 +188,8 @@ struct Tiled_MMA_v2 {
             const int3 offset_mnk = get_offset(threadIdx.x);
             const int  group_id_k = offset_mnk.z / Map::kFootprintK;
 
-            constexpr bool kRaked = false;
+            constexpr bool kRakedM = Map::kPartitionM == Partition::kRaked;
+            constexpr bool kRakedN = Map::kPartitionN == Partition::kRaked;
 
             const int2 thr = Atom::get_offset_C();
 
@@ -208,8 +210,8 @@ struct Tiled_MMA_v2 {
                     for (int m1 = 0; m1 < kPeriodM1; ++m1) {
                         PRAGMA_UNROLL
                         for (int n1 = 0; n1 < kPeriodN1; ++n1) {
-                            const int mm = offset_mnk.x - offset_mn.x + m * Map::kDeltaM + m1 * Atom::M + thr.x;
-                            const int nn = offset_mnk.y - offset_mn.y + n * Map::kDeltaN + n1 * Atom::N + thr.y;
+                            const int mm = offset_mnk.x + m * Map::kDeltaM + m1 * Atom::M + thr.x;
+                            const int nn = offset_mnk.y + n * Map::kDeltaN + n1 * Atom::N + thr.y;
                             Atom::foreach_C(frag_C[m][n], [&](auto, int idx, int mi, int ni) {
                                 const int2 cs             = mk2cs<order>(mm + mi, nn + ni);
                                 phases[m][n][m1][n1][idx] = Layout::apply(cs.y, cs.x);
@@ -222,17 +224,17 @@ struct Tiled_MMA_v2 {
             auto ptr = &smem_C(0, 0);
 
             auto apply = [&](int m, int n, int k) {
-                const int  m0 = m / kAtomM, m1 = m % kAtomM, n0 = n / kAtomN, n1 = n % kAtomN;
-                const int  m01      = m0 / kPeriodM * kPeriodM * Map::kDeltaM + m1 / kPeriodM1 * kPeriodM1 * Atom::M;
-                const int  n01      = n0 / kPeriodN * kPeriodN * Map::kDeltaN + n1 / kPeriodN1 * kPeriodN1 * Atom::N;
+                const int m0 = m / kAtomM, m1 = m % kAtomM, n0 = n / kAtomN, n1 = n % kAtomN;
+                int m01 = m0 / kPeriodM * kPeriodM * Map::kDeltaM + m1 / kPeriodM1 * kPeriodM1 * Atom::M - offset_mn.x;
+                int n01 = n0 / kPeriodN * kPeriodN * Map::kDeltaN + n1 / kPeriodN1 * kPeriodN1 * Atom::N - offset_mn.y;
                 const int2 cs       = mk2cs<order>(m01, n01);
                 const int  offset_0 = Layout::apply(cs.y, cs.x);
                 Atom::foreach_C(frag_C[m][n], [&](auto& vec, int idx, int, int) {
                     int       offset_1 = phases[m0 % kPeriodM][n0 % kPeriodN][m1 % kPeriodM1][n1 % kPeriodN1][idx];
                     const int bm       = offset_mnk.x - offset_mn.x + m0 * Map::kDeltaM + m1 * Atom::M + thr.x;
                     const int bn       = offset_mnk.y - offset_mn.y + n0 * Map::kDeltaN + n1 * Atom::N + thr.y;
-                    const int mm       = kRaked ? m01 : bm;
-                    const int nn       = kRaked ? n01 : bn;
+                    const int mm       = kRakedM ? m01 : bm;
+                    const int nn       = kRakedN ? n01 : bn;
                     int       mask = (TM >= Map::M || (0 <= mm && mm < TM)) && (TN >= Map::N || (0 <= nn && nn < TN));
                     if ((Map::kGroupK == 1 || group_id_k == k) && mask) {
                         if (k > 0) {

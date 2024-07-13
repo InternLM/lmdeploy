@@ -85,6 +85,11 @@ __host__ __device__ static constexpr int2 idx2mk(int idx, pair<M, K>)
     }
 }
 
+enum class Partition {
+    kBlocked,
+    kRaked,
+};
+
 template<int gM_, int gN_, Order order>
 struct Blocked {
     static constexpr int gM = gM_;
@@ -94,6 +99,9 @@ struct Blocked {
 
     static constexpr int dM = 1;
     static constexpr int dN = 1;
+
+    static constexpr Partition pM = Partition::kBlocked;
+    static constexpr Partition pN = Partition::kBlocked;
 
     template<int M, int N>
     __device__ static int2 get_offset(int idx, pair<M, N>)
@@ -118,6 +126,9 @@ struct Raked {
 
     static constexpr int dM = gM;
     static constexpr int dN = gN;
+
+    static constexpr Partition pM = Partition::kRaked;
+    static constexpr Partition pN = Partition::kRaked;
 
     template<class Shape>
     __device__ static int2 get_offset(int idx, Shape)
@@ -155,6 +166,9 @@ struct ThreadMap_V2 {
     static constexpr int kWarpC = kWarpCount > kWarpIterS ? kWarpCount / kWarpS : 1;
 
     using Arrangement = Arrangement_<kWarpC, kWarpS, kColMajor>;
+
+    static constexpr auto kPartitionM = Arrangement::pM;
+    static constexpr auto kPartitionN = Arrangement::pN;
 
     static constexpr int kIterC = ceil_div(kWarpIterC, kWarpC);
     static constexpr int kIterS = ceil_div(kWarpIterS, kWarpS);
