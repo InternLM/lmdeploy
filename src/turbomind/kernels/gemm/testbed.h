@@ -10,6 +10,7 @@
 #include "src/turbomind/kernels/gemm/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
+#include <cstdlib>
 #include <fstream>
 #include <thrust/universal_vector.h>
 #include <type_traits>
@@ -346,7 +347,23 @@ private:
 template<class T>
 T& gTestbed()
 {
-    static T inst{turbomind::gemm::DispatchPolicy::kMeasure, "tm_cache"};
+    static auto policy = [&] {
+        const auto str    = std::getenv("TM_GEMM_TEST_POLICY");
+        auto       policy = turbomind::gemm::DispatchPolicy::kDefault;
+        using namespace turbomind::gemm;
+        if (str) {
+            using namespace std::string_view_literals;
+            if (str == "MEASURE"sv) {
+                policy = DispatchPolicy::kMeasure;
+            }
+            else if (str == "USE_CACHED"sv) {
+                policy = DispatchPolicy::kUseCached;
+            }
+        }
+        return policy;
+    }();
+
+    static T inst{policy, "tm_cache"};
     return inst;
 }
 
@@ -361,23 +378,23 @@ inline decltype(auto) get_test()
         return gTestbed<
             gemm::Testbed<half, half, half, kRowMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
     }
-    else if constexpr (1) {
+    else if constexpr (0) {
         // sm80 / sm75
         constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;
         constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
         constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
         return gTestbed<
-            gemm::Testbed<uint4_t, half, half, kColMajor, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
+            gemm::Testbed<uint4_t, half, half, kRowMajor, kColMajor, kColMajor, kPackA, kPackB, kPackU, kPackV>>();
     }
-    else if constexpr (0) {
+    else if constexpr (1) {
         // sm80 / sm75
         constexpr Pack kPackA = 0;
         constexpr Pack kPackU = 0;
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
         constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
         return gTestbed<
-            gemm::Testbed<half, uint4_t, half, kRowMajor, kRowMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
+            gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
     }
     else if constexpr (0) {
         // sm70

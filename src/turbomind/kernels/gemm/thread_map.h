@@ -137,6 +137,27 @@ struct Raked {
     }
 };
 
+template<int gM_, int gN_, Order order>
+struct Blocked_C_Raked_S {
+    static constexpr int gM = gM_;
+    static constexpr int gN = gN_;
+
+    static constexpr int dM = 1;
+    static constexpr int dN = gN;
+
+    static constexpr Partition pM = Partition::kBlocked;
+    static constexpr Partition pN = Partition::kRaked;
+
+    template<int M, int N>
+    __device__ static int2 get_offset(int idx, pair<M, N>)
+    {
+        constexpr int iM = ceil_div(M, gM);
+
+        const int2 mn = idx2mk<order>(idx, pair<gM, gN>{});
+        return {mn.x * iM, mn.y};
+    }
+};
+
 template<int C,
          int S,
          int AccessC,

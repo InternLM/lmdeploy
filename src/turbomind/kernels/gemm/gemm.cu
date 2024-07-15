@@ -205,15 +205,15 @@ struct Gemm::Impl {
                                       l2_bytes_per_second_,
                                       fma_per_second_);
             for (const auto& [split_k, cost] : splits) {
-                for (const auto& swizzle : {0,1,2,3}) {
+                for (const auto& swizzle : {0, 1, 2, 3, 4, 5, 6}) {
                     specs.push_back(LaunchSpec{k, swizzle, split_k, cost});
                 }
             }
         }
 
         /// TODO: filter kernels by heuristic
-        constexpr int   kMinIteration = 10;
-        constexpr int   kMaxIteration = 100;
+        constexpr int   kMinIteration = 5;
+        constexpr int   kMaxIteration = 50;
         constexpr float kMaxDuration  = 25;  // std::milli
 
         constexpr float kFloatInf = std::numeric_limits<float>::infinity();

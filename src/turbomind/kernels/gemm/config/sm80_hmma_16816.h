@@ -14,6 +14,7 @@
 #include "src/turbomind/kernels/gemm/kernel_impl.h"
 #include "src/turbomind/kernels/gemm/mainloop_sm80_v2.h"
 #include "src/turbomind/kernels/gemm/operand.h"
+#include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/smem_copy_sm80.h"
 #include "src/turbomind/kernels/gemm/thread_group_map.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
@@ -74,7 +75,7 @@ struct Operand_A {
 };
 
 // (n, k)
-template<class T, Order order>
+template<class T, Order order, int N>
 struct Operand_B {
     using Dtype = T;
 
@@ -87,7 +88,7 @@ struct Operand_B {
     //                                         LDSM_SM75_8x8<T, 16, 16, kRowMajor, kRowMajor>,
     //                                         LDSM_SM75_8x8<T, 16, 16, kColMajor, kColMajor>>;
 
-    using SmemCopyAtom = LDSM_SM75_8x8<T, 8, 16, order, order>;
+    using SmemCopyAtom = LDSM_SM75_8x8<T, N, 16, order, order>;
 
     using GetSmemLayout = GetSmemLayoutV2<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -175,7 +176,9 @@ struct Operand_A_Pack {
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | Pack_M;
     static constexpr Order kOrder = order;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
+    // using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
+    using _SCp         = typename Operand_A<T, order>::SmemCopyAtom;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, _SCp, order, Pack_M>;
 
     using GetSmemLayout = GetSmemLayout_Pack<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -205,7 +208,10 @@ struct Operand_U_Pack {
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_U | Pack_M;
     static constexpr Order kOrder = Order::kColMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 2, Pack_M, 4>;
+    // using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 2, Pack_M, 4>;
+
+    using _SCp         = typename Operand_U<T>::SmemCopyAtom;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, _SCp, kOrder, Pack_M>;
 
     using GetSmemLayout = GetSmemLayout_Pack<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -213,6 +219,13 @@ struct Operand_U_Pack {
 
 template<class A, class TransformA, class U, class B, class TransformB, class V, Order order_c, class Tc>
 struct SM80_HMMA_16816_F32 {
+
+    static_assert(A::SmemCopyAtom::K == B::SmemCopyAtom::K);
+
+    static constexpr int SMEM_M = A::SmemCopyAtom::M;
+    static constexpr int SMEM_N = B::SmemCopyAtom::M;
+    static constexpr int SMEM_K = A::SmemCopyAtom::K;
+
     template<int CTA_M,
              int CTA_N,
              int CTA_K,
@@ -224,12 +237,14 @@ struct SM80_HMMA_16816_F32 {
              int  Stages,
              bool SplitK,
              int  GroupSizeU = 1,
-             int  GroupSizeV = 1>
+             int  GroupSizeV = 1,
+             int  TILE_C_M_  = -1,
+             int  TILE_C_N_  = -1>
+
     struct Type {
-        // using MMA_Map = RakedThreadGroupMap<CTA_M, CTA_N, CTA_K, 16, 16, 16, WARP_CNT_M, WARP_CNT_N, WARP_CNT_K>;
-        // using Partition = Blocked<WARP_CNT_M, WARP_CNT_N, kColMajor>;
+
         using Partition = Raked<WARP_CNT_M, WARP_CNT_N, kColMajor>;
-        using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, 16, 8, 16, Partition, WARP_CNT_K>;
+        using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, SMEM_M, SMEM_N, SMEM_K, Partition, WARP_CNT_K>;
         using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
 
         using Mainloop = MainloopSm80_v2<CTA_M,
@@ -249,11 +264,14 @@ struct SM80_HMMA_16816_F32 {
                                          Stages,
                                          true>;
 
+        static constexpr int TILE_C_M = TILE_C_M_ == -1 ? CTA_M : TILE_C_M_;
+        static constexpr int TILE_C_N = TILE_C_N_ == -1 ? CTA_N : TILE_C_N_;
+
         using Epilogue = gemm::Epilogue_<Tc,
                                          CTA_M,
                                          CTA_N,
-                                         CTA_M,
-                                         CTA_N,
+                                         TILE_C_M,
+                                         TILE_C_N,
                                          MMA::kThreadCount,
                                          typename MMA::Rearrange,
                                          Operand_C<float, order_c>,
@@ -272,7 +290,7 @@ struct GetOperand<HMMA_16816, OPERAND_A, T, order, false>: std::true_type {
 
 template<class T, Order order>
 struct GetOperand<HMMA_16816, OPERAND_B, T, order, false>: std::true_type {
-    using Operand = sm80_hmma_16816::Operand_B<T, order>;
+    using Operand = sm80_hmma_16816::Operand_B<T, order, 16>;
 };
 
 template<class T>
@@ -285,25 +303,25 @@ struct GetOperand<HMMA_16816, OPERAND_V, T, kColMajor, false>: std::true_type {
     using Operand = sm80_hmma_16816::Operand_U<T>;
 };
 
-template<class T>
-struct GetOperand<HMMA_16816, OPERAND_A, T, kColMajor, true>: std::true_type {
-    using Operand = sm80_hmma_16816::Operand_A_Pack<T, kColMajor>;
-};
+// template<class T>
+// struct GetOperand<HMMA_16816, OPERAND_A, T, kColMajor, true>: std::true_type {
+//     using Operand = sm80_hmma_16816::Operand_A_Pack<T, kColMajor>;
+// };
 
-template<class T>
-struct GetOperand<HMMA_16816, OPERAND_B, T, kColMajor, true>: std::true_type {
-    using Operand = sm80_hmma_16816::Operand_B_Pack<T, kColMajor>;
-};
+// template<class T>
+// struct GetOperand<HMMA_16816, OPERAND_B, T, kColMajor, true>: std::true_type {
+//     using Operand = sm80_hmma_16816::Operand_B_Pack<T, kColMajor>;
+// };
 
-template<>
-struct GetOperand<HMMA_16816, OPERAND_U, uint32_t, kColMajor, true>: std::true_type {
-    using Operand = sm80_hmma_16816::Operand_U_Pack<uint32_t>;
-};
+// template<>
+// struct GetOperand<HMMA_16816, OPERAND_U, uint32_t, kColMajor, true>: std::true_type {
+//     using Operand = sm80_hmma_16816::Operand_U_Pack<uint32_t>;
+// };
 
-template<>
-struct GetOperand<HMMA_16816, OPERAND_V, uint32_t, kColMajor, true>: std::true_type {
-    using Operand = sm80_hmma_16816::Operand_U_Pack<uint32_t>;
-};
+// template<>
+// struct GetOperand<HMMA_16816, OPERAND_V, uint32_t, kColMajor, true>: std::true_type {
+//     using Operand = sm80_hmma_16816::Operand_U_Pack<uint32_t>;
+// };
 namespace sm80_hmma_16816 {
 
 }  // namespace sm80_hmma_16816
