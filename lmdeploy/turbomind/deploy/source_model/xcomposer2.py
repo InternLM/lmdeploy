@@ -1,7 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import json
-import os.path as osp
-
 import torch
 
 from .base import INPUT_MODELS
@@ -111,10 +108,9 @@ class Xcomposer2Model(LlamaModel):
 
     def model_info(self):
         out = super().model_info()
-        params_path = osp.join(self.model_path, 'config.json')
-        with open(params_path) as f:
-            model_arg = json.load(f)
-        if model_arg['max_length'] == 16384:
+        from lmdeploy.vl.model.xcomposer2 import ModelType, get_xcomposer_type
+        model_type, _ = get_xcomposer_type(self.model_path)
+        if model_type == ModelType.XCOMPOSER2_4KHD:
             out.update(self._lora_cfg_4khd_7b(out))
         else:
             out.update(self._lora_cfg_7b())

@@ -250,6 +250,8 @@ class InternLMXComposer2TemplateWrapper(VLChatTemplateWrapper):
     """InternLM-XComposer2 chat template."""
 
     def append_image_token(self, prompt, num_images: int):
+        logger.warning(f'auto append {IMAGE_TOKEN} at the beginning, '
+                       'the user can manually insert the token to prompt')
         return ' '.join([IMAGE_TOKEN] * num_images) + prompt
 
 
@@ -295,6 +297,11 @@ class MiniCPMVTempateWrapper(VLChatTemplateWrapper):
         return _prompt, _features
 
 
+class GLM4VChatTemplateWrapper(VLChatTemplateWrapper):
+    """glm-4v chat template."""
+    pass
+
+
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
@@ -323,4 +330,6 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return MiniGeminiLlamaTempateWrapper(chat_template)
     elif arch == 'MiniCPMV':
         return MiniCPMVTempateWrapper(chat_template)
+    elif arch == 'ChatGLMModel':
+        return GLM4VChatTemplateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')

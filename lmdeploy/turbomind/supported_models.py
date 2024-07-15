@@ -90,6 +90,9 @@ def is_supported(model_path: str):
             elif arch == 'ChatGLMModel':
                 # chatglm1/2/3 is not working yet
                 support_by_turbomind = cfg.num_layers == 40
+                if getattr(cfg, 'vision_config', None) is not None:
+                    # glm-4v-9b not supported
+                    support_by_turbomind = False
             elif arch == 'InternVLChatModel':
                 # internvl2-4b,internlm2-1b are not working yet
                 support_by_turbomind = _is_head_dim_128(cfg.llm_config)

@@ -27,6 +27,7 @@
 |       MiniCPM       | Llama3-V-2_5 |    Yes    |   Yes   |   Yes   |  Yes  |
 |   MiniGeminiLlama   |      7B      |    Yes    |   No    |   No    |  Yes  |
 |        GLM4         |      9B      |    Yes    |   Yes   |   Yes   |  No   |
+|      CodeGeeX4      |      9B      |    Yes    |   Yes   |   Yes   |  No   |
 
 "-" means not verified yet.
 
@@ -66,3 +67,5 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |   LLaVA(1.5,1.6)    |   7B-34B    |    Yes    |   No    |  No  |
 | InternVL-Chat(v1.5) |   2B-26B    |    Yes    |   No    |  No  |
 |       Gemma2        |   9B-27B    |    Yes    |   No    |  No  |
+|        GLM4         |     9B      |    Yes    |   No    |  No  |
+|      CodeGeeX4      |     9B      |    Yes    |   No    |  No  |

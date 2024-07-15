@@ -19,6 +19,7 @@ class CogVLMModelConfigBuilder(AutoModelConfigBuilder):
         if getattr(hf_config, 'num_multi_query_heads', None):
             cfg.num_key_value_heads = hf_config.num_multi_query_heads
         cfg.unused_modules = ['model.vision']
+        cfg.cogvlm_style = True
         torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
         ) else 'float16'
         hf_config.torch_dtype = torch_dtype
