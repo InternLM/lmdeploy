@@ -119,6 +119,8 @@ struct SmemCopy {
 
     static constexpr int ITER_M = iM / Atom::kFragNum;
 
+    static_assert(ITER_M > 0);
+
     using Frag = typename Atom::Frag[ITER_M];
 
     using Pack = Packing_v2<Operand::kPack, Operand::kOrder>;

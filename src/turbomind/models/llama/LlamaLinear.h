@@ -126,7 +126,7 @@ private:
         const Operation operation{gemm::DispatchPolicy::kDefault,
                                   type == kFusedSiluFfn ? Epilogue::kGatedSilu : Epilogue::kNone,
                                   {QuantType::kNone},
-                                  {QuantType::kAsym_FMA, weight.group_size}};
+                                  {QuantType::kDefault, weight.group_size}};
 
         const MatrixLayout a_desc{
             get_data_type_v<T>,

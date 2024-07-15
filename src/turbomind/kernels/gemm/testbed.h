@@ -391,8 +391,8 @@ inline decltype(auto) get_test()
         // sm80 / sm75
         constexpr Pack kPackA = 0;
         constexpr Pack kPackU = 0;
-        constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
-        constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
+        constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
+        constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 2;
         return gTestbed<
             gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
     }

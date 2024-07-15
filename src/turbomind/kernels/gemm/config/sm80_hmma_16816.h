@@ -188,7 +188,7 @@ template<class T, Order order>
 struct Operand_B_Pack {
     using Dtype = T;
 
-    static constexpr int Pack_M = 1;
+    static constexpr int Pack_M = 2;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | Pack_M;
     static constexpr Order kOrder = order;
@@ -203,7 +203,7 @@ template<class T>
 struct Operand_U_Pack {
     using Dtype = T;
 
-    static constexpr int Pack_M = 1;
+    static constexpr int Pack_M = 2;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_U | Pack_M;
     static constexpr Order kOrder = Order::kColMajor;
@@ -222,16 +222,16 @@ struct SM80_HMMA_16816_F32 {
 
     static_assert(A::SmemCopyAtom::K == B::SmemCopyAtom::K);
 
-    static constexpr int SMEM_M = A::SmemCopyAtom::M;
-    static constexpr int SMEM_N = B::SmemCopyAtom::M;
+    static constexpr int SMEM_M = A::SmemCopyAtom::M / A::SmemCopyAtom::kFragNum;
+    static constexpr int SMEM_N = B::SmemCopyAtom::M / B::SmemCopyAtom::kFragNum;
     static constexpr int SMEM_K = A::SmemCopyAtom::K;
 
     template<int CTA_M,
              int CTA_N,
              int CTA_K,
-             int WARP_CNT_M,
-             int WARP_CNT_N,
-             int WARP_CNT_K,
+             int TG_M,
+             int TG_N,
+             int TG_K,
              class PolicyA,
              class PolicyB,
              int  Stages,
@@ -243,8 +243,8 @@ struct SM80_HMMA_16816_F32 {
 
     struct Type {
 
-        using Partition = Raked<WARP_CNT_M, WARP_CNT_N, kColMajor>;
-        using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, SMEM_M, SMEM_N, SMEM_K, Partition, WARP_CNT_K>;
+        using Partition = Blocked<TG_M, TG_N, kColMajor>;
+        using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, SMEM_M, SMEM_N, SMEM_K, Partition, TG_K>;
         using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
 
         using Mainloop = MainloopSm80_v2<CTA_M,
