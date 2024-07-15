@@ -137,6 +137,10 @@ quatization_case_config:
         - internlm/internlm-xcomposer2d5-7b
         - OpenGVLab/InternVL-Chat-V1-5
         - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
+        - OpenGVLab/InternVL2-2B
+        - OpenGVLab/InternVL2-4B
+        - OpenGVLab/InternVL2-8B
+        - OpenGVLab/InternVL2-26B
         - Qwen/Qwen-7B-Chat
         - Qwen/Qwen1.5-7B-Chat
         - Qwen/Qwen2-7B-Instruct
