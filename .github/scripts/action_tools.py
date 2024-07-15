@@ -219,9 +219,9 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
                 header = ','.join(['Model', 'Engine', 'Precision'] +
                                   dataset_names)
                 f.write(header + '\n')
-                f.write(row + '\n')
                 if hf_res_row:
                     f.write(hf_res_row + '\n')
+                f.write(row + '\n')
         else:
             with open(output_csv, 'a') as f:
                 f.write(row + '\n')
@@ -250,7 +250,7 @@ def create_model_links(src_dir: str, dst_dir: str):
 
 def generate_benchmark_report(report_path: str):
     # write to github action summary
-    _append_summary('## Evaluation Results Start')
+    _append_summary('## Benchmark Results Start')
     subfolders = [f.path for f in os.scandir(report_path) if f.is_dir()]
     for dir_path in subfolders:
         second_subfolders = [
@@ -311,7 +311,7 @@ def generate_benchmark_report(report_path: str):
                         if 'generation' in benchmark_subfolder:
                             add_summary(merged_csv_path)
                         print(merged_df)
-    _append_summary('## Evaluation Results End')
+    _append_summary('## Benchmark Results End')
 
 
 if __name__ == '__main__':

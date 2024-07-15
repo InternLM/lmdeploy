@@ -18,7 +18,7 @@ SESSION_LEN_PASSKEY_1M = 1048576
 
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', [
-    'internlm/internlm2-chat-7b', 'internlm/internlm2-7b',
+    'internlm/internlm2-chat-7b', 'internlm2_5-7b',
     'internlm/internlm2-chat-1_8b', 'internlm/internlm2-1_8b'
 ])
 def test_history_issue_tp1(config, model, worker_id):
@@ -82,7 +82,7 @@ def stream_infer_basic(config, model, log_name):
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize(
     'model', ['internlm/internlm2-chat-7b', 'Qwen/Qwen2-7B-Instruct'])
-@pytest.mark.parametrize('backend', ['turbomind'])
+@pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp1(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
@@ -100,7 +100,7 @@ def test_long_test_passkey_tp1(config, model, backend, worker_id):
     'internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits',
     'Qwen/Qwen2-7B-Instruct'
 ])
-@pytest.mark.parametrize('backend', ['turbomind'])
+@pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp2(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
@@ -116,7 +116,7 @@ def test_long_test_passkey_tp2(config, model, backend, worker_id):
 
 @pytest.mark.gpu_num_4
 @pytest.mark.parametrize('model', ['internlm/internlm2_5-7b-chat-1m'])
-@pytest.mark.parametrize('backend', ['turbomind'])
+@pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp4(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
@@ -151,8 +151,15 @@ def passkey_retrival(config,
                                                    use_logn_attn=True,
                                                    tp=tp_num)
     else:
-        backend_config = PytorchEngineConfig(session_len=session_len,
-                                             tp=tp_num)
+        if 'internlm2_5' in model and '-1m' in model:
+            backend_config = PytorchEngineConfig(session_len=session_len,
+                                                 max_batch_size=1,
+                                                 cache_max_entry_count=0.7,
+                                                 tp=tp_num)
+        else:
+            backend_config = PytorchEngineConfig(session_len=session_len,
+                                                 use_logn_attn=True,
+                                                 tp=tp_num)
 
     pipe = pipeline(model_path, backend_config=backend_config)
 
