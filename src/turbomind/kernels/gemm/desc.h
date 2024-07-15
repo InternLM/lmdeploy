@@ -27,13 +27,28 @@ struct GemmDesc {
 
 enum class OpClass {
     kSIMT,
-    kMMA_884,
-    kMMA_81616,
-    kMMA_16816,
+    kMMA_s884,
+    kMMA_s16816,
 };
+
+inline const char* to_string(OpClass op)
+{
+    switch (op) {
+        case OpClass::kSIMT:
+            return "simt";
+        case OpClass::kMMA_s884:
+            return "s884";
+        case OpClass::kMMA_s16816:
+            return "s16816";
+        default:
+            return "unknown_op_cls";
+    }
+}
 
 // aggregate that uniquely identifies a kernel
 struct KernelDesc {
+    int       arch;
+    OpClass   op_class;
     DataType  type_a;
     DataType  type_b;
     DataType  type_c;
@@ -44,13 +59,14 @@ struct KernelDesc {
     Pack      pack_b;
     QuantDesc quant_a;
     QuantDesc quant_b;
+    int       policy_a;
+    int       policy_b;
     int3      cta_tile;
-    int3      warp_tile;
+    int3      mma_tile;
+    int3      align;
+    int2      c_tile;
     int       stages;
     bool      split_k;
-    bool      align_m;
-    bool      align_n;
-    int       arch;
 };
 
 class Kernel;

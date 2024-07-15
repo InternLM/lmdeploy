@@ -7,6 +7,7 @@
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/core/mma.h"
 #include "src/turbomind/kernels/core/smem.h"
+#include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/simt.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/thread_map.h"
@@ -21,6 +22,8 @@ struct SM80_MMA_16x8x16_F32_F16_F16_F32_TN {
     static constexpr int K = 16;
 
     static constexpr int kThreadCount = 32;
+
+    static constexpr auto kOpClass = OpClass::kMMA_s16816;
 
     using FragA = Array<half, 8>;
     using FragB = Array<half, 4>;
@@ -77,6 +80,8 @@ struct SM70_MMA_SIMT {
 
     static constexpr int kThreadCount = 32;
 
+    static constexpr auto kOpClass = OpClass::kSIMT;
+
     using FragA = Array<T, K>;
     using FragB = Array<T, K>;
     using FragC = Array<float, 1>;
@@ -119,6 +124,8 @@ struct SM70_MMA_884 {
     static constexpr int K = 4;
 
     static constexpr int kThreadCount = 32;
+
+    static constexpr auto kOpClass = OpClass::kMMA_s884;
 
     using FragA = Array<half, 4>;
     using FragB = Array<half, 4>;

@@ -15,12 +15,29 @@ struct Arch {
 };
 
 struct Sm70: Arch<700, 750> {
+    static constexpr int value = 70;
 };
 
 struct Sm75: Arch<750, 800> {
+    static constexpr int value = 75;
 };
 
 struct Sm80: Arch<800> {
+    static constexpr int value = 80;
 };
 
-}  // namespace turbomind::arch
+inline bool is_arch_compatible(int karch, int darch)
+{
+    switch (karch) {
+        case 70:
+            return Sm70::is_compatible(darch);
+        case 75:
+            return Sm75::is_compatible(darch);
+        case 80:
+            return Sm80::is_compatible(darch);
+        default:
+            return false;
+    }
+}
+
+}  // namespace turbomind::gemm

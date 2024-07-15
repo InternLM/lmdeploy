@@ -136,7 +136,7 @@ public:
             u_pack_desc_.pack      = pack_u;
             u_pack_.resize(u_.size());
             CHECK(!Convert(u_.data().get(), u_desc_, u_pack_.data().get(), u_pack_desc_, stream_));
-            quant_a_ = {QuantType::kAsym_FMA, g};
+            quant_a_ = {QuantType::kDefault, g};
 
             // cudaDeviceSynchronize();
 
@@ -154,7 +154,7 @@ public:
             v_pack_desc_.pack      = pack_v;
             v_pack_.resize(v_.size());
             CHECK(!Convert(v_.data().get(), v_desc_, v_pack_.data().get(), v_pack_desc_, stream_));
-            quant_b_ = {QuantType::kAsym_FMA, g};
+            quant_b_ = {QuantType::kDefault, g};
 
             // cudaDeviceSynchronize();
 

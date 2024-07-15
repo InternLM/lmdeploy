@@ -67,22 +67,12 @@ public:
 
     int3 warp_tile_size() const noexcept
     {
-        return desc_.warp_tile;
+        return desc_.mma_tile;
     }
 
     int chunk_size_k() const noexcept
     {
         return chunk_size_k_;
-    }
-
-    bool align_m() const noexcept
-    {
-        return desc_.align_m;
-    }
-
-    bool align_n() const noexcept
-    {
-        return desc_.align_n;
     }
 
     int stages() const noexcept

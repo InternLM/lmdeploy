@@ -56,9 +56,7 @@ constexpr int get_pack_num(Pack pack)
 
 enum class QuantType : int {
     kNone,
-    kSymmetric,
-    kAsym_FMA,
-    kAsym_SubMul,
+    kDefault,
 };
 
 enum class Epilogue : int {

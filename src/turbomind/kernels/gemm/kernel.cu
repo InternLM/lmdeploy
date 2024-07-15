@@ -129,29 +129,9 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
 
     // printf("C\n");
 
-    if (desc.k % desc_.cta_tile.z) {
+    if (desc.m % desc_.align.x || desc.n % desc_.align.y || desc.k % desc_.align.z) {
         return false;
     }
-
-    // printf("D\n");
-
-    // if (desc.n % 8 != 0) {
-    //     return false;
-    // }
-
-    // printf("E\n");
-
-    if (desc_.align_m && desc.m % desc_.cta_tile.x) {
-        return false;
-    }
-
-    // printf("F\n");
-
-    if (desc_.align_n && desc.n % desc_.cta_tile.y) {
-        return false;
-    }
-
-    // printf("G\n");
 
     return true;
 }
@@ -160,14 +140,23 @@ std::string Kernel::GetName() const
 {
     std::stringstream ss;
 
-    ss << "gemm_"                                                                           //
-       << to_string(desc_.type_a) << "_"                                                    //
-       << to_string(desc_.type_b) << "_"                                                    //
-       << to_string(desc_.type_c) << "_"                                                    //
-       << desc_.cta_tile.x << "x" << desc_.cta_tile.y << "x" << desc_.cta_tile.z << "_"     //
-       << desc_.warp_tile.x << "x" << desc_.warp_tile.y << "x" << desc_.warp_tile.z << "_"  //
-       << desc_.stages << "_"                                                               //
-       << (desc_.align_m ? "a" : "n") << (desc_.align_n ? "a" : "n");
+    ss << "sm" << desc_.arch;
+    ss << "_" << to_string(desc_.type_a);  //
+    if ((int)desc_.quant_a.type) {
+        ss << "g" << desc_.quant_a.group_size;
+    }
+    ss << "_" << to_string(desc_.type_b);  //
+    if ((int)desc_.quant_b.type) {
+        ss << "g" << desc_.quant_b.group_size;
+    }
+    ss << "_" << to_string(desc_.type_c)                                                 //
+       << "_" << desc_.cta_tile.x << "x" << desc_.cta_tile.y << "x" << desc_.cta_tile.z  //
+       << "_" << desc_.stages                                                            //
+       << "_" << to_string(desc_.op_class)                                               //
+       << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z  //
+       << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y                                //
+       << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z          //
+       << "_" << desc_.policy_a << desc_.policy_b;
 
     return ss.str();
 }

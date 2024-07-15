@@ -198,10 +198,13 @@ struct Silu {
     }
 };
 
-template<class Tc_, int M, int N, int PM, int PN, int THREADS, class RearrangeC, class OperandC, bool SplitK_>
+template<class Tc_, int M, int N, int TM_, int TN_, int THREADS, class RearrangeC, class OperandC, bool SplitK_>
 struct Epilogue_ {
 
-    using SmemLayout = decltype(OperandC::GetSmemLayout::apply(pair<PM, PN>{}));
+    static constexpr int TM = TM_;
+    static constexpr int TN = TN_;
+
+    using SmemLayout = decltype(OperandC::GetSmemLayout::apply(pair<TM, TN>{}));
     using Map        = decltype(OperandC::GetThreadMap::apply(pair<M, N>{}, constant<THREADS>{}));
 
     using Dtype = typename OperandC::Dtype;
@@ -260,11 +263,11 @@ struct Epilogue_ {
         constexpr bool kRaked = true;
 
         PRAGMA_UNROLL
-        for (int m = 0; m < M; m += PM) {
+        for (int m = 0; m < M; m += TM) {
             PRAGMA_UNROLL
-            for (int n = 0; n < N; n += PN) {
+            for (int n = 0; n < N; n += TN) {
                 // Store to shared memory
-                RearrangeC::apply(frag_C, smem_C, {m, n}, pair<PM, PN>{});
+                RearrangeC::apply(frag_C, smem_C, {m, n}, pair<TM, TN>{});
 
                 // Load from shared memory
                 PRAGMA_UNROLL
@@ -278,7 +281,7 @@ struct Epilogue_ {
                             kRaked ? cs2mk<kOrder>(c * Map::kDeltaC, s * Map::kDeltaS) : cs2mk<kOrder>(cc, ss);
                         const int  mm   = mn.x - m;
                         const int  nn   = mn.y - n;
-                        const bool mask = (M <= PM || (0 <= mm && mm < PM)) && ((N <= PN) || (0 <= nn && nn < PN));
+                        const bool mask = (M <= TM || (0 <= mm && mm < TM)) && ((N <= TN) || (0 <= nn && nn < TN));
 
                         const int2 _cs      = mk2cs<kOrder>(m, n);
                         const int  offset_0 = SmemLayout::apply(  //

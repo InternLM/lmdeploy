@@ -23,43 +23,57 @@ public:
 
     using Impl = typename Gemm::Impl;
 
+    using OpA = typename Gemm::OperandA;
+    using OpB = typename Gemm::OperandB;
+    using OpU = typename Gemm::OperandU;
+    using OpV = typename Gemm::OperandV;
+
     KernelImpl()
     {
-        desc_.order_a = Impl::OperandA::kOrder;
-        desc_.order_b = transpose(Impl::OperandB::kOrder);
+        desc_.order_a = OpA::kOrder;
+        desc_.order_b = transpose(OpB::kOrder);
         desc_.order_c = Gemm::kOrderC;
 
         desc_.type_a = get_data_type_v<typename Gemm::Ta>;
         desc_.type_b = get_data_type_v<typename Gemm::Tb>;
         desc_.type_c = get_data_type_v<typename Gemm::Tc>;
 
-        desc_.pack_a = Impl::OperandA::kPack;
-        desc_.pack_b = Impl::OperandB::kPack;
+        desc_.pack_a = OpA::kPack;
+        desc_.pack_b = OpB::kPack;
 
         desc_.quant_a = QuantDesc{};
         desc_.quant_b = QuantDesc{};
 
-        if constexpr (Gemm::OperandU::SmemLayout::kSize > 1) {
-            desc_.quant_a = QuantDesc{QuantType::kAsym_FMA, Gemm::OperandU::kGroupSize};
+        if constexpr (OpU::SmemLayout::kSize > 1) {
+            desc_.quant_a = QuantDesc{QuantType::kDefault, OpU::kGroupSize};
         }
 
-        if constexpr (Gemm::OperandV::SmemLayout::kSize > 1) {
-            desc_.quant_b = QuantDesc{QuantType::kAsym_FMA, Gemm::OperandV::kGroupSize};
+        if constexpr (OpV::SmemLayout::kSize > 1) {
+            desc_.quant_b = QuantDesc{QuantType::kDefault, OpV::kGroupSize};
         }
 
-        desc_.cta_tile  = {Gemm::CTA_M, Gemm::CTA_N, Gemm::CTA_K};
-        desc_.warp_tile = {Impl::WARP_M, Impl::WARP_N, Impl::WARP_K};
-        chunk_size_k_   = Gemm::kChunkSizeK;
+        desc_.cta_tile = {Gemm::CTA_M, Gemm::CTA_N, Gemm::CTA_K};
+        desc_.mma_tile = {Impl::MMA_Map::kGroupM, Impl::MMA_Map::kGroupN, Impl::MMA_Map::kGroupK};
+        chunk_size_k_  = Gemm::kChunkSizeK;
 
-        desc_.align_m = 0;  // Gemm::AlignedM;
-        desc_.align_n = 0;  // Gemm::AlignedN;
+        using IterA = typename OpA::GmemIter;
+        using IterB = typename OpB::GmemIter;
+
+        desc_.align.x = OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
+        desc_.align.y = OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
+        desc_.align.z = Gemm::CTA_K;
+
+        desc_.policy_a = (int)IterA::Policy::kEvictPolicy;
+        desc_.policy_b = (int)IterB::Policy::kEvictPolicy;
+        desc_.c_tile   = {Gemm::Epilogue::TM, Gemm::Epilogue::TN};
+        desc_.op_class = Impl::kOpClass;
 
         smem_size_ = sizeof(typename Gemm::SharedStorage);
 
         desc_.stages  = Impl::Stages;
         desc_.split_k = Gemm::SplitK;
 
-        desc_.arch = 80;
+        desc_.arch = Gemm::Arch::value;
 
         if (smem_size_ > (48 << 10)) {
             cudaFuncSetAttribute(gemm_kernel<Gemm>, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_);

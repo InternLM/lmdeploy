@@ -129,41 +129,43 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
 
         using namespace cache_policy;
 
-        Add<Config::Type<128, 256, 64, 1, 8, 1, Default, Default, 3, false, 1, 128>>();
-        Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 5, false, 1, 128>>();
-        Add<Config::Type<96, 256, 64, 1, 8, 1, Default, Default, 3, false, 1, 128>>();
-        Add<Config::Type<96, 256, 32, 1, 8, 1, Default, Default, 5, false, 1, 128>>();
+        // Add<Config::Type<128, 256, 64, 1, 8, 1, Default, Default, 3, false, 1, 128>>();
+        // Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 5, false, 1, 128>>();
+        // Add<Config::Type<96, 256, 64, 1, 8, 1, Default, Default, 3, false, 1, 128>>();
+        // Add<Config::Type<96, 256, 32, 1, 8, 1, Default, Default, 5, false, 1, 128>>();
 
-        Add<Config::Type<128, 256, 64, 1, 8, 1, Default, Default, 3, true, 1, 128>>();  // 6
-        Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 5, true, 1, 128>>();  // 4
-        Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 3, true, 1, 128>>();  // 2
-        Add<Config::Type<96, 256, 64, 1, 8, 1, Default, Default, 3, true, 1, 128>>();
-        Add<Config::Type<96, 256, 32, 1, 8, 1, Default, Default, 5, true, 1, 128>>();
+        // Add<Config::Type<128, 256, 64, 1, 8, 1, Default, Default, 3, true, 1, 128>>();  // 6
+        // Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 5, true, 1, 128>>();  // 4
+        // Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 3, true, 1, 128>>();  // 2
+        // Add<Config::Type<96, 256, 64, 1, 8, 1, Default, Default, 3, true, 1, 128>>();
+        // Add<Config::Type<96, 256, 32, 1, 8, 1, Default, Default, 5, true, 1, 128>>();
 
-        Add<Config::Type<256, 128, 32, 2, 4, 1, Default, Default, 5, true, 1, 128>>();
-        Add<Config::Type<192, 128, 32, 2, 4, 1, Default, Default, 5, true, 1, 128>>();
-        Add<Config::Type<160, 128, 32, 2, 4, 1, Default, Default, 5, true, 1, 128>>();
-        Add<Config::Type<128, 128, 32, 1, 4, 1, Default, Default, 5, true, 1, 128>>();  // 7
-        Add<Config::Type<96, 128, 64, 1, 4, 1, Default, Default, 3, true, 1, 128>>();   // 3
-        Add<Config::Type<96, 128, 32, 1, 4, 1, Default, Default, 5, true, 1, 128>>();   // 1
-        Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Default, 3, true, 1, 128>>();   // 7
-        Add<Config::Type<64, 128, 32, 1, 4, 1, Default, Default, 5, true, 1, 128>>();
+        // Add<Config::Type<256, 128, 32, 2, 4, 1, Default, Default, 5, true, 1, 128>>();
+        // Add<Config::Type<192, 128, 32, 2, 4, 1, Default, Default, 5, true, 1, 128>>();
+        // Add<Config::Type<160, 128, 32, 2, 4, 1, Default, Default, 5, true, 1, 128>>();
+        // Add<Config::Type<128, 128, 32, 1, 4, 1, Default, Default, 5, true, 1, 128>>();  // 7
+        // Add<Config::Type<96, 128, 64, 1, 4, 1, Default, Default, 3, true, 1, 128>>();   // 3
+        // Add<Config::Type<96, 128, 32, 1, 4, 1, Default, Default, 5, true, 1, 128>>();   // 1
+        // Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Default, 3, true, 1, 128>>();   // 7
+        // Add<Config::Type<64, 128, 32, 1, 4, 1, Default, Default, 5, true, 1, 128>>();
 
-        Add<Config::Type<256, 128, 32, 2, 4, 1, Default, Stream, 5, true, 1, 128>>();
-        Add<Config::Type<192, 128, 32, 2, 4, 1, Default, Stream, 5, true, 1, 128>>();  // 1
-        Add<Config::Type<160, 128, 32, 2, 4, 1, Default, Stream, 5, true, 1, 128>>();
-        Add<Config::Type<128, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();  // 7
-        Add<Config::Type<96, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();   // 3
-        Add<Config::Type<96, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();   // 1
-        Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();   // 7
-        Add<Config::Type<64, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
-        Add<Config::Type<32, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
-        Add<Config::Type<32, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();  // 2
-        Add<Config::Type<16, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();  // 1
-        Add<Config::Type<16, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
-        Add<Config::Type<16, 64, 64, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
-        Add<Config::Type<16, 64, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
-        Add<Config::Type<16, 64, 128, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();  // 22
+        Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Default, 3, true, 1, 128>>();  // 7
+
+        // Add<Config::Type<256, 128, 32, 2, 4, 1, Default, Stream, 5, true, 1, 128>>();
+        // Add<Config::Type<192, 128, 32, 2, 4, 1, Default, Stream, 5, true, 1, 128>>();  // 1
+        // Add<Config::Type<160, 128, 32, 2, 4, 1, Default, Stream, 5, true, 1, 128>>();
+        // Add<Config::Type<128, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();  // 7
+        // Add<Config::Type<96, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();   // 3
+        // Add<Config::Type<96, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();   // 1
+        // Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();   // 7
+        // Add<Config::Type<64, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
+        // Add<Config::Type<32, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
+        // Add<Config::Type<32, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();  // 2
+        // Add<Config::Type<16, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();  // 1
+        // Add<Config::Type<16, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
+        // Add<Config::Type<16, 64, 64, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
+        // Add<Config::Type<16, 64, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
+        // Add<Config::Type<16, 64, 128, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();  // 22
 
         // Add<Config::Type<128, 128, 32, 1, 4, 1, 3, false, 1, 128>::Kernel>();
         // Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 5, false, 1, 128>>();

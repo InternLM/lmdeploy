@@ -91,9 +91,7 @@ struct MainloopSm80_v2 {
     static constexpr int CTA_N = N_;
     static constexpr int CTA_K = K_;
 
-    static constexpr int WARP_M = MMA_Map::kFootprintM;
-    static constexpr int WARP_N = MMA_Map::kFootprintN;
-    static constexpr int WARP_K = MMA_Map::kFootprintK;
+    static constexpr auto kOpClass = MMA_Atom::kOpClass;
 
     static constexpr int WARPS = MMA::kThreadCount / WARP_SIZE;
 
@@ -115,9 +113,6 @@ struct MainloopSm80_v2 {
     using SmemLayoutB = typename OperandB::SmemLayout;
     using SmemLayoutU = typename OperandU::SmemLayout;
     using SmemLayoutV = typename OperandV::SmemLayout;
-
-    // static constexpr int2 delta_k_u = _delta_k(OperandU::kGroupSize);
-    // static constexpr int2 delta_k_v = _delta_k(OperandV::kGroupSize);
 
     using SmemCopyA = SmemCopy<OperandA, MMA_Map::kIterM, MMA_Map::kIterK, MMA_Map::kDeltaM, MMA_Map::kDeltaK>;
     using SmemCopyU = SmemCopy<OperandU, MMA_Map::kIterM, MMA_Map::kIterK, MMA_Map::kDeltaM, MMA_Map::kDeltaK>;

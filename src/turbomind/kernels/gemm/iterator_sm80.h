@@ -22,13 +22,15 @@ namespace turbomind::gemm {
 #define L2_CACHEHINT(size)
 #endif
 
-template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS, class Policy>
+template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS, class Policy_>
 struct GmemIteratorSm80 {
 
     using ThreadMap = Map;
 
     using AccessType = Array<T, Map::kAccessC>;
     using Pointer    = get_pointer_type<T>;
+
+    using Policy = Policy_;
 
     static constexpr int ITER_S = Map::kIterS;
     static constexpr int ITER_C = Map::kIterC;

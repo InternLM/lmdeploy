@@ -298,29 +298,6 @@ struct Gemm::Impl {
             return -1;
         }
 
-        // When an aligned kernel is selected, find the fastest unaligned kernel for `m - 1`
-        if (desc.m > 1 && spec.kernel->align_m()) {
-            auto unaligned_desc = desc;
-            --unaligned_desc.m;
-            LaunchSpec unaligned_spec{};
-            for (const auto& i : idxs) {
-                if (specs[i].measured == kFloatInf) {
-                    break;
-                }
-                if (!specs[i].kernel->align_m()) {
-                    unaligned_spec = specs[i];
-                    break;
-                }
-            }
-            if (unaligned_spec.kernel) {
-                dispatch_cache_[unaligned_desc] = unaligned_spec;
-            }
-            else {
-                std::cout << "No non-aligned kernel found for problem.\n";
-                return -1;
-            }
-        }
-
         return 0;
     }
 
