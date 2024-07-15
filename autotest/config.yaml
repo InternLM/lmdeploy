@@ -25,6 +25,7 @@ turbomind_chat_model:
     - internlm/internlm-chat-20b
     - internlm/internlm-xcomposer2-vl-7b
     - internlm/internlm-xcomposer2-4khd-7b
+    - internlm/internlm-xcomposer2d5-7b
     - OpenGVLab/InternVL2-2B
     - OpenGVLab/InternVL2-8B
     - OpenGVLab/InternVL2-26B
@@ -133,6 +134,7 @@ quatization_case_config:
         - internlm/internlm-chat-20b
         - internlm/internlm-xcomposer2-vl-7b
         - internlm/internlm-xcomposer2-4khd-7b
+        - internlm/internlm-xcomposer2d5-7b
         - OpenGVLab/InternVL-Chat-V1-5
         - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
         - Qwen/Qwen-7B-Chat
