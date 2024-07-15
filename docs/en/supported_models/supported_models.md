@@ -25,6 +25,7 @@
 |          YI           |   6B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |    LLaVA(1.5,1.6)     |   7B - 34B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |     InternVL-Chat     |  v1.1- v1.5  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       InternVL2       |    1B-40B    |    Yes    |   Yes   |   Yes   |  Yes  |
 |        MiniCPM        | Llama3-V-2_5 |    Yes    |   Yes   |   Yes   |  Yes  |
 |    MiniGeminiLlama    |      7B      |    Yes    |   No    |   No    |  Yes  |
 |         GLM4          |      9B      |    Yes    |   Yes   |   Yes   |  No   |

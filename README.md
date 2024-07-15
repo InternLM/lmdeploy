@@ -143,6 +143,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>QWen-VL (7B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
+  <li>InternVL2 (1B-40B)</li>
   <li>MiniGeminiLlama (7B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>

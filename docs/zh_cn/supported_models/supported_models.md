@@ -25,6 +25,7 @@
 |          YI           |   6B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |    LLaVA(1.5,1.6)     |   7B - 34B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |     InternVL-Chat     |  v1.1- v1.5  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       InternVL2       |    2B-40B    |    Yes    |   Yes   |   Yes   |  Yes  |
 |        MiniCPM        | Llama3-V-2_5 |    Yes    |   Yes   |   Yes   |  Yes  |
 |    MiniGeminiLlama    |      7B      |    Yes    |   No    |   No    |  Yes  |
 |         GLM4          |      9B      |    Yes    |   Yes   |   Yes   |  No   |
@@ -67,6 +68,7 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |    CogVLM2-Chat     |     19B     |    Yes    |   No    |  No  |
 |   LLaVA(1.5,1.6)    |   7B-34B    |    Yes    |   No    |  No  |
 | InternVL-Chat(v1.5) |   2B-26B    |    Yes    |   No    |  No  |
+|      InternVL2      |   1B-40B    |    Yes    |   No    |  No  |
 |       Gemma2        |   9B-27B    |    Yes    |   No    |  No  |
 |        GLM4         |     9B      |    Yes    |   No    |  No  |
 |      CodeGeeX4      |     9B      |    Yes    |   No    |  No  |
