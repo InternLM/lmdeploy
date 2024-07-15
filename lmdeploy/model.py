@@ -607,6 +607,7 @@ class InternVL2InternLM2(InternLM2Chat7B):
             return 'internvl2-internlm2'
 
 
+@MODELS.register_module(name='internlm-xcomposer2d5')
 @MODELS.register_module(name='internlm-xcomposer2')
 class InternLMXComposer2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM-XComposer2-7b."""
@@ -647,28 +648,10 @@ class InternLMXComposer2Chat7B(InternLMChat7B):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'internlm' in path and 'xcomposer2' in path and '4khd' not in path:
+        if 'internlm' in path and 'xcomposer2' in path:
+            if '2d5' in path:
+                return 'internlm-xcomposer2d5'
             return 'internlm-xcomposer2'
-
-
-@MODELS.register_module(name='internlm-xcomposer2-4khd')
-class InternLMXComposer24khdChat7B(InternLMXComposer2Chat7B):
-    """Chat template and generation parameters of InternLM-
-    XComposer2-4khd-7b."""
-
-    def __init__(self, session_len=16384, **kwargs):
-        super().__init__(session_len=session_len, **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'internlm' in path and 'xcomposer2' in path and '4khd' in path:
-            return 'internlm-xcomposer2-4khd'
 
 
 @MODELS.register_module(name='baichuan-7b')

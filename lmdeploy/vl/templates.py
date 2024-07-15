@@ -250,6 +250,8 @@ class InternLMXComposer2TemplateWrapper(VLChatTemplateWrapper):
     """InternLM-XComposer2 chat template."""
 
     def append_image_token(self, prompt, num_images: int):
+        logger.warning(f'auto append {IMAGE_TOKEN} at the beginning, '
+                       'the user can manually insert the token to prompt')
         return ' '.join([IMAGE_TOKEN] * num_images) + prompt
 
 
