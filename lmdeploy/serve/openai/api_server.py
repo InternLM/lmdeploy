@@ -137,6 +137,12 @@ async def check_request(request) -> Optional[JSONResponse]:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             f'The temperature `{request.temperature}` must be in [0, 2]')
+    if hasattr(request,
+               'session_id') and VariableInterface.async_engine.id2step.get(
+                   str(request.session_id), 0) != 0:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The session_id `{request.session_id}` is occupied.')
     return
 
 
@@ -416,8 +422,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    VariableInterface.session_id += 1
-    request.session_id = VariableInterface.session_id
+    if request.session_id == -1:
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -785,8 +792,9 @@ async def completions_v1(request: CompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    VariableInterface.session_id += 1
-    request.session_id = VariableInterface.session_id
+    if request.session_id == -1:
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
