@@ -138,7 +138,6 @@ quatization_case_config:
         - OpenGVLab/InternVL-Chat-V1-5
         - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
         - OpenGVLab/InternVL2-2B
-        - OpenGVLab/InternVL2-4B
         - OpenGVLab/InternVL2-8B
         - OpenGVLab/InternVL2-26B
         - Qwen/Qwen-7B-Chat

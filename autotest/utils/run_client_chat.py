@@ -116,7 +116,6 @@ def command_test(config,
                    shell=True,
                    text=True,
                    encoding='utf-8') as proc:
-            print(prompt)
             file.writelines('prompt:' + prompt + '\n')
 
             outputs, errors = proc.communicate(input=prompt)
