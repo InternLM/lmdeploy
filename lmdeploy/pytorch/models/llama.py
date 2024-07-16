@@ -118,7 +118,8 @@ class LlamaAttention(nn.Module):
                 position_ids,
                 context.position_ids_1d,
                 q_embed=query_states,
-                k_embed=key_states)
+                k_embed=key_states,
+                context=context)
             return query_states, key_states, value_states
 
         def __rotary_emb_fn_438_naive(query_states, key_states, value_states):
@@ -229,6 +230,199 @@ class LlamaAttention(nn.Module):
         )
 
 
+class LlamaAttentionAscend(nn.Module):
+    """Rewrite module of LlamaAttention."""
+
+    def _load_weights(self, loader, rank: int, world_size: int,
+                      device: torch.device):
+        """load weights."""
+        for mod_name in ['q_proj', 'k_proj', 'v_proj']:
+            colwise_parallelize_linear(
+                getattr(self, mod_name),
+                loader,
+                rank=rank,
+                world_size=world_size,
+                prefix=mod_name,
+            )
+        rowwise_parallelize_linear(self.o_proj,
+                                   loader,
+                                   rank=rank,
+                                   world_size=world_size,
+                                   prefix='o_proj')
+
+    @classmethod
+    def _distribute_output_fn(cls, outputs, **kwargs):
+        """Distribution output hook."""
+        dist.all_reduce(outputs[0])
+        return outputs
+
+    def _contiguous_batching_forward_default_impl(
+        self,
+        hidden_states: torch.Tensor,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        output_attentions: bool = False,
+        attention_mask: Optional[torch.Tensor] = None,
+        world_size: int = 1,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
+               Optional[Tuple[torch.Tensor]]]:
+        """default rewrite."""
+        context = self.context.context
+        kv_seq_length = context.kv_seq_length
+        q_seq_length = context.q_seq_length
+        q_start_loc = context.q_start_loc
+        block_offsets = context.block_offsets
+        max_q_seq_length = context.max_q_seq_length
+        max_kv_seq_length = context.max_kv_seq_length
+
+        num_heads = self.num_heads // world_size
+        num_kv_heads = self.num_key_value_heads // world_size
+        head_dim = self.head_dim
+        hidden_size = num_heads * head_dim
+
+        def __qkv_proj(hidden_states):
+            """qkv proj."""
+            query_states = self.q_proj(hidden_states)
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
+
+            return query_states, key_states, value_states
+
+        def __rotary_emb_fn_old(query_states, key_states, value_states):
+            """rotary embedding old."""
+            if max_kv_seq_length >= self.rotary_emb.max_seq_len_cached:
+                # create larger cache
+                cos, sin = self.rotary_emb(value_states,
+                                           seq_len=max_kv_seq_length + 128)
+            cos = self.rotary_emb.cos_cached
+            sin = self.rotary_emb.sin_cached
+            query_states, key_states = apply_rotary_pos_emb_old(
+                query_states,
+                key_states,
+                cos,
+                sin,
+                position_ids,
+                context.position_ids_1d,
+                q_embed=query_states,
+                k_embed=key_states,
+            )
+            return query_states, key_states, value_states
+
+        def __rotary_emb_fn_438_naive(query_states, key_states, value_states):
+            """rotary embedding transformers>4.38."""
+            cos, sin = self.rotary_emb(value_states,
+                                       context.position_ids_1d[None])
+            cos = cos[0]
+            sin = sin[0]
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states, key_states, cos, sin)
+            return query_states, key_states, value_states
+
+        def __rotary_emb_fn_438_fused(query_states, key_states, value_states):
+            scaling_factor = getattr(self.rotary_emb, 'scaling_factor', 1.0)
+            inv_freq = self.rotary_emb.inv_freq
+            query_states, key_states = fused_rotary_emb(
+                query_states[None],
+                key_states[None],
+                context.position_ids_1d[None],
+                inv_freq=inv_freq,
+                scaling_factor=scaling_factor,
+                out_q=query_states[None],
+                out_k=key_states[None],
+                context=context,
+            )
+            return query_states[0], key_states[0], value_states
+
+        def __rotary_emb_fn_438(query_states, key_states, value_states):
+            rotary_name = type(self.rotary_emb).__name__
+            if rotary_name in [
+                    'LlamaRotaryEmbedding',
+                    'LlamaLinearScalingRotaryEmbedding',
+            ]:
+                return __rotary_emb_fn_438_fused(query_states, key_states,
+                                                 value_states)
+            else:
+                return __rotary_emb_fn_438_naive(query_states, key_states,
+                                                 value_states)
+
+        def __rotary_emb_fn(query_states, key_states, value_states):
+            """rotary embedding."""
+            if TRANSFORMERS_VERSION >= VERSION_4_38_0:
+                return __rotary_emb_fn_438(query_states, key_states,
+                                           value_states)
+            else:
+                return __rotary_emb_fn_old(query_states, key_states,
+                                           value_states)
+
+        query_states, key_states, value_states = __qkv_proj(hidden_states)
+
+        query_states = query_states.view(-1, num_heads, head_dim)
+        key_states = key_states.view(-1, num_kv_heads, head_dim)
+        value_states = value_states.view(-1, num_kv_heads, head_dim)
+
+        query_states, key_states, value_states = __rotary_emb_fn(
+            query_states, key_states, value_states)
+
+        fill_kv_cache(
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_q_seq_length,
+            block_offsets=block_offsets,
+            context=context,
+        )
+
+        attn_output = query_states
+        paged_attention_fwd(
+            query_states,
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            attn_output,
+            block_offsets,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seq_length,
+            kv_seqlens=kv_seq_length,
+            max_seqlen=max_q_seq_length,
+            context=context,
+        )
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1],
+                                          hidden_size)
+
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, None, past_key_value
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
+               Optional[Tuple[torch.Tensor]]]:
+        """Rewrite of LlamaAttention.forward."""
+        world_size = 1
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+        return self._contiguous_batching_forward_default_impl(
+            hidden_states,
+            position_ids,
+            past_key_value,
+            output_attentions,
+            attention_mask=attention_mask,
+            world_size=world_size,
+        )
+
+
 class LlamaMLP(nn.Module):
 
     def _load_weights(self, loader, rank: int, world_size: int,
@@ -265,10 +459,18 @@ class LlamaModel(nn.Module):
         """Rewrite implementation of LlamaModel.forward."""
         output_attentions = False
         use_cache = True
+        context = self.context.context
+        # get inputs from context
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
         # Attention mask is not necessary in continuous batching
         attention_mask = None
 

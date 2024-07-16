@@ -215,8 +215,8 @@ def quant_weights(model,
                   device='cuda',
                   skip_if_contains: str = None):
     """Quantize the weights of the target model's linear layers."""
-    from lmdeploy.legacy.pytorch.modules import WeightOnlyQLinear
     from lmdeploy.lite.quantization import WeightQuantizer
+    from lmdeploy.lite.quantization.modules import WeightOnlyQLinear
     from lmdeploy.lite.utils import QParams
     for name, fc in fcs.items():
         fc.to(device)

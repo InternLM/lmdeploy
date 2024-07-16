@@ -77,3 +77,12 @@ def test_glm4_special_token():
     for token, token_id in zip(special_tokens, speicial_token_ids):
         _token_id = tokenizer.encode(token, add_bos=False)
         assert len(_token_id) == 1 and _token_id[0] == token_id
+
+
+@pytest.mark.parametrize('model_path', [
+    'Qwen/Qwen2-7B-Instruct', 'deepseek-ai/deepseek-vl-1.3b-chat',
+    'OpenGVLab/InternVL2-1B'
+])
+def test_check_transformers_version(model_path):
+    tokenizer = HuggingFaceTokenizer(model_path)
+    assert tokenizer is not None
