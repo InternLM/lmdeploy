@@ -55,5 +55,5 @@ bash builder/manywheel/build_wheel.sh ${py_version} "manylinux2014_x86_64" ${doc
 After the whl is built successfully, you can install it by:
 
 ```shell
-pip install builder/manywheel/lmdeploy_wheel/*.whl
+pip install builder/manywheel/${output_dir}/*.whl
 ```
