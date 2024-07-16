@@ -29,7 +29,7 @@ from lmdeploy.vl.constants import IMAGE_TOKEN
 pipe = pipeline('internlm/internlm-xcomposer2d5-7b')
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-response = pipe((f'{IMAGE_TOKEN} describe this image', image))
+response = pipe((f'describe this image', image))
 print(response)
 ```
 
