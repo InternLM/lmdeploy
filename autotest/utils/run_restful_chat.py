@@ -200,13 +200,13 @@ def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
     file.writelines('available_models:' +
                     ','.join(api_client.available_models) + '\n')
 
+    # Randomly generate 6 characters and concatenate them into a string.
     characters = string.digits
+    random_chars = ''.join(random.choice(characters) for i in range(6))
 
     messages = []
     msg = ''
     for prompt_detail in case_info:
-        # Randomly generate 6 characters and concatenate them into a string.
-        random_chars = ''.join(random.choice(characters) for i in range(6))
         prompt = list(prompt_detail.keys())[0]
         new_prompt = {'role': 'user', 'content': prompt}
         messages.append(new_prompt)

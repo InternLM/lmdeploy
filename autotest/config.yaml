@@ -118,7 +118,6 @@ vl_model:
     - THUDM/cogvlm-chat-hf
     - THUDM/cogvlm2-llama3-chinese-chat-19B
     - THUDM/glm-4v-9b
-    - microsoft/Phi-3-mini-4k-instruct
     - microsoft/Phi-3-vision-128k-instruct
     - openbmb/MiniCPM-Llama3-V-2_5
 
