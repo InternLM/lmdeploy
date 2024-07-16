@@ -63,6 +63,7 @@ env:
   TP_INFO: --tp 1
   LOOP_NUM: 1
   TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
 
 jobs:
@@ -171,7 +172,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 8,256 -ct 128 128 2048 128 -pt 1 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
       - name: Run generation benchmark - longtext turbomind
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(env.LONGTEXT_BENCHMARK, 'true')
         env:
@@ -187,7 +188,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 128 -ct 128 2048 128 -pt 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 8,256 -ct 128 128 2048 128 -pt 1 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
       - name: Run generation benchmark - longtext pytorch
         if: (!contains(env.MODEL_FORMAT, 'awq') && contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(env.LONGTEXT_BENCHMARK, 'true'))
         env:
@@ -726,5 +727,5 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Get overview
         run: |
-          pip install pandas fire
+          pip install pandas fire mmengine
           python3 .github/scripts/action_tools.py generate_benchmark_report $REPORT_DIR

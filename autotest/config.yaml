@@ -14,56 +14,76 @@ tp_config:
     Qwen2-7B-Instruct: 2
 
 turbomind_chat_model:
-    - meta-llama/Llama-2-7b-chat-hf
     - meta-llama/Meta-Llama-3-8B-Instruct
+    - meta-llama/Llama-2-7b-chat-hf
+    - internlm/internlm2_5-7b-chat
+    - internlm/internlm2_5-7b-chat-1m
     - internlm/internlm2-chat-1_8b
-    - internlm/internlm-chat-20b
     - internlm/internlm2-chat-7b
     - internlm/internlm2-chat-20b
     - internlm/internlm2-chat-7b-4bits
     - internlm/internlm2-chat-20b-4bits
+    - internlm/internlm-chat-20b
     - internlm/internlm-xcomposer2-vl-7b
     - internlm/internlm-xcomposer2-7b
     - internlm/internlm-xcomposer2-4khd-7b
     - OpenGVLab/InternVL-Chat-V1-5
-    - Qwen/Qwen-7B-Chat
-    - Qwen/Qwen-VL-Chat
+    - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
+    - Qwen/Qwen2-7B-Instruct
+    - Qwen/Qwen2-7B-Instruct-AWQ
+    - Qwen/Qwen2-1.5B-Instruct
     - Qwen/Qwen1.5-7B-Chat
     - Qwen/Qwen1.5-4B-Chat-AWQ
-    - Qwen/Qwen2-7B-Instruct
-    - Qwen/Qwen2-1.5B-Instruct
+    - Qwen/Qwen-7B-Chat
+    - Qwen/Qwen-VL-Chat
+    - mistralai/Mistral-7B-Instruct-v0.1
+    - mistralai/Mistral-7B-Instruct-v0.2
+    - mistralai/Mistral-7B-Instruct-v0.3
     - lmdeploy/llama2-chat-7b-w4
     - baichuan-inc/Baichuan2-7B-Chat
     - 01-ai/Yi-6B-Chat
     - 01-ai/Yi-VL-6B
-    - liuhaotian/llava-v1.5-7b
     - liuhaotian/llava-v1.5-13b
     - liuhaotian/llava-v1.6-vicuna-7b
     - deepseek-ai/deepseek-vl-1.3b-chat
     - deepseek-ai/deepseek-coder-1.3b-instruct
     - codellama/CodeLlama-7b-Instruct-hf
+    - THUDM/glm-4-9b-chat
 
 
 pytorch_chat_model:
-    - meta-llama/Llama-2-7b-chat-hf
     - meta-llama/Meta-Llama-3-8B-Instruct
-    - internlm/internlm-chat-20b
+    - meta-llama/Llama-2-7b-chat-hf
+    - internlm/internlm2_5-7b-chat
+    - internlm/internlm2_5-7b-chat-1m
     - internlm/internlm2-chat-7b
     - internlm/internlm2-chat-20b
+    - internlm/internlm-chat-20b
     - baichuan-inc/Baichuan2-7B-Chat
     - baichuan-inc/Baichuan2-13B-Chat
     - 01-ai/Yi-6B-Chat
+    - liuhaotian/llava-v1.5-13b
+    - liuhaotian/llava-v1.6-vicuna-7b
+    - Qwen/Qwen2-7B-Instruct
+    - Qwen/Qwen2-1.5B-Instruct
     - Qwen/Qwen1.5-7B-Chat
+    - Qwen/Qwen-7B-Chat
     - Qwen/Qwen1.5-MoE-A2.7B-Chat
-    - Qwen/Qwen2-0.5B-Instruct
     - mistralai/Mistral-7B-Instruct-v0.1
+    - mistralai/Mistral-7B-Instruct-v0.2
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-7b-it
     - deepseek-ai/deepseek-moe-16b-chat
-    - deepseek-ai/deepseek-coder-6.7b-instruct
+    - deepseek-ai/deepseek-coder-1.3b-instruct
     - THUDM/chatglm2-6b
+    - THUDM/cogvlm-chat-hf
+    - THUDM/cogvlm2-llama3-chinese-chat-19B
+    - microsoft/Phi-3-mini-4k-instruct
+    - microsoft/Phi-3-vision-128k-instruct
+    - bigcode/starcoder2-7b
 
 turbomind_base_model:
+    - internlm/internlm2_5-7b
     - internlm/internlm2-1_8b
     - internlm/internlm2-20b
     - codellama/CodeLlama-7b-hf
@@ -75,61 +95,85 @@ pytorch_base_model:
 
 vl_model:
     - Qwen/Qwen-VL-Chat
-    - liuhaotian/llava-v1.5-7b
     - liuhaotian/llava-v1.5-13b
     - liuhaotian/llava-v1.6-vicuna-7b
     - 01-ai/Yi-VL-6B
     - deepseek-ai/deepseek-vl-1.3b-chat
     - OpenGVLab/InternVL-Chat-V1-5
+    - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
     - internlm/internlm-xcomposer2-vl-7b
     - internlm/internlm-xcomposer2-7b
     - internlm/internlm-xcomposer2-4khd-7b
     - THUDM/cogvlm-chat-hf
     - THUDM/cogvlm2-llama3-chinese-chat-19B
+    - microsoft/Phi-3-vision-128k-instruct
+    - openbmb/MiniCPM-Llama3-V-2_5
 
 quatization_case_config:
     w4a16:
+        - meta-llama/Meta-Llama-3-8B-Instruct
         - meta-llama/Llama-2-7b-chat-hf
-        - internlm/internlm-chat-20b
-        - Qwen/Qwen-7B-Chat
+        - internlm/internlm2_5-7b-chat
+        - internlm/internlm2_5-7b-chat-1m
+        - internlm/internlm2_5-7b
         - internlm/internlm2-chat-20b
-        - baichuan-inc/Baichuan2-7B-Chat
         - internlm/internlm2-20b
+        - internlm/internlm-chat-20b
+        - internlm/internlm-xcomposer2-vl-7b
+        - internlm/internlm-xcomposer2-7b
+        - internlm/internlm-xcomposer2-4khd-7b
+        - OpenGVLab/InternVL-Chat-V1-5
+        - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
+        - Qwen/Qwen-7B-Chat
         - Qwen/Qwen1.5-7B-Chat
         - Qwen/Qwen2-7B-Instruct
         - Qwen/Qwen2-1.5B-Instruct
         - Qwen/Qwen-VL-Chat
-        - meta-llama/Meta-Llama-3-8B-Instruct
-        - liuhaotian/llava-v1.5-7b
         - liuhaotian/llava-v1.5-13b
         - liuhaotian/llava-v1.6-vicuna-7b
         - 01-ai/Yi-VL-6B
+        - 01-ai/Yi-6B-Chat
         - deepseek-ai/deepseek-vl-1.3b-chat
-        - OpenGVLab/InternVL-Chat-V1-5
-        - internlm/internlm-xcomposer2-vl-7b
-        - internlm/internlm-xcomposer2-7b
-        - internlm/internlm-xcomposer2-4khd-7b
+        - baichuan-inc/Baichuan2-7B-Chat
+        - codellama/CodeLlama-7b-hf
+        - openbmb/MiniCPM-Llama3-V-2_5
     kvint:
-        - meta-llama/Llama-2-7b-chat-hf
         - meta-llama/Meta-Llama-3-8B-Instruct
+        - meta-llama/Llama-2-7b-chat-hf
+        - internlm/internlm2_5-7b-chat
+        - internlm/internlm2_5-7b-chat-1m
         - internlm/internlm2-chat-1_8b
-        - internlm/internlm-chat-20b
         - internlm/internlm2-chat-7b
         - internlm/internlm2-chat-20b
         - internlm/internlm2-chat-7b-4bits
         - internlm/internlm2-chat-20b-4bits
-        - Qwen/Qwen-7B-Chat
-        - Qwen/Qwen1.5-7B-Chat
+        - internlm/internlm-chat-20b
+        - internlm/internlm-xcomposer2-vl-7b
+        - internlm/internlm-xcomposer2-7b
+        - internlm/internlm-xcomposer2-4khd-7b
+        - OpenGVLab/InternVL-Chat-V1-5
         - Qwen/Qwen2-7B-Instruct
+        - Qwen/Qwen2-7B-Instruct-AWQ
+        - Qwen/Qwen2-1.5B-Instruct
+        - Qwen/Qwen1.5-7B-Chat
+        - Qwen/Qwen1.5-4B-Chat-AWQ
+        - Qwen/Qwen-7B-Chat
+        - Qwen/Qwen-VL-Chat
+        - mistralai/Mistral-7B-Instruct-v0.2
+        - mistralai/Mistral-7B-Instruct-v0.3
         - lmdeploy/llama2-chat-7b-w4
         - baichuan-inc/Baichuan2-7B-Chat
-        - internlm/internlm2-1_8b
-        - internlm/internlm2-20b
         - 01-ai/Yi-6B-Chat
+        - 01-ai/Yi-VL-6B
+        - liuhaotian/llava-v1.5-13b
+        - liuhaotian/llava-v1.6-vicuna-7b
+        - deepseek-ai/deepseek-vl-1.3b-chat
+        - deepseek-ai/deepseek-coder-1.3b-instruct
         - codellama/CodeLlama-7b-Instruct-hf
+        - THUDM/glm-4-9b-chat
     w8a8:
-        - meta-llama/Llama-2-7b-chat-hf
         - meta-llama/Meta-Llama-3-8B-Instruct
+        - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm2-chat-20b
         - internlm/internlm2-chat-7b
         - 01-ai/Yi-6B-Chat

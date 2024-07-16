@@ -31,6 +31,7 @@ LMDeploy has the following core features:
 
 * **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, the engine remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
+* **Excellent Compatibility**: LMDeploy supports `KV Cache Quant <https://lmdeploy.readthedocs.io/en/latest/quantization/kv_quant.html>`_, `AWQ <https://lmdeploy.readthedocs.io/en/latest/quantization/w4a16.html>`_ and `Automatic Prefix Caching <https://lmdeploy.readthedocs.io/en/latest/inference/turbomind_config.html>`_ to be used simultaneously.
 
 Documentation
 -------------
@@ -81,6 +82,7 @@ Documentation
 
    serving/api_server.md
    serving/api_server_vl.md
+   serving/api_server_tools.md
    serving/gradio.md
    serving/proxy_server.md
 

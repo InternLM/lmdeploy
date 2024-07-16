@@ -1545,52 +1545,5 @@ template void invokeAddBiasSoftMax(half*        logits,
                                    const int    n,
                                    cudaStream_t stream);
 #endif
-__global__ void computeToppDecay(float*         runtime_top_p,
-                                 const float*   runtime_initial_top_p,
-                                 const int*     output_ids,
-                                 const float*   top_p_decay,
-                                 const float*   top_p_min,
-                                 const int32_t* top_p_reset_ids,
-                                 const int      local_batch_size)
-{
-    /**
-     * @brief Compute the topp decay by https://arxiv.org/pdf/2206.04624.pdf
-     *        In short, the formula is
-     *          runtime_top_p = max(runtime_top_p * top_p_decay, top_p_min)
-     *        If generating the top_p_reset_ids, then reset the runtime_top_p.
-     *
-     * \param runtime_top_p          [local_batch_size]
-     * \param runtime_initial_top_p  [local_batch_size]
-     * \param output_ids             [local_batch_size]
-     * \param top_p_decay            [local_batch_size]
-     * \param top_p_min              [local_batch_size]
-     * \param top_p_reset_ids         [local_batch_size]
-     * \param local_batch_size
-     *
-     */
-
-    int idx = blockDim.x * blockIdx.x + threadIdx.x;
-    if (output_ids[idx] == top_p_reset_ids[idx]) {
-        runtime_top_p[idx] = runtime_initial_top_p[idx];
-    }
-    else {
-        runtime_top_p[idx] = max(runtime_top_p[idx] * top_p_decay[idx], top_p_min[idx]);
-    }
-}
-
-void invokeComputeToppDecay(float*         runtime_top_p,
-                            const float*   runtime_initial_top_p,
-                            const int*     output_ids,
-                            const float*   top_p_decay,
-                            const float*   top_p_min,
-                            const int32_t* top_p_reset_ids,
-                            const int      local_batch_size,
-                            cudaStream_t   stream)
-{
-    dim3 block(min(local_batch_size, 512));
-    dim3 grid((local_batch_size + block.x - 1) / block.x);
-    computeToppDecay<<<grid, block, 0, stream>>>(
-        runtime_top_p, runtime_initial_top_p, output_ids, top_p_decay, top_p_min, top_p_reset_ids, local_batch_size);
-}
 
 }  // namespace turbomind

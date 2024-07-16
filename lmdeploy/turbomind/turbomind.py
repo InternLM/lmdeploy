@@ -481,6 +481,10 @@ class TurboMindInstance:
                 valid_n = n.item()
                 tok_res[token_id.item()] = \
                     val[:valid_n][idx[:valid_n] == token_id].item()
+            ids = list(tok_res.keys())
+            for k in ids:
+                if tok_res[k] == float('-inf'):
+                    tok_res.pop(k)
             out_logprobs.append(tok_res)
         return out_logprobs
 

@@ -127,6 +127,14 @@ def get_cuda_id_by_workerid(worker_id, tp_num: int = 1):
         elif tp_num == 2:
             cuda_num = int(worker_id.replace('gw', '')) * 2
             return ','.join([str(cuda_num), str(cuda_num + 1)])
+        elif tp_num == 4:
+            cuda_num = int(worker_id.replace('gw', '')) * 4
+            return ','.join([
+                str(cuda_num),
+                str(cuda_num + 1),
+                str(cuda_num + 2),
+                str(cuda_num + 3)
+            ])
 
 
 def get_config():

@@ -31,6 +31,7 @@ LMDeploy 工具箱提供以下核心功能：
 
 - **有状态推理：** 通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。显著提升长文本多轮对话场景中的效率。
 
+- **卓越的兼容性:**  LMDeploy 支持 `KV Cache 量化 <https://lmdeploy.readthedocs.io/zh-cn/latest/quantization/kv_quant.html>`_, `AWQ <https://lmdeploy.readthedocs.io/zh-cn/latest/quantization/w4a16.html>`_ 和 `Automatic Prefix Caching <https://lmdeploy.readthedocs.io/zh-cn/latest/inference/turbomind_config.html>`_ 同时使用。
 
 中文文档
 --------
@@ -82,6 +83,7 @@ LMDeploy 工具箱提供以下核心功能：
 
    serving/api_server.md
    serving/api_server_vl.md
+   serving/api_server_tools.md
    serving/gradio.md
    serving/proxy_server.md
 
