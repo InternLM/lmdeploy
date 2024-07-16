@@ -694,6 +694,7 @@ class TestRestfulInterfaceChatCompletions:
             'finish_reason') == 'length'
         assert length == 5 or length == 6
 
+    @pytest.mark.not_pytorch
     def test_logprobs(self):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
@@ -705,11 +706,15 @@ class TestRestfulInterfaceChatCompletions:
                 logprobs=True,
                 top_logprobs=10):
             continue
-        assert_chat_completions_batch_return(output, model_name)
+        assert_chat_completions_batch_return(output,
+                                             model_name,
+                                             check_logprobs=True,
+                                             logprobs_num=10)
         assert output.get('choices')[0].get('finish_reason') == 'length'
         assert output.get('usage').get('completion_tokens') == 6 or output.get(
             'usage').get('completion_tokens') == 5
 
+    @pytest.mark.not_pytorch
     def test_logprobs_streaming(self):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]

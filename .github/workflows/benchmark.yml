@@ -456,31 +456,6 @@ jobs:
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
           kill -15 "$restful_pid"
-      - name: Start restful api turbomind - kvint4
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
-        run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MAX_BATCH_SIZE $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level ${{inputs.log_level}} > turbomind_kvint4_run.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
-      - name: Run restful benchmark -kvint4
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
-        env:
-          result_dir: benchmark-restful-turbomind-kvint4
-        run: |
-          rm -rf ${result_dir}
-          mkdir ${result_dir}
-          batches=($BATCHES)
-          for batch in "${batches[@]}"
-          do
-            for ((i=1; i<=$LOOP_NUM; i++))
-              do
-                python3 benchmark/profile_restful_api.py localhost:23333 $MODEL_PATH $DATASET_FILE --concurrency "$batch" --stream-output True --csv ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.log
-              done
-          done
-      - name: Kill restful api turbomind - kvint4
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
-        run: |
-          kill -15 "$restful_pid"
       - name: Start restful api turbomind - kvint8
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
         run: |
@@ -504,6 +479,31 @@ jobs:
           done
       - name: Kill restful api turbomind - kvint8
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
+        run: |
+          kill -15 "$restful_pid"
+      - name: Start restful api turbomind - kvint4
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
+        run: |
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MAX_BATCH_SIZE $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level ${{inputs.log_level}} > turbomind_kvint4_run.log 2>&1 &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 180s
+      - name: Run restful benchmark -kvint4
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
+        env:
+          result_dir: benchmark-restful-turbomind-kvint4
+        run: |
+          rm -rf ${result_dir}
+          mkdir ${result_dir}
+          batches=($BATCHES)
+          for batch in "${batches[@]}"
+          do
+            for ((i=1; i<=$LOOP_NUM; i++))
+              do
+                python3 benchmark/profile_restful_api.py localhost:23333 $MODEL_PATH $DATASET_FILE --concurrency "$batch" --stream-output True --csv ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.log
+              done
+          done
+      - name: Kill restful api turbomind - kvint4
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
         run: |
           kill -15 "$restful_pid"
       - name: Start restful api pytorch

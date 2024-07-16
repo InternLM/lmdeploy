@@ -53,6 +53,7 @@ turbomind_chat_model:
     - deepseek-ai/deepseek-vl-1.3b-chat
     - deepseek-ai/deepseek-coder-1.3b-instruct
     - codellama/CodeLlama-7b-Instruct-hf
+    - THUDM/glm-4-9b-chat
 
 pytorch_chat_model:
     - meta-llama/Meta-Llama-3-8B-Instruct
@@ -87,6 +88,7 @@ pytorch_chat_model:
     - THUDM/chatglm2-6b
     - THUDM/cogvlm2-llama3-chinese-chat-19B
     - THUDM/glm-4v-9b
+    - THUDM/glm-4-9b-chat
     - microsoft/Phi-3-mini-4k-instruct
     - microsoft/Phi-3-vision-128k-instruct
     - bigcode/starcoder2-7b
@@ -156,6 +158,7 @@ quatization_case_config:
         - baichuan-inc/Baichuan2-7B-Chat
         - codellama/CodeLlama-7b-hf
         - openbmb/MiniCPM-Llama3-V-2_5
+        - THUDM/glm-4-9b-chat
     kvint:
         - meta-llama/Meta-Llama-3-8B-Instruct
         - meta-llama/Llama-2-7b-chat-hf
