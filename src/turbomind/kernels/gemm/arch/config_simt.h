@@ -1,14 +1,23 @@
-#include "src/turbomind/kernels/gemm/config/sm80_hmma_16816.h"
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#pragma once
+
+#include "src/turbomind/kernels/gemm/arch.h"
+#include "src/turbomind/kernels/gemm/arch/operand_simt.h"
+#include "src/turbomind/kernels/gemm/cta_map.h"
+#include "src/turbomind/kernels/gemm/gemm_universal.h"
 #include "src/turbomind/kernels/gemm/iterator_sm70.h"
+#include "src/turbomind/kernels/gemm/mainloop_sm80_v2.h"
+#include "src/turbomind/kernels/gemm/thread_group_map.h"
+#include "src/turbomind/kernels/gemm/tiled_mma.h"
+#include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
 
-namespace sm75_hmma_1688 {
-
-using namespace sm80_hmma_16816;
+namespace simt {
 
 template<class A, class TransformA, class U, class B, class TransformB, class V, Order order_c, class Tc>
-struct SM75_HMMA_1688_F32 {
+struct Sm75_Simt {
     template<int CTA_M,
              int CTA_N,
              int CTA_K,
@@ -22,9 +31,17 @@ struct SM75_HMMA_1688_F32 {
              int  GroupSizeU = 1,
              int  GroupSizeV = 1>
     struct Type {
-        using Partition = Raked<WARP_CNT_M, WARP_CNT_N, kColMajor>;
-        using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, 16, 16, 16, Partition, WARP_CNT_K>;
-        using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
+
+        // (TM, TN, TK) = R(MMA_Atom, SmemCopy_Atom)
+        using MMA_Atom = SM70_MMA_SIMT<half>;
+
+        static constexpr int TM = MMA_Atom::M;
+        static constexpr int TN = MMA_Atom::N;
+        static constexpr int TK = MMA_Atom::K;
+
+        using MMA_Map = RakedThreadGroupMap<CTA_M, CTA_N, CTA_K, TM, TN, TK, WARP_CNT_M, WARP_CNT_N, WARP_CNT_K>;
+
+        using MMA = Tiled_MMA_v2<MMA_Atom, MMA_Map>;
 
         using Mainloop = MainloopSm80_v2<CTA_M,
                                          CTA_N,
@@ -36,12 +53,12 @@ struct SM75_HMMA_1688_F32 {
                                          U,
                                          GroupSizeU,
                                          B,
-                                         IteratorSm70<PolicyB>,
                                          TransformB,
+                                         IteratorSm70<PolicyB>,
                                          V,
                                          GroupSizeV,
                                          Stages,
-                                         false>;  // FusePrefetch_
+                                         false>;
 
         using Epilogue = gemm::Epilogue_<Tc,
                                          CTA_M,
@@ -57,6 +74,6 @@ struct SM75_HMMA_1688_F32 {
     };
 };
 
-}  // namespace sm75_hmma_1688
+}  // namespace simt
 
 }  // namespace turbomind::gemm

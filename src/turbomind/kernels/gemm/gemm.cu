@@ -134,10 +134,9 @@ struct Gemm::Impl {
         std::vector<std::pair<float, int>> costs;
 
         for (const auto& k : kernels) {
-            std::cout << "\n" << k->name() << "\n";
+            // std::cout << "\n" << k->name() << "\n";
             int max_split_k = k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
-            // max_split_k = std::min(3, max_split_k);
-            std::cout << "max_split_k: " << max_split_k << "\n";
+            // std::cout << "max_split_k: " << max_split_k << "\n";
             auto [splits, cost] = k->Estimate(desc.m,  //
                                               desc.n,
                                               desc.k,
@@ -165,7 +164,7 @@ struct Gemm::Impl {
 
         for (int i = 0; i < top_k; ++i) {
             const auto& [cost, splits] = costs[idxs[i]];
-            ret.emplace_back(LaunchSpec{kernels[idxs[i]], 0, splits}, static_cast<float>(cost));
+            ret.emplace_back(LaunchSpec{kernels[idxs[i]], 3, splits}, static_cast<float>(cost));
         }
 
         return ret;
@@ -320,10 +319,35 @@ struct Gemm::Impl {
         for (const auto& entry : entries) {
             dispatch_cache_.insert(entry);
         }
+        Summary(entries);
         return dispatch_cache_.size();
     }
 
 private:
+    void Summary(const std::vector<std::pair<GemmDesc, LaunchSpec>>& entries)
+    {
+        std::vector<Kernel*> uses{nullptr};
+        for (const auto& k : registry_.kernels()) {
+            uses.push_back(k.get());
+        }
+        for (const auto& [_, s] : entries) {
+            uses.push_back(s.kernel);
+        }
+        std::sort(uses.begin(), uses.end());
+        assert(uses[0] == nullptr);
+        std::vector<std::pair<int, Kernel*>> count;
+        for (size_t i = 1; i < uses.size(); ++i) {
+            if (uses[i] != uses[i - 1]) {
+                count.emplace_back(-1, uses[i]);
+            }
+            ++count.back().first;
+        }
+        std::sort(count.begin(), count.end(), std::greater<>{});
+        for (const auto& [n, k] : count) {
+            std::cout << k->name() << ": " << n << "\n";
+        }
+    }
+
     /// TODO: move to cuda utils
     static std::unique_ptr<cudaDeviceProp> GetCudaDeviceProps()
     {

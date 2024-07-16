@@ -6,7 +6,7 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
-#include "src/turbomind/kernels/gemm/test_utils.h"
+#include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 #include <thrust/execution_policy.h>

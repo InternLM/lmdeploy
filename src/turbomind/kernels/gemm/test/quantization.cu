@@ -1,6 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/gemm/quantization_impl.h"
+#include "src/turbomind/kernels/gemm/test/quantization_impl.h"
 
 namespace turbomind::gemm {
 

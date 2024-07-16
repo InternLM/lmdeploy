@@ -12,10 +12,10 @@ namespace turbomind::gemm {
 
 template<class T, int K_>
 struct SmemCopy_MMA_SIMT_A {
-    static constexpr int M = sm70_mma_simt::OP_M;
-    static constexpr int K = sm70_mma_simt::OP_K;
+    static constexpr int M = simt::OP_M;
+    static constexpr int K = simt::OP_K;
 
-    static constexpr int OP_N = sm70_mma_simt::OP_N;
+    static constexpr int OP_N = simt::OP_N;
 
     static constexpr int kFragNum = 1;
 
@@ -42,10 +42,10 @@ struct SmemCopy_MMA_SIMT_A {
 
 template<class T, int K_>
 struct SmemCopy_MMA_SIMT_B {
-    static constexpr int M = sm70_mma_simt::OP_N;
-    static constexpr int K = sm70_mma_simt::OP_K;
+    static constexpr int M = simt::OP_N;
+    static constexpr int K = simt::OP_K;
 
-    static constexpr int OP_N = sm70_mma_simt::OP_N;
+    static constexpr int OP_N = simt::OP_N;
 
     static constexpr int kFragNum = 1;
 
@@ -72,10 +72,10 @@ struct SmemCopy_MMA_SIMT_B {
 
 template<class T, int K_>
 struct SmemCopy_MMA_SIMT_V {
-    static constexpr int M = sm70_mma_simt::OP_N;
+    static constexpr int M = simt::OP_N;
     static constexpr int K = K_;
 
-    static constexpr int OP_N = sm70_mma_simt::OP_N;
+    static constexpr int OP_N = simt::OP_N;
 
     static constexpr int kFragNum = 1;
 

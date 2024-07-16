@@ -1,28 +1,27 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/gemm/config/sm80_hmma_16816.h"
-#include "src/turbomind/kernels/gemm/operand.h"
+#include "src/turbomind/kernels/gemm/arch/config_sm80_s16816.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/transform.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
 
-void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
+void Registry::f16_u4g128_f16_tnt_sm80_s16816()
 {
-    using namespace sm80_hmma_16816;
+    using namespace sm80_s16816;
 
     if constexpr (0) {
         static constexpr int N = 16;
 
-        using Config = SM80_HMMA_16816_F32<Operand_A_Pack<uint4_t, kRowMajor>,  // A
-                                           Transform_HMMA_16816<0, 1>,          // tarnsform A
-                                           Operand_U_Pack<uint32_t>,            // U
-                                           Operand_B<half, kRowMajor, N>,       // B
-                                           Transform_Default,                   // transform B
-                                           VoidOperand,                         // V
-                                           kColMajor,                           // order_C
-                                           half>;                               // Tc
+        using Config = Sm80_s16816<Operand_A_Pack<uint4_t, kRowMajor>,  // A
+                                   Transform_HMMA_16816<0, 1>,          // tarnsform A
+                                   Operand_UV_Pack<uint32_t, false>,    // U
+                                   Operand_B<half, kRowMajor, N>,       // B
+                                   Transform_Default,                   // transform B
+                                   VoidOperand,                         // V
+                                   kColMajor,                           // order_C
+                                   half>;                               // Tc
 
         using namespace cache_policy;
 
@@ -119,14 +118,14 @@ void Registry::reigster_sm80_s16816gemm_f16_f16_nn_packed()
 
     if constexpr (1) {
 
-        using Config = SM80_HMMA_16816_F32<Operand_A<half, kRowMajor>,          // A
-                                           Transform_Default,                   // tarnsform A
-                                           VoidOperand,                         // U
-                                           Operand_B_Pack<uint4_t, kRowMajor>,  // B
-                                           Transform_HMMA_16816<1, 0>,          // transform B
-                                           Operand_U_Pack<uint32_t>,            // V
-                                           kRowMajor,                           // order_C
-                                           half>;                               // Tc
+        using Config = Sm80_s16816<Operand_A<half, kRowMajor>,          // A
+                                   Transform_Default,                   // tarnsform A
+                                   VoidOperand,                         // U
+                                   Operand_B_Pack<uint4_t, kRowMajor>,  // B
+                                   Transform_HMMA_16816<1, 0>,          // transform B
+                                   Operand_UV_Pack<uint32_t, true>,     // V
+                                   kRowMajor,                           // order_C
+                                   half>;                               // Tc
 
         using namespace cache_policy;
 

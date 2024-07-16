@@ -6,9 +6,9 @@
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/gpu_metric.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
-#include "src/turbomind/kernels/gemm/quantization.h"
-#include "src/turbomind/kernels/gemm/test_utils.h"
-#include "src/turbomind/kernels/gemm/testbed.h"
+#include "src/turbomind/kernels/gemm/test/quantization.h"
+#include "src/turbomind/kernels/gemm/test/test_utils.h"
+#include "src/turbomind/kernels/gemm/test/testbed.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <fstream>
 #include <limits>

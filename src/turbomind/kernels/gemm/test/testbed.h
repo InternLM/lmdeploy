@@ -5,9 +5,9 @@
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
-#include "src/turbomind/kernels/gemm/quantization.h"
-#include "src/turbomind/kernels/gemm/reference.h"
-#include "src/turbomind/kernels/gemm/test_utils.h"
+#include "src/turbomind/kernels/gemm/test/quantization.h"
+#include "src/turbomind/kernels/gemm/test/reference.h"
+#include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 #include <cstdlib>
@@ -146,11 +146,12 @@ public:
             // std::cout << "\n";
         }
 
+        // b (k, n) -> v is always row major
         if constexpr (is_quant_b) {
             static_assert(pack_b && pack_v);
             constexpr Order _order_b = transpose(order_b);
             Quantize<Tb>(b_, n, k, _order_b, g, b_f_, b_q_, v_, stream);
-            v_pack_desc_ = v_desc_ = {DataType::U32, kColMajor, n, ceil_div(k, g), n};
+            v_pack_desc_ = v_desc_ = {DataType::U32, kRowMajor, ceil_div(k, g), n, n};
             v_pack_desc_.pack      = pack_v;
             v_pack_.resize(v_.size());
             CHECK(!Convert(v_.data().get(), v_desc_, v_pack_.data().get(), v_pack_desc_, stream_));
@@ -392,7 +393,7 @@ inline decltype(auto) get_test()
         constexpr Pack kPackA = 0;
         constexpr Pack kPackU = 0;
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
-        constexpr Pack kPackV = HMMA_16816 | OPERAND_U | 1;
+        constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
         return gTestbed<
             gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
     }

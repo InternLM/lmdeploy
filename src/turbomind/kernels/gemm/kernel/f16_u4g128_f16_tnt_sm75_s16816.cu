@@ -1,6 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/gemm/config/sm75_hmma_1688.h"
+#include "src/turbomind/kernels/gemm/arch/config_sm75_s16816.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/transform.h"
@@ -8,7 +8,7 @@
 
 namespace turbomind::gemm {
 
-void Registry::register_sm75_s1688gemm_f16_f16()
+void Registry::f16_u4g128_f16_tnt_sm75_s16816()
 {
 
     {  // fp x fp

@@ -1,6 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/gemm/test_utils.h"
+#include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include <cublas_v2.h>
 #include <curand.h>
 #include <curand_kernel.h>

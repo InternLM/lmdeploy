@@ -1,24 +1,25 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/gemm/config/sm70_mma_884.h"
+#include "src/turbomind/kernels/gemm/arch/config_sm70_s884.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/registry.h"
+#include "src/turbomind/kernels/gemm/transform.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
 
-void Registry::register_sm70_s884gemm_f16_f16()
+void Registry::f16_u4g128_f16_tnt_sm70_s884()
 {
+    using namespace sm70_s884;
     {
-        using Config =
-            sm70_mma_884::SM70_MMA_884_F32<typename GetOperand<HMMA_884, OPERAND_A, half, kRowMajor, false>::Operand,
-                                           Transform_Default,
-                                           VoidOperand,
-                                           typename GetOperand<HMMA_884, OPERAND_B, half, kRowMajor, false>::Operand,
-                                           Transform_Default,
-                                           VoidOperand,
-                                           kRowMajor,
-                                           half>;
+        using Config = Sm70_s884<typename GetOperand<HMMA_884, OPERAND_A, half, kRowMajor, false>::Operand,
+                                 Transform_Default,
+                                 VoidOperand,
+                                 typename GetOperand<HMMA_884, OPERAND_B, half, kRowMajor, false>::Operand,
+                                 Transform_Default,
+                                 VoidOperand,
+                                 kRowMajor,
+                                 half>;
 
         // Add(std::make_unique<KernelImpl<Config::Type<64, 64, 16, 2, 2, 1, 3, false, 0, 0>::Kernel>>());
         // Add(std::make_unique<KernelImpl<Config::Type<16, 16, 16, 1, 1, 1, 3, false, 1, 1>::Kernel>>());
@@ -42,17 +43,15 @@ void Registry::register_sm70_s884gemm_f16_f16()
         // Add(std::make_unique<KernelImpl<Config::Type<64, 64, 16, 2, 2, 1, 3, false, 0, 0>::Kernel>>());
     }
 
-    using sm70_mma_884::SM70_MMA_884_F32;
-
     {  // quant B
-        using Config = SM70_MMA_884_F32<typename GetOperand<HMMA_884, OPERAND_A, half, kRowMajor, false>::Operand,
-                                        Transform_Default,
-                                        VoidOperand,
-                                        typename GetOperand<HMMA_884, OPERAND_B, uint4_t, kRowMajor, true>::Operand,
-                                        Transform_HMMA_SIMT_B,
-                                        typename GetOperand<HMMA_884, OPERAND_V, uint32_t, kColMajor, true>::Operand,
-                                        kRowMajor,
-                                        half>;
+        using Config = Sm70_s884<typename GetOperand<HMMA_884, OPERAND_A, half, kRowMajor, false>::Operand,
+                                 Transform_Default,
+                                 VoidOperand,
+                                 typename GetOperand<HMMA_884, OPERAND_B, uint4_t, kRowMajor, true>::Operand,
+                                 Transform_HMMA_SIMT_B,
+                                 typename GetOperand<HMMA_884, OPERAND_V, uint32_t, kColMajor, true>::Operand,
+                                 kRowMajor,
+                                 half>;
 
         // Add(std::make_unique<KernelImpl<Config::Type<128, 128, 16, 1, 4, 1, 2, false, 1, 128>::Kernel>>());
     }

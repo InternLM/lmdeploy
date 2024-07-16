@@ -5,7 +5,7 @@
 #include "src/turbomind/kernels/core/math.h"
 // #include "src/turbomind/kernels/gemm/config/sm70_mma_884.h"
 // #include "src/turbomind/kernels/gemm/config/sm70_mma_simt.h"
-#include "src/turbomind/kernels/gemm/config/sm80_hmma_16816.h"
+#include "src/turbomind/kernels/gemm/arch/operand_sm80_s16816.h"
 #include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/format.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
@@ -103,7 +103,7 @@ int Convert(const void*         S,  //
             cudaStream_t        stream)
 {
     const Op_Tag op_tag = get_operand_tag(_Ddesc.pack);
-    const bool   trans  = op_tag == OPERAND_B;
+    const bool   trans  = op_tag == OPERAND_B || op_tag == OPERAND_V;
 
     // (k, n) -> (n, k)
     MatrixLayout Sdesc = trans ? transpose(_Sdesc) : _Sdesc;
@@ -223,7 +223,7 @@ std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(int sm, bool f
         return {kColMajor, HMMA_SIMT | OPERAND_B | 1, kRowMajor, HMMA_SIMT | OPERAND_V | 1};
     }
     if (sm >= 80) {
-        return {kRowMajor, HMMA_16816 | OPERAND_B | 1, kRowMajor, HMMA_16816 | OPERAND_V | 1};
+        return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
     }
     else if (sm == 75) {
         return {kRowMajor, HMMA_16816 | OPERAND_B | 1, kRowMajor, HMMA_16816 | OPERAND_V | 1};

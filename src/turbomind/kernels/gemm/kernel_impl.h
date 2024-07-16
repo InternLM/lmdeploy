@@ -96,7 +96,7 @@ public:
                const void*         B,
                const MatrixLayout& _Bdesc,
                const void*         V,
-               const MatrixLayout& Vdesc,
+               const MatrixLayout& _Vdesc,
                const void*         beta,
                const void*         C,
                const MatrixLayout& Cdesc,
@@ -120,6 +120,7 @@ public:
         };
 
         const MatrixLayout Bdesc = transpose(_Bdesc);
+        const MatrixLayout Vdesc = transpose(_Vdesc);
 
         const auto tiles = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, splits);
 
@@ -129,8 +130,7 @@ public:
             return -1;
         }
 
-        // const auto log_tile = Map::get_log_tile(tiles, 8);
-        const auto log_tile = swizzle;
+        const auto log_tile = Map::get_log_tile(tiles, 1 << swizzle);
 
         const auto grid  = Map::get_grid_shape(tiles, log_tile);
         const auto block = Gemm::Impl::WARPS * WARP_SIZE;
@@ -230,8 +230,15 @@ public:
     void
     GetWorkspaceSizes(int m, int n, int tiled_m, int tiled_n, int splits, size_t& barriers_size, size_t& partials_size)
     {
-        partials_size = sizeof(float) * m * n * splits;
-        barriers_size = sizeof(int) * tiled_m * tiled_n * splits;
+        static constexpr bool kSerial = true;
+
+        partials_size = sizeof(float) * m * n;
+        barriers_size = sizeof(int) * tiled_m * tiled_n;
+
+        if constexpr (!kSerial) {
+            partials_size *= splits;
+            barriers_size *= splits;
+        }
     }
 
     int GetMaxSplits(int m, int n, size_t barrier_size, size_t partials_size) override

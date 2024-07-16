@@ -1,6 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/gemm/reference.h"
+#include "src/turbomind/kernels/gemm/test/reference.h"
 #include <cstdio>
 
 namespace turbomind::gemm {

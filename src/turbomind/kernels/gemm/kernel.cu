@@ -28,8 +28,9 @@ std::vector<std::pair<int, float>> Kernel::Estimate(int   m,
     const int64_t cta_mn = cta_m * cta_n;
 
     const int tiled_shape_mn = tiled_shape_m * tiled_shape_n;
-    const int concurrency    = sm_count * std::min(2, max_active_ctas_);
+    // const int concurrency    = sm_count * std::min(2, max_active_ctas_);
     // const int   concurrency    = sm_count;
+    const int   concurrency    = sm_count * max_active_ctas_;
     const float wave_per_split = float(tiled_shape_mn) / float(concurrency);
 
     //                     cost    volume   waves  split-k
@@ -101,43 +102,56 @@ std::vector<std::pair<int, float>> Kernel::Estimate(int   m,
 
 bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
 {
-    // printf("S\n");
+    constexpr bool debug = false;
+
+    if constexpr (debug)
+        printf("S\n");
 
     if (std::tie(desc.order_a, desc.order_b, desc.order_c) != std::tie(desc_.order_a, desc_.order_b, desc_.order_c)) {
         return false;
     }
 
-    // printf("A\n");
+    if constexpr (debug)
+        printf("A\n");
 
     if (std::tie(desc.type_a, desc.type_b, desc.type_c) != std::tie(desc_.type_a, desc_.type_b, desc_.type_c)) {
         return false;
     }
 
-    // printf("B\n");
+    if constexpr (debug) {
+        printf("B\n");
+        printf("%X %X %X %X\n", desc.pack_a, desc_.pack_a, desc.pack_u, desc_.pack_u);
+    }
 
     if (std::tie(desc.pack_a, desc.pack_u) != std::tie(desc_.pack_a, desc_.pack_u)) {
         return false;
     }
 
-    // printf("C\n");
+    if constexpr (debug) {
+        printf("C\n");
+        printf("%X %X %X %X\n", desc.pack_b, desc_.pack_b, desc.pack_v, desc_.pack_v);
+    }
 
     if (std::tie(desc.pack_b, desc.pack_v) != std::tie(desc_.pack_b, desc_.pack_v)) {
         return false;
     }
 
-    // printf("D\n");
+    if constexpr (debug)
+        printf("D\n");
 
     if (desc.quant_a.type != desc_.quant_a.type || desc.quant_a.group_size != desc_.quant_a.group_size) {
         return false;
     }
 
-    // printf("E\n");
+    if constexpr (debug)
+        printf("E\n");
 
     if (desc.quant_b.type != desc_.quant_b.type || desc.quant_b.group_size != desc_.quant_b.group_size) {
         return false;
     }
 
-    // printf("F\n");
+    if constexpr (debug)
+        printf("F\n");
 
     if (desc.m % desc_.align.x || desc.n % desc_.align.y || desc.k % desc_.align.z) {
         return false;

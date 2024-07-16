@@ -2,7 +2,7 @@
 
 #include "nvbench/main.cuh"
 #include "src/turbomind/kernels/gemm/operand.h"
-#include "src/turbomind/kernels/gemm/testbed.h"
+#include "src/turbomind/kernels/gemm/test/testbed.h"
 #include <map>
 #include <nvbench/nvbench.cuh>
 #include <string>
@@ -19,8 +19,6 @@ std::vector<std::pair<int64_t, int64_t>> config{
 
 void gemm_bench(nvbench::state& state)
 {
-    // const auto& weights = config["llama2-7b"];
-
     const auto index = state.get_int64("index");
 
     const auto m      = state.get_int64("batch size");
@@ -54,7 +52,7 @@ void gemm_bench(nvbench::state& state)
 }
 
 NVBENCH_BENCH(gemm_bench)
-    .add_int64_power_of_two_axis("batch size", nvbench::range(8, 8))
+    .add_int64_power_of_two_axis("batch size", nvbench::range(7, 8))
     .add_int64_axis("index", nvbench::range(0, 27));
 
 int main(int argc, char* argv[])

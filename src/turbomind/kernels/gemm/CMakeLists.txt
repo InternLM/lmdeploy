@@ -14,36 +14,38 @@ FetchContent_MakeAvailable(repo-nvbench)
 add_library(gemm2
         gemm.cu
         kernel.cu
-        # transcript.cu
         dispatch_cache.cu
         cache_utils.cu
         gpu_metric.cu
         convert_v2.cu
-        # codegen/sm80_s16816gemm_f16_f16_nn.cu
-        codegen/sm80_s16816gemm_f16_f16_nn_pack.cu
-        codegen/sm75_s1688gemm_f16_f16.cu
-        codegen/sm70_s884gemm_f16_f16_f16_tn.cu
-        codegen/sm70_sgemm_f16_f16_f16_tn.cu
-
-        quantization.cu
+        # quantization.cu
         cast.cu
         unpack.cu
-        # tmp.cu
-        )
+        kernel/f16_u4g128_f16_tnt_sm80_s16816.cu
+        kernel/f16_u4g128_f16_tnt_sm75_s16816.cu
+        kernel/f16_u4g128_f16_tnt_sm70_s884.cu
+        kernel/f16_u4g128_f16_tnt_sm75_simt.cu
+)
 
-        # codegen/gemm_sm80_f16_u4_f16_asym_g128_basic.cu
-        # codegen/gemm_sm80_f16_u4_f16_asym_g128_extra.cu
-        # codegen/gemm_sm80_f16_f16_f16.cu
-        # codegen/sm80_s16816gemm_f16_f16.cu
-        # codegen/sm70_s884gemm_f16_f16.cu
-
-add_executable(gemm_bench gemm_bench.cu test_utils.cu cache_utils.cu reference.cu)
+add_executable(gemm_bench 
+        test/gemm_bench.cu 
+        test/test_utils.cu 
+        test/quantization.cu
+        cache_utils.cu 
+        test/reference.cu)
 target_link_libraries(gemm_bench PRIVATE gemm2 nvbench::nvbench cublas)
+
 
 target_compile_options(gemm2 PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info>)
 set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
-add_executable(gemm_test gemm_test.cu test_utils.cu cache_utils.cu reference.cu)
+
+add_executable(gemm_test 
+        test/gemm_test.cu 
+        test/test_utils.cu 
+        cache_utils.cu 
+        test/quantization.cu
+        test/reference.cu)
 target_link_libraries(gemm_test PRIVATE gemm2 cublas)
