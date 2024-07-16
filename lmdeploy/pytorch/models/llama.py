@@ -64,6 +64,22 @@ class LlamaAttention(nn.Module):
                                    world_size=world_size,
                                    prefix='o_proj')
 
+    def _update_model_fn(self):
+        """update model."""
+        from lmdeploy.pytorch.attention.layer import Attention
+        world_size = 1
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+        num_heads = self.num_heads // world_size
+        num_kv_heads = self.num_key_value_heads // world_size
+        head_size = self.head_dim
+        self.attn_fwd = Attention(
+            num_heads,
+            head_size,
+            num_kv_heads=num_kv_heads,
+            v_head_size=head_size,
+        )
+
     @classmethod
     def _distribute_output_fn(cls, outputs, **kwargs):
         """Distribution output hook."""
@@ -82,11 +98,6 @@ class LlamaAttention(nn.Module):
                Optional[Tuple[torch.Tensor]]]:
         """default rewrite."""
         context = self.context.context
-        kv_seq_length = context.kv_seq_length
-        q_seq_length = context.q_seq_length
-        q_start_loc = context.q_start_loc
-        block_offsets = context.block_offsets
-        max_q_seq_length = context.max_q_seq_length
         max_kv_seq_length = context.max_kv_seq_length
 
         num_heads = self.num_heads // world_size
@@ -174,29 +185,14 @@ class LlamaAttention(nn.Module):
         query_states, key_states, value_states = __rotary_emb_fn(
             query_states, key_states, value_states)
 
-        fill_kv_cache(
+        attn_output = self.attn_fwd(
+            query_states,
             key_states,
             value_states,
             past_key_value[0],
             past_key_value[1],
-            q_start_loc,
-            q_seq_length,
-            kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_q_seq_length,
-            block_offsets=block_offsets,
-        )
-
-        attn_output = query_states
-        paged_attention_fwd(
-            query_states,
-            past_key_value[0],
-            past_key_value[1],
-            attn_output,
-            block_offsets,
-            q_start_loc=q_start_loc,
-            q_seqlens=q_seq_length,
-            kv_seqlens=kv_seq_length,
-            max_seqlen=max_q_seq_length,
+            context.attn_meta,
+            inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1],
                                           hidden_size)
