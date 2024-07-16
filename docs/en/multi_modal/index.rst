@@ -2,7 +2,7 @@ Vision-Language Models
 =================================
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
    :caption: Examples
 
    llava.md
