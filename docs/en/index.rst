@@ -3,17 +3,48 @@ Welcome to LMDeploy's tutorials!
 
 .. _get_started:
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
    :caption: Get Started
 
+   installation.md
    get_started.md
 
-.. _build:
+.. _supported_models:
 .. toctree::
    :maxdepth: 1
-   :caption: Build
+   :caption: Models
 
-   build.md
+   supported_models/supported_models.md
+
+.. _llm_deployment:
+.. toctree::
+   :maxdepth: 1
+   :caption: Large Language Models(LLMs) Deployment
+
+   llm/introduction.md
+   llm/pipeline.md
+   llm/api_server.md
+   llm/function_call.md
+   llm/gradio.md
+
+.. _vlm_deployment:
+.. toctree::
+   :maxdepth: 1
+   :caption: Vision-Language Models(LLMs) Deployment
+
+   multi_modal/introduction.md
+   multi_modal/llava.md
+   multi_modal/internvl.md
+   multi_modal/minicpmv.md
+
+.. _quantization:
+.. toctree::
+   :maxdepth: 1
+   :caption: Quantization
+
+   quantization/w4a16.md
+   quantization/w8a8.md
+   quantization/kv_quant.md
 
 .. _benchmark:
 .. toctree::
@@ -25,41 +56,6 @@ Welcome to LMDeploy's tutorials!
    benchmark/profile_api_server.md
    benchmark/profile_triton_server.md
    benchmark/evaluate_with_opencompass.md
-
-.. _supported_models:
-.. toctree::
-   :maxdepth: 1
-   :caption: Supported Models
-
-   supported_models/supported_models.md
-
-.. _inference:
-.. toctree::
-   :maxdepth: 1
-   :caption: Inference
-
-   inference/pipeline.md
-   inference/vl_pipeline.md
-
-
-.. _serving:
-.. toctree::
-   :maxdepth: 1
-   :caption: serving
-
-   serving/api_server.md
-   serving/api_server_vl.md
-   serving/gradio.md
-   serving/proxy_server.md
-
-.. _quantization:
-.. toctree::
-   :maxdepth: 1
-   :caption: Quantization
-
-   quantization/w4a16.md
-   quantization/kv_quant.md
-   quantization/w8a8.md
 
 .. toctree::
    :maxdepth: 1

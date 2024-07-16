@@ -1,4 +1,4 @@
-# LLM Offline Inference Pipeline
+# Offline Inference Pipeline
 
 In this tutorial, We will present a list of examples to introduce the usage of `lmdeploy.pipeline`.
 

@@ -35,7 +35,7 @@ ______________________________________________________________________
 - \[2024/03\] Support DeepSeek-VL offline inference pipeline and serving.
 - \[2024/03\] Support VLM offline inference pipeline and serving.
 - \[2024/02\] Support Qwen 1.5, Gemma, Mistral, Mixtral, Deepseek-MOE and so on.
-- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](./docs/en/serving/api_server.md).
+- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](docs/en/llm/api_server.md).
 - \[2024/01\] Support for multi-model, multi-machine, multi-card inference services. For usage instructions, please refer to [here](./docs/en/serving/proxy_server.md)
 - \[2024/01\] Support [PyTorch inference engine](./docs/en/inference/pytorch.md), developed entirely in Python, helping to lower the barriers for developers and enable  rapid experimentation with new features and technologies.
 
@@ -180,7 +180,7 @@ print(response)
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
 
-For more information about inference pipeline, please refer to [here](./docs/en/inference/pipeline.md).
+For more information about inference pipeline, please refer to [here](docs/en/llms/pipeline.md).
 
 # Tutorials
 
@@ -189,9 +189,9 @@ Please overview [getting_started](./docs/en/get_started.md) section for the basi
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
 - User Guide
-  - [LLM Inference pipeline](./docs/en/inference/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
-  - [VLM Inference pipeline](./docs/en/inference/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
-  - [LLM Serving](docs/en/serving/api_server.md)
+  - [LLM Inference pipeline](docs/en/llms/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
+  - [VLM Inference pipeline](docs/en/multi_modal/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
+  - [LLM Serving](docs/en/llm/api_server.md)
   - [VLM Serving](docs/en/serving/api_server_vl.md)
   - [Quantization](docs/en/quantization)
 - Advance Guide

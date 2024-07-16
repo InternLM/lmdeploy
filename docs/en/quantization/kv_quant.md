@@ -1,4 +1,4 @@
-# Key-Value(KV) Cache Quantization
+# INT4/INT8 KV Cache
 
 Since v0.4.0, LMDeploy has supported **online** key-value (kv) cache quantization with int4 and int8 numerical precision, utilizing an asymmetric quantization method that is applied on a per-head, per-token basis. The original kv offline quantization method has been removed.
 

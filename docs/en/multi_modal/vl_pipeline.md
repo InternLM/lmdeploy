@@ -1,6 +1,6 @@
 # VLM Offline Inference Pipeline
 
-LMDeploy abstracts the complex inference process of multi-modal Vision-Language Models (VLM) into an easy-to-use pipeline, similar to the Large Language Model (LLM) inference [pipeline](./pipeline.md).
+LMDeploy abstracts the complex inference process of multi-modal Vision-Language Models (VLM) into an easy-to-use pipeline, similar to the Large Language Model (LLM) inference [pipeline](../llms/pipeline.md).
 
 Currently, it supports the following models.
 

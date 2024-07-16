@@ -27,7 +27,7 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-For more information on inference pipeline parameters, please refer to [here](./inference/pipeline.md).
+For more information on inference pipeline parameters, please refer to [here](llms/pipeline.md).
 
 ## Serving
 

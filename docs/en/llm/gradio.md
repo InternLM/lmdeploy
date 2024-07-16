@@ -1,4 +1,4 @@
-# Serving with Gradio
+# WebUI Demo
 
 Starting an LLM model's gradio service with LMDeploy and interacting with the model on the WebUI is incredibly simple.
 
