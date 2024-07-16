@@ -7,34 +7,41 @@
 #include <nvbench/nvbench.cuh>
 #include <string>
 
-std::map<std::string, std::vector<std::pair<int, int>>> config{
-    {"llama2-7b", {{2 * 11008, 4096}, {4096, 11008}, {12288, 4096}, {4096, 4096}}}};
+std::vector<std::pair<int64_t, int64_t>> config{
+    {11008 * 2, 4096}, {4096, 11008}, {12288, 4096}, {4096, 4096},  // llama2-7b
+    {14336 * 2, 4096}, {4096, 14336}, {6144, 4096},  {4096, 4096},  // llama3-8b / internlm2.5-7b
+    {16384 * 2, 6144}, {6144, 16384}, {8192, 6144},  {6144, 6144},  // internlm2-20b
+    {13696 * 2, 4096}, {4096, 13696}, {4608, 4096},  {4096, 4096},  // glm4-9b
+    {18944 * 2, 3584}, {3584, 18944}, {4608, 3584},  {3584, 3584},  // qwen2-7b
+    {28672 * 2, 8192}, {8192, 28672}, {10240, 8192}, {8192, 8192},  // llama2-70b / llama3-70b
+    {29568 * 2, 8192}, {8192, 29568}, {10240, 8192}, {8192, 8192},  // qwen2-72b
+};
 
 void gemm_bench(nvbench::state& state)
 {
-    const auto& weights = config["llama2-7b"];
+    // const auto& weights = config["llama2-7b"];
 
     const auto index = state.get_int64("index");
 
     const auto m      = state.get_int64("batch size");
-    const auto [n, k] = weights[index];
+    const auto [n, k] = config[index];
 
     // const auto n      = state.get_int64("batch size");
-    // const auto [m, k] = weights[index];
+    // const auto [m, k] = config[index];
 
     using turbomind::gemm::get_test;
 
     get_test().Initialize(m, n, k, 128, state.get_cuda_stream());
-    // g_testbed->Run();
 
     state.add_element_count((size_t)m * n * k * 2);  // mul + add
-    state.collect_dram_throughput();
-    state.collect_l2_hit_rates();
+
+    // state.collect_dram_throughput();
+    // state.collect_l2_hit_rates();
 
     if constexpr (1) {
         // state.add_global_memory_reads(m * k / 2 + sizeof(half) * n * k);
         state.add_global_memory_reads(m * k * 2 + n * k / 2);
-        state.exec([&](nvbench::launch&) {  //
+        state.exec(nvbench::exec_tag::sync, [&](nvbench::launch&) {  //
             get_test().Run();
         });
     }
@@ -47,15 +54,10 @@ void gemm_bench(nvbench::state& state)
 }
 
 NVBENCH_BENCH(gemm_bench)
-    .add_int64_power_of_two_axis("batch size", nvbench::range(0, 13))
-    .add_int64_axis("index", nvbench::range(0, 3));
+    .add_int64_power_of_two_axis("batch size", nvbench::range(8, 8))
+    .add_int64_axis("index", nvbench::range(0, 27));
 
 int main(int argc, char* argv[])
 {
-    // g_testbed = std::make_unique<turbomind::gemm::Testbed<half, turbomind::uint4_t>>(
-    //     turbomind::gemm::DispatchPolicy::kDefault, "cache");
-
     NVBENCH_MAIN_BODY(argc, argv);
-
-    // g_testbed.reset();
 }

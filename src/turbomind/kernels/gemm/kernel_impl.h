@@ -40,6 +40,8 @@ public:
 
         desc_.pack_a = OpA::kPack;
         desc_.pack_b = OpB::kPack;
+        desc_.pack_u = OpU::kPack;
+        desc_.pack_v = OpV::kPack;
 
         desc_.quant_a = QuantDesc{};
         desc_.quant_b = QuantDesc{};

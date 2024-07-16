@@ -17,6 +17,8 @@ struct GemmDesc {
     Order     order_c;
     Pack      pack_a;
     Pack      pack_b;
+    Pack      pack_u;
+    Pack      pack_v;
     QuantDesc quant_a;
     QuantDesc quant_b;
     Epilogue  epilogue;
@@ -57,6 +59,8 @@ struct KernelDesc {
     Order     order_c;
     Pack      pack_a;
     Pack      pack_b;
+    Pack      pack_u;
+    Pack      pack_v;
     QuantDesc quant_a;
     QuantDesc quant_b;
     int       policy_a;

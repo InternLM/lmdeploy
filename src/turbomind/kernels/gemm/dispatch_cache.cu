@@ -29,6 +29,8 @@ static inline decltype(auto) as_tuple(const KernelDesc& d)
                     d.order_c,
                     d.pack_a,
                     d.pack_b,
+                    d.pack_u,
+                    d.pack_v,
                     d.quant_a,
                     d.quant_b,
                     d.policy_a,
@@ -84,6 +86,8 @@ void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc,
                     g.order_c,
                     g.pack_a,
                     g.pack_b,
+                    g.pack_u,
+                    g.pack_v,
                     g.quant_a.type,
                     g.quant_a.group_size,
                     g.quant_b.type,
@@ -136,6 +140,8 @@ void ImportDispatchCache(std::istream&                                 is,
                     g.order_c,
                     g.pack_a,
                     g.pack_b,
+                    g.pack_u,
+                    g.pack_v,
                     g.quant_a.type,
                     g.quant_a.group_size,
                     g.quant_b.type,
@@ -150,6 +156,8 @@ void ImportDispatchCache(std::istream&                                 is,
         k.type_c  = g.type_c;
         k.pack_a  = g.pack_a;
         k.pack_b  = g.pack_b;
+        k.pack_u  = g.pack_u;
+        k.pack_v  = g.pack_v;
         k.order_a = g.order_a;
         k.order_b = g.order_b;
         k.order_c = g.order_c;

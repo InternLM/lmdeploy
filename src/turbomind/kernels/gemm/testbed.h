@@ -380,7 +380,7 @@ inline decltype(auto) get_test()
     }
     else if constexpr (0) {
         // sm80 / sm75
-        constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;
+        constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 2;
         constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
         constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
@@ -392,7 +392,7 @@ inline decltype(auto) get_test()
         constexpr Pack kPackA = 0;
         constexpr Pack kPackU = 0;
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
-        constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 2;
+        constexpr Pack kPackV = HMMA_16816 | OPERAND_U | 1;
         return gTestbed<
             gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, kPackA, kPackB, kPackU, kPackV>>();
     }
