@@ -264,7 +264,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
     return __inner
 
 
-# copy from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
+# modified from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
 def _get_and_verify_max_len(
     hf_tm_config: Union[PretrainedConfig,
                         TypeVar('TurbomindModelConfig')],
@@ -275,6 +275,11 @@ def _get_and_verify_max_len(
         # `hf_tm_config` is TurbomindModelConfig
         session_len = getattr(hf_tm_config, 'session_len')
         return max_model_len if max_model_len else session_len
+
+    # vl configs hide session-len inside llm configs
+    llm_keys = ['language_config', 'llm_config']
+    for key in llm_keys:
+        hf_tm_config = getattr(hf_tm_config, key, hf_tm_config)
 
     logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')
@@ -313,15 +318,6 @@ def _get_and_verify_max_len(
             f"{possible_keys}. Assuming the model's maximum length is "
             f'{default_max_len}.')
         derived_max_model_len = default_max_len
-
-    rope_scaling = getattr(hf_tm_config, 'rope_scaling', None)
-    if rope_scaling is not None and rope_scaling['type'] != 'su':
-        assert 'factor' in rope_scaling
-        scaling_factor = rope_scaling['factor']
-        if rope_scaling['type'] == 'yarn':
-            derived_max_model_len = rope_scaling[
-                'original_max_position_embeddings']
-        derived_max_model_len *= scaling_factor
 
     if max_model_len is None:
         max_model_len = int(derived_max_model_len)

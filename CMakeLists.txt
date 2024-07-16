@@ -348,7 +348,6 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:stop_criteria>
   $<TARGET_OBJECTS:tensor>
   $<TARGET_OBJECTS:unfused_attention_kernels>
-  $<TARGET_OBJECTS:word_list>
 )
 
 if (BUILD_MULTI_GPU)

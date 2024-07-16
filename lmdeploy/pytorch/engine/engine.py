@@ -28,6 +28,8 @@ logger = get_logger('lmdeploy')
 SeqList = List[SchedulerSequence]
 AdapterList = List[SchedulerAdapter]
 
+_EMPTY_TOKEN = np.empty((0, ), dtype=np.int64)
+
 
 def _raise_exception_on_finish(task: asyncio.Task) -> None:
     """raise exception on finish."""
@@ -427,7 +429,7 @@ class Engine:
         history_image_nums = None
         history_image_token_lengths = None
         # only for cogvlm
-        if self.model_config.model_arch == 'CogVLMForCausalLM':
+        if self.model_config.cogvlm_style:
             (history_image_nums,
              history_image_token_lengths) = __get_cogvlm_image_info()
 
@@ -497,7 +499,6 @@ class Engine:
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos)
         logits = logits_processor(history_ids, split_logits)
         next_token_ids = logits_processor.sampling(logits)
-        next_token_ids = next_token_ids
 
         return next_token_ids
 
@@ -506,13 +507,16 @@ class Engine:
                        stopped: torch.Tensor):
         """update scheduler."""
         next_token_ids = next_token_ids.numpy()
+        eos_token_id = self.model_config.eos_token_id
         for token, msg, stop in zip(next_token_ids, running, stopped):
             if msg.status != MessageStatus.RUNNING:
                 continue
-            msg.num_new_tokens += 1
             update_token = token
+            stop = stop or token in eos_token_id
             if stop:
-                update_token = np.empty((0, ), dtype=np.int64)
+                update_token = _EMPTY_TOKEN
+            else:
+                msg.num_new_tokens += 1
             msg.update_token_ids(update_token)
             if stop:
                 msg.status = MessageStatus.STOPPED

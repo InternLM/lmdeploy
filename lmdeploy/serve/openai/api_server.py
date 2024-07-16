@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import copy
+import json
 import os
 import time
 from http import HTTPStatus
@@ -25,11 +26,14 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     CompletionResponse, CompletionResponseChoice,
     CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
     EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-    GenerateRequest, GenerateRequestQos, GenerateResponse, LogProbs, ModelCard,
-    ModelList, ModelPermission, TopLogprob, UsageInfo)
+    FunctionResponse, GenerateRequest, GenerateRequestQos, GenerateResponse,
+    LogProbs, ModelCard, ModelList, ModelPermission, ToolCall, TopLogprob,
+    UsageInfo)
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 class VariableInterface:
@@ -389,6 +393,15 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
+    - tools (List): A list of tools the model may call. Currently, only
+        internlm2 functions are supported as a tool. Use this to specify a
+        list of functions for which the model can generate JSON inputs.
+    - tool_choice (str | object): Controls which (if any) tool is called by
+        the model. `none` means the model will not call any tool and instead
+        generates a message. Specifying a particular tool via {"type":
+        "function", "function": {"name": "my_function"}} forces the model to
+        call that tool. `auto` or `required` will put all the tools information
+        to the model.
 
     Additional arguments supported by LMDeploy:
     - top_k (int): The number of the highest probability vocabulary
@@ -403,11 +416,17 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    VariableInterface.session_id += 1
-    request.session_id = VariableInterface.session_id
+    if request.session_id == -1:
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    if VariableInterface.async_engine.id2step.get(str(request.session_id),
+                                                  0) != 0:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The session_id `{request.session_id}` is occupied.')
 
     model_name = request.model
     adapter_name = None
@@ -434,10 +453,25 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens)
 
+    tools = None
+    if request.tools and request.tool_choice != 'none':
+        gen_config.skip_special_tokens = False
+        if request.stream is True:
+            logger.warning('Set stream to False for tools')
+            request.stream = False
+        # internlm2 only uses contents inside function regardless of 'type'
+        if not isinstance(request.tool_choice, str):
+            tools = [
+                item.function.model_dump() for item in request.tools
+                if item.function.name == request.tool_choice.function.name
+            ]
+        else:
+            tools = [item.function.model_dump() for item in request.tools]
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
         gen_config=gen_config,
+        tools=tools,
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
@@ -506,6 +540,30 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         if res.logprobs:
             final_logprobs.extend(res.logprobs)
 
+    tool_calls = None
+    if request.tool_choice != 'none' and '<|plugin|>' in text:
+        if final_res.finish_reason == 'stop':
+            final_res.finish_reason = 'tool_calls'
+        # TODO may move to generate function
+        text, action = text.split('<|action_start|><|plugin|>')
+        action = action.split('<|action_end|>'.strip())[0]
+        action = action[action.find('{'):]
+        try:  # TODO add json_schema guidance to turbomind
+            action = json.loads(action)
+            action_id = [tool.function.name
+                         for tool in request.tools].index(action['name'])
+            tool_calls = [
+                ToolCall(id=str(action_id),
+                         function=FunctionResponse(name=action['name'],
+                                                   arguments=json.dumps(
+                                                       action['parameters'])))
+            ]
+        except Exception as e:
+            logger.error(f'Exception: {e}')
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                'Failed to parse fc related info to json format!')
+
     logprobs = None
     if gen_logprobs and len(final_logprobs):
         logprobs = _create_chat_completion_logprobs(
@@ -516,7 +574,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     choices = []
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        message=ChatMessage(role='assistant', content=text),
+        message=ChatMessage(role='assistant',
+                            content=text,
+                            tool_calls=tool_calls),
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
     )
@@ -600,6 +660,7 @@ async def completions_v1_qos(request: CompletionRequestQos,
         index: int,
         text: str,
         finish_reason: Optional[str] = None,
+        usage: Optional[UsageInfo] = None,
     ) -> str:
         choice_data = CompletionResponseStreamChoice(
             index=index,
@@ -611,6 +672,7 @@ async def completions_v1_qos(request: CompletionRequestQos,
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=usage,
         )
         response_json = response.model_dump_json()
 
@@ -620,9 +682,22 @@ async def completions_v1_qos(request: CompletionRequestQos,
         # First chunk with role
         for generator in generators:
             async for res in generator:
+                usage = None
+                if res.finish_reason is not None:
+                    final_res = res
+                    total_tokens = sum([
+                        final_res.history_token_len, final_res.input_token_len,
+                        final_res.generate_token_len
+                    ])
+                    usage = UsageInfo(
+                        prompt_tokens=final_res.input_token_len,
+                        completion_tokens=final_res.generate_token_len,
+                        total_tokens=total_tokens,
+                    )
                 response_json = create_stream_response_json(
                     index=0,
                     text=res.response,
+                    usage=usage,
                 )
                 yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
@@ -716,11 +791,17 @@ async def completions_v1(request: CompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    VariableInterface.session_id += 1
-    request.session_id = VariableInterface.session_id
+    if request.session_id == -1:
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    if VariableInterface.async_engine.id2step.get(str(request.session_id),
+                                                  0) != 0:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The session_id `{request.session_id}` is occupied.')
 
     model_name = request.model
     adapter_name = None
@@ -755,11 +836,11 @@ async def completions_v1(request: CompletionRequest,
             adapter_name=adapter_name)
         generators.append(result_generator)
 
-    def create_stream_response_json(
-            index: int,
-            text: str,
-            finish_reason: Optional[str] = None,
-            logprobs: Optional[LogProbs] = None) -> str:
+    def create_stream_response_json(index: int,
+                                    text: str,
+                                    finish_reason: Optional[str] = None,
+                                    logprobs: Optional[LogProbs] = None,
+                                    usage: Optional[UsageInfo] = None) -> str:
         choice_data = CompletionResponseStreamChoice(
             index=index,
             text=text,
@@ -770,6 +851,7 @@ async def completions_v1(request: CompletionRequest,
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=usage,
         )
         response_json = response.model_dump_json()
 
@@ -783,17 +865,30 @@ async def completions_v1(request: CompletionRequest,
             state = DetokenizeState()
             async for res in generator:
                 logprobs = None
+                usage = None
                 if request.logprobs and res.logprobs:
                     logprobs, offset, all_token_ids, state = _create_completion_logprobs(  # noqa E501
                         VariableInterface.async_engine.tokenizer,
                         res.token_ids, res.logprobs,
                         gen_config.skip_special_tokens, offset, all_token_ids,
                         state)
+                if res.finish_reason is not None:
+                    final_res = res
+                    total_tokens = sum([
+                        final_res.history_token_len, final_res.input_token_len,
+                        final_res.generate_token_len
+                    ])
+                    usage = UsageInfo(
+                        prompt_tokens=final_res.input_token_len,
+                        completion_tokens=final_res.generate_token_len,
+                        total_tokens=total_tokens,
+                    )
                 response_json = create_stream_response_json(
                     index=0,
                     text=res.response,
                     finish_reason=res.finish_reason,
-                    logprobs=logprobs)
+                    logprobs=logprobs,
+                    usage=usage)
                 yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -1171,7 +1266,6 @@ def serve(model_path: str,
     """ # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
-    logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
 
     if allow_origins:

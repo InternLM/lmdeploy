@@ -2,7 +2,7 @@
 
 Since v0.4.0, LMDeploy has supported **online** key-value (kv) cache quantization with int4 and int8 numerical precision, utilizing an asymmetric quantization method that is applied on a per-head, per-token basis. The original kv offline quantization method has been removed.
 
-Intuitively, quantizing the kv cache is beneficial for reducing memory usage. Compared to FP16, the memory for int4/int8 kv can be reduced to 1/4 and 1/2, respectively. This means that under the same memory conditions, the system can support a significantly increased number of concurrent operations after kv quantization, thereby ultimately enhancing throughput.
+Intuitively, quantization is beneficial for increasing the number of kv block. Compared to fp16, the number of kv block for int4/int8 kv can be increased by 4 times and 2 times respectively. This means that under the same memory conditions, the system can support a significantly increased number of concurrent operations after kv quantization, thereby ultimately enhancing throughput.
 
 However, quantization typically brings in some loss of model accuracy. We have used OpenCompass to evaluate the accuracy of several models after applying int4/int8 quantization. int8 kv keeps the accuracy while int4 kv has slight loss. The detailed results are presented in the [Evaluation](#Evaluation) section. You can refer to the information and choose wisely based on your requirements.
 
@@ -38,7 +38,7 @@ Applying kv quantization and inference via LMDeploy is quite straightforward. Si
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
 engine_config = TurbomindEngineConfig(quant_policy=8)
-pipe = pipeline("internlm/internlm2-chat-7b", backend_config=engine_config)
+pipe = pipeline("internlm/internlm2_5-7b-chat", backend_config=engine_config)
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
@@ -46,22 +46,22 @@ print(response)
 ### Serving
 
 ```shell
-lmdeploy serve api_server internlm/internlm2-chat-7b --quant-policy 8
+lmdeploy serve api_server internlm/internlm2_5-7b-chat --quant-policy 8
 ```
 
 ## Evaluation
 
 We apply kv quantization of LMDeploy to several LLM models and utilize OpenCompass to evaluate the inference accuracy. The results are shown in the table below:
 
-| -           | -       | -             | llama2-7b-chat | -       | -       | internlm2-chat-7b | -       | -       | qwen1.5-7b-chat | -       | -       |
-| ----------- | ------- | ------------- | -------------- | ------- | ------- | ----------------- | ------- | ------- | --------------- | ------- | ------- |
-| dataset     | version | metric        | kv fp16        | kv int8 | kv int4 | kv fp16           | kv int8 | kv int4 | fp16            | kv int8 | kv int4 |
-| ceval       | -       | naive_average | 28.42          | 27.96   | 27.58   | 60.45             | 60.88   | 60.28   | 70.56           | 70.49   | 68.62   |
-| mmlu        | -       | naive_average | 35.64          | 35.58   | 34.79   | 63.91             | 64      | 62.36   | 61.48           | 61.56   | 60.65   |
-| triviaqa    | 2121ce  | score         | 56.09          | 56.13   | 53.71   | 58.73             | 58.7    | 58.18   | 44.62           | 44.77   | 44.04   |
-| gsm8k       | 1d7fe4  | accuracy      | 28.2           | 28.05   | 27.37   | 70.13             | 69.75   | 66.87   | 54.97           | 56.41   | 54.74   |
-| race-middle | 9a54b6  | accuracy      | 41.57          | 41.78   | 41.23   | 88.93             | 88.93   | 88.93   | 87.33           | 87.26   | 86.28   |
-| race-high   | 9a54b6  | accuracy      | 39.65          | 39.77   | 40.77   | 85.33             | 85.31   | 84.62   | 82.53           | 82.59   | 82.02   |
+| -           | -       | -             | llama2-7b-chat | -       | -       | internlm2-chat-7b | -       | -       | internlm2.5-chat-7b | -       | -       | qwen1.5-7b-chat | -       | -       |
+| ----------- | ------- | ------------- | -------------- | ------- | ------- | ----------------- | ------- | ------- | ------------------- | ------- | ------- | --------------- | ------- | ------- |
+| dataset     | version | metric        | kv fp16        | kv int8 | kv int4 | kv fp16           | kv int8 | kv int4 | kv fp16             | kv int8 | kv int4 | fp16            | kv int8 | kv int4 |
+| ceval       | -       | naive_average | 28.42          | 27.96   | 27.58   | 60.45             | 60.88   | 60.28   | 78.06               | 77.87   | 77.05   | 70.56           | 70.49   | 68.62   |
+| mmlu        | -       | naive_average | 35.64          | 35.58   | 34.79   | 63.91             | 64      | 62.36   | 72.30               | 72.27   | 71.17   | 61.48           | 61.56   | 60.65   |
+| triviaqa    | 2121ce  | score         | 56.09          | 56.13   | 53.71   | 58.73             | 58.7    | 58.18   | 65.09               | 64.87   | 63.28   | 44.62           | 44.77   | 44.04   |
+| gsm8k       | 1d7fe4  | accuracy      | 28.2           | 28.05   | 27.37   | 70.13             | 69.75   | 66.87   | 85.67               | 85.44   | 83.78   | 54.97           | 56.41   | 54.74   |
+| race-middle | 9a54b6  | accuracy      | 41.57          | 41.78   | 41.23   | 88.93             | 88.93   | 88.93   | 92.76               | 92.83   | 92.55   | 87.33           | 87.26   | 86.28   |
+| race-high   | 9a54b6  | accuracy      | 39.65          | 39.77   | 40.77   | 85.33             | 85.31   | 84.62   | 90.51               | 90.42   | 90.42   | 82.53           | 82.59   | 82.02   |
 
 For detailed evaluation methods, please refer to [this](../benchmark/evaluate_with_opencompass.md) guide. Remember to pass `quant_policy` to the inference engine in the config file.
 

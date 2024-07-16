@@ -12,7 +12,8 @@ namespace turbomind {
 template<class Kernel>
 bool invokeDecoding(const typename Kernel::ParamType& params)
 {
-    static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
+    static const size_t kSmemSize =
+        std::max(sizeof(typename Kernel::SharedStorage), sizeof(typename Kernel::ReduceOp::SharedStorage));
 
     if constexpr (1) {
         [[maybe_unused]] static const int _ = [&] {
@@ -63,12 +64,6 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
     const int split_cnt = GetSplitCount(max_split_count, grid_size, caps.y, caps.x, 4);
 
     grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, split_cnt, cta_per_q_group);
-
-    auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
-    if (err) {
-        std::cout << cudaGetErrorString(err) << "\n";
-        std::abort();
-    }
 
     // Print(typename Kernel::Impl::ThreadMapKVp{});
 

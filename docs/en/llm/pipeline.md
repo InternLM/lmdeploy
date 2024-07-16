@@ -11,7 +11,7 @@ You can overview the detailed pipeline API in [this](https://lmdeploy.readthedoc
 ```python
 from lmdeploy import pipeline
 
-pipe = pipeline('internlm/internlm2-chat-7b')
+pipe = pipeline('internlm/internlm2_5-7b-chat')
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
@@ -30,7 +30,7 @@ There have been alterations to the strategy for setting the k/v cache ratio thro
    # decrease the ratio of the k/v cache occupation to 20%
    backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
 
-   pipe = pipeline('internlm/internlm2-chat-7b',
+   pipe = pipeline('internlm/internlm2_5-7b-chat',
                    backend_config=backend_config)
    response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
    print(response)
@@ -46,7 +46,7 @@ There have been alterations to the strategy for setting the k/v cache ratio thro
 from lmdeploy import pipeline, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
@@ -62,7 +62,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
@@ -79,7 +79,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -103,7 +103,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -121,7 +121,7 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
 ```python
 from transformers import AutoTokenizer
 from lmdeploy import pipeline
-model_repoid_or_path='internlm/internlm2-chat-7b'
+model_repoid_or_path='internlm/internlm2_5-7b-chat'
 pipe = pipeline(model_repoid_or_path)
 tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
 
@@ -150,7 +150,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2-chat-7b',
+pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',

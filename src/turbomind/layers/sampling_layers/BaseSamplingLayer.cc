@@ -180,7 +180,7 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     cudaAutoCpy(temperature_buf_, temperature_, batch_size, stream_);
     cudaAutoCpy(repetition_penalty_buf_, repetition_penalty_, batch_size, stream_);
     cudaAutoCpy(min_lengths_buf_, min_lengths_, batch_size, stream_);
-    cudaStreamSynchronize(stream_);
+    sync_check_cuda_error();
 }
 
 template<typename T>
@@ -259,6 +259,10 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
     const int ite              = input_tensors->at("ite").getVal<int>();
     const int max_input_length = input_tensors->at("max_input_length").getVal<int>();
     T*        logits           = input_tensors->at("logits").getPtr<T>();
+
+    if (skip_all_) {
+        return;
+    }
 
 #define ALL_OF(p_, sz_, dt_, v_) (std::all_of(p_, p_ + sz_, [&](dt_ b) { return b == v_; }))
 

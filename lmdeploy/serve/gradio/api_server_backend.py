@@ -77,7 +77,7 @@ def reset_restful_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
     return (
         state_chatbot,
         state_chatbot,
-        gr.Textbox.update(value=''),
+        instruction_txtbox,
     )
 
 
@@ -128,7 +128,8 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
 def run_api_server(api_server_url: str,
                    server_name: str = 'localhost',
                    server_port: int = 6006,
-                   batch_size: int = 32):
+                   batch_size: int = 32,
+                   share: bool = False):
     """chat with AI assistant through web ui.
 
     Args:
@@ -136,6 +137,7 @@ def run_api_server(api_server_url: str,
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
         batch_size (int): batch size for running Turbomind directly
+        share (bool): whether to create a publicly shareable link for the app
     """
     InterFace.api_server_url = api_server_url
     model_names = get_model_list(f'{api_server_url}/v1/models')
@@ -172,25 +174,23 @@ def run_api_server(api_server_url: str,
                                         step=0.01,
                                         label='Temperature')
 
-        send_event = instruction_txtbox.submit(chat_stream_restful, [
+        instruction_txtbox.submit(chat_stream_restful, [
             instruction_txtbox, state_chatbot, cancel_btn, reset_btn,
             state_session_id, top_p, temperature, request_output_len
         ], [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
-            lambda: gr.Textbox.update(value=''),
+            lambda: instruction_txtbox.postprocess(value=''),
             [],
             [instruction_txtbox],
         )
         cancel_btn.click(
             cancel_restful_func,
             [state_chatbot, cancel_btn, reset_btn, state_session_id],
-            [state_chatbot, cancel_btn, reset_btn],
-            cancels=[send_event])
+            [state_chatbot, cancel_btn, reset_btn])
 
         reset_btn.click(reset_restful_func,
                         [instruction_txtbox, state_chatbot, state_session_id],
-                        [state_chatbot, chatbot, instruction_txtbox],
-                        cancels=[send_event])
+                        [state_chatbot, chatbot, instruction_txtbox])
 
         def init():
             with InterFace.lock:
@@ -201,10 +201,11 @@ def run_api_server(api_server_url: str,
         demo.load(init, inputs=None, outputs=[state_session_id])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
-    demo.queue(concurrency_count=batch_size, max_size=100,
-               api_open=True).launch(
+    demo.queue(default_concurrency_limit=batch_size,
+               max_size=100,
+               api_open=False).launch(
                    max_threads=10,
-                   share=True,
+                   share=share,
                    server_port=server_port,
                    server_name=server_name,
                )

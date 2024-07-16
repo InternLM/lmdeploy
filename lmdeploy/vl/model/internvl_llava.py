@@ -6,10 +6,10 @@ from typing import List, Union
 
 import torch
 from PIL.Image import Image
-from transformers import AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import rewrite_ctx
 
 from .utils import disable_logging, disable_transformers_logging
@@ -64,19 +64,24 @@ def init_empty_vit():
         yield
 
 
+@VISION_MODELS.register_module()
 class InternVLLlavaVisionModel(VisonModel):
     """Llava visual model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
-        self.with_llm = with_llm
-        self.model_path = model_path
-        # check llava install
-        check_llava_install()
-        self.build_model()
+    @classmethod
+    def match(cls, config: AutoConfig):
+        """check whether the config match the model."""
+        arch = config.architectures[0]
+        if arch == 'LlavaLlamaForCausalLM':
+            mm_vision_tower = getattr(config, 'mm_vision_tower', '')
+            if 'OpenGVLab' in mm_vision_tower:
+                return True
+        return False
 
     def build_model(self):
         """build model & load weights."""
-
+        # check llava install
+        check_llava_install()
         # currently, only support llava llama
         from llava.model.language_model.llava_llama import (  # noqa
             LlavaConfig, LlavaLlamaForCausalLM)
@@ -122,6 +127,7 @@ class InternVLLlavaVisionModel(VisonModel):
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
+                max_memory=self.max_memory,
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['InternVisionEncoderLayer'],

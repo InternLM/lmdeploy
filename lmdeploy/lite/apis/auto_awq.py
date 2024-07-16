@@ -136,7 +136,7 @@ def auto_awq(model: str,
                   w_sym,
                   w_group_size,
                   device,
-                  skip_if_contains='Plora')  # TODO quant lora weight
+                  skip_if_contains='lora')  # TODO quant lora weight
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,

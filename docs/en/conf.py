@@ -14,11 +14,6 @@
 import os
 import sys
 
-import pytorch_sphinx_theme
-from m2r import MdInclude
-from recommonmark.transform import AutoStructify
-from sphinx.builders.html import StandaloneHTMLBuilder
-
 sys.path.insert(0, os.path.abspath('../..'))
 
 version_file = '../../lmdeploy/version.py'
@@ -49,17 +44,17 @@ release = __version__
 
 extensions = [
     'sphinx.ext.autodoc',
+    'sphinx.ext.autosummary',
     'sphinx.ext.napoleon',
     'sphinx.ext.viewcode',
     'sphinx.ext.autosectionlabel',
+    'sphinx.ext.intersphinx',
     'sphinx_tabs.tabs',
-    'sphinx_markdown_tables',
     'myst_parser',
     'sphinx_copybutton',
-    'sphinxcontrib.mermaid'
+    'sphinxcontrib.mermaid',
 ]  # yapf: disable
 
-autodoc_mock_imports = []
 
 autosectionlabel_prefix_document = True
 
@@ -98,20 +93,37 @@ pygments_style = 'sphinx'
 # a list of builtin themes.
 #
 # html_theme = 'sphinx_rtd_theme'
-html_theme = 'pytorch_sphinx_theme'
-html_theme_path = [pytorch_sphinx_theme.get_html_theme_path()]
-
+html_theme = 'sphinx_book_theme'
+html_logo = '_static/image/lmdeploy-logo.svg'
+html_title = project
+html_copy_source = True
+html_last_updated_fmt = ''
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
 # documentation.
 #
 html_theme_options = {
-    'logo_url': 'https://lmdeploy.readthedocs.io/en/latest/',
-    'menu': [{
-        'name': 'GitHub',
-        'url': 'https://github.com/InternLM/lmdeploy'
-    }],
-    'menu_lang': 'en'
+    'path_to_docs': 'docs/en',
+    'repository_url': 'https://github.com/InternLM/lmdeploy',
+    'repository_branch': 'main',
+    'show_navbar_depth': 3,
+    'max_navbar_depth': 4,
+    'collapse_navbar': True,
+    'use_edit_page_button': True,
+    'use_source_button': True,
+    'use_issues_button': True,
+    'use_repository_button': True,
+    'use_download_button': True,
+    'use_sidenotes': True,
+    'show_toc_level': 2,
+    # "icon_links": [
+    #     {
+    #         "name": "切换至简体中文",
+    #         "url": "https://lmdeploy.readthedocs.io/en/latest",
+    #         "icon": "https://img.shields.io/badge/Doc-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-blue", # noqa: #501
+    #         "type": "url",
+    #     },
+    # ],
 }
 
 # Add any paths that contain custom static files (such as style sheets) here,
@@ -121,8 +133,19 @@ html_static_path = ['_static']
 html_css_files = ['css/readthedocs.css']
 
 # Enable ::: for my_st
-myst_enable_extensions = ['colon_fence']
-myst_heading_anchors = 3
+myst_enable_extensions = [
+    'dollarmath',
+    'amsmath',
+    'deflist',
+    # "html_admonition",
+    # "html_image",
+    'colon_fence',
+    # "smartquotes",
+    # "replacements",
+    # "linkify",
+    # "substitution",
+]
+myst_heading_anchors = 5
 
 # Custom sidebar templates, must be a dictionary that maps document names
 # to template names.
@@ -200,25 +223,30 @@ epub_title = project
 # A list of files that should not be packed into the epub file.
 epub_exclude_files = ['search.html']
 
-# set priority when building html
-StandaloneHTMLBuilder.supported_image_types = [
-    'image/svg+xml', 'image/gif', 'image/png', 'image/jpeg'
-]
-
 # -- Extension configuration -------------------------------------------------
 # Ignore >>> when copying code
 copybutton_prompt_text = r'>>> |\.\.\. '
 copybutton_prompt_is_regexp = True
 
+autodoc_preserve_defaults = True
+navigation_with_keys = False
 
-def setup(app):
-    app.add_config_value('no_underscore_emphasis', False, 'env')
-    app.add_config_value('m2r_parse_relative_links', False, 'env')
-    app.add_config_value('m2r_anonymous_references', False, 'env')
-    app.add_config_value('m2r_disable_inline_math', False, 'env')
-    app.add_directive('mdinclude', MdInclude)
-    app.add_config_value('recommonmark_config', {
-        'auto_toc_tree_section': 'Contents',
-        'enable_eval_rst': True,
-    }, True)
-    app.add_transform(AutoStructify)
+# Mock out external dependencies here,
+# otherwise the autodoc pages may be blank.
+autodoc_mock_imports = [
+    'torch',
+    'torchvision',
+    'transformers',
+    '_turbomind',
+    'triton',
+]
+
+intersphinx_mapping = {
+    'python': ('https://docs.python.org/3.10', None),
+    'typing_extensions':
+    ('https://typing-extensions.readthedocs.io/en/latest', None),
+    'pillow': ('https://pillow.readthedocs.io/en/stable', None),
+    'numpy': ('https://numpy.org/doc/stable', None),
+    'torch': ('https://pytorch.org/docs/stable', None),
+    'torchvision': ('https://pytorch.org/vision/stable', None),
+}
