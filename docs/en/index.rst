@@ -59,20 +59,19 @@ Documentation
    llm/introduction.md
    llm/pipeline.md
    llm/api_server.md
-   llm/function_call.md
+   llm/api_server_tools.md
    llm/gradio.md
+   llm/proxy_server.md
 
-.. _serving:
 .. _vlm_deployment:
 .. toctree::
    :maxdepth: 1
-   :caption: Serving
-   :caption: Vision-Language Models(LLMs) Deployment
+   :caption: Vision-Language Models(VLMs) Deployment
 
    multi_modal/introduction.md
-   multi_modal/llava.md
-   multi_modal/internvl.md
-   multi_modal/minicpmv.md
+   multi_modal/vl_pipeline.md
+   multi_modal/api_server_vl.md
+   multi_modal/index.rst
 
 .. _quantization:
 .. toctree::
@@ -104,7 +103,6 @@ Documentation
    advance/long_context.md
    advance/chat_template.md
    advance/debug_turbomind.md
-   serving/qos.md
 
 .. toctree::
    :maxdepth: 1
