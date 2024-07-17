@@ -158,7 +158,6 @@ quatization_case_config:
         - baichuan-inc/Baichuan2-7B-Chat
         - codellama/CodeLlama-7b-hf
         - openbmb/MiniCPM-Llama3-V-2_5
-        - THUDM/glm-4-9b-chat
     kvint:
         - meta-llama/Meta-Llama-3-8B-Instruct
         - meta-llama/Llama-2-7b-chat-hf
