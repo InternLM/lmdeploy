@@ -218,15 +218,15 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
             with open(output_csv, 'w') as f:
                 header = ','.join(['Model', 'Engine', 'Precision'] +
                                   dataset_names)
-                f.write(row + '\n')
                 f.write(header + '\n')
                 if hf_res_row:
                     f.write(hf_res_row + '\n')
+                f.write(row + '\n')
         else:
             with open(output_csv, 'a') as f:
-                f.write(row + '\n')
                 if hf_res_row:
                     f.write(hf_res_row + '\n')
+                f.write(row + '\n')
 
     # write to github action summary
     _append_summary('## Evaluation Results')
