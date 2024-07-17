@@ -58,7 +58,6 @@ LMDeploy 工具箱提供以下核心功能：
    benchmark/profile_generation.md
    benchmark/profile_throughput.md
    benchmark/profile_api_server.md
-   benchmark/profile_triton_server.md
    benchmark/evaluate_with_opencompass.md
 
 .. _支持的模型:
