@@ -2,7 +2,6 @@
 import os
 import os.path as osp
 import shutil
-from pathlib import Path
 
 import fire
 import torch
@@ -17,12 +16,6 @@ from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 
 SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', None]
-
-
-def get_package_root_path():
-    """Get lmdeploy root path."""
-    import lmdeploy
-    return Path(lmdeploy.__file__).parent
 
 
 def get_input_model_registered_name(model_path: str, model_format: str):
@@ -51,30 +44,41 @@ def create_workspace(_path: str):
         print(f'remove workspace in directory {_path}')
         shutil.rmtree(_path)
     print(f'create workspace in directory {_path}')
-    os.makedirs(_path)
+    weight_path = osp.join(_path, 'triton_models', 'weights')
+    tokenizer_path = osp.join(_path, 'triton_models', 'tokenizer')
+    os.makedirs(weight_path)
+    os.makedirs(tokenizer_path)
+    return weight_path, tokenizer_path
 
 
-def copy_triton_model_templates(_path: str):
-    """copy triton model templates to the specified path.
+def copy_tokenizer(model_path: str, tokenizer_path: str,
+                   tm_tokenizer_path: str, trust_remote_code: bool):
+    """Copy tokenizer."""
 
-    Args:
-        _path (str): the target path
-    Returns:
-        str: the path of the triton models
-    """
+    if tokenizer_path is not None:
+        assert osp.exists(tokenizer_path), f'{tokenizer_path} does not exists.'
 
-    root = get_package_root_path()
-    dir_path = osp.join(root, 'serve', 'turbomind')
-    triton_models_path = osp.join(dir_path, 'triton_models')
-    dst_path = osp.join(_path, 'triton_models')
-    print(f'copy triton model templates from "{triton_models_path}" to '
-          f'"{dst_path}"')
-    shutil.copytree(triton_models_path, dst_path, symlinks=True)
-    service_docker_up_file = osp.join(dir_path, 'service_docker_up.sh')
-    print(f'copy service_docker_up.sh from "{service_docker_up_file}" to '
-          f'"{_path}"')
-    shutil.copy(osp.join(dir_path, 'service_docker_up.sh'), _path)
-    return dst_path
+        shutil.copy(tokenizer_path,
+                    osp.join(tm_tokenizer_path, osp.basename(tokenizer_path)))
+    else:
+        from transformers import AutoTokenizer
+        try:
+            _ = AutoTokenizer.from_pretrained(
+                model_path, trust_remote_code=trust_remote_code)
+        except Exception as e:
+            assert 0, f'{e}'
+
+    # move tokenizer model to the target path
+    candidate = ['tokenizer.model', 'qwen.tiktoken', 'merges.txt']
+    for name in candidate:
+        tmp_path = osp.join(model_path, name)
+        if osp.exists(tmp_path):
+            shutil.copy(tmp_path, osp.join(tm_tokenizer_path, name))
+    # copy py/json files that are related to tokenizer to the target path
+    for _file in os.listdir(model_path):
+        if _file.endswith('.json') or _file.endswith('.py'):
+            json_path = osp.join(model_path, _file)
+            shutil.copy(json_path, osp.join(tm_tokenizer_path, _file))
 
 
 def get_output_model_registered_name_and_config(model_path: str,
@@ -166,6 +170,7 @@ def main(model_name: str,
          tp: int = 1,
          quant_path: str = None,
          group_size: int = 0,
+         trust_remote_code: bool = False,
          revision: str = None,
          download_dir: str = None,
          **kwargs):
@@ -237,17 +242,17 @@ def main(model_name: str,
     cfg.model_name = model_name
     cfg.tensor_para_size = tp
 
-    create_workspace(dst_path)
+    tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
 
-    weight_path = osp.join(dst_path, 'triton_models', 'weights')
-    os.makedirs(weight_path)
+    copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path,
+                   trust_remote_code)
 
     input_model = INPUT_MODELS.get(input_model_name)(
         model_path=model_path,
         tokenizer_path=tokenizer_path,
         ckpt_path=quant_path)
     output_model = OUTPUT_MODELS.get(output_model_name)(
-        input_model=input_model, cfg=cfg, to_file=True, out_dir=weight_path)
+        input_model=input_model, cfg=cfg, to_file=True, out_dir=tm_weight_path)
     print(f'turbomind model config: {output_model.cfg}')
 
     output_model.export()
