@@ -21,7 +21,7 @@ void gemm_bench(nvbench::state& state)
 {
     const auto index = state.get_int64("index");
 
-    const auto m      = state.get_int64("batch size");
+    const auto m      = state.get_int64("bs");
     const auto [n, k] = config[index];
 
     // const auto n      = state.get_int64("batch size");
@@ -52,8 +52,8 @@ void gemm_bench(nvbench::state& state)
 }
 
 NVBENCH_BENCH(gemm_bench)
-    .add_int64_power_of_two_axis("batch size", nvbench::range(7, 8))
-    .add_int64_axis("index", nvbench::range(0, 27));
+    .add_int64_axis("index", nvbench::range(0, 27))
+    .add_int64_power_of_two_axis("bs", nvbench::range(0, 10));
 
 int main(int argc, char* argv[])
 {

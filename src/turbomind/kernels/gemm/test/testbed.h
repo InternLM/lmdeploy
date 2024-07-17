@@ -12,6 +12,7 @@
 #include "src/turbomind/kernels/gemm/utils.h"
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <thrust/universal_vector.h>
 #include <type_traits>
 
@@ -46,7 +47,7 @@ public:
     Testbed(DispatchPolicy dispatch_policy, std::string cache_path):
         dispatch_policy_{dispatch_policy}, cache_path_{cache_path}
     {
-        if (dispatch_policy == DispatchPolicy::kUseCached) {
+        if (dispatch_policy & DispatchPolicy::kReuse) {
             std::ifstream ifs(cache_path);
             if (ifs.is_open()) {
                 gemm_.Import(ifs);
@@ -59,7 +60,7 @@ public:
 
     ~Testbed()
     {
-        if (dispatch_policy_ == DispatchPolicy::kMeasure) {
+        if (dispatch_policy_ & DispatchPolicy::kMeasure) {
             std::ofstream ofs(cache_path_);
             if (ofs.is_open()) {
                 gemm_.Export(ofs);
@@ -354,11 +355,17 @@ T& gTestbed()
         using namespace turbomind::gemm;
         if (str) {
             using namespace std::string_view_literals;
-            if (str == "MEASURE"sv) {
+            if (str == "measure"sv) {
                 policy = DispatchPolicy::kMeasure;
             }
-            else if (str == "USE_CACHED"sv) {
-                policy = DispatchPolicy::kUseCached;
+            else if (str == "reuse"sv) {
+                policy = DispatchPolicy::kReuse;
+            }
+            else if (str == "append"sv) {
+                policy = DispatchPolicy::kAppend;
+            }
+            else {
+                std::cerr << "unrecognized policy: " << std::quoted(str) << ", default policy will be used.\n";
             }
         }
         return policy;

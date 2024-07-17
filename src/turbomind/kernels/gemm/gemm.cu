@@ -70,7 +70,7 @@ struct Gemm::Impl {
     // find launch spec in dispatch cache, dispatch by heuristic on cache miss
     LaunchSpec Dispatch(DispatchPolicy policy, GemmDesc desc, size_t barriers_size, size_t partials_size)
     {
-        if (policy == DispatchPolicy::kUseCached) {
+        if (policy & DispatchPolicy::kMeasure) {
             auto it = dispatch_cache_.lower_bound(desc);
             if (is_compatible(it->first, desc) && it->second.kernel->is_feasible(desc)) {
                 return it->second;
@@ -134,13 +134,14 @@ struct Gemm::Impl {
         std::vector<std::pair<float, int>> costs;
 
         for (const auto& k : kernels) {
-            // std::cout << "\n" << k->name() << "\n";
-            int max_split_k = k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
+            std::cout << "\n" << k->name() << "\n";
+            int max_splits = k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
             // std::cout << "max_split_k: " << max_split_k << "\n";
+            max_splits          = std::min(max_splits, 4);
             auto [splits, cost] = k->Estimate(desc.m,  //
                                               desc.n,
                                               desc.k,
-                                              max_split_k,
+                                              max_splits,
                                               props_->multiProcessorCount,
                                               8,
                                               1,
@@ -206,7 +207,7 @@ struct Gemm::Impl {
                                       l2_bytes_per_second_,
                                       fma_per_second_);
             for (const auto& [split_k, cost] : splits) {
-                for (const auto& swizzle : {0, 1, 2, 3, 4, 5, 6}) {
+                for (const auto& swizzle : {0, 1, 2, 3}) {
                     specs.push_back(LaunchSpec{k, swizzle, split_k, cost});
                 }
             }
@@ -309,6 +310,7 @@ struct Gemm::Impl {
             entries.push_back(entry);
         }
         ExportDispatchCache(os, entries);
+        Summary(entries);
         return dispatch_cache_.size();
     }
 
@@ -319,7 +321,6 @@ struct Gemm::Impl {
         for (const auto& entry : entries) {
             dispatch_cache_.insert(entry);
         }
-        Summary(entries);
         return dispatch_cache_.size();
     }
 
@@ -445,7 +446,7 @@ int Gemm::Run(const Operation&    operation,
 
     LaunchSpec spec{};
 
-    if (operation.dispatch == DispatchPolicy::kMeasure) {
+    if (operation.dispatch & DispatchPolicy::kMeasure) {
         impl_->Measure(desc, workspace.barriers_size, workspace.partials_size, 1, launch, stream);
     }
 

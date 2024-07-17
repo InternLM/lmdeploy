@@ -160,9 +160,15 @@ struct QuantDesc {
 
 enum class DispatchPolicy : int {
     kDefault = 0,
-    kMeasure,
-    kUseCached,
+    kMeasure = 1,
+    kReuse   = 2,
+    kAppend  = 3,
 };
+
+constexpr bool operator&(const DispatchPolicy& a, const DispatchPolicy& b)
+{
+    return ((int)a & (int)b);
+}
 
 struct Operation {
     DispatchPolicy dispatch;

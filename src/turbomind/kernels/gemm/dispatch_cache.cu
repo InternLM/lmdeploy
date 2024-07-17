@@ -117,7 +117,7 @@ void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc,
                     k.c_tile.y,
                     k.split_k);
         // Runtime params
-        export_impl(os, spec.splits, spec.swizzle);
+        export_impl(os, spec.swizzle, spec.splits);
         os << std::endl;
     }
 }
@@ -182,7 +182,7 @@ void ImportDispatchCache(std::istream&                                 is,
                     k.c_tile.y,
                     k.split_k);
         LaunchSpec spec{};
-        import_impl(ss, spec.splits, spec.swizzle);
+        import_impl(ss, spec.swizzle, spec.splits);
         for (const auto& p : kernels) {
             if (p->desc() == k) {
                 spec.kernel = p.get();

@@ -14,6 +14,7 @@ FetchContent_MakeAvailable(repo-nvbench)
 add_library(gemm2
         gemm.cu
         kernel.cu
+        registry.cu
         dispatch_cache.cu
         cache_utils.cu
         gpu_metric.cu
