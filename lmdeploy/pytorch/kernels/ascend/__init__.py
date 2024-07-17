@@ -164,12 +164,7 @@ def flash_context_attention(
 
 def paged_token_attention(q, k_cache, v_cache, attn_output, kv_seq_len,
                           block_offsets, block_size):
-    num_kv_heads = k_cache.shape[1]
-    bs, num_q_heads, dim = q.shape
-    kv_cache_len = k_cache.shape[0]
-    q = q.reshape(bs, 1, num_q_heads * dim)
-    k_cache = k_cache.reshape(1, kv_cache_len, num_kv_heads * dim)
-    v_cache = v_cache.reshape(1, kv_cache_len, num_kv_heads * dim)
+    num_kv_heads, num_q_heads = k_cache.shape[1], q.shape[1]
     ext_ops.paged_decode_attention(
         attn_output.view(q.shape),
         q,
