@@ -55,6 +55,8 @@ public:
                                                 float bytes_per_second,
                                                 float fma_per_second);
 
+    virtual int GetSwizzle(int m, int n, int k, int splits, int swizzle) = 0;
+
     const KernelDesc& desc() const noexcept
     {
         return desc_;

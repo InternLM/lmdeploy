@@ -3,8 +3,8 @@
 #include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
-// #include "src/turbomind/kernels/gemm/config/sm70_mma_884.h"
-// #include "src/turbomind/kernels/gemm/config/sm70_mma_simt.h"
+#include "src/turbomind/kernels/gemm/arch/operand_simt.h"
+#include "src/turbomind/kernels/gemm/arch/operand_sm70_s884.h"
 #include "src/turbomind/kernels/gemm/arch/operand_sm80_s16816.h"
 #include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/format.h"
@@ -226,13 +226,13 @@ std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(int sm, bool f
         return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
     }
     else if (sm == 75) {
-        return {kRowMajor, HMMA_16816 | OPERAND_B | 1, kRowMajor, HMMA_16816 | OPERAND_V | 1};
+        return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
     }
     else if (sm == 70) {
         return {kColMajor, HMMA_884 | OPERAND_B | 2, kRowMajor, HMMA_884 | OPERAND_V | 2};
     }
     else {
-        std::cerr << "not implemented" << std::endl;
+        std::cerr << "not implemented: sm_" << sm << std::endl;
         std::abort();
     }
     return {};

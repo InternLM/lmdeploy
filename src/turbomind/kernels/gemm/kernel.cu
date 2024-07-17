@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/kernels/gemm/kernel.h"
+#include "src/turbomind/kernels/gemm/types.h"
 #include <algorithm>
 #include <iostream>
 #include <numeric>
@@ -173,8 +174,12 @@ std::string Kernel::GetName() const
     if ((int)desc_.quant_b.type) {
         ss << "g" << desc_.quant_b.group_size;
     }
-    ss << "_" << to_string(desc_.type_c)                                                 //
-       << "_" << desc_.cta_tile.x << "x" << desc_.cta_tile.y << "x" << desc_.cta_tile.z  //
+    ss << "_" << to_string(desc_.type_c);
+    ss << "_"                                                                            //
+       << (desc_.order_a == kColMajor ? 'n' : 't')                                       //
+       << (desc_.order_b == kColMajor ? 'n' : 't')                                       //
+       << (desc_.order_c == kColMajor ? 'n' : 't');                                      //
+    ss << "_" << desc_.cta_tile.x << "x" << desc_.cta_tile.y << "x" << desc_.cta_tile.z  //
        << "_" << desc_.stages                                                            //
        << "_" << to_string(desc_.op_class)                                               //
        << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z  //

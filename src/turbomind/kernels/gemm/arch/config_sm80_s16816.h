@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/gemm/arch.h"
+#include "src/turbomind/kernels/gemm/arch/mma_sm80.h"
 #include "src/turbomind/kernels/gemm/arch/operand_sm80_s16816.h"
 #include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/epilogue.h"

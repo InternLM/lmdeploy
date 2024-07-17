@@ -101,7 +101,6 @@ struct Gemm::Impl {
         std::vector<Kernel*> kernels;
 
         for (const auto& k : registry_.kernels()) {
-            std::cout << k->name() << "\n";
             if (k->is_feasible(desc)) {
                 kernels.push_back(k.get());
             }
@@ -208,6 +207,10 @@ struct Gemm::Impl {
                                       fma_per_second_);
             for (const auto& [split_k, cost] : splits) {
                 for (const auto& swizzle : {0, 1, 2, 3}) {
+                    if (auto s = k->GetSwizzle(desc.m, desc.n, desc.k, split_k, swizzle); s != swizzle) {
+                        // Skip when swizzle is starting to get truncated
+                        break;
+                    }
                     specs.push_back(LaunchSpec{k, swizzle, split_k, cost});
                 }
             }

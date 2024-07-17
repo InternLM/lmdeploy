@@ -153,9 +153,6 @@ struct GmemIteratorSm70 {
             src_data_ += src_step_s_;
             if (s == Map::kIterS - 1) {
                 src_data_ -= src_step_s_ * Map::kIterS;
-                // if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
-                //     printf("_src_step_k = %d\n", (int)_src_step_k());
-                // }
                 src_data_ += _src_step_k();
             }
         }

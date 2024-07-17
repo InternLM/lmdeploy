@@ -24,7 +24,7 @@ struct GetSmemLayout {
 };
 
 template<class T, int K>
-struct OperandA {
+struct Operand_A {
     using Dtype = T;
 
     static constexpr Pack  kPack  = 0;
@@ -37,7 +37,7 @@ struct OperandA {
 };
 
 template<class T, int K>
-struct OperandB {
+struct Operand_B {
     using Dtype = T;
 
     static constexpr Pack  kPack  = 0;
@@ -113,7 +113,7 @@ struct Operand_B_Pack {
     static constexpr Pack  kPack  = HMMA_SIMT | OPERAND_B | Pack_M;
     static constexpr Order kOrder = kRowMajor;
 
-    using SmemCopyAtom  = SmemCopyAtom_Pack_v3<T, typename OperandB<T, K>::SmemCopyAtom, kRowMajor, Pack_M>;
+    using SmemCopyAtom  = SmemCopyAtom_Pack_v3<T, typename Operand_B<T, K>::SmemCopyAtom, kRowMajor, Pack_M>;
     using GetSmemLayout = GetSmemLayout_Pack;
     using GetGmemIter   = GetGmemIter;
 };
@@ -144,12 +144,12 @@ struct Operand_V_Pack {
 
 template<class T>
 struct GetOperand<HMMA_SIMT, OPERAND_A, T, kRowMajor, false>: std::true_type {
-    using Operand = simt::OperandA<T, simt::OP_K>;
+    using Operand = simt::Operand_A<T, simt::OP_K>;
 };
 
 template<class T>
 struct GetOperand<HMMA_SIMT, OPERAND_B, T, kRowMajor, false>: std::true_type {
-    using Operand = simt::OperandB<T, simt::OP_K>;
+    using Operand = simt::Operand_B<T, simt::OP_K>;
 };
 
 template<class T>

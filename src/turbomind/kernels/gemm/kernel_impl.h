@@ -130,9 +130,9 @@ public:
             return -1;
         }
 
-        const auto log_tile = Map::get_log_tile(tiles, 1 << swizzle);
+        swizzle = Map::get_log_tile(tiles, 1 << swizzle);
 
-        const auto grid  = Map::get_grid_shape(tiles, log_tile);
+        const auto grid  = Map::get_grid_shape(tiles, swizzle);
         const auto block = Gemm::Impl::WARPS * WARP_SIZE;
 
         using Ta = typename Gemm::Ta;
@@ -206,7 +206,7 @@ public:
                                    ldb,
                                    (Tv*)V,
                                    Vdesc.ld,
-                                   log_tile,
+                                   swizzle,
                                    tiles,
                                    epilogue};
 
@@ -257,6 +257,13 @@ public:
         GetWorkspaceSizes(m, n, tiled_m, tiled_n, 1, barriers_per_split, partials_per_split);
 
         return std::max(1, std::min<int>(barrier_size / barriers_per_split, partials_size / partials_per_split));
+    }
+
+    int GetSwizzle(int m, int n, int k, int splits, int swizzle) override
+    {
+        using Map        = typename Gemm::CtaMap;
+        const auto tiles = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, splits);
+        return Map::get_log_tile(tiles, 1 << swizzle);
     }
 };
 
