@@ -1,4 +1,7 @@
 import pytest
+import infer_ext
+from lmdeploy.pytorch.devices.device_manager import DeviceContext, get_device_manager
+get_device_manager().set_context(DeviceContext(device_type='ascend'))
 import torch
 
 
