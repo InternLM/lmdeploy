@@ -11,10 +11,10 @@ def get_attn_backend():
     device_type = device_ctx.device_type
 
     if device_type == 'cuda':
-        from .triton import TritonAttentionBackend
+        from .backends.triton import TritonAttentionBackend
         return TritonAttentionBackend
     if device_type == 'ascend':
-        from .ascend import AscendAttentionBackend
+        from .backends.ascend import AscendAttentionBackend
         return AscendAttentionBackend
     else:
         logger = get_logger('lmdeploy')

@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 
-from .base import AttentionMetadata
+from .backends.base import AttentionMetadata
 
 
 class Attention(nn.Module):
