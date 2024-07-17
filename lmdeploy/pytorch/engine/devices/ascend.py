@@ -28,7 +28,7 @@ class ASCENDDeviceUtils(DIPUDeviceUtils):
             block_loc = step_context.block_offsets[i][block_idx]
             token_loc = history_length % block_size
             for _ in range(step_context.q_seq_length[i]):
-                kv_start_indices.append(block_loc * block_size + token_loc)
+                kv_start_indices.append([block_loc * block_size + token_loc])
                 if _ == step_context.q_seq_length[i] - 1:
                     break
                 token_loc = (token_loc + 1) % block_size

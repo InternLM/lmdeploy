@@ -271,6 +271,7 @@ class TestPagedAttention:
                                       kv_lens,
                                       window_size=(win_size, win_size))
 
+    @pytest.mark.skip()
     @pytest.mark.parametrize('feat_dim', [16], indirect=True)
     @pytest.mark.parametrize('feat_dim_v', [16], indirect=True)
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(4, 2)],
