@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 # Adapted from https://github.com/thewh1teagle/vibe/blob/5d7b75568ca65ab635bdf0ce912bbc975a043066/scripts/setup_cuda.ps1
 
 $CUDA_VERSION_FULL = $env:INPUT_CUDA_VERSION # v12.1.0 or v11.8.0
@@ -74,7 +75,7 @@ foreach ($dir in $directories) {
 
 # Add msbuild cuda extensions
 $msBuildExtensions = (Get-ChildItem  "$src\visual_studio_integration\CUDAVisualStudioIntegration\extras\visual_studio_integration\MSBuildExtensions").fullname
-(Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022\*\MSBuild\Microsoft\VC\*\BuildCustomizations').FullName | ForEach-Object { 
+(Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022\*\MSBuild\Microsoft\VC\*\BuildCustomizations').FullName | ForEach-Object {
     $destination = $_
     $msBuildExtensions | ForEach-Object {
         $extension = $_
