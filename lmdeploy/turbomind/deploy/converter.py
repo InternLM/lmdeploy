@@ -52,7 +52,7 @@ def create_workspace(_path: str):
 
 
 def copy_tokenizer(model_path: str, tokenizer_path: str,
-                   tm_tokenizer_path: str, trust_remote_code: bool):
+                   tm_tokenizer_path: str):
     """Copy tokenizer."""
 
     if tokenizer_path is not None:
@@ -63,8 +63,8 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
     else:
         from transformers import AutoTokenizer
         try:
-            _ = AutoTokenizer.from_pretrained(
-                model_path, trust_remote_code=trust_remote_code)
+            _ = AutoTokenizer.from_pretrained(model_path,
+                                              trust_remote_code=True)
         except Exception as e:
             assert 0, f'{e}'
 
@@ -170,7 +170,6 @@ def main(model_name: str,
          tp: int = 1,
          quant_path: str = None,
          group_size: int = 0,
-         trust_remote_code: bool = False,
          revision: str = None,
          download_dir: str = None,
          **kwargs):
@@ -244,8 +243,7 @@ def main(model_name: str,
 
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
 
-    copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path,
-                   trust_remote_code)
+    copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
 
     input_model = INPUT_MODELS.get(input_model_name)(
         model_path=model_path,
