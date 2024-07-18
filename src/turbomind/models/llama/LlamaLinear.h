@@ -113,14 +113,6 @@ private:
 
     void forwardInt4(T* output_data, Pitched input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
     {
-        // GemmS4F16::Type gemm_type = GemmS4F16::kGemm;
-        // if (type == kFusedAdd)
-        //     gemm_type = GemmS4F16::kFusedAdd;
-        // if (type == kFusedSiluFfn)
-        //     gemm_type = GemmS4F16::kFusedSiluFfn;
-
-        // FT_CHECK(type == kGemm);
-
         using namespace gemm;
 
         const Operation operation{gemm::DispatchPolicy::kDefault,
@@ -154,7 +146,7 @@ private:
                             weight.k_desc,
                             weight.scales_zeros,
                             weight.q_desc,
-                            0.f,
+                            type == kFusedAdd ? 1.0f : 0.0f,
                             output_data,
                             c_desc,
                             output_data,
