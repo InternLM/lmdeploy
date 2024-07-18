@@ -3,7 +3,7 @@
 LMDeploy is a python library for compressing, deploying, and serving Large Language Models and Vision-Language Models.
 Its core inference engines include TurboMind Engine and PyTorch Engine. The former is developed by C++ and CUDA, striving for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
-It supports deployment both Linux and Windows platform, with minimum requirement of CUDA version 11.3. Furthermore, it is compatible with the following NVIDIA GPUs:
+It supports deployment on both Linux and Windows platform, with minimum requirement of CUDA version 11.3. Furthermore, it is compatible with the following NVIDIA GPUs:
 
 - Volta(sm70): V100
 - Turing(sm75): 20 series, T4
