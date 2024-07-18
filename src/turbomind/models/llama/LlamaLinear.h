@@ -4,7 +4,6 @@
 
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include "src/turbomind/kernels/gemm_s_f16/gemm_s4_f16.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -34,6 +33,16 @@ public:
 
     LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream): cublas_wrapper_(cublas_wrapper), stream_(stream)
     {
+        // std::ifstream ifs("tm_cache");
+        // gemm_.Import(ifs);
+
+        workspace_ = {};
+
+        workspace_.barriers_size = 1 << 20;
+        workspace_.partials_size = 32 << 20;
+        cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, stream_);
+        cudaMallocAsync(&workspace_.partials, workspace_.partials_size, stream_);
+        cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, stream_);
     }
 
     void forward(T*                         output_data,
@@ -151,7 +160,7 @@ private:
                             c_desc,
                             output_data,
                             c_desc,
-                            {},
+                            workspace_,
                             stream_);
         sync_check_cuda_error();
 
@@ -165,6 +174,8 @@ private:
     cublasMMWrapper* cublas_wrapper_;
     gemm::Gemm       gemm_;
     cudaStream_t     stream_{};
+
+    gemm::Workspace workspace_;
 };
 
 }  // namespace turbomind

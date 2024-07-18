@@ -141,7 +141,7 @@ public:
         using Tv = typename Gemm::Tv;
         using Tc = typename Gemm::Tc;
 
-        if constexpr (1) {
+        if constexpr (0) {
             [[maybe_unused]] static const int _ = [] {
                 std::cout << "A:\n";
                 Print(typename Gemm::OperandA::GmemIter::ThreadMap{});
@@ -184,12 +184,14 @@ public:
 
         const bool silu_act = ((int)operation.epilogue & (int)Epilogue::kGatedSilu);
 
+        const int partial_C = mk2cs<Gemm::kOrderC>(Cdesc.rows, Cdesc.cols).x;
+
         typename Gemm::Epilogue::Param epilogue{m,
                                                 n,
                                                 (Tc*)D,
                                                 Cdesc.ld,
                                                 (float*)workspace.partials,
-                                                Cdesc.ld,  /// TODO: optimize this
+                                                partial_C,
                                                 (int*)workspace.barriers,
                                                 {},
                                                 {alpha, beta},
@@ -256,7 +258,13 @@ public:
         // workspace for 1 non-trival split
         GetWorkspaceSizes(m, n, tiled_m, tiled_n, 1, barriers_per_split, partials_per_split);
 
-        return std::max(1, std::min<int>(barrier_size / barriers_per_split, partials_size / partials_per_split));
+        if (barrier_size >= barriers_per_split && partials_size >= partials_per_split) {
+            // Serial split-k requires workspace for 1 split only
+            return 32;
+        }
+        else {
+            return 1;
+        }
     }
 
     int GetSwizzle(int m, int n, int k, int splits, int swizzle) override

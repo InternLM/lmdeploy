@@ -41,7 +41,7 @@ inline decltype(auto) as_tuple(const GemmDesc& d)
                     d.quant_a.group_size,
                     d.quant_b.type,
                     d.quant_b.group_size,
-                    d.epilogue,
+                    // d.epilogue,
                     d.n,
                     d.k,
                     d.m);
@@ -49,7 +49,9 @@ inline decltype(auto) as_tuple(const GemmDesc& d)
 
 inline bool is_compatible(GemmDesc a, GemmDesc b)
 {
-    a.m = b.m = 0;
+    // skip batch dim & epilogue flags
+    a.m = b.m  = 0;
+    a.epilogue = b.epilogue = Epilogue::kNone;
     return as_tuple(a) == as_tuple(b);
 }
 
@@ -71,11 +73,14 @@ struct Gemm::Impl {
     // find launch spec in dispatch cache, dispatch by heuristic on cache miss
     LaunchSpec Dispatch(DispatchPolicy policy, GemmDesc desc, size_t barriers_size, size_t partials_size)
     {
-        if (policy & DispatchPolicy::kMeasure) {
+        if (policy & DispatchPolicy::kReuse) {
             auto it = dispatch_cache_.lower_bound(desc);
-            if (is_compatible(it->first, desc) && it->second.kernel->is_feasible(desc)) {
+            if (it != dispatch_cache_.end() && is_compatible(it->first, desc) && it->second.kernel->is_feasible(desc)) {
                 return it->second;
             }
+            // if (it != dispatch_cache_.end()) {
+            //     std::cout << is_compatible(it->first, desc) << " " << it->second.kernel->is_feasible(desc) << "\n";
+            // }
             std::cout << "Failed to find a feasible kernel in the cache, will dispatch by heuristic.\n";
         }
 
@@ -134,10 +139,11 @@ struct Gemm::Impl {
         std::vector<std::pair<float, int>> costs;
 
         for (const auto& k : kernels) {
-            std::cout << "\n" << k->name() << "\n";
+            // std::cout << "\n" << k->name() << "\n";
+
             int max_splits = k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
-            // std::cout << "max_split_k: " << max_split_k << "\n";
-            max_splits          = std::min(max_splits, 4);
+            max_splits     = std::min(max_splits, 4);
+
             auto [splits, cost] = k->Estimate(desc.m,  //
                                               desc.n,
                                               desc.k,
@@ -363,14 +369,13 @@ struct Gemm::Impl {
     }
 
     std::shared_ptr<cudaDeviceProp> props_;
-
-    int arch_;
+    int                             arch_;
+    Registry                        registry_;
 
     float l2_bytes_per_second_;
     float fma_per_second_;
 
     std::map<GemmDesc, LaunchSpec> dispatch_cache_;
-    Registry                       registry_;
 };
 
 // implementation of GEMM interfaces

@@ -25,7 +25,7 @@ std::vector<std::pair<int, float>> Kernel::Estimate(int   m,
     const int tiled_shape_n = ceil_div(n, desc_.cta_tile.y);
     const int chunk_cnt_k   = ceil_div(k, chunk_size_k_);
 
-    std::cout << tiled_shape_m << " " << tiled_shape_n << " " << chunk_cnt_k << std::endl;
+    // std::cout << tiled_shape_m << " " << tiled_shape_n << " " << chunk_cnt_k << std::endl;
 
     const int     cta_m  = desc_.cta_tile.x;
     const int     cta_n  = desc_.cta_tile.y;
@@ -66,8 +66,8 @@ std::vector<std::pair<int, float>> Kernel::Estimate(int   m,
         // Non-perfect latency hiding
         float cost = std::pow(fma_cost + ldg_cost, 0.2) * std::pow(std::max(fma_cost, ldg_cost), 0.8) + split_cost;
 
-        std::cout << splits << " waves=" << waves << " fma=" << fma_cost * 1e3 << " ldg=" << ldg_cost * 1e3
-                  << " spk=" << split_cost * 1e3 << " cost=" << cost * 1e3 << std::endl;
+        // std::cout << splits << " waves=" << waves << " fma=" << fma_cost * 1e3 << " ldg=" << ldg_cost * 1e3
+        //           << " spk=" << split_cost * 1e3 << " cost=" << cost * 1e3 << std::endl;
 
         estimations.emplace_back(cost, 0, waves, splits);
     }
@@ -96,7 +96,7 @@ std::vector<std::pair<int, float>> Kernel::Estimate(int   m,
     for (int i = 0; i < top_k; ++i) {
         auto& [cost, volume, waves, splits] = estimations[idxs[i]];
         if (i == 0) {
-            std::cout << "* " << cost * 1e3 << " " << volume << " " << waves << " " << splits << std::endl;
+            // std::cout << "* " << cost * 1e3 << " " << volume << " " << waves << " " << splits << std::endl;
         }
         ret.emplace_back(splits, cost);
     }

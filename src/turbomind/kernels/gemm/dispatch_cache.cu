@@ -80,6 +80,7 @@ void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc,
     for (const auto& [g, spec] : entries) {
         // GEMM desc
         export_impl(os,
+                    g.arch,
                     g.type_a,
                     g.type_b,
                     g.type_c,
@@ -134,6 +135,7 @@ void ImportDispatchCache(std::istream&                                 is,
         std::stringstream ss(line);
         GemmDesc          g{};
         import_impl(ss,
+                    g.arch,
                     g.type_a,
                     g.type_b,
                     g.type_c,

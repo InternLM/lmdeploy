@@ -1,4 +1,5 @@
-#include "src/turbomind/kernels/gemm_s_f16/format.h"
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
@@ -461,56 +462,4 @@ PYBIND11_MODULE(_turbomind, m)
         .def("get_tensor_para_size", &AbstractTransformerModel::getTensorParaSize)
         .def("get_pipeline_para_size", &AbstractTransformerModel::getPipelineParaSize);
 
-    m.def("transpose_qk_s4_k_m8", [](py::object src, py::object dst, int m, int k, int size_per_head) {
-        auto src_tensor = GetDLTensor(src);
-        auto dst_tensor = GetDLTensor(dst);
-
-        turbomind::transpose_qk_s4_k_m8_hf(
-            (uint32_t*)dst_tensor.data, (const uint32_t*)src_tensor.data, m, k, size_per_head, nullptr);
-    });
-
-    m.def("fuse_w1_w3_s4_k_m8", [](py::object src, py::object dst, int m, int k) {
-        auto src_tensor = GetDLTensor(src);
-        auto dst_tensor = GetDLTensor(dst);
-
-        turbomind::fuse_w1_w3_s4_k_m8((uint32_t*)dst_tensor.data, (const uint32_t*)src_tensor.data, m, k, nullptr);
-    });
-
-    m.def("convert_s4_k_m8",
-          [](py::object A_dst,
-             py::object Q_dst,
-             py::object ws,
-             py::object A_src,
-             py::object scales,
-             py::object qzeros,
-             int        m,
-             int        k,
-             int        group_size) {
-              auto a_dst = GetDLTensor(A_dst);
-              auto q_dst = GetDLTensor(Q_dst);
-              auto w     = GetDLTensor(ws);
-              auto a_src = GetDLTensor(A_src);
-              auto s     = GetDLTensor(scales);
-              auto qz    = GetDLTensor(qzeros);
-
-              turbomind::convert_s4_k_m8((uint32_t*)a_dst.data,
-                                         (half2*)q_dst.data,
-                                         (half*)w.data,
-                                         (const uint32_t*)a_src.data,
-                                         (const half*)s.data,
-                                         (const uint32_t*)qz.data,
-                                         m,
-                                         k,
-                                         group_size,
-                                         nullptr);
-          });
-
-    m.def("dequantize_s4", [](py::object src, py::object dst) {
-        auto src_tensor = GetDLTensor(src);
-        auto dst_tensor = GetDLTensor(dst);
-        auto src_count  = std::accumulate(src_tensor.shape, src_tensor.shape + src_tensor.ndim, size_t{1});
-        auto dst_count  = std::accumulate(dst_tensor.shape, dst_tensor.shape + dst_tensor.ndim, size_t{1});
-        turbomind::FT_CHECK(src_count * 8 == dst_count);
-        turbomind::dequantize_s4((uint4*)dst_tensor.data, (uint32_t*)src_tensor.data, src_count, nullptr);
-    });
 }
