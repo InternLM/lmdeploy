@@ -3,9 +3,11 @@
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/core/math.h"
 #include <algorithm>
 #include <iostream>
 #include <numeric>
+#include <sstream>
 
 namespace turbomind::gemm {
 

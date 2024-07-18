@@ -219,7 +219,7 @@ public:
                                   sizeof(float) * partials_.size()};
 
         auto status = gemm_.Run(operation,
-                                nullptr,
+                                1.f,
                                 a_pack_.data().get(),
                                 a_pack_desc_,
                                 u_pack_.data().get(),
@@ -228,7 +228,7 @@ public:
                                 b_pack_desc_,
                                 v_pack_.data().get(),
                                 v_pack_desc_,
-                                nullptr,
+                                0.f,
                                 c_.data().get(),
                                 c_desc_,
                                 c_.data().get(),

@@ -1,5 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 
 namespace turbomind::gemm {
@@ -15,10 +16,10 @@ Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
 
 bool Registry::Add(std::unique_ptr<Kernel> kernel)
 {
-    if ((int)device_prop_->sharedMemPerBlockOptin < kernel->smem_size()) {
+    if (!is_arch_compatible(kernel->arch(), arch_)) {
         return false;
     }
-    if (arch_ < kernel->arch()) {
+    if ((int)device_prop_->sharedMemPerBlockOptin < kernel->smem_size()) {
         return false;
     }
     std::cout << "register: " << kernel->name() << "\n";

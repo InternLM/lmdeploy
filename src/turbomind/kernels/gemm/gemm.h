@@ -16,7 +16,7 @@ public:
     ~Gemm();
 
     [[nodiscard]] int Run(const Operation&    operation,
-                          const void*         alpha,
+                          float               alpha,
                           const void*         A,
                           const MatrixLayout& Adesc,
                           const void*         U,
@@ -25,7 +25,7 @@ public:
                           const MatrixLayout& Bdesc,
                           const void*         V,
                           const MatrixLayout& Vdesc,
-                          const void*         beta,
+                          float               beta,
                           const void*         C,
                           const MatrixLayout& Cdesc,
                           void*               D,

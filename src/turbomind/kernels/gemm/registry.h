@@ -2,9 +2,8 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/kernel_impl.h"
-#include <iostream>
+#include <memory>
 
 namespace turbomind::gemm {
 

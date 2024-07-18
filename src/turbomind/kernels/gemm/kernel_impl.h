@@ -88,7 +88,7 @@ public:
     }
 
     int Launch(const Operation&    operation,
-               const void*         alpha,
+               float               alpha,
                const void*         A,
                const MatrixLayout& Adesc,
                const void*         U,
@@ -97,7 +97,7 @@ public:
                const MatrixLayout& _Bdesc,
                const void*         V,
                const MatrixLayout& _Vdesc,
-               const void*         beta,
+               float               beta,
                const void*         C,
                const MatrixLayout& Cdesc,
                void*               D,
@@ -192,7 +192,7 @@ public:
                                                 Cdesc.ld,  /// TODO: optimize this
                                                 (int*)workspace.barriers,
                                                 {},
-                                                {1.f, 0.f},
+                                                {alpha, beta},
                                                 silu_act};
 
         typename Gemm::Param param{m,

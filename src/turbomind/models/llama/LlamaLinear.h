@@ -145,7 +145,7 @@ private:
         };
 
         auto ec = gemm_.Run(operation,
-                            nullptr,
+                            1.f,
                             input_data.ptr,
                             a_desc,
                             nullptr,
@@ -154,7 +154,7 @@ private:
                             weight.k_desc,
                             weight.scales_zeros,
                             weight.q_desc,
-                            nullptr,
+                            0.f,
                             output_data,
                             c_desc,
                             output_data,

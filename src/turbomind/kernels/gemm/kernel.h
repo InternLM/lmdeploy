@@ -2,15 +2,11 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/core/data_type.h"
-#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include <cstdint>
 #include <cuda_runtime.h>
-#include <limits>
-#include <memory>
-#include <sstream>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace turbomind::gemm {
@@ -20,7 +16,7 @@ public:
     virtual ~Kernel() = default;
 
     virtual int Launch(const Operation&    operation,
-                       const void*         alpha,
+                       float               alpha,
                        const void*         A,
                        const MatrixLayout& Adesc,
                        const void*         U,
@@ -29,7 +25,7 @@ public:
                        const MatrixLayout& Bdesc,
                        const void*         V,
                        const MatrixLayout& Vdesc,
-                       const void*         beta,
+                       float               beta,
                        const void*         C,
                        const MatrixLayout& Cdesc,
                        void*               D,

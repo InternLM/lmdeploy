@@ -4,6 +4,8 @@
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <iostream>
+#include <memory>
+#include <sstream>
 
 static inline bool operator==(const int3& a, const int3& b)
 {
