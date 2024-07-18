@@ -329,7 +329,13 @@ def test_chatglm3():
 
 
 def test_glm4():
-    model = MODELS.get('glm4')()
+    model_path_and_name = 'THUDM/glm-4-9b-chat'
+    deduced_name = best_match_model(model_path_and_name)
+    assert deduced_name == 'glm4'
+
+    model = MODELS.get(deduced_name)()
+    # check stop words
+    assert model.stop_words == ['<|user|>', '<|endoftext|>', '<|observation|>']
     messages = [{
         'role': 'system',
         'content': 'you are a helpful assistant'
@@ -344,7 +350,7 @@ def test_glm4():
         'content': 'AGI is?'
     }]
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained('THUDM/glm-4-9b-chat',
+    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name,
                                               trust_remote_code=True)
     ref = tokenizer.apply_chat_template(messages, tokenize=False)
     res = model.messages2prompt(messages)

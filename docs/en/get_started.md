@@ -103,7 +103,7 @@ print(response)
 
 However, the larger the image batch size, the greater risk of an OOM error, because the LLM component within the VLM model pre-allocates a massive amount of memory in advance.
 
-We encourage you to manually choose between the TurboMind Engine and the PyTorch Engine based on their respective capabilities, as detailed in [the supported-models metrix](./supported_models/supported_models.md).
+We encourage you to manually choose between the TurboMind Engine and the PyTorch Engine based on their respective capabilities, as detailed in [the supported-models matrix](./supported_models/supported_models.md).
 Additionally, follow the instructions in [LLM Inference](#llm-inference) section to reduce the values of memory-related parameters
 
 ## Serving
