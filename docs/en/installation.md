@@ -3,6 +3,8 @@
 LMDeploy is a python library for compressing, deploying, and serving Large Language Models and Vision-Language Models.
 Its core inference engines include TurboMind Engine and PyTorch Engine. The former is developed by C++ and CUDA, striving for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
+It supports both Linux and Windows platform, with minimum requirement of CUDA version 11.3.
+
 ## Install with pip (Recommend)
 
 You can install lmdeploy using pip (python 3.8 - 3.12) as follows:
