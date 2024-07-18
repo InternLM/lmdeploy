@@ -60,7 +60,7 @@ struct Sm75_s16816 {
                                          Operand_C<float, order_c>,
                                          SplitK>;
 
-        using Kernel = GemmUniversal<Sm80, Mainloop, Epilogue, CtaMap>;
+        using Kernel = GemmUniversal<Sm75, Mainloop, Epilogue, CtaMap>;
     };
 };
 

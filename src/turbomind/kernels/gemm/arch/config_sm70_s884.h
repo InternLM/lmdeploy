@@ -78,7 +78,7 @@ struct Sm70_s884 {
                                          Operand_C<float, order_c>,
                                          SplitK>;
 
-        using Kernel = GemmUniversal<Sm80, Mainloop, Epilogue, CtaMap>;
+        using Kernel = GemmUniversal<Sm70, Mainloop, Epilogue, CtaMap>;
     };
 };
 

@@ -387,7 +387,7 @@ inline decltype(auto) get_test()
         constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
         return gTestbed<gemm::Testbed<uint4_t, half, half, kRowMajor, kColMajor, kColMajor, kPackA, 0, kPackU, 0>>();
     }
-    else if constexpr (0) {
+    else if constexpr (1) {
         // sm80 / sm75
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
         constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
@@ -399,7 +399,7 @@ inline decltype(auto) get_test()
         constexpr Pack kPackV = HMMA_884 | OPERAND_V | 2;
         return gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
-    else if constexpr (1) {
+    else if constexpr (0) {
         // simt
         constexpr Pack kPackB = HMMA_SIMT | OPERAND_B | 1;
         constexpr Pack kPackV = HMMA_SIMT | OPERAND_V | 1;

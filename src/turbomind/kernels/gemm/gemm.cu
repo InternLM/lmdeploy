@@ -26,7 +26,8 @@ namespace {
 
 inline decltype(auto) as_tuple(const GemmDesc& d)
 {
-    return std::tie(d.type_a,
+    return std::tie(d.arch,
+                    d.type_a,
                     d.type_b,
                     d.type_c,
                     d.order_a,
@@ -61,7 +62,7 @@ inline bool operator<(const GemmDesc& a, const GemmDesc& b)
 
 struct Gemm::Impl {
 
-    Impl(): props_{GetCudaDeviceProps()}, registry_{props_}
+    Impl(): props_{GetCudaDeviceProps()}, arch_{props_->major * 100 + props_->minor * 10}, registry_{props_}
     {
         l2_bytes_per_second_ = MeasureL2CacheThroughput();
         fma_per_second_      = MeasureMmaThroughput();
@@ -327,7 +328,6 @@ struct Gemm::Impl {
         return dispatch_cache_.size();
     }
 
-private:
     void Summary(const std::vector<std::pair<GemmDesc, LaunchSpec>>& entries)
     {
         std::vector<Kernel*> uses{nullptr};
@@ -362,8 +362,9 @@ private:
         return props;
     }
 
-private:
     std::shared_ptr<cudaDeviceProp> props_;
+
+    int arch_;
 
     float l2_bytes_per_second_;
     float fma_per_second_;
@@ -406,6 +407,7 @@ int Gemm::Run(const Operation&    operation,
     const int k = Adesc.cols;
 
     const GemmDesc desc{
+        impl_->arch_,
         Adesc.type,
         Bdesc.type,
         Cdesc.type,

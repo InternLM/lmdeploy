@@ -171,9 +171,8 @@ private:
 
 private:
     cublasMMWrapper* cublas_wrapper_;
+    gemm::Gemm       gemm_;
     cudaStream_t     stream_{};
-    // GemmS4F16        gemm_s4_f16_;
-    gemm::Gemm gemm_;
 };
 
 }  // namespace turbomind

@@ -9,6 +9,7 @@ namespace turbomind::gemm {
 
 // aggregate that uniquely identifies a GEMM problem
 struct GemmDesc {
+    int       arch;
     DataType  type_a;
     DataType  type_b;
     DataType  type_c;

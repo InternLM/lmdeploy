@@ -1,5 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <algorithm>
@@ -108,6 +109,13 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
     if constexpr (debug)
         printf("S\n");
 
+    if (!is_arch_compatible(desc_.arch, desc.arch)) {
+        return false;
+    }
+
+    if constexpr (debug)
+        printf("S0\n");
+
     if (std::tie(desc.order_a, desc.order_b, desc.order_c) != std::tie(desc_.order_a, desc_.order_b, desc_.order_c)) {
         return false;
     }
@@ -165,7 +173,7 @@ std::string Kernel::GetName() const
 {
     std::stringstream ss;
 
-    ss << "sm" << desc_.arch;
+    ss << "sm" << desc_.arch / 10;
     ss << "_" << to_string(desc_.type_a);  //
     if ((int)desc_.quant_a.type) {
         ss << "g" << desc_.quant_a.group_size;
