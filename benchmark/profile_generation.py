@@ -18,6 +18,9 @@ from tqdm import tqdm
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
+from lmdeploy.utils import get_logger
+
+get_logger('lmdeploy').setLevel('ERROR')
 
 
 def infer(model, session_id: int, input_ids: List,

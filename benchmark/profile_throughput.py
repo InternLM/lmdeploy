@@ -17,6 +17,9 @@ from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
 from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
+from lmdeploy.utils import get_logger
+
+get_logger('lmdeploy').setLevel('ERROR')
 
 
 def sample_requests(
