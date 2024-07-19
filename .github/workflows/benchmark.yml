@@ -17,12 +17,7 @@ on:
         required: true
         description: 'Set benchmark type. Default is "["generation", "throughtput", "api_server", "triton_server"]"'
         type: string
-        default: "['generation', 'throughput', 'api_server', 'triton_server']"
-      backend:
-        required: true
-        description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
-        type: string
-        default: "['turbomind', 'pytorch']"
+        default: "['generation', 'throughput', 'api_server']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -33,26 +28,6 @@ on:
         description: 'Dependency packages, you can also set a specific version'
         type: string
         default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'
-      default_tp:
-        required: true
-        description: 'Default tp value'
-        type: string
-        default: '--tp 1'
-      log_level:
-        required: true
-        description: 'Default ERROR, can also set INFO'
-        type: string
-        default: 'ERROR'
-      kvint_quantization:
-        required: true
-        description: 'Default kvint4, kvint8'
-        type: string
-        default: "['kvint4','kvint8']"
-      models:
-        required: true
-        description: 'Set models run benchmark'
-        type: string
-        default: "['internlm/internlm2-chat-20b','internlm/internlm2-chat-20b-inner-4bits','meta-llama/Llama-2-7b-chat-hf','meta-llama/Llama-2-7b-chat-hf-inner-4bits','meta-llama/Meta-Llama-3-8B-Instruct','Qwen/Qwen1.5-32B-Chat']"
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
