@@ -25,6 +25,7 @@
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
@@ -36,6 +37,8 @@
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -547,6 +550,92 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
         }
         throw std::runtime_error(ss.str());
     }
+}
+
+static std::pair<std::vector<int>, std::string> parse_int_list(const char* str)
+{
+    if (!str) {
+        return {};
+    }
+    std::vector<int>  xs;
+    const std::string bstr(str);
+    std::stringstream ss(bstr);
+    std::string       token;
+    while (getline(ss, token, ',')) {
+        xs.push_back(std::stoi(token));
+    }
+    std::stringstream os;
+    os << "[";
+    for (int i = 0; i < (int)xs.size(); ++i) {
+        os << (i ? "," : "") << xs[i];
+    }
+    os << "]";
+    return {xs, os.str()};
+}
+
+template<typename T>
+void LlamaV2<T>::tune()
+{
+    auto [bss, str] = parse_int_list(std::getenv("TM_GEMM_TUNE"));
+
+    if (tensor_para_.rank_ == 0 && !bss.empty()) {
+        LlamaAttentionWeight<T>& attn = weights_->decoder_layer_weights[0]->self_attn_weights;
+        LlamaFfnWeight<T>&       ffn  = weights_->decoder_layer_weights[0]->ffn_weights;
+
+        TM_LOG_ERROR("[Gemm2] Tuning sequence: %s", str.c_str());
+
+        std::vector<LlamaDenseWeight<T>*> weights{&attn.qkv, &attn.output, &ffn.output};
+
+        for (auto& layer : weights_->decoder_layer_weights) {
+            if (layer->ffn_weights.gating.kernel) {
+                weights.push_back(&layer->ffn_weights.gating);
+                break;
+            }
+        }
+        for (auto& layer : weights_->decoder_layer_weights) {
+            if (layer->ffn_weights.fused_gating_intermediate.kernel) {
+                weights.push_back(&layer->ffn_weights.fused_gating_intermediate);
+                break;
+            }
+        }
+
+        const int max_bs  = *std::max_element(bss.begin(), bss.end());
+        int       max_in  = 0;
+        int       max_out = 0;
+        for (auto& w : weights) {
+            max_in  = std::max<int>(max_in, w->input_dims);
+            max_out = std::max<int>(max_out, w->output_dims);
+        }
+
+        T* in_data  = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_in);
+        T* out_data = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_out);
+
+        cudaRandomUniform(in_data, (size_t)max_bs * max_in);
+        cudaDeviceSynchronize();
+
+        linear_.set_measure(true);
+
+        for (auto& w : weights) {
+            for (auto bs : bss) {
+                linear_.forward(out_data, in_data, bs, *w);
+            }
+        }
+
+        linear_.set_measure(false);
+
+        linear_.Export();
+
+        allocator_->free((void**)&in_data);
+        allocator_->free((void**)&out_data);
+    }
+
+    FT_CHECK(shared_state_ && shared_state_->barrier);
+    shared_state_->barrier->wait();
+
+    /// TODO: handle heterogeneous TP
+    /// TODO: handle uneven TP division
+
+    linear_.Import();
 }
 
 template class LlamaV2<half>;

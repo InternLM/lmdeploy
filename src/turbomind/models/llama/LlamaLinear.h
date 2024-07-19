@@ -31,6 +31,12 @@ public:
                  Type                       type      = kGemm,
                  int*                       lora_mask = nullptr);
 
+    void set_measure(bool measure);
+
+    void Export();
+
+    void Import();
+
 private:
     struct Impl;
     std::shared_ptr<Impl> impl_;

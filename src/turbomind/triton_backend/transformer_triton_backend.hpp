@@ -328,7 +328,12 @@ struct AbstractTransformerModel {
 
     virtual TensorMap getParams(int deviceId, int rank) = 0;
 
-    virtual void prepare(int deviceId, int rank) = 0;
+    virtual void processWeights(int deviceId, int rank) = 0;
+
+    virtual void createEngine(int                                                               device_id,
+                              int                                                               rank,
+                              std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
+                              std::shared_ptr<ft::AbstractCustomComm>) = 0;
 
     virtual std::string toString()            = 0;
     virtual int         getTensorParaSize()   = 0;

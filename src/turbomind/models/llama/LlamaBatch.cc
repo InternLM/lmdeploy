@@ -628,6 +628,8 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     g.unique_ids             = std::move(unique_ids);
     g.finished_count         = 0;
 
+    // TM_LOG_ERROR("[Initialize] batch size: %d, active size: %d", state_->size, state_->active_size);
+
     if (!skip_init_sampling) {
         g.max_init_ctx_len = max_context_len;
         g.step             = max_context_len;

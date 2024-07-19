@@ -144,6 +144,9 @@ class TurboMind:
             self.model_comm = self._from_hf(model_source=model_source,
                                             model_path=model_path,
                                             engine_config=engine_config)
+        
+        self._process_weight(self.model_comm)
+        self._create_engine(self.model_comm)
 
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
@@ -194,16 +197,31 @@ class TurboMind:
                     tm_params[k] = []
                 tm_params[k].append(v)
 
-    def _prepare_model(self, model_comm):
-        """Get turbomind model params when loading from hf."""
+    def _process_weight(self, model_comm):
+        """On the fly weight transformation"""
 
-        def _prepare(device_id):
+        def _process(device_id):
             rank = self.node_id * self.gpu_count + device_id
-            model_comm.prepare(device_id, rank)
+            model_comm.process_weight(device_id, rank)
 
         threads = []
         for device_id in range(self.gpu_count):
-            t = Thread(target=_prepare, args=(device_id, ))
+            t = Thread(target=_process, args=(device_id, ))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
+
+    def _create_engine(self, model_comm):
+        """Engine creation & gemm tuning"""
+
+        def _create(device_id):
+            rank = self.node_id * self.gpu_count + device_id
+            model_comm.create_engine(device_id, rank, self.nccl_params)
+
+        threads = []
+        for device_id in range(self.gpu_count):
+            t = Thread(target=_create, args=(device_id, ))
             t.start()
             threads.append(t)
         for t in threads:
@@ -279,8 +297,6 @@ class TurboMind:
                 'the model may not be loaded successfully '
                 f'with {len(tm_params)} uninitialized params:\n{uninitialized}'
             )
-        self._prepare_model(model_comm)
-
         return model_comm
 
     def _from_workspace(self, model_path: str,

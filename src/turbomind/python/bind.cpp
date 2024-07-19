@@ -452,14 +452,29 @@ PYBIND11_MODULE(_turbomind, m)
             "device_id"_a,
             "rank"_a)
         .def(
-            "prepare",
-            [](AbstractTransformerModel* model, int deviceId, int rank) { model->prepare(deviceId, rank); },
+            "process_weight",
+            [](AbstractTransformerModel* model, int deviceId, int rank) {
+                model->processWeights(deviceId, rank);
+            },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
             "rank"_a)
+        .def(
+            "create_engine",
+            [](AbstractTransformerModel*                                         model,
+               int                                                               deviceId,
+               int                                                               rank,
+               std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
+               std::shared_ptr<ft::AbstractCustomComm>                           custom_all_reduce_comm = nullptr) {
+                model->createEngine(deviceId, rank, nccl_params, custom_all_reduce_comm);
+            },
+            py::call_guard<py::gil_scoped_release>(),
+            "device_id"_a,
+            "rank"_a,
+            "nccl_params"_a,
+            "custom_all_reduce_comm"_a = nullptr)
         .def("__str__", &AbstractTransformerModel::toString)
         .def("__repr__", &AbstractTransformerModel::toString)
         .def("get_tensor_para_size", &AbstractTransformerModel::getTensorParaSize)
         .def("get_pipeline_para_size", &AbstractTransformerModel::getPipelineParaSize);
-
 }

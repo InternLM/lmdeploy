@@ -198,7 +198,7 @@ struct Gemm::Impl {
 
         std::vector<LaunchSpec> specs;
         for (const auto& k : kernels) {
-            std::cout << k->name() << "\n";
+            // std::cout << k->name() << "\n";
             int max_splits = k->GetMaxSplits(desc.m, desc.n, barriers_size, partials_size);
             max_splits     = std::min(max_splits, 8);
             auto splits    = k->Estimate(desc.m,  //

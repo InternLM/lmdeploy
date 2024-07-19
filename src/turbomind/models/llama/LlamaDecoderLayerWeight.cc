@@ -506,7 +506,7 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size)
 
     cudaMemset(weight.kernel, 0, weight.input_dims * weight.output_dims / 2);
 
-    Convert(workspace, w_desc, weight.kernel, k_desc, 0);
+    FT_CHECK(Convert(workspace, w_desc, weight.kernel, k_desc, 0) == 0);
     sync_check_cuda_error();
 
     if constexpr (0) {
@@ -552,7 +552,7 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size)
     MatrixLayout q_desc = s_desc;
     q_desc.pack         = pack_v;
 
-    Convert(workspace, s_desc, weight.scales_zeros, q_desc, 0);
+    FT_CHECK(Convert(workspace, s_desc, weight.scales_zeros, q_desc, 0) == 0);
     sync_check_cuda_error();
 
     if constexpr (0) {

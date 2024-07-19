@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
+#include <fstream>
 
 namespace turbomind {
 
@@ -12,9 +13,6 @@ struct LlamaLinear<T>::Impl {
 
     Impl(cublasMMWrapper* cublas_wrapper, cudaStream_t stream): cublas_wrapper_(cublas_wrapper), stream_(stream)
     {
-        std::ifstream ifs("tm_cache");
-        gemm_.Import(ifs);
-
         workspace_ = {};
 
         workspace_.barriers_size = gemm::Gemm::kBarriersSize;
@@ -109,7 +107,7 @@ struct LlamaLinear<T>::Impl {
     {
         using namespace gemm;
 
-        const Operation operation{gemm::DispatchPolicy::kReuse,
+        const Operation operation{dispatch_policy_,
                                   type == kFusedSiluFfn ? Epilogue::kGatedSilu : Epilogue::kNone,
                                   {QuantType::kNone},
                                   {QuantType::kDefault, weight.group_size}};
@@ -155,9 +153,10 @@ struct LlamaLinear<T>::Impl {
         }
     }
 
-    cublasMMWrapper* cublas_wrapper_;
-    gemm::Gemm       gemm_;
-    cudaStream_t     stream_{};
+    cublasMMWrapper*     cublas_wrapper_;
+    gemm::Gemm           gemm_;
+    gemm::DispatchPolicy dispatch_policy_{gemm::DispatchPolicy::kDefault};
+    cudaStream_t         stream_{};
 
     gemm::Workspace workspace_;
 };
@@ -173,6 +172,37 @@ void LlamaLinear<T>::forward(
     T* output_data, Pitched input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type, int* lora_mask)
 {
     impl_->forward(output_data, input_data, batch_size, weight, type, lora_mask);
+}
+
+template<class T>
+void LlamaLinear<T>::set_measure(bool measure)
+{
+    impl_->dispatch_policy_ = measure ? gemm::DispatchPolicy::kMeasure : gemm::DispatchPolicy::kReuse;
+}
+
+template<class T>
+void LlamaLinear<T>::Export()
+{
+    if (auto path = std::getenv("TM_GEMM_EXPORT")) {
+        std::ofstream ofs(path);
+        if (ofs.is_open()) {
+            const auto n_records = impl_->gemm_.Export(ofs);
+            std::cout << "[Gemm2] " << n_records << " records exported." << std::endl;;
+        }
+    }
+}
+
+template<class T>
+void LlamaLinear<T>::Import()
+{
+    if (auto path = std::getenv("TM_GEMM_IMPORT")) {
+        std::ifstream ifs(path);
+        const auto    n_records = impl_->gemm_.Import(ifs);
+        if (n_records) {
+            impl_->dispatch_policy_ = gemm::DispatchPolicy::kReuse;
+        }
+        std::cout << "[Gemm2] " << n_records << " records imported." << std::endl;;
+    }
 }
 
 #ifdef ENABLE_FP32

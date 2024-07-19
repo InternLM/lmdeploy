@@ -2,7 +2,6 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <cuda_runtime.h>
 #include <memory>
@@ -45,11 +44,8 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-int Convert(const void*         S,  //
-            const MatrixLayout& Sdesc,
-            void*               D,
-            const MatrixLayout& Ddesc,
-            cudaStream_t        stream);
+[[nodiscard]] int
+Convert(const void* S, const MatrixLayout& Sdesc, void* D, const MatrixLayout& Ddesc, cudaStream_t stream);
 
 std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(int sm, bool force_simt);
 
