@@ -21,10 +21,9 @@ def run(model_path_or_server: str,
     """chat with AI assistant through web ui.
 
     Args:
-        model_path_or_server (str): the path of the deployed model or the
-            tritonserver URL or restful api URL. For example:
-            - ./workspace
-            - 0.0.0.0:23333
+        model_path_or_server (str): the path of the deployed model or
+        restful api URL. For example:
+            - huggingface hub repo_id
             - http://0.0.0.0:23333
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
@@ -39,17 +38,12 @@ def run(model_path_or_server: str,
         share (bool): whether to create a publicly shareable link for the app
     """
     if ':' in model_path_or_server:
-        if 'http:' in model_path_or_server:
-            from lmdeploy.serve.gradio.api_server_backend import run_api_server
-            run_api_server(model_path_or_server,
-                           server_name,
-                           server_port,
-                           batch_size,
-                           share=share)
-        else:
-            from lmdeploy.serve.gradio.triton_server_backend import \
-                run_triton_server
-            run_triton_server(model_path_or_server, server_name, server_port)
+        from lmdeploy.serve.gradio.api_server_backend import run_api_server
+        run_api_server(model_path_or_server,
+                       server_name,
+                       server_port,
+                       batch_size,
+                       share=share)
     else:
         pipeline_type, _ = get_task(model_path_or_server)
         if pipeline_type == 'vlm':

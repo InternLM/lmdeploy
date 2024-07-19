@@ -20,6 +20,8 @@ from lmdeploy.model import MODELS, best_match_model
      ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
      ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
      ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
+     ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
+     ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
      ('tiiuae/falcon-7b', ['falcon']), ('workspace', ['base'])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
@@ -300,8 +302,11 @@ def test_deepseek_coder():
     assert res.startswith(ref)
 
 
-def test_glm4():
-    model = MODELS.get('glm4')()
+def test_chatglm3():
+    model_path_and_name = 'THUDM/chatglm3-6b'
+    deduced_name = best_match_model(model_path_and_name)
+    assert deduced_name == 'chatglm3'
+    model = MODELS.get(deduced_name)()
     messages = [{
         'role': 'system',
         'content': 'you are a helpful assistant'
@@ -316,7 +321,36 @@ def test_glm4():
         'content': 'AGI is?'
     }]
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained('THUDM/glm-4-9b-chat',
+    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name,
+                                              trust_remote_code=True)
+    ref = tokenizer.apply_chat_template(messages, tokenize=False)
+    res = model.messages2prompt(messages)
+    assert res.startswith(ref)
+
+
+def test_glm4():
+    model_path_and_name = 'THUDM/glm-4-9b-chat'
+    deduced_name = best_match_model(model_path_and_name)
+    assert deduced_name == 'glm4'
+
+    model = MODELS.get(deduced_name)()
+    # check stop words
+    assert model.stop_words == ['<|user|>', '<|endoftext|>', '<|observation|>']
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name,
                                               trust_remote_code=True)
     ref = tokenizer.apply_chat_template(messages, tokenize=False)
     res = model.messages2prompt(messages)
@@ -377,3 +411,29 @@ def test_internvl2():
         'assistant\nI am an AI<|im_end|>\n<|im_start|>assistant\n'
     res = model.messages2prompt(messages)
     assert res == expected
+
+
+def test_codegeex4():
+    model_path_and_name = 'THUDM/codegeex4-all-9b'
+    deduced_name = best_match_model(model_path_and_name)
+    assert deduced_name == 'codegeex4'
+    model = MODELS.get(deduced_name)()
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name,
+                                              trust_remote_code=True)
+    ref = tokenizer.apply_chat_template(messages, tokenize=False)
+    res = model.messages2prompt(messages)
+    assert res.startswith(ref)
