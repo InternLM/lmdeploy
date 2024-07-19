@@ -2,7 +2,8 @@
 import torch
 from torch import nn
 
-from .backends.base import AttentionMetadata
+from ..backends import LayerType, get_backend
+from ..backends.attention import AttentionMetadata
 
 
 class Attention(nn.Module):
@@ -18,12 +19,12 @@ class Attention(nn.Module):
         sliding_window: int = None,
         **kwargs,
     ):
-        from .selector import get_attn_backend
         super().__init__()
-        attn_backend = get_attn_backend()
-        impl_cls = attn_backend.get_impl_cls()
+        layer_backend = get_backend()
+        impl_builder = layer_backend.get_layer_impl_builder(
+            LayerType.Attention)
 
-        self.impl = impl_cls(
+        self.impl = impl_builder.build(
             num_heads,
             head_size,
             scale,

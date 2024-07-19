@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 
 import torch
 
-from lmdeploy.pytorch.attention import get_attn_backend
+from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, ModelConfig
@@ -86,7 +86,7 @@ class CacheEngine:
                                   world_size: int = 1,
                                   local: bool = True):
         """get single block shape."""
-        attn_backend = get_attn_backend()
+        attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
         if local and not model_config.multi_query_attention:
@@ -104,7 +104,7 @@ class CacheEngine:
                                     world_size: int = 1,
                                     local: bool = True):
         """get single block shape."""
-        attn_backend = get_attn_backend()
+        attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
         if local and not model_config.multi_query_attention:

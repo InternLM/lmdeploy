@@ -40,7 +40,6 @@ def apply_rotary_pos_emb_qk_kernel(
     K,
     COS,
     SIN,
-    POS,
     Q_EMB,
     K_EMB,
     seq_len,
@@ -66,7 +65,8 @@ def apply_rotary_pos_emb_qk_kernel(
     seq_block_id = tl.program_id(0)
 
     pos_offset = seq_block_id * BLOCK + tl.arange(0, BLOCK)
-    pos_ids = tl.load(POS + pos_offset, pos_offset < seq_len, other=-1)
+    # pos_ids = tl.load(POS + pos_offset, pos_offset < seq_len, other=-1)
+    pos_ids = pos_offset
 
     feat_size = half_size * 2
     feat_offset_l = tl.arange(0, BLOCK_N)
@@ -75,11 +75,13 @@ def apply_rotary_pos_emb_qk_kernel(
                                                   half_size)[None, :]
     cs_offset_l = pos_ids[:, None] * feat_size + feat_offset_l[None, :]
     cs_offset_h = pos_ids[:, None] * feat_size + feat_offset_h[None, :]
-    pos_ids_mask = pos_ids[:, None] >= 0
-    cos_l = tl.load(COS + cs_offset_l, mask=pos_ids_mask)
-    cos_h = tl.load(COS + cs_offset_h, mask=pos_ids_mask)
-    sin_l = tl.load(SIN + cs_offset_l, mask=pos_ids_mask)
-    sin_h = tl.load(SIN + cs_offset_h, mask=pos_ids_mask)
+    # pos_ids_mask = pos_ids[:, None] >= 0
+    pos_ids_mask = pos_ids[:, None] < seq_len
+    q_elem_type = Q.dtype.element_ty
+    cos_l = tl.load(COS + cs_offset_l, mask=pos_ids_mask).to(q_elem_type)
+    cos_h = tl.load(COS + cs_offset_h, mask=pos_ids_mask).to(q_elem_type)
+    sin_l = tl.load(SIN + cs_offset_l, mask=pos_ids_mask).to(q_elem_type)
+    sin_h = tl.load(SIN + cs_offset_h, mask=pos_ids_mask).to(q_elem_type)
 
     q_ptr = Q + pos_offset * stride_qs
     qe_ptr = Q_EMB + pos_offset * stride_qes
@@ -124,8 +126,6 @@ def apply_rotary_pos_emb(q: Tensor,
                          k: Tensor,
                          cos: Tensor,
                          sin: Tensor,
-                         position_ids: Tensor = None,
-                         position_ids_1d: Tensor = None,
                          q_embed: Tensor = None,
                          k_embed: Tensor = None):
     """Apply rotary positional embedding on query and key.
@@ -135,29 +135,23 @@ def apply_rotary_pos_emb(q: Tensor,
         k (Tensor): Key state.
         cos (Tensor): cosine matrix (seq_len, dim).
         sin (Tensor): sine matrix (seq_len, dim).
-        position_ids (Tensor): Position ids of q and k.
-        position_ids_1d (Tensor): 1d Position ids.
         q_embed (Tensor): output q, can be same as q
         k_embed (Tensor): output k, can be same as k
 
     Returns:
         Tuple[Tensor, Tensor]: Embedded query and key.
     """
-    if cos.device != q.device or cos.dtype != q.dtype:
-        cos = cos.to(device=q.device, dtype=q.dtype)
-    if sin.device != q.device or sin.dtype != q.dtype:
-        sin = sin.to(device=q.device, dtype=q.dtype)
-    if position_ids_1d is None:
-        seq_length = position_ids[..., -1] + 1
-        position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
-        position_ids_1d = torch.cat(position_ids_1d)
+    if cos.device != q.device:
+        cos = cos.to(device=q.device)
+    if sin.device != q.device:
+        sin = sin.to(device=q.device)
 
     if q_embed is None:
         q_embed = torch.empty_like(q)
     if k_embed is None:
         k_embed = torch.empty_like(k)
 
-    seq_len = position_ids_1d.size(-1)
+    seq_len = cos.numel() // cos.size(-1)
     BLOCK = 32
     half_size = q.size(-1) // 2
     BLOCK_N = triton.next_power_of_2(half_size)
@@ -172,7 +166,6 @@ def apply_rotary_pos_emb(q: Tensor,
                                          k,
                                          cos,
                                          sin,
-                                         position_ids_1d,
                                          q_embed,
                                          k_embed,
                                          seq_len=seq_len,

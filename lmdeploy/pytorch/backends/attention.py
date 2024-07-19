@@ -1,49 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# modify from:
-# https://github.com/vllm-project/vllm/blob/main/vllm/attention/backends/abstract.py
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Generic, Tuple, Type, TypeVar
+from typing import Generic, TypeVar
 
 import torch
-
-
-class AttentionBackend(ABC):
-
-    @staticmethod
-    @abstractmethod
-    def get_name() -> str:
-        raise NotImplementedError
-
-    @staticmethod
-    @abstractmethod
-    def get_impl_cls() -> Type['AttentionImpl']:
-        raise NotImplementedError
-
-    @staticmethod
-    @abstractmethod
-    def get_metadata_cls() -> Type['AttentionMetadata']:
-        raise NotImplementedError
-
-    @staticmethod
-    @abstractmethod
-    def get_k_block_shape(
-        block_size: int,
-        num_heads: int,
-        head_size: int,
-        dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
-        raise NotImplementedError
-
-    @staticmethod
-    @abstractmethod
-    def get_v_block_shape(
-        block_size: int,
-        num_heads: int,
-        head_size: int,
-        dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
-        raise NotImplementedError
 
 
 @dataclass
@@ -100,4 +60,21 @@ class AttentionImpl(ABC, Generic[T]):
         v_cache: torch.Tensor,
         attn_metadata: T,
     ) -> torch.Tensor:
+        raise NotImplementedError
+
+
+class AttentionBuilder(ABC, Generic[T]):
+
+    @staticmethod
+    @abstractmethod
+    def build(
+        num_heads: int,
+        head_size: int,
+        scale: float = None,
+        num_kv_heads: int = None,
+        v_head_size: int = None,
+        alibi_scale: float = None,
+        sliding_window: int = None,
+        **kwargs,
+    ) -> AttentionImpl[T]:
         raise NotImplementedError

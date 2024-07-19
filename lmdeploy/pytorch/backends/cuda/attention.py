@@ -1,50 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple, Type
-
 import torch
 
-from .base import AttentionBackend, AttentionImpl, AttentionMetadata
-
-
-class TritonAttentionBackend(AttentionBackend):
-
-    @staticmethod
-    def get_name() -> str:
-        raise 'triton'
-
-    @staticmethod
-    def get_impl_cls() -> Type['AttentionImpl']:
-        return TritonAttentionImpl
-
-    @staticmethod
-    def get_metadata_cls() -> Type['AttentionMetadata']:
-        return TritonAttentionMetadata
-
-    @staticmethod
-    def get_k_block_shape(
-        block_size: int,
-        num_heads: int,
-        head_size: int,
-        dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
-        return (
-            block_size,
-            num_heads,
-            head_size,
-        )
-
-    @staticmethod
-    def get_v_block_shape(
-        block_size: int,
-        num_heads: int,
-        head_size: int,
-        dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
-        return (
-            block_size,
-            num_heads,
-            head_size,
-        )
+from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
 
 
 class TritonAttentionMetadata(AttentionMetadata):
@@ -132,3 +89,26 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         )
 
         return attn_output
+
+
+class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
+
+    @staticmethod
+    def build(
+        num_heads: int,
+        head_size: int,
+        scale: float = None,
+        num_kv_heads: int = None,
+        v_head_size: int = None,
+        alibi_scale: float = None,
+        sliding_window: int = None,
+        **kwargs,
+    ) -> TritonAttentionImpl:
+        return TritonAttentionImpl(num_heads,
+                                   head_size,
+                                   scale=scale,
+                                   num_kv_heads=num_kv_heads,
+                                   v_head_size=v_head_size,
+                                   alibi_scale=alibi_scale,
+                                   sliding_window=sliding_window,
+                                   **kwargs)
