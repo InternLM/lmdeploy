@@ -169,7 +169,7 @@ def get_benchmark_model_list(tp_num,
         ]
     else:
         case_list = config.get('benchmark_model')
-    quatization_case_config = config.get('quatization_case_config')
+    quatization_case_config = config.get('turbomind_quatization')
     for key in quatization_case_config.get('4bits'):
         if key in case_list:
             case_list.append(key + '-inner-4bits')
