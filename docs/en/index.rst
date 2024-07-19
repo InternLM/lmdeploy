@@ -83,6 +83,7 @@ Documentation
    serving/api_server.md
    serving/api_server_vl.md
    serving/api_server_tools.md
+   serving/api_server_lora.md
    serving/gradio.md
    serving/proxy_server.md
 
