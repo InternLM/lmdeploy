@@ -720,62 +720,64 @@ class TurboMindInstance:
         prev_len = 0
         # generator
         while True:
-            while que.qsize() == 0:  # let other requests in
-                await asyncio.sleep(0.002)
+            try:
+                while que.qsize() == 0:  # let other requests in
+                    await asyncio.sleep(0.002)
 
-            finish, tm_outputs = que.get()
+                finish, tm_outputs = que.get()
 
-            outputs = _tm_dict_to_torch_dict(tm_outputs)
+                outputs = _tm_dict_to_torch_dict(tm_outputs)
 
-            output_ids = outputs['output_ids'][:, 0, :]
-            sequence_length = outputs['sequence_length'].long()[:, 0]
-            output_ids = [
-                output_id[s:l] for output_id, s, l in zip(
-                    output_ids, seq_start, sequence_length)
-            ]
-            sequence_length -= seq_start.to(sequence_length.device)
+                output_ids = outputs['output_ids'][:, 0, :]
+                sequence_length = outputs['sequence_length'].long()[:, 0]
+                output_ids = [
+                    output_id[s:l] for output_id, s, l in zip(
+                        output_ids, seq_start, sequence_length)
+                ]
+                sequence_length -= seq_start.to(sequence_length.device)
 
-            if 'logprob_vals' in outputs:
-                logprob_vals = outputs['logprob_vals'][0, 0]
-                logprob_indexes = outputs['logprob_indexes'][0, 0]
-                logprob_nums = outputs['logprob_nums'][0, 0]
-                out_logprobs = self._get_logprobs(logprob_vals,
-                                                  logprob_indexes,
-                                                  logprob_nums, output_ids[0],
-                                                  gen_config.logprobs,
-                                                  sequence_length.cpu().item(),
-                                                  out_logprobs, session_id)
+                if 'logprob_vals' in outputs:
+                    logprob_vals = outputs['logprob_vals'][0, 0]
+                    logprob_indexes = outputs['logprob_indexes'][0, 0]
+                    logprob_nums = outputs['logprob_nums'][0, 0]
+                    out_logprobs = self._get_logprobs(
+                        logprob_vals, logprob_indexes, logprob_nums,
+                        output_ids[0], gen_config.logprobs,
+                        sequence_length.cpu().item(), out_logprobs, session_id)
 
-            outputs = []
-            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
-            for output, len_ in zip(output_ids, sequence_length):
-                output, len_ = output, len_.item()
-                if len(output) > 0 and output[-1].item() == self.eos_id \
-                        and not gen_config.ignore_eos:
-                    outputs = EngineOutput(status, output[:-1].tolist(),
-                                           len_ - 1)
-                elif len(output) > 0 and \
-                    gen_config.stop_words is not None and \
-                        output[-1].item() in gen_config.stop_words:
-                    outputs = EngineOutput(status, output[:-1].tolist(), len_)
+                outputs = []
+                status = ResponseType.FINISH if finish \
+                    else ResponseType.SUCCESS
+                for output, len_ in zip(output_ids, sequence_length):
+                    output, len_ = output, len_.item()
+                    if len(output) > 0 and output[-1].item() == self.eos_id \
+                            and not gen_config.ignore_eos:
+                        outputs = EngineOutput(status, output[:-1].tolist(),
+                                               len_ - 1)
+                    elif len(output) > 0 and \
+                        gen_config.stop_words is not None and \
+                            output[-1].item() in gen_config.stop_words:
+                        outputs = EngineOutput(status, output[:-1].tolist(),
+                                               len_)
+                    else:
+                        outputs = EngineOutput(status, output.tolist(), len_)
+                if outputs.num_token < prev_len and not finish:
+                    continue
                 else:
-                    outputs = EngineOutput(status, output.tolist(), len_)
-            if outputs.num_token < prev_len and not finish:
-                continue
-            else:
-                prev_len = outputs.num_token
+                    prev_len = outputs.num_token
 
-            if out_logprobs:
-                output_token_len = len(outputs.token_ids)
-                outputs.logprobs = out_logprobs[:output_token_len]
+                if out_logprobs:
+                    output_token_len = len(outputs.token_ids)
+                    outputs.logprobs = out_logprobs[:output_token_len]
 
-            yield outputs
+                yield outputs
 
-            if finish:
-                for t in self.threads:
-                    t.join()
-                break
-
+                if finish:
+                    for t in self.threads:
+                        t.join()
+                    break
+            except Exception as e:
+                logger.error(f'[async_stream_infer]catch exception: {e}')
         if stream_output and not stop:
             logger.info(f'UN-register stream callback for {session_id}')
             self.model_insts[0].unregister_callback()
@@ -834,61 +836,63 @@ class TurboMindInstance:
 
         # generator
         while True:
-            while self.que.qsize() > 1:
-                self.que.get()
-
-            finish, tm_outputs = self.que.get()
-
-            outputs = _tm_dict_to_torch_dict(tm_outputs)
-
-            output_ids = outputs['output_ids'][:, 0, :]
-            sequence_length = outputs['sequence_length'].long()[:, 0]
-            output_ids = [
-                output_id[s:l] for output_id, s, l in zip(
-                    output_ids, seq_start, sequence_length)
-            ]
-            sequence_length -= seq_start.to(sequence_length.device)
-
-            if 'logprob_vals' in outputs:
-                logprob_vals = outputs['logprob_vals'][0, 0]
-                logprob_indexes = outputs['logprob_indexes'][0, 0]
-                logprob_nums = outputs['logprob_nums'][0, 0]
-                out_logprobs = self._get_logprobs(logprob_vals,
-                                                  logprob_indexes,
-                                                  logprob_nums, output_ids[0],
-                                                  gen_config.logprobs,
-                                                  sequence_length.cpu().item(),
-                                                  out_logprobs, session_id)
-
-            outputs = []
-            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
-            for output, len_ in zip(output_ids, sequence_length):
-                output, len_ = output, len_.item()
-                if len(output) > 0 and output[-1].item() == self.eos_id \
-                        and not gen_config.ignore_eos:
-                    outputs = EngineOutput(status, output[:-1].tolist(),
-                                           len_ - 1, out_logprobs)
-                elif len(output) > 0 and \
-                    gen_config.stop_words is not None and \
-                        output[-1].item() in gen_config.stop_words:
-                    outputs = EngineOutput(status, output[:-1].tolist(), len_,
-                                           out_logprobs)
-                else:
-                    outputs = EngineOutput(status, output.tolist(), len_,
-                                           out_logprobs)
-
-            if out_logprobs:
-                output_token_len = len(outputs.token_ids)
-                outputs.logprobs = out_logprobs[:output_token_len]
-
-            yield outputs
-
-            if finish:
-                for t in self.threads:
-                    t.join()
-                while self.que.qsize() > 0:
+            try:
+                while self.que.qsize() > 1:
                     self.que.get()
-                break
+
+                finish, tm_outputs = self.que.get()
+
+                outputs = _tm_dict_to_torch_dict(tm_outputs)
+
+                output_ids = outputs['output_ids'][:, 0, :]
+                sequence_length = outputs['sequence_length'].long()[:, 0]
+                output_ids = [
+                    output_id[s:l] for output_id, s, l in zip(
+                        output_ids, seq_start, sequence_length)
+                ]
+                sequence_length -= seq_start.to(sequence_length.device)
+
+                if 'logprob_vals' in outputs:
+                    logprob_vals = outputs['logprob_vals'][0, 0]
+                    logprob_indexes = outputs['logprob_indexes'][0, 0]
+                    logprob_nums = outputs['logprob_nums'][0, 0]
+                    out_logprobs = self._get_logprobs(
+                        logprob_vals, logprob_indexes, logprob_nums,
+                        output_ids[0], gen_config.logprobs,
+                        sequence_length.cpu().item(), out_logprobs, session_id)
+
+                outputs = []
+                status = ResponseType.FINISH if finish \
+                    else ResponseType.SUCCESS
+                for output, len_ in zip(output_ids, sequence_length):
+                    output, len_ = output, len_.item()
+                    if len(output) > 0 and output[-1].item() == self.eos_id \
+                            and not gen_config.ignore_eos:
+                        outputs = EngineOutput(status, output[:-1].tolist(),
+                                               len_ - 1, out_logprobs)
+                    elif len(output) > 0 and \
+                        gen_config.stop_words is not None and \
+                            output[-1].item() in gen_config.stop_words:
+                        outputs = EngineOutput(status, output[:-1].tolist(),
+                                               len_, out_logprobs)
+                    else:
+                        outputs = EngineOutput(status, output.tolist(), len_,
+                                               out_logprobs)
+
+                if out_logprobs:
+                    output_token_len = len(outputs.token_ids)
+                    outputs.logprobs = out_logprobs[:output_token_len]
+
+                yield outputs
+
+                if finish:
+                    for t in self.threads:
+                        t.join()
+                    while self.que.qsize() > 0:
+                        self.que.get()
+                    break
+            except Exception as e:
+                logger.error(f'[stream_infer] catch exception {e}')
 
         if stream_output and not stop:
             logger.info(f'UN-register stream callback for {session_id}')
