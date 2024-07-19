@@ -6,11 +6,11 @@ from utils.config_utils import get_workerid
 
 DEFAULT_PORT = 23333
 
-# GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
-# GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 200000 -ct 1024 -pt 198000'
+GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
+GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 200000 -ct 1024 -pt 198000'
 
-GENERATION_CONFIG = ' -c 8 -ct 128 -pt 128'
-GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 100 -ct 128 -pt 128'
+# GENERATION_CONFIG = ' -c 8 -ct 128 -pt 128'
+# GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 100 -ct 128 -pt 128'
 
 
 def generation_test(config,
@@ -110,7 +110,7 @@ def throughput_test(config,
     if is_smoke:
         run_config = '--num-prompts 300'
     else:
-        run_config = '--num-prompts 400'
+        run_config = '--num-prompts 3000'
     if backend == 'pytorch':
         command += ' --backend pytorch'
     else:
