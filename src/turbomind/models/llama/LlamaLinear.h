@@ -12,6 +12,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/gemm.h"
 #include "src/turbomind/utils/logger.h"
+#include <cstdlib>
 #include <type_traits>
 
 namespace turbomind {
@@ -33,13 +34,13 @@ public:
 
     LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream): cublas_wrapper_(cublas_wrapper), stream_(stream)
     {
-        // std::ifstream ifs("tm_cache");
-        // gemm_.Import(ifs);
+        std::ifstream ifs("tm_cache");
+        gemm_.Import(ifs);
 
         workspace_ = {};
 
-        workspace_.barriers_size = 1 << 20;
-        workspace_.partials_size = 32 << 20;
+        workspace_.barriers_size = gemm::Gemm::kBarriersSize;
+        workspace_.partials_size = gemm::Gemm::kPartialsSize;
         cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, stream_);
         cudaMallocAsync(&workspace_.partials, workspace_.partials_size, stream_);
         cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, stream_);
@@ -124,7 +125,7 @@ private:
     {
         using namespace gemm;
 
-        const Operation operation{gemm::DispatchPolicy::kDefault,
+        const Operation operation{gemm::DispatchPolicy::kReuse,
                                   type == kFusedSiluFfn ? Epilogue::kGatedSilu : Epilogue::kNone,
                                   {QuantType::kNone},
                                   {QuantType::kDefault, weight.group_size}};

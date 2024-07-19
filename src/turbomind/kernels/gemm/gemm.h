@@ -37,6 +37,9 @@ public:
 
     [[maybe_unused]] int Import(std::istream& is);
 
+    static constexpr size_t kBarriersSize = 1 << 20;
+    static constexpr size_t kPartialsSize = 32 << 20;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

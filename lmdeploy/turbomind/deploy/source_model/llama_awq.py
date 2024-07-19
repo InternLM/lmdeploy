@@ -3,7 +3,7 @@ import torch
 
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
-
+from .internlm2 import unpack_awq_gemm
 
 def ensure_fp16orint32(tensors: torch.Tensor):
     """Ensure tensors in fp16/int32 format."""
@@ -27,29 +27,35 @@ class LlamaAwqReader(LlamaReader):
                  model_cfg: dict):
         super().__init__(new_params, unused_params, last_bin, model_cfg)
 
+    def _transform(self, x: torch.Tensor):
+        x = x.cuda()
+        if x.dtype != torch.int32:
+            return x.T
+        return unpack_awq_gemm(x).T
+
     def attn(self, i: int):
         """Get q, k, v, o qweight for layer i."""
-        return ensure_fp16orint32(self._attn(i, 'qweight'))
+        return tuple(map(self._transform, self._attn(i, 'qweight')))
 
     def attn_zero(self, i: int):
         """Get q, k, v, o qzeros for layer i."""
-        return ensure_fp16orint32(self._attn(i, 'qzeros'))
+        return tuple(map(self._transform, self._attn(i, 'qzeros')))
 
     def attn_scale(self, i: int):
         """Get q, k, v, o scales for layer i."""
-        return ensure_fp16orint32(self._attn(i, 'scales'))
+        return tuple(map(self._transform, self._attn(i, 'scales')))
 
     def ffn(self, i: int):
         """Get ffn qweight for layer i."""
-        return ensure_fp16orint32(self._ffn(i, 'qweight'))
+        return tuple(map(self._transform, self._ffn(i, 'qweight')))
 
     def ffn_zero(self, i: int):
         """Get ffn qzeros for layer i."""
-        return ensure_fp16orint32(self._ffn(i, 'qzeros'))
+        return tuple(map(self._transform, self._ffn(i, 'qzeros')))
 
     def ffn_scale(self, i: int):
         """Get ffn scales for layer i."""
-        return ensure_fp16orint32(self._ffn(i, 'scales'))
+        return tuple(map(self._transform, self._ffn(i, 'scales')))
 
 
 @INPUT_MODELS.register_module(name='llama-awq')

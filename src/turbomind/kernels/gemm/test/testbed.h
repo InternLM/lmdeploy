@@ -40,8 +40,6 @@ template<class Ta,
          Pack  pack_v = 0>
 class Testbed {
 public:
-    static constexpr size_t kMaxSplits = 16;
-
     Testbed(): dispatch_policy_{DispatchPolicy::kDefault} {}
 
     Testbed(DispatchPolicy dispatch_policy, std::string cache_path):
@@ -105,8 +103,8 @@ public:
         a_pack_.resize(a_.size() / kVecSize);
         b_pack_.resize(b_.size() / kVecSize);
 
-        barriers_.resize(m_ * n_);
-        partials_.resize(kMaxSplits * m_ * n_);
+        barriers_.resize(Gemm::kBarriersSize);
+        partials_.resize(Gemm::kPartialsSize);
 
         rng_.GenerateUniform(a_.data().get(), a_.size(), 1, -.5f);
         rng_.GenerateUniform(b_.data().get(), b_.size(), 1, -.5f);
@@ -213,10 +211,7 @@ public:
             quant_b_,
         };
 
-        const Workspace workspace{barriers_.data().get(),
-                                  sizeof(int) * barriers_.size(),
-                                  partials_.data().get(),
-                                  sizeof(float) * partials_.size()};
+        const Workspace workspace{barriers_.data().get(), barriers_.size(), partials_.data().get(), partials_.size()};
 
         auto status = gemm_.Run(operation,
                                 1.f,
@@ -333,8 +328,8 @@ private:
     QuantDesc quant_a_{};
     QuantDesc quant_b_{};
 
-    universal_vector<int>   barriers_;
-    universal_vector<float> partials_;
+    universal_vector<char> barriers_;
+    universal_vector<char> partials_;
 
     cudaStream_t stream_;
 

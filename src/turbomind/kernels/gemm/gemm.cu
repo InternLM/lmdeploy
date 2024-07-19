@@ -81,7 +81,7 @@ struct Gemm::Impl {
             // if (it != dispatch_cache_.end()) {
             //     std::cout << is_compatible(it->first, desc) << " " << it->second.kernel->is_feasible(desc) << "\n";
             // }
-            std::cout << "Failed to find a feasible kernel in the cache, will dispatch by heuristic.\n";
+            std::cerr << "Failed to find a feasible kernel in the cache, will dispatch by heuristic.\n";
         }
 
         if (auto it = dispatch_cache_.find(desc); it != dispatch_cache_.end()) {
@@ -139,12 +139,9 @@ struct Gemm::Impl {
         std::vector<std::pair<float, int>> costs;
 
         for (const auto& k : kernels) {
-            // std::cout << "\n" << k->name() << "\n";
+            const int max_splits = std::min(k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size), 4);
 
-            int max_splits = k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
-            max_splits     = std::min(max_splits, 4);
-
-            auto [splits, cost] = k->Estimate(desc.m,  //
+            auto [splits, cost] = k->Estimate(desc.m,
                                               desc.n,
                                               desc.k,
                                               max_splits,
@@ -154,6 +151,7 @@ struct Gemm::Impl {
                                               l2_bytes_per_second_,
                                               fma_per_second_)
                                       .front();
+
             costs.emplace_back(cost, splits);
         }
 
@@ -213,7 +211,8 @@ struct Gemm::Impl {
                                       l2_bytes_per_second_,
                                       fma_per_second_);
             for (const auto& [split_k, cost] : splits) {
-                for (const auto& swizzle : {0, 1, 2, 3}) {
+                // for (const auto& swizzle : {0, 1, 2, 3}) {
+                for (const auto& swizzle : {3}) {
                     if (auto s = k->GetSwizzle(desc.m, desc.n, desc.k, split_k, swizzle); s != swizzle) {
                         // Skip when swizzle is starting to get truncated
                         break;

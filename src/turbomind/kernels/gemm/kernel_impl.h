@@ -122,12 +122,28 @@ public:
         const MatrixLayout Bdesc = transpose(_Bdesc);
         const MatrixLayout Vdesc = transpose(_Vdesc);
 
-        const auto tiles = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, splits);
+        auto tiles = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, splits);
 
-        if (splits > 1 && workspace.barriers == nullptr && workspace.partials == nullptr) {
-            GetWorkspaceSizes(m, n, tiles.x, tiles.y, splits, workspace.barriers_size, workspace.partials_size);
-            std::cout << "not enough workspace for " << splits << " splits\n";
-            return -1;
+        if (splits > 1) {
+            size_t bsize{}, psize{};
+            GetWorkspaceSizes(m, n, tiles.x, tiles.y, splits, bsize, psize);
+            const int max_splits = GetMaxSplits(m, n, workspace.barriers_size, workspace.partials_size);
+            if (workspace.barriers_size < bsize || workspace.partials_size < psize) {
+                fprintf(
+                    stderr,
+                    "Problem size (%d, %d, %d), workspace size too small (%d, %d) vs required (%d, %d) for %d splits. Force `splits` = %d\n",
+                    m,
+                    n,
+                    k,
+                    (int)workspace.barriers_size,
+                    (int)workspace.partials_size,
+                    (int)bsize,
+                    (int)psize,
+                    splits,
+                    max_splits);
+                splits = max_splits;
+                tiles  = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, splits);
+            }
         }
 
         swizzle = Map::get_log_tile(tiles, 1 << swizzle);
@@ -184,14 +200,14 @@ public:
 
         const bool silu_act = ((int)operation.epilogue & (int)Epilogue::kGatedSilu);
 
-        const int partial_C = mk2cs<Gemm::kOrderC>(Cdesc.rows, Cdesc.cols).x;
+        const int partial_C_ld = mk2cs<Gemm::kOrderC>(Cdesc.rows, Cdesc.cols).x;
 
         typename Gemm::Epilogue::Param epilogue{m,
                                                 n,
                                                 (Tc*)D,
                                                 Cdesc.ld,
                                                 (float*)workspace.partials,
-                                                partial_C,
+                                                partial_C_ld,
                                                 (int*)workspace.barriers,
                                                 {},
                                                 {alpha, beta},
@@ -252,13 +268,13 @@ public:
         const int tiled_m = ceil_div(m, CTA_M);
         const int tiled_n = ceil_div(n, CTA_N);
 
-        size_t barriers_per_split{};
-        size_t partials_per_split{};
+        size_t bsize_1split{};
+        size_t psize_1split{};
 
         // workspace for 1 non-trival split
-        GetWorkspaceSizes(m, n, tiled_m, tiled_n, 1, barriers_per_split, partials_per_split);
+        GetWorkspaceSizes(m, n, tiled_m, tiled_n, 1, bsize_1split, psize_1split);
 
-        if (barrier_size >= barriers_per_split && partials_size >= partials_per_split) {
+        if (barrier_size >= bsize_1split && partials_size >= psize_1split) {
             // Serial split-k requires workspace for 1 split only
             return 32;
         }
