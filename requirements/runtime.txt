@@ -3,6 +3,7 @@ einops
 fastapi
 fire
 mmengine-lite
+nest_asyncio
 numpy<2.0.0
 peft<=0.11.1
 pillow
