@@ -84,13 +84,14 @@ public:
         if (isExist(ptr_address)) {
             ReallocType realloc_type = isReMalloc(ptr_address, size);
             if (realloc_type == ReallocType::INCREASE) {
-                TM_LOG_DEBUG("ReMalloc the buffer %p since it is too small.", void_ptr);
+                TM_LOG_DEBUG("ReMalloc the buffer %p with size %d since it is too small.", void_ptr, size);
                 free((void**)(&void_ptr), is_host);
                 return malloc(size, is_set_zero, is_host);
             }
 #if !defined(CUDA_MEMORY_POOL_DISABLED)
             else if (realloc_type == ReallocType::DECREASE) {
-                TM_LOG_DEBUG("ReMalloc the buffer %p to release unused memory to memory pools.", void_ptr);
+                TM_LOG_DEBUG(
+                    "ReMalloc the buffer %p with size %d to release unused memory to memory pools.", void_ptr, size);
                 free((void**)(&void_ptr), is_host);
                 return malloc(size, is_set_zero, is_host);
             }

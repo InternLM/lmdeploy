@@ -94,6 +94,10 @@ void TopKSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
         // a greedy decode, i.e. top_k=1, although such case has max_top_k=0.
         max_top_k = 1;
     }
+    if (max_top_k > 1024) {
+        TM_LOG_DEBUG("invalid max_top_k %u, setting it to 1024 instead", max_top_k);
+        max_top_k = 1024;
+    }
     invokeTopKSampling<T>(nullptr,
                           sampling_workspace_size_,
                           nullptr,
