@@ -17,13 +17,12 @@ BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 
 
-def start_restful_api(config, param, model, model_path, backend_tpye,
+def start_restful_api(config, param, model, model_path, backend_type,
                       worker_id):
     log_path = config.get('log_path')
 
     cuda_prefix = param['cuda_prefix']
     tp_num = param['tp_num']
-    print(param)
     if 'extra' in param.keys():
         extra = param['extra']
     else:
@@ -52,16 +51,19 @@ def start_restful_api(config, param, model, model_path, backend_tpye,
                                  cuda_prefix=cuda_prefix,
                                  extra=extra)
 
-    if backend_tpye == 'turbomind' and ('w4' in model or '4bits' in model
+    if backend_type == 'turbomind' and ('w4' in model or '4bits' in model
                                         or 'awq' in model.lower()):
         cmd += ' --model-format awq'
-    if backend_tpye == 'pytorch':
+    if backend_type == 'pytorch':
         cmd += ' --backend pytorch'
     if 'llava' in model:
         cmd += ' --model-name vicuna'
+    if backend_type == 'turbomind' and 'quant_policy' in param.keys():
+        quant_policy = param['quant_policy']
+        cmd += f' --quant-policy {quant_policy}'
 
-    start_log = os.path.join(log_path,
-                             'start_restful_' + model.split('/')[1] + '.log')
+    start_log = os.path.join(
+        log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
 
     print('reproduce command restful: ' + cmd)
 

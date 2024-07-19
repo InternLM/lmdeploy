@@ -262,53 +262,45 @@ def generate_benchmark_report(report_path: str):
             benchmark_subfolders = [
                 f.path for f in os.scandir(sec_dir_path) if f.is_dir()
             ]
-            for benchmark_subfolder in benchmark_subfolders:
-                backend_subfolders = [
-                    f.path for f in os.scandir(benchmark_subfolder)
-                    if f.is_dir()
-                ]
-                for backend_subfolder in backend_subfolders:
-                    benchmark_type = backend_subfolder.replace(
-                        sec_dir_path + '/', '')
-                    print('*' * 10, benchmark_type, '*' * 10)
-                    _append_summary('-' * 10 + benchmark_type + '-' * 10 +
-                                    '\n')
-                    merged_csv_path = os.path.join(backend_subfolder,
-                                                   'summary.csv')
-                    csv_files = glob.glob(
-                        os.path.join(backend_subfolder, '*.csv'))
-                    average_csv_path = os.path.join(backend_subfolder,
-                                                    'average.csv')
-                    if merged_csv_path in csv_files:
-                        csv_files.remove(merged_csv_path)
-                    if average_csv_path in csv_files:
-                        csv_files.remove(average_csv_path)
-                    merged_df = pd.DataFrame()
+            for backend_subfolder in benchmark_subfolders:
+                benchmark_type = backend_subfolder.replace(
+                    sec_dir_path + '/', '')
+                print('*' * 10, benchmark_type, '*' * 10)
+                _append_summary('-' * 10 + benchmark_type + '-' * 10 + '\n')
+                merged_csv_path = os.path.join(backend_subfolder,
+                                               'summary.csv')
+                csv_files = glob.glob(os.path.join(backend_subfolder, '*.csv'))
+                average_csv_path = os.path.join(backend_subfolder,
+                                                'average.csv')
+                if merged_csv_path in csv_files:
+                    csv_files.remove(merged_csv_path)
+                if average_csv_path in csv_files:
+                    csv_files.remove(average_csv_path)
+                merged_df = pd.DataFrame()
 
-                    if len(csv_files) > 0:
-                        for f in csv_files:
-                            df = pd.read_csv(f)
-                            merged_df = pd.concat([merged_df, df],
-                                                  ignore_index=True)
+                if len(csv_files) > 0:
+                    for f in csv_files:
+                        df = pd.read_csv(f)
+                        merged_df = pd.concat([merged_df, df],
+                                              ignore_index=True)
 
-                        merged_df = merged_df.sort_values(
-                            by=merged_df.columns[0])
+                    merged_df = merged_df.sort_values(by=merged_df.columns[0])
 
-                        grouped_df = merged_df.groupby(merged_df.columns[0])
-                        if 'generation' not in benchmark_subfolder:
-                            average_values = grouped_df.pipe(
-                                (lambda group: {
-                                    'mean': group.mean().round(decimals=3)
-                                }))['mean']
-                            average_values.to_csv(average_csv_path, index=True)
-                            avg_df = pd.read_csv(average_csv_path)
-                            merged_df = pd.concat([merged_df, avg_df],
-                                                  ignore_index=True)
-                            add_summary(average_csv_path)
-                        merged_df.to_csv(merged_csv_path, index=False)
-                        if 'generation' in benchmark_subfolder:
-                            add_summary(merged_csv_path)
-                        print(merged_df)
+                    grouped_df = merged_df.groupby(merged_df.columns[0])
+                    if 'generation' not in backend_subfolder:
+                        average_values = grouped_df.pipe(
+                            (lambda group: {
+                                'mean': group.mean().round(decimals=3)
+                            }))['mean']
+                        average_values.to_csv(average_csv_path, index=True)
+                        avg_df = pd.read_csv(average_csv_path)
+                        merged_df = pd.concat([merged_df, avg_df],
+                                              ignore_index=True)
+                        add_summary(average_csv_path)
+                    merged_df.to_csv(merged_csv_path, index=False)
+                    if 'generation' in backend_subfolder:
+                        add_summary(merged_csv_path)
+
     _append_summary('## Evaluation Results End')
 
 
