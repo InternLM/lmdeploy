@@ -24,6 +24,13 @@ struct LlamaLinear<T>::Impl {
         cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, stream_);
     }
 
+    ~Impl()
+    {
+        cudaFreeAsync(workspace_.barriers, stream_);
+        cudaFreeAsync(workspace_.partials, stream_);
+        workspace_ = {};
+    }
+
     void forward(T*                         output_data,
                  Pitched                    input_data,
                  int                        batch_size,

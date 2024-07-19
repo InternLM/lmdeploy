@@ -186,6 +186,8 @@ private:
 
     LlamaWeight<T>* weights_{};
 
+    LlamaLinear<T> linear_;
+
     std::unique_ptr<UnifiedDecoder<T>> unified_decoder_;
     DynamicDecodeLayer<float>*         dynamic_decode_layer_{};
 
