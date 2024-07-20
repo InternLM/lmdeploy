@@ -17,10 +17,10 @@ from ..config import CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
 from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
+from ..model_inputs import AdapterInfo, ModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
-from .model_agent import (AdapterInfo, AutoModelAgent, ModelInputs,
-                          VisionModelInputs)
+from .model_agent import AutoModelAgent
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')

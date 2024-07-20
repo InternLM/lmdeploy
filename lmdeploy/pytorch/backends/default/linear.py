@@ -2,6 +2,8 @@
 from torch import distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch.model_inputs import StepContextManager
+
 from ..linear import LinearBuilder, LinearImpl
 
 
@@ -22,5 +24,7 @@ class DefaultLinearImpl(LinearImpl):
 class DefaultLinearBuilder(LinearBuilder):
 
     @staticmethod
-    def build(mod: nn.Module, all_reduce: bool = False):
+    def build(mod: nn.Module,
+              ctx_mgr: StepContextManager = None,
+              all_reduce: bool = False):
         return DefaultLinearImpl(mod, all_reduce)

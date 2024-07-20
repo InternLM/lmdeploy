@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import List
+from typing import Any, List
 
 import torch
 import torch.distributed as dist
@@ -101,6 +101,7 @@ class BaseLinear(nn.Module):
     def __init__(self,
                  mod: nn.Module,
                  adapter_infos: List[AdapterInfo] = None,
+                 ctx_mgr: Any = None,
                  all_reduce: bool = False):
         super().__init__()
         layer_backend = get_backend()
@@ -110,7 +111,7 @@ class BaseLinear(nn.Module):
                 LayerType.Linear)
         else:
             raise NotImplementedError(f'Unsupported linear type: {type(mod)}')
-        self.impl = impl_builder.build(mod, all_reduce)
+        self.impl = impl_builder.build(mod, ctx_mgr, all_reduce)
 
         adapter_infos = adapter_infos if adapter_infos is not None else []
         self.adapter = None
@@ -241,7 +242,10 @@ def _merge_awqlinear(*linears: List[nn.Module]):
     return merged_linear
 
 
-def build_merged_linear(*linears: List[nn.Module], free_origin=False):
+def build_merged_linear(*linears: List[nn.Module],
+                        ctx_mgr: Any = None,
+                        all_reduce: bool = False,
+                        free_origin=False):
     """merge linear."""
     base_layers = []
     out_features = []
@@ -284,7 +288,10 @@ def build_merged_linear(*linears: List[nn.Module], free_origin=False):
         base_layer = _merge_qlinear(*base_layers)
     else:
         raise NotImplementedError(f'Unknown linear type: {type(mod)}')
-    ret = build_linear(base_layer, adapter_infos)
+    ret = build_linear(base_layer,
+                       adapter_infos,
+                       ctx_mgr=ctx_mgr,
+                       all_reduce=all_reduce)
     if free_origin:
         for mod in linears:
             mod.to('meta')
@@ -292,10 +299,16 @@ def build_merged_linear(*linears: List[nn.Module], free_origin=False):
 
 
 def build_linear(mod: nn.Module,
-                 adapter_infos: List[AdapterInfo] = None) -> nn.Module:
+                 adapter_infos: List[AdapterInfo] = None,
+                 ctx_mgr: Any = None,
+                 all_reduce: bool = False) -> nn.Module:
     """build linear."""
+    if all_reduce:
+        world_size, rank = _get_world_rank()
+        all_reduce = world_size > 1
+
     if isinstance(mod, nn.Linear):
-        return BaseLinear(mod, adapter_infos)
+        return BaseLinear(mod, adapter_infos, ctx_mgr, all_reduce)
     elif isinstance(mod, WQLinear_GEMM):
         return AwqLinear(mod, adapter_infos)
     elif isinstance(mod, QLinear):

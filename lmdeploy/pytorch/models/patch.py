@@ -3,10 +3,9 @@ import importlib
 import inspect
 import re
 from copy import copy
-from typing import Any, Dict, Sequence
+from typing import Any, Dict
 
 import torch
-from addict import Addict
 
 from lmdeploy.utils import get_logger
 
@@ -112,115 +111,46 @@ def _update_module_type(model: Any, cls_type: type, custom_attrs: dict = None):
     return model
 
 
-def _patch(model: torch.nn.Module,
-           context: Addict,
-           module_map: Dict[str, str] = None) -> torch.nn.Module:
+def _patch(model: torch.nn.Module, module_map: Dict[str,
+                                                    str]) -> torch.nn.Module:
     """patch the model with rewrite module.
 
     Args:
         model (Module): model to be patched.
-        context (Addict): The environment info to patched in model
 
     Returns:
         Module: The patched model
     """
 
-    if module_map is None:
-        module_map = MODULE_MAP
-
-    def _recursive_children(context, named_children):
+    def _recursive_children(named_children):
         """recursive children."""
         for name, child in named_children:
-            patched_child = _patch(child, context, module_map=module_map)
-            if patched_child != child:
-                model.register_module(name, patched_child)
+            _patch(child, module_map=module_map)
 
-    _recursive_children(context, model.named_children())
+    _recursive_children(model.named_children())
     rewrite_qualname = _find_rewrite_module_qualname(model,
                                                      module_map=module_map)
 
     if rewrite_qualname is not None:
         cls_type = _class_from_qualname(rewrite_qualname)
-        model = _update_module_type(model, cls_type, dict(context=context))
+        if hasattr(cls_type, '_load_weights'):
+            setattr(model, '_load_weights', cls_type._load_weights)
 
     return model
 
 
-def _update_model(model: torch.nn.Module):
-    """Update model after patch and load.
-
-    Args:
-        model (Module): The model to be updated.
-    """
-    # recursive over children
-    for _, child in model.named_children():
-        _update_model(child)
-
-    if hasattr(model, '_update_model_fn'):
-        model._update_model_fn()
-
-
-def update_model(model: torch.nn.Module):
-    """update model."""
-    return _update_model(model)
-
-
-def _dist_model(model: torch.nn.Module, rank: int = 0):
-    """distribute model parameters."""
-
-    def _register_hooks():
-        """register hooks."""
-        if hasattr(model, '_distribute_input_fn'):
-            input_fn = model._distribute_input_fn
-            model.register_forward_pre_hook(
-                lambda _, inputs, inputs_dict: input_fn(inputs, inputs_dict),
-                with_kwargs=True,
-            )
-
-        if hasattr(model, '_distribute_output_fn'):
-            output_fn = model._distribute_output_fn
-            model.register_forward_hook(
-                lambda mod, inputs, outputs: output_fn(outputs))
-
-    for name, child in model.named_children():
-        if rank == 0:
-            logger.debug(f'Distribute module: <{name}>')
-        new_child = _dist_model(child, rank)
-        if new_child != child:
-            model.register_module(name, child)
-
-    _register_hooks()
-
-    return model
-
-
-class PatchedForward:
-    """patched forward."""
-
-    def __init__(self, model, context, extra_args):
-        self._model = model
-        self._patch_context: Dict = context
-        self._extra_args: list = extra_args
-
-    def __call__(self, *args, **kwargs):
-        for arg_name in self._extra_args:
-            extra_arg = kwargs.pop(arg_name, None)
-            self._patch_context[arg_name] = extra_arg
-
-        output = self._model(*args, **kwargs)
-
-        self._patch_context.clear()
-
-        return output
+def _get_module_map():
+    """get module map."""
+    module_map = MODULE_MAP.copy()
+    device_type = get_device_manager().current_context().device_type
+    if device_type != 'cuda':
+        device_map = DEVICE_SPECIAL_MODULE_MAP.get(device_type, dict())
+        module_map.update(device_map)
+    return module_map
 
 
 @torch.inference_mode()
-def patch(
-    model: torch.nn.Module,
-    extra_args: Sequence[str] = None,
-    rank: int = 0,
-    world_size: int = 1,
-):
+def patch(model: torch.nn.Module, ):
     """Patch the model with rewrite modules.
 
     Extra arguments will be patched in forward of model, weights on each rank
@@ -228,35 +158,25 @@ def patch(
 
     Args:
         model (Module): Model to be patched.
-        extra_args (Sequence[str]): Extra arguments of model forward.
-        rank (int): Distribution rank.
-        world_size (int): Distribution world size.
 
     Returns:
         Module: The patched model.
     """
-    if rank == 0:
-        logger.info('Patching model.')
-
-    if extra_args is None:
-        extra_args = []
-
-    _patch_context = Addict()
-
-    module_map = MODULE_MAP.copy()
-    device_type = get_device_manager().current_context().device_type
-    if device_type != 'cuda':
-        device_map = DEVICE_SPECIAL_MODULE_MAP.get(device_type, dict())
-        module_map.update(device_map)
-
-    model = _patch(model, _patch_context, module_map=module_map)
-
-    if world_size > 1:
-        model = _dist_model(model, rank)
-
-    patched_forward = PatchedForward(model,
-                                     _patch_context,
-                                     extra_args=extra_args)
-    model.patched_forward = patched_forward
-
+    module_map = _get_module_map()
+    model = _patch(model, module_map=module_map)
     return model
+
+
+def update_model(model: torch.nn.Module):
+    """build model."""
+    from lmdeploy.pytorch.model_inputs import StepContextManager
+    ctx_mgr = StepContextManager()
+    module_map = _get_module_map()
+
+    rewrite_qualname = _find_rewrite_module_qualname(model,
+                                                     module_map=module_map)
+
+    if rewrite_qualname is not None:
+        model_cls = _class_from_qualname(rewrite_qualname)
+
+    return model_cls(model, ctx_mgr)
