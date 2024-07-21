@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[tb_internlm2_chat_7b,tb_internlm2_chat_7b_w4a16,tb_internlm2_chat_7b_kvint4,pt_internlm2_chat_7b,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_internlm2_chat_20b_kvint4,pt_internlm2_chat_20b,tb_llama_3_8b_instruct,tb_llama_3_8b_instruct_w4a16,tb_llama_3_8b_instruct_kvint4,tb_qwen1_5_7b_chat,tb_qwen1_5_7b_chat_kvint4,tb_qwen1_5_7b_chat_w4a16,pt_qwen1_5_7b_chat,pt_qwen1_5_moe_2_7b_chat,tb_qwen2_7b_instruct,tb_qwen2_7b_instruct_w4a16,tb_qwen2_7b_instruct_kvint4]'
+        default: '[tb_internlm2_chat_7b, tb_internlm2_chat_7b_4bits, tb_internlm2_chat_7b_kvint4, tb_internlm2_chat_7b_kvint8, pt_internlm2_chat_7b, tb_internlm2_5_7b_chat, tb_internlm2_5_7b_chat_4bits, tb_internlm2_5_7b_chat_kvint4, tb_internlm2_5_7b_chat_kvint8, pt_internlm2_5_7b_chat, tb_internlm2_chat_20b, tb_internlm2_chat_20b_4bits, tb_internlm2_chat_20b_kvint4, tb_internlm2_chat_20b_kvint8, pt_internlm2_chat_20b, tb_qwen1_5_7b_chat, tb_qwen1_5_7b_chat_4bits, tb_qwen1_5_7b_chat_kvint4, tb_qwen1_5_7b_chat_kvint8, pt_qwen1_5_7b_chat,  tb_llama_3_8b_instruct, pt_llama_3_8b_instruct, tb_llama_3_8b_instruct_4bits, tb_llama_3_8b_instruct_kvint4, tb_llama_3_8b_instruct_kvint8, tb_qwen2_7b_instruct, tb_qwen2_7b_instruct_4bits, tb_qwen2_7b_instruct_kvint4, tb_qwen2_7b_instruct_kvint8, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]'
       datasets:
         required: true
         description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
@@ -41,13 +41,14 @@ on:
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'pynvml packaging protobuf transformers_stream_generator transformers'}}
 
 jobs:
   linux-build:
     if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py38]
+        pyver: [py310]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -84,7 +85,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 4320 # 72hours
     container:
-      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      image: nvcr.io/nvidia/tritonserver:24.03-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -93,6 +94,7 @@ jobs:
         - /nvme/github-actions/opencompass-data:/root/opencompass-data
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/root/models
+        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
@@ -107,17 +109,18 @@ jobs:
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py38
+          name: my-artifact-${{ github.run_id }}-py310
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs }}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl
@@ -126,7 +129,8 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
-          python3 -m pip install opencompass==0.2.5
+          python3 -m pip install -e .
+          python3 -m pip install triton==2.1.0
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |

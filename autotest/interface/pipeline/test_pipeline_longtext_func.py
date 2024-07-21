@@ -18,7 +18,7 @@ SESSION_LEN_PASSKEY_1M = 1048576
 
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', [
-    'internlm/internlm2-chat-7b', 'internlm/internlm2-7b',
+    'internlm/internlm2-chat-7b', 'internlm/internlm2_5-7b',
     'internlm/internlm2-chat-1_8b', 'internlm/internlm2-1_8b'
 ])
 def test_history_issue_tp1(config, model, worker_id):
@@ -151,8 +151,14 @@ def passkey_retrival(config,
                                                    use_logn_attn=True,
                                                    tp=tp_num)
     else:
-        backend_config = PytorchEngineConfig(session_len=session_len,
-                                             tp=tp_num)
+        if 'internlm2_5' in model and '-1m' in model:
+            backend_config = PytorchEngineConfig(session_len=session_len,
+                                                 max_batch_size=1,
+                                                 cache_max_entry_count=0.7,
+                                                 tp=tp_num)
+        else:
+            backend_config = PytorchEngineConfig(session_len=session_len,
+                                                 tp=tp_num)
 
     pipe = pipeline(model_path, backend_config=backend_config)
 

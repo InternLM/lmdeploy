@@ -15,9 +15,9 @@ on:
         default: 'main'
       benchmark_type:
         required: true
-        description: 'Set benchmark type. Default is "["generation", "throughtput", "api_server", "triton_server"]"'
+        description: 'Set benchmark type. Default is "["generation", "throughtput", "api_server"]"'
         type: string
-        default: "['generation', 'throughput', 'api_server', 'triton_server']"
+        default: "['generation', 'throughput', 'api_server']"
       backend:
         required: true
         description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
@@ -52,7 +52,7 @@ on:
         required: true
         description: 'Set models run benchmark'
         type: string
-        default: "['internlm/internlm2-chat-20b','internlm/internlm2-chat-20b-inner-4bits','meta-llama/Llama-2-7b-chat-hf','meta-llama/Llama-2-7b-chat-hf-inner-4bits','meta-llama/Meta-Llama-3-8B-Instruct','Qwen/Qwen1.5-32B-Chat']"
+        default: "['internlm/internlm2-chat-20b','internlm/internlm2-chat-20b-inner-4bits','internlm/internlm2_5-7b-chat','internlm/internlm2_5-7b-chat-inner-4bits','meta-llama/Llama-2-7b-chat-hf','meta-llama/Llama-2-7b-chat-hf-inner-4bits','meta-llama/Meta-Llama-3-8B-Instruct','meta-llama/Meta-Llama-3-8B-Instruct-inner-4bits','Qwen/Qwen2-72B-Instruct']"
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -62,16 +62,15 @@ env:
   DATASET_FILE: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
   TP_INFO: --tp 1
   LOOP_NUM: 1
-  TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'}}
 
 jobs:
   linux-build:
     if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py38]
+        pyver: [py310]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -115,12 +114,13 @@ jobs:
       MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
       CUDA_VISIBLE_DEVICES: 6,7
     container:
-      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      image: nvcr.io/nvidia/tritonserver:24.03-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -136,26 +136,29 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py38
+          name: my-artifact-${{ github.run_id }}-py310
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py38/lmdeploy-*.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
@@ -172,7 +175,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 8,256 -ct 128 128 2048 128 -pt 1 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $MAX_ENTRY_COUNT $MODEL_FORMAT $TP_INFO -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
       - name: Run generation benchmark - longtext turbomind
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(env.LONGTEXT_BENCHMARK, 'true')
         env:
@@ -188,7 +191,7 @@ jobs:
         run: |
           rm -rf ${result_dir}
           mkdir ${result_dir}
-          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 8,256 -ct 128 128 2048 128 -pt 1 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
+          python3 benchmark/profile_generation.py $MODEL_PATH $TP_INFO --backend pytorch -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048 --csv ${result_dir}/generation.csv > ${result_dir}/generation.log
       - name: Run generation benchmark - longtext pytorch
         if: (!contains(env.MODEL_FORMAT, 'awq') && contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(env.LONGTEXT_BENCHMARK, 'true'))
         env:
@@ -227,13 +230,14 @@ jobs:
       MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
       CUDA_VISIBLE_DEVICES: 4,5
     container:
-      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      image: nvcr.io/nvidia/tritonserver:24.03-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/qa_test_models/datasets/:/nvme/qa_test_models/datasets/
+        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -249,26 +253,29 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py38
+          name: my-artifact-${{ github.run_id }}-py310
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py38/lmdeploy-*.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
@@ -368,13 +375,14 @@ jobs:
       MODEL_PATH: /nvme/qa_test_models/${{matrix.model}}
       CUDA_VISIBLE_DEVICES: 6,7
     container:
-      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      image: nvcr.io/nvidia/tritonserver:24.03-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/qa_test_models/datasets/:/nvme/qa_test_models/datasets/
+        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -390,26 +398,29 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py38
+          name: my-artifact-${{ github.run_id }}-py310
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py38/lmdeploy-*.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
@@ -445,31 +456,6 @@ jobs:
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
           kill -15 "$restful_pid"
-      - name: Start restful api turbomind - kvint4
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
-        run: |
-          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MAX_BATCH_SIZE $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level ${{inputs.log_level}} > turbomind_kvint4_run.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
-      - name: Run restful benchmark -kvint4
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
-        env:
-          result_dir: benchmark-restful-turbomind-kvint4
-        run: |
-          rm -rf ${result_dir}
-          mkdir ${result_dir}
-          batches=($BATCHES)
-          for batch in "${batches[@]}"
-          do
-            for ((i=1; i<=$LOOP_NUM; i++))
-              do
-                python3 benchmark/profile_restful_api.py localhost:23333 $MODEL_PATH $DATASET_FILE --concurrency "$batch" --stream-output True --csv ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.log
-              done
-          done
-      - name: Kill restful api turbomind - kvint4
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
-        run: |
-          kill -15 "$restful_pid"
       - name: Start restful api turbomind - kvint8
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
         run: |
@@ -493,6 +479,31 @@ jobs:
           done
       - name: Kill restful api turbomind - kvint8
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint8')
+        run: |
+          kill -15 "$restful_pid"
+      - name: Start restful api turbomind - kvint4
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
+        run: |
+          lmdeploy serve api_server $MODEL_PATH $MAX_ENTRY_COUNT $MAX_BATCH_SIZE $MODEL_FORMAT $TP_INFO --quant-policy 4 --log-level ${{inputs.log_level}} > turbomind_kvint4_run.log 2>&1 &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 180s
+      - name: Run restful benchmark -kvint4
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
+        env:
+          result_dir: benchmark-restful-turbomind-kvint4
+        run: |
+          rm -rf ${result_dir}
+          mkdir ${result_dir}
+          batches=($BATCHES)
+          for batch in "${batches[@]}"
+          do
+            for ((i=1; i<=$LOOP_NUM; i++))
+              do
+                python3 benchmark/profile_restful_api.py localhost:23333 $MODEL_PATH $DATASET_FILE --concurrency "$batch" --stream-output True --csv ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/restful_csv_batch_"${batch}"_"${i}"th.log
+              done
+          done
+      - name: Kill restful api turbomind - kvint4
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.kvint_quantization), 'kvint4')
         run: |
           kill -15 "$restful_pid"
       - name: Start restful api pytorch
@@ -537,186 +548,9 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
-
-
-  triton_benchmark:
-    if: ${{github.event_name == 'schedule' || ((!cancelled() && contains(fromJSON(github.event.inputs.benchmark_type), 'triton_server')) && contains(fromJSON(github.event.inputs.backend), 'turbomind'))}}
-    runs-on: [self-hosted, linux-a100-2]
-    timeout-minutes: 120
-    env:
-      WORKDIR: /nvme/qa_test_models/triton_workspace
-      OFFLINE_PKGS: /nvme/qa_test_models/offline_pkg
-      MODEL_PATH: /nvme/qa_test_models/autotest_model/workspace_${{matrix.model}}
-      DEVICE: device=4
-      GRPC_PORT: 33337
-    strategy:
-      fail-fast: false
-      matrix:
-        model: ${{fromJSON(github.event.inputs.models)}}
-    steps:
-      - name: Clone repository
-        uses: actions/checkout@v3
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Set params
-        run: |
-          chmod +x .github/scripts/set_benchmark_param.sh
-          .github/scripts/set_benchmark_param.sh ${{matrix.model}}
-      - name: Set params - cuda allocate
-        if: contains( env.TP_INFO, '--tp 2')
-        run: |
-          echo 'DEVICE="device=4,5"' >> "$GITHUB_ENV"
-      - name: Create test container
-        run: |
-          export date_today="$(date +'%H%M%S')"
-          export CONTAINER_ID=$(docker create \
-            --rm \
-            --gpus=$DEVICE \
-            --shm-size 16g \
-            --cap-add=SYS_PTRACE \
-            --cap-add=SYS_ADMIN \
-            --security-opt seccomp=unconfined \
-            --name "lmdeploy-ci-triton-$GITHUB_RUN_ID-$date_today" \
-            --workdir /__w/lmdeploy/lmdeploy \
-            --env NCCL_LAUNCH_MODE=GROUP \
-            --pull never \
-            -v $(pwd)/../../:/__w \
-            -v ${MODEL_PATH}:${MODEL_PATH} \
-            -v ${WORKDIR}:/root/workspace/workdir \
-            -v ${OFFLINE_PKGS}:/root/workspace/offline_pkg \
-            -v ${HOST_PIP_CACHE_DIR}:/root/.cache/pip \
-            -v ${HOST_LOCALTIME}:/etc/localtime:ro \
-            -v /nvme/qa_test_models/datasets/:/nvme/qa_test_models/datasets/ \
-            openmmlab/lmdeploy:latest tail -f /dev/null \
-             )
-          docker start $CONTAINER_ID
-          echo "CONTAINER_ID=$CONTAINER_ID"
-          echo "CONTAINER_ID=$CONTAINER_ID"  >> $GITHUB_ENV
-      - name: Build lmdeploy from source
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        run: |
-          docker exec $CONTAINER_ID mkdir build
-          docker exec --workdir /__w/lmdeploy/lmdeploy/build \
-            --env http_proxy=${{secrets.PROXY}} \
-            --env https_proxy=${{secrets.PROXY}} \
-            --env HTTP_PROXY=${{secrets.PROXY}} \
-            --env HTTPS_PROXY=${{secrets.PROXY}} \
-            --env no_proxy="localhost,127.0.0.1" \
-            --env NO_PROXY="localhost,127.0.0.1" \
-            $CONTAINER_ID  cmake .. \
-               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-               -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-               -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
-               -DBUILD_PY_FFI=ON \
-               -DBUILD_MULTI_GPU=ON \
-               -DCMAKE_CUDA_FLAGS="-lineinfo" \
-               -DUSE_NVTX=ON \
-               -DSM=80 \
-               -DCMAKE_CUDA_ARCHITECTURES=80 \
-               -DBUILD_TEST=OFF
-          docker exec --workdir /__w/lmdeploy/lmdeploy/build $CONTAINER_ID  make -j$(nproc)
-          docker exec --workdir /__w/lmdeploy/lmdeploy/build $CONTAINER_ID  make install \
-            --env http_proxy=${{secrets.PROXY}} \
-            --env https_proxy=${{secrets.PROXY}} \
-            --env HTTP_PROXY=${{secrets.PROXY}} \
-            --env HTTPS_PROXY=${{secrets.PROXY}}
-      - name: Install lmdeploy
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        run: |
-          docker exec \
-            --env http_proxy=${{secrets.PROXY}} \
-            --env https_proxy=${{secrets.PROXY}} \
-            $CONTAINER_ID python3 -m pip install tritonclient[grpc] protobuf
-
-          docker exec \
-            --env http_proxy=${{secrets.PROXY}} \
-            --env https_proxy=${{secrets.PROXY}} \
-            $CONTAINER_ID python3 -m pip install -r requirements/test.txt
-
-          docker exec \
-            --env http_proxy=${{secrets.PROXY}} \
-            --env https_proxy=${{secrets.PROXY}} \
-            $CONTAINER_ID python3 -m pip install .
-
-          docker exec $CONTAINER_ID lmdeploy check_env
-      - name: Copy repository - offline
-        if: ${{inputs.offline_mode}}
-        run: |
-          docker exec --workdir /__w/lmdeploy $CONTAINER_ID \
-            cp -r /root/workspace/offline_pkg/lmdeploy .
-      - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
-        run: |
-          docker exec \
-            --env http_proxy=${{secrets.PROXY}} \
-            --env https_proxy=${{secrets.PROXY}} \
-            $CONTAINER_ID python3 -m pip install tritonclient[grpc] protobuf
-
-          docker exec --workdir /__w/lmdeploy/lmdeploy \
-            --env http_proxy=${{secrets.PROXY}} \
-            --env https_proxy=${{secrets.PROXY}} \
-            $CONTAINER_ID python3 -m pip install -r requirements/test.txt
-
-          docker exec --env http_proxy=${{secrets.PROXY}} \
-            --env https_proxy=${{secrets.PROXY}} $CONTAINER_ID \
-            python3 -m pip install /root/workspace/offline_pkg/py38/lmdeploy-latest-cp38-cp38-manylinux2014_x86_64.whl
-
-          docker exec $CONTAINER_ID lmdeploy check_env
-      - name: Start triton server service
-        run: |
-          docker exec --detach $CONTAINER_ID bash -c \
-            "tritonserver \
-            --model-repository=${MODEL_PATH}/model_repository \
-            --allow-http=0 \
-            --allow-grpc=1 \
-            --grpc-port=${GRPC_PORT} \
-            --log-verbose=0 \
-            --allow-metrics=1 > run.log 2>&1 ; touch finish.txt"
-          # wait for triton server to fully start up
-          sleep 360s
-          # print triton server log file
-          cat run.log
-          python3 -c 'import os; assert not os.path.exists("finish.txt"), "Failed to start tritonserver"'
-      - name: Run triton benchmark
-        env:
-          result_dir: benchmark-triton-turbomind
-        run: |
-          rm -rf ${result_dir}
-          mkdir ${result_dir} -p
-          batches=($BATCHES)
-          for batch in "${batches[@]}"
-          do
-            for ((i=1; i<=$LOOP_NUM; i++))
-              do
-              docker exec \
-              --env no_proxy="localhost,127.0.0.1" \
-              --env NO_PROXY="localhost,127.0.0.1" \
-              $CONTAINER_ID python3 benchmark/profile_serving.py localhost:${GRPC_PORT} $MODEL_PATH/triton_models/tokenizer $DATASET_FILE --concurrency "$batch" --csv ${result_dir}/triton_csv_batch_"${batch}"_"${i}"th.csv &> ${result_dir}/triton_csv_batch_"${batch}"_"${i}"th.log
-              done
-          done
-      - name: Save reports
-        if: always()
-        run: |
-          mkdir $REPORT_DIR -p && mkdir $REPORT_DIR/${{matrix.model}} -p && mkdir $REPORT_DIR/${{matrix.model}}/triton -p
-          cp -r benchmark-triton-* $REPORT_DIR/${{matrix.model}}/triton && rm -rf benchmark-triton-*
-          mv run.log $REPORT_DIR/${{matrix.model}}/triton
-          echo 'save report to $REPORT_DIR/${{matrix.model}}/triton'
-      - name: Clear workfile
-        if: always()
-        run: |
-          docker exec --workdir /__w/lmdeploy $CONTAINER_ID chmod -R 777 lmdeploy
-          docker stop $CONTAINER_ID
-          export workdir=$(pwd)
-          cd ..
-          rm -rf $workdir
-          mkdir $workdir
-
-
   get_result_overview:
     if: always() && !cancelled()
-    needs: [generation_benchmark, throughput_benchmark, restful_benchmark, triton_benchmark]
+    needs: [generation_benchmark, throughput_benchmark, restful_benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     steps:

@@ -117,7 +117,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         print(f'Start evaluating {idx+1}/{num_model} {ori_model} ...')
         model = ori_model.lower()
         model_, precision = model.rsplit('_', 1)
-        do_lite = precision in ['w4a16', 'w4kv8', 'w8a8']
+        do_lite = precision in ['4bits', 'kvint4', 'kvint8']
         if do_lite:
             model = model_
         engine_type, model_ = model.split('_', 1)
@@ -170,10 +170,12 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         if ret != 0:
             continue
         csv_files = glob.glob(f'{work_dir}/*/summary/summary_*.csv')
-        if len(csv_files) != 1:
+
+        if len(csv_files) < 1:
             logging.error(f'Did not find summary csv file {csv_files}')
             continue
-        csv_file = csv_files[0]
+        else:
+            csv_file = max(csv_files, key=os.path.getctime)
         # print csv_txt to screen
         csv_txt = csv_file.replace('.csv', '.txt')
         if os.path.exists(csv_txt):
@@ -217,14 +219,14 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
                 header = ','.join(['Model', 'Engine', 'Precision'] +
                                   dataset_names)
                 f.write(header + '\n')
-                f.write(row + '\n')
                 if hf_res_row:
                     f.write(hf_res_row + '\n')
+                f.write(row + '\n')
         else:
             with open(output_csv, 'a') as f:
-                f.write(row + '\n')
                 if hf_res_row:
                     f.write(hf_res_row + '\n')
+                f.write(row + '\n')
 
     # write to github action summary
     _append_summary('## Evaluation Results')
@@ -248,7 +250,7 @@ def create_model_links(src_dir: str, dst_dir: str):
 
 def generate_benchmark_report(report_path: str):
     # write to github action summary
-    _append_summary('## Evaluation Results Start')
+    _append_summary('## Benchmark Results Start')
     subfolders = [f.path for f in os.scandir(report_path) if f.is_dir()]
     for dir_path in subfolders:
         second_subfolders = [
@@ -309,7 +311,7 @@ def generate_benchmark_report(report_path: str):
                         if 'generation' in benchmark_subfolder:
                             add_summary(merged_csv_path)
                         print(merged_df)
-    _append_summary('## Evaluation Results End')
+    _append_summary('## Benchmark Results End')
 
 
 if __name__ == '__main__':
