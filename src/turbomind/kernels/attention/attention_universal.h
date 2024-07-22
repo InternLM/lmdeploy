@@ -47,6 +47,8 @@ struct AttentionUniversal {
     static constexpr int CTA_Q = Impl::CTA_Q;
     static constexpr int CTA_S = Impl::CTA_S;
 
+    using ReduceOp = attention::Reduce<T, CTA_H, 32, kHeadDim, kWarpCount>;
+
     using SharedStorage = typename Mainloop::SharedStorage;
 
     static constexpr bool kProcessKV = CTA_Q == 1;
@@ -476,9 +478,7 @@ struct AttentionUniversal {
 
             sem_wait_many(&locks[threadIdx.x], split_count - 1, threadIdx.x < split_count - 1);
 
-            using Reduce = attention::Reduce<T, CTA_H, 32, kHeadDim, kWarpCount>;
-
-            Reduce reduce_op;
+            ReduceOp reduce_op;
             reduce_op(params.out,
                       params.partial_M,
                       params.partial_L,
@@ -492,7 +492,7 @@ struct AttentionUniversal {
                       params.inv_sqrt_dh,
                       1,
                       0,
-                      *(typename Reduce::SharedStorage*)smem_buf,
+                      *(typename ReduceOp::SharedStorage*)smem_buf,
                       std::true_type{});
 
             if (threadIdx.x < split_idx) {

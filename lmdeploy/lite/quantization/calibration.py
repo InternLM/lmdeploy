@@ -192,24 +192,12 @@ class CalibrationContext():
                         self_attn.layer_idx = ori_idx
 
                         out = list(out)
-                        cache = out.pop(-1)
-
-                        key = cache.key_cache.pop(-1)
-                        value = cache.value_cache.pop(-1)
-
-                        k_obs.observe(key)
-                        v_obs.observe(value)
 
                     else:
                         out = self._ori_forwards[mod](*batch_args[i],
                                                       **batch_kwargs[i])
                         out = list(out)
-                        key, value = out.pop(-1)
 
-                        k_obs.observe(key)
-                        v_obs.observe(value)
-
-                    del key, value
                     torch.cuda.empty_cache()
                     batch_outputs.append(tuple(out))
                 else:
@@ -316,7 +304,8 @@ class CalibrationContext():
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
 
-        if type(self.model).__name__ == 'QWenLMHeadModel':
+        if type(self.model).__name__ in ('QWenLMHeadModel',
+                                         'ChatGLMForConditionalGeneration'):
             model = self.model.transformer
         else:
             model = self.model.model
@@ -405,6 +394,11 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
         if module2inspect is None:
             assert len(layers) == 1
             module2inspect = layers[0]
+        # internlm-xcomposer2-vl applies plora, which requires im_mask arg
+        if module2inspect._get_name() == 'InternLM2MLP':
+            from inspect import signature
+            if 'im_mask' in signature(module2inspect.forward).parameters:
+                kwargs['im_mask'] = None
 
         best_ratio = _search_module_scale(module2inspect, layers, inp.value,
                                           kwargs)

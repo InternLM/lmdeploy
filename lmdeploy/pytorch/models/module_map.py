@@ -71,6 +71,10 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.MLP',
     'modeling_chatglm.RMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedRMSNorm',
+    'modeling_chatglm.Embedding':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedEmbedding',
+    'modeling_chatglm.ChatGLMForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedChatGLMForConditionalGeneration',  # noqa: E501
 })
 
 # internlm
@@ -125,9 +129,25 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
     'transformers.models.gemma.modeling_gemma.GemmaModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaModel',
-    'transformers.models.gemma.modeling_gemma.modeling_mistral.GemmaMLP':
+    'transformers.models.gemma.modeling_gemma.GemmaMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
     'transformers.models.gemma.modeling_gemma.GemmaRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaRMSNorm',
+})
+
+# gemma2
+MODULE_MAP.update({
+    'transformers.models.gemma2.modeling_gemma2.Gemma2Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
+    'transformers.models.gemma2.modeling_gemma2.Gemma2FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
+    'transformers.models.gemma2.modeling_gemma2.Gemma2SdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
+    'transformers.models.gemma2.modeling_gemma2.Gemma2Model':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaModel',
+    'transformers.models.gemma2.modeling_gemma2.Gemma2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'transformers.models.gemma2.modeling_gemma2.Gemma2RMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaRMSNorm',
 })
 
@@ -321,7 +341,44 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.PatchedInternVLChatModel'
 })
 
+# phi3 vision
+MODULE_MAP.update({
+    'modeling_phi3_v.Phi3Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
+    'modeling_phi3_v.Phi3FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
+    'modeling_phi3_v.Phi3SdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
+    'modeling_phi3_v.Phi3VModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Model',
+    'modeling_phi3_v.Phi3MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3MLP',
+    'modeling_phi3_v.Phi3RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})
+
 # ascend module
 ASCEND_MODULE_MAP = dict()
 
 DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)
+
+# ascend llama
+ASCEND_MODULE_MAP.update({
+    'transformers.models.llama.modeling_llama.LlamaFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
+    'transformers.models.llama.modeling_llama.LlamaSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
+    'transformers.models.llama.modeling_llama.LlamaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
+    # support modeling rewritten in lmdeploy
+    'modeling_llama.LlamaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
+})
+
+# ascend internlm2
+ASCEND_MODULE_MAP.update({
+    'modeling_internlm2.InternLM2Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',
+    'modeling_internlm2.InternLM2FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',
+})

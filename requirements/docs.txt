@@ -1,12 +1,7 @@
-docutils==0.16.0
-m2r==0.2.1
 markdown>=3.4.0
-mistune==0.8.4
 myst-parser
--e git+https://github.com/InternLM/pytorch_sphinx_theme.git#egg=pytorch_sphinx_theme
-recommonmark
-sphinx==4.0.2
+sphinx
+sphinx-book-theme
 sphinx-copybutton
 sphinx-tabs
-sphinx_markdown_tables>=0.0.16
 sphinxcontrib-mermaid

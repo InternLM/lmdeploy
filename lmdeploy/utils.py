@@ -319,15 +319,6 @@ def _get_and_verify_max_len(
             f'{default_max_len}.')
         derived_max_model_len = default_max_len
 
-    rope_scaling = getattr(hf_tm_config, 'rope_scaling', None)
-    if rope_scaling is not None and rope_scaling['type'] != 'su':
-        assert 'factor' in rope_scaling
-        scaling_factor = rope_scaling['factor']
-        if rope_scaling['type'] == 'yarn':
-            derived_max_model_len = rope_scaling[
-                'original_max_position_embeddings']
-        derived_max_model_len *= scaling_factor
-
     if max_model_len is None:
         max_model_len = int(derived_max_model_len)
     elif max_model_len > derived_max_model_len:

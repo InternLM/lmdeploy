@@ -48,6 +48,8 @@ The [memory leak](https://github.com/triton-inference-server/python_backend/pull
 Use the following command to start the Triton Inference Server with the specified model repository:
 
 ```
+export PYTHONIOENCODING=UTF-8
+
 tritonserver \
     --model-repository=/path/to/your/model_repository \
     --allow-grpc=1 \

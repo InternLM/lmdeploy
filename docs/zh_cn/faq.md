@@ -16,11 +16,31 @@ pip install --upgrade mmengine
 
 1. 您没有安装 lmdeploy 的预编译包。`_turbomind`是 turbomind c++ 的 pybind部分，涉及到编译。推荐您直接安装预编译包。
 
-```
+```shell
 pip install lmdeploy[all]
 ```
 
+如果您想安装 LMDeploy 预编译包的 nightly 版本，可以根据您的 CUDA 和 Python 版本从 https://github.com/zhyncs/lmdeploy-build 下载并安装最新发布的包。目前更新频率是每天一次。
+
 2. 如果已经安装了，还是出现这个问题，请检查下执行目录。不要在 lmdeploy 的源码根目录下执行 python -m lmdeploy.turbomind.\*下的package，换到其他目录下执行。
+
+但是如果您是开发人员，通常需要在本地进行开发和编译。每次安装 whl 的效率太低了。您可以通过符号链接在编译后指定 lib 的路径。
+
+```shell
+# 创建 bld 和进行本地编译
+mkdir bld && cd bld && bash ../generate.sh && ninja -j$(nproc)
+
+# 从 bld 中切到 lmdeploy 子目录并设置软链接
+cd ../lmdeploy && ln -s ../bld/lib .
+
+# 切换到 lmdeploy 根目录
+cd ..
+
+# 使用 python command 比如 check_env
+python3 -m lmdeploy check_env
+```
+
+如果您仍然遇到在本地机器上找不到 turbomind so 的问题，这意味着您的本地机器上可能存在多个 Python 环境，并且在编译和执行过程中 Python 的版本不匹配。在这种情况下，您需要根据实际情况设置 `lmdeploy/generate.sh` 中的 `PYTHON_EXECUTABLE`，例如 `-DPYTHON_EXECUTABLE=/usr/local/bin/python3`，并且需要重新编译。
 
 ## Libs
 

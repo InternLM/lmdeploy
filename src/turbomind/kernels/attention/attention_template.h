@@ -12,7 +12,8 @@ namespace turbomind {
 template<class Kernel>
 void invokeAttention(const typename Kernel::ParamType& params)
 {
-    static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
+    static const size_t kSmemSize =
+        std::max(sizeof(typename Kernel::SharedStorage), sizeof(typename Kernel::ReduceOp::SharedStorage));
 
     if constexpr (1) {
 

@@ -41,10 +41,6 @@ if (SPARSITY_SUPPORT)
 target_link_libraries(cublasMMWrapper PUBLIC CUDA::cusparse -lcusparseLt)
 endif()
 
-add_library(word_list STATIC word_list.cc)
-set_property(TARGET word_list PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET word_list PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-
 add_library(nvtx_utils STATIC nvtx_utils.cc)
 set_property(TARGET nvtx_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET nvtx_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -77,14 +73,6 @@ add_library(cublasINT8MMWrapper STATIC cublasINT8MMWrapper.cc)
 set_property(TARGET cublasINT8MMWrapper PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET cublasINT8MMWrapper PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(cublasINT8MMWrapper PUBLIC CUDA::cublasLt CUDA::cudart CUDA::curand cublasAlgoMap cublasMMWrapper cuda_utils logger)
-
-if(ENABLE_FP8)
-add_library(cublasFP8MMWrapper STATIC cublasFP8MMWrapper.cu)
-set_property(TARGET cublasFP8MMWrapper PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET cublasFP8MMWrapper PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(cublasFP8MMWrapper PUBLIC CUDA::cublasLt CUDA::cudart CUDA::curand
-                      cublasAlgoMap cublasMMWrapper nvtx_utils fp8_qgmma_1x1_utils)
-endif()
 
 add_library(custom_ar_comm STATIC custom_ar_comm.cc)
 set_property(TARGET custom_ar_comm PROPERTY POSITION_INDEPENDENT_CODE  ON)

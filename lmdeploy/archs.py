@@ -115,26 +115,22 @@ def check_vl_llm(config: dict) -> bool:
         for _, v in config['auto_map'].items():
             if 'InternLMXComposer2ForCausalLM' in v:
                 return True
+
     arch = config['architectures'][0]
-    if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
-        return True
-    elif arch == 'QWenLMHeadModel' and 'visual' in config:
+    supported_archs = set([
+        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM',
+        'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
+        'InternVLChatModel', 'MiniGeminiLlamaForCausalLM',
+        'MGMLlamaForCausalLM', 'MiniCPMV', 'LlavaForConditionalGeneration',
+        'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM'
+    ])
+    if arch == 'QWenLMHeadModel' and 'visual' in config:
         return True
     elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
-    elif arch == 'CogVLMForCausalLM':
+    elif arch == 'ChatGLMModel' and 'vision_config' in config:
         return True
-    elif arch == 'InternLMXComposer2ForCausalLM':
-        return True
-    elif arch == 'InternVLChatModel':
-        return True
-    elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
-        return True
-    elif arch == 'MiniCPMV':
-        return True
-    elif arch == 'LlavaForConditionalGeneration':
-        return True
-    elif arch == 'LlavaNextForConditionalGeneration':
+    elif arch in supported_archs:
         return True
     return False
 

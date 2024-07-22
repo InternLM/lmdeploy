@@ -215,6 +215,29 @@ class CLI(object):
             except Exception:
                 env_info[req] = 'Not Found'
 
+        def get_gpu_topo():
+            import subprocess
+            import sys
+            if sys.platform.startswith('linux'):
+                try:
+                    res = subprocess.run(['nvidia-smi', 'topo', '-m'],
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE,
+                                         text=True,
+                                         check=True)
+                    if res.returncode == 0:
+                        return '\n' + res.stdout
+                    else:
+                        return None
+                except FileNotFoundError:
+                    return None
+            else:
+                return None
+
+        gpu_topo = get_gpu_topo()
+        if gpu_topo is not None:
+            env_info['NVIDIA Topology'] = gpu_topo
+
         # print env info
         for k, v in env_info.items():
             print(f'{k}: {v}')
@@ -278,3 +301,4 @@ class CLI(object):
         CLI.add_parser_convert()
         CLI.add_parser_list()
         CLI.add_parser_checkenv()
+        CLI.add_parser_chat()
