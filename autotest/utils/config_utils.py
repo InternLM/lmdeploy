@@ -199,7 +199,7 @@ def get_benchmark_model_list(tp_num,
                     'quant_policy': kvint,
                     'tp_num': tp_num
                 } for item in model_list
-                if item in config.get('quatization_case_config').get('kvint')
+                if item in config.get('turbomind_quatization').get('kvint')
             ]
     return result
 

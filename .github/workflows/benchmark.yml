@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Set benchmark type. Default is "["generation", "throughtput", "api_server"]"'
         type: string
-        default: "['generation', 'throughput', 'api_server']"
+        default: "['api_server', 'generation', 'throughput']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -34,7 +34,6 @@ env:
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
-  TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'}}
 
