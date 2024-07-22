@@ -4,22 +4,20 @@ from typing import List
 
 import torch
 from PIL.Image import Image
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM
 
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 
+@VISION_MODELS.register_module()
 class CogVLMVisionModel(VisonModel):
     """CogVLM vision model."""
 
-    def __init__(self, model_path: str, with_llm: bool = False):
+    _arch = 'CogVLMForCausalLM'
+
+    def build_model(self):
         from torchvision import transforms
-        self.with_llm = with_llm
-        self.model_path = model_path
-        self.hf_config = AutoConfig.from_pretrained(model_path,
-                                                    trust_remote_code=True)
-        self.build_model()
         self.image_transform = transforms.Compose([
             transforms.Resize(
                 (self.hf_config.vision_config['image_size'], ) * 2,
@@ -29,7 +27,6 @@ class CogVLMVisionModel(VisonModel):
                                  (0.26862954, 0.26130258, 0.27577711)),
         ])
 
-    def build_model(self):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         with init_empty_weights(), warnings.catch_warnings():
@@ -45,6 +42,7 @@ class CogVLMVisionModel(VisonModel):
         no_split_module_classes = ['TransformerLayer']
         max_memory = get_balanced_memory(
             model,
+            max_memory=self.max_memory,
             dtype=torch.half,
             no_split_module_classes=no_split_module_classes)
         device_map = infer_auto_device_map(

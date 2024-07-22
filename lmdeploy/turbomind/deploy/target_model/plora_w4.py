@@ -82,6 +82,8 @@ class TurbomindPloraW4Model(TurbomindPloraModel):
 
         w1_qw, w1_sz = convert_s4(w1_qw, w1_qz, w1_s, group_size)
         w3_qw, w3_sz = convert_s4(w3_qw, w3_qz, w3_s, group_size)
+        w1_qw = tp_m_s4(w1_qw, tp)
+        w3_qw = tp_m_s4(w3_qw, tp)
         self.save_split(w1_qw, f'layers.{i}.feed_forward.w1.qweight', -1)
         self.save_split(w1_sz, f'layers.{i}.feed_forward.w1.scales_zeros', -1)
         self.save_split(w3_qw, f'layers.{i}.feed_forward.w3.qweight', -1)

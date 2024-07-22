@@ -4,30 +4,27 @@ from typing import List
 
 import torch
 from PIL.Image import Image
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
 
+@VISION_MODELS.register_module()
 class MiniCPMVModel(VisonModel):
     """MiniCPMV vision model."""
 
-    def __init__(self, model_path, with_llm: bool = False):
-        self.model_path = model_path
-        self.with_llm = with_llm
-        self.build_model()
+    _arch = 'MiniCPMV'
 
     def build_model(self):
         """build model & load weights."""
         from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            config = AutoConfig.from_pretrained(self.model_path,
-                                                trust_remote_code=True)
+            config = self.hf_config
             assert config.slice_mode is True, 'only support slice mode'
             config.quantization_config = {}  # disable vision part quantization
             model = AutoModelForCausalLM.from_config(config,
@@ -41,6 +38,7 @@ class MiniCPMVModel(VisonModel):
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
+                max_memory=self.max_memory,
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['Idefics2EncoderLayer', 'Resampler'],

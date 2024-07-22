@@ -8,14 +8,14 @@ def test_get_and_verify_max_len():
     # with PretrainedConfig
     config = AutoConfig.from_pretrained('OpenGVLab/InternVL-Chat-V1-5-AWQ',
                                         trust_remote_code=True)
-    assert (_get_and_verify_max_len(config, None) == 98304)
+    assert (_get_and_verify_max_len(config, None) == 32768)
     assert (_get_and_verify_max_len(config, 1024) == 1024)
     assert (_get_and_verify_max_len(config, 102400) == 102400)
 
     # with PretrainedConfig
     config = AutoConfig.from_pretrained('internlm/internlm2-chat-7b',
                                         trust_remote_code=True)
-    assert (_get_and_verify_max_len(config, None) == 65536)
+    assert (_get_and_verify_max_len(config, None) == 32768)
     assert (_get_and_verify_max_len(config, 1024) == 1024)
     assert (_get_and_verify_max_len(config, 102400) == 102400)
 

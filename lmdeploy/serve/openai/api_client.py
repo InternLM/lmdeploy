@@ -96,6 +96,8 @@ class APIClient:
                             messages: Union[str, List[Dict[str, str]]],
                             temperature: Optional[float] = 0.7,
                             top_p: Optional[float] = 1.0,
+                            logprobs: Optional[bool] = False,
+                            top_logprobs: Optional[int] = 0,
                             n: Optional[int] = 1,
                             max_tokens: Optional[int] = None,
                             stop: Optional[Union[str, List[str]]] = None,
@@ -425,10 +427,14 @@ def get_streaming_response(
             yield output, tokens, finish_reason
 
 
-def main(api_server_url: str,
+def main(api_server_url: str = 'http://0.0.0.0:23333',
          session_id: int = 0,
          api_key: Optional[str] = None):
     """Main function to chat in terminal."""
+    if not api_server_url.startswith('http://'):
+        print(f'[WARNING] api_server_url of the api_server should '
+              f'start with "http://", but got "{api_server_url}"')
+        api_server_url = 'http://' + api_server_url.strip()
     api_client = APIClient(api_server_url, api_key=api_key)
     while True:
         prompt = input_prompt()

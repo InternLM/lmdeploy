@@ -43,20 +43,21 @@ option(BUILD_PY_FFI "Build python ffi" ON)
 option(BUILD_TEST "Build tests" OFF)
 
 include(FetchContent)
+if (BUILD_TEST)
+  FetchContent_Declare(
+    repo-cutlass
+    GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
+    GIT_TAG        6f47420213f757831fae65c686aa471749fa8d60
+    GIT_SHALLOW ON
+  )
 
-FetchContent_Declare(
-  repo-cutlass
-  GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
-  GIT_TAG        6f47420213f757831fae65c686aa471749fa8d60
-  GIT_SHALLOW ON
-)
+  set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
 
-set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
+  FetchContent_MakeAvailable(repo-cutlass)
 
-FetchContent_MakeAvailable(repo-cutlass)
-
-set(CUTLASS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/include)
-set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/turbomind/cutlass_extensions/include)
+  set(CUTLASS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/include)
+  set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/turbomind/cutlass_extensions/include)
+endif()
 
 option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF)
 

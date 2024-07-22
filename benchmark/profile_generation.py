@@ -18,6 +18,10 @@ from tqdm import tqdm
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
+from lmdeploy.utils import get_logger
+
+get_logger('lmdeploy').setLevel('ERROR')
+os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
 def infer(model, session_id: int, input_ids: List,
@@ -329,7 +333,6 @@ def parse_args():
     ArgumentHelper.top_p(parser)
     ArgumentHelper.temperature(parser)
     ArgumentHelper.top_k(parser)
-    ArgumentHelper.log_level(parser)
     ArgumentHelper.backend(parser)
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -385,7 +388,6 @@ def main():
         f'mismatched size between `prompt-tokens` and `completion-tokenes`' \
         f', {len(args.prompt_tokens)} vs {len(args.completion_tokens)}'
 
-    os.environ['TM_LOG_LEVEL'] = args.log_level
     results: List[ProfileResult] = []
 
     MemoryMonitor.init()
