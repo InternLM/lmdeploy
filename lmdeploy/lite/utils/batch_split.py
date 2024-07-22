@@ -96,6 +96,8 @@ def concat_decoder_layer_outputs(
             key = torch.cat([out[i][0] for out in batch_outputs])
             value = torch.cat([out[i][1] for out in batch_outputs])
             out_i = (key, value)
+        elif batch_outputs[0][i] is None:  # glm4
+            out_i = None
         else:
             # If it's not a past key-value pair, concatenate directly.
             out_i = torch.cat([out[i] for out in batch_outputs])
