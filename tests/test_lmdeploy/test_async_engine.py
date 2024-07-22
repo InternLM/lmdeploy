@@ -1,0 +1,38 @@
+import configparser
+import os
+import tempfile
+
+from lmdeploy.serve.async_engine import get_names_from_model
+
+
+def test_get_names_from_hf_model():
+    cases = [
+        # model repo_id from huggingface hub, model_name, chat_template_name
+        ('InternLM/internlm2_5-7b-chat', 'internlm2.5-7b-chat', 'internlm2'),
+        ('InternLM/internlm2_5-7b-chat', None, 'internlm2'),
+    ]
+    for model_path, model_name, chat_template in cases:
+        _model_name, _chat_template = get_names_from_model(
+            model_path=model_path, model_name=model_name)
+        assert _chat_template == chat_template
+        assert _model_name == model_name if model_name else model_path
+
+
+def test_get_names_from_triton_model():
+    workspace = tempfile.TemporaryDirectory('internlm2_5-7b-chat').name
+    os.makedirs(os.path.join(workspace, 'triton_models', 'weights'),
+                exist_ok=True)
+
+    expected_model_name = 'internlm2.5-7b-chat'
+    expected_chat_template = 'internlm2'
+    config = configparser.ConfigParser()
+    config.add_section('llama')
+    config.set('llama', 'model_name', expected_model_name)
+    config.set('llama', 'chat_template_name', expected_chat_template)
+
+    with open(f'{workspace}/triton_models/weights/config.ini', 'w') as f:
+        config.write(f)
+
+    model_name, chat_template = get_names_from_model(workspace)
+    assert model_name == expected_model_name
+    assert chat_template == expected_chat_template
