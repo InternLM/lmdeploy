@@ -15,7 +15,7 @@ on:
         default: 'main'
       benchmark_type:
         required: true
-        description: 'Set benchmark type. Default is "["generation", "throughtput", "api_server", "triton_server"]"'
+        description: 'Set benchmark type. Default is "["generation", "throughtput", "api_server"]"'
         type: string
         default: "['generation', 'throughput', 'api_server']"
       offline_mode:
@@ -36,14 +36,14 @@ env:
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
   TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'}}
 
 jobs:
   linux-build:
     if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py38]
+        pyver: [py310]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -84,12 +84,13 @@ jobs:
         benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
     timeout-minutes: 120
     container:
-      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      image: nvcr.io/nvidia/tritonserver:24.03-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -105,26 +106,29 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py38
+          name: my-artifact-${{ github.run_id }}-py310
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install ${{inputs.dependency_pkgs}}
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py38/lmdeploy-*.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |

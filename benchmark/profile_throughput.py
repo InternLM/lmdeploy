@@ -17,6 +17,10 @@ from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
 from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
+from lmdeploy.utils import get_logger
+
+get_logger('lmdeploy').setLevel('ERROR')
+os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
 def sample_requests(
@@ -274,7 +278,6 @@ def parse_args():
     ArgumentHelper.top_p(parser)
     ArgumentHelper.temperature(parser)
     ArgumentHelper.top_k(parser)
-    ArgumentHelper.log_level(parser)
     ArgumentHelper.backend(parser)
 
     # pytorch engine args
@@ -304,7 +307,6 @@ def parse_args():
 def main():
     args = parse_args()
     random.seed(args.seed)
-    os.environ['TM_LOG_LEVEL'] = args.log_level
     if args.backend == 'turbomind':
         engine_config = TurbomindEngineConfig(
             session_len=args.session_len,

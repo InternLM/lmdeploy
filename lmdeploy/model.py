@@ -1583,10 +1583,12 @@ class Glm4Chat(ChatGLM3):
                  system='<|system|>\n',
                  user='<|user|>\n',
                  assistant='<|assistant|>\n',
+                 stop_words=['<|user|>', '<|endoftext|>', '<|observation|>'],
                  **kwargs):
         super().__init__(system=system,
                          user=user,
                          assistant=assistant,
+                         stop_words=stop_words,
                          **kwargs)
         self.start = '[gMASK]<sop>'
 

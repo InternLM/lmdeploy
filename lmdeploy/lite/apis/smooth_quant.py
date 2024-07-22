@@ -20,6 +20,7 @@ LAYER_TYPE_MAP = {
     'QWenLMHeadModel': 'QWenBlock',
     'BaiChuanForCausalLM': 'DecoderLayer',
     'LlamaForCausalLM': 'LlamaDecoderLayer',
+    'ChatGLMForConditionalGeneration': 'GLMBlock',
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
@@ -27,6 +28,7 @@ NORM_TYPE_MAP = {
     'QWenLMHeadModel': 'RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',
     'LlamaForCausalLM': 'LlamaRMSNorm',
+    'ChatGLMForConditionalGeneration': 'RMSNorm',
 }
 
 LMDEPLOY_ROOT = lmdeploy.__path__[0]

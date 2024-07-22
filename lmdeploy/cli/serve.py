@@ -201,23 +201,6 @@ class SubCliServe:
         ArgumentHelper.session_id(parser)
 
     @staticmethod
-    def add_parser_triton_client():
-        """Add parser for triton_client command."""
-        parser = SubCliServe.subparsers.add_parser(
-            'triton_client',
-            formatter_class=DefaultsAndTypesHelpFormatter,
-            description=SubCliServe.triton_client.__doc__,
-            help=SubCliServe.triton_client.__doc__)
-        parser.set_defaults(run=SubCliServe.triton_client)
-        parser.add_argument(
-            'tritonserver_addr',
-            type=str,
-            help='The address in format "ip:port" of triton inference server')
-        ArgumentHelper.session_id(parser)
-        ArgumentHelper.cap(parser)
-        ArgumentHelper.stream_output(parser)
-
-    @staticmethod
     def gradio(args):
         """Serve LLMs with web UI using gradio."""
         from lmdeploy.archs import autoget_backend
@@ -337,15 +320,7 @@ class SubCliServe:
         run_api_client(**kwargs)
 
     @staticmethod
-    def triton_client(args):
-        """Interact with Triton Server using gRPC protocol."""
-        from lmdeploy.serve.client import main as run_triton_client
-        kwargs = convert_args(args)
-        run_triton_client(**kwargs)
-
-    @staticmethod
     def add_parsers():
         SubCliServe.add_parser_gradio()
         SubCliServe.add_parser_api_server()
         SubCliServe.add_parser_api_client()
-        SubCliServe.add_parser_triton_client()
