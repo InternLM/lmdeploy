@@ -1,15 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-FetchContent_Declare(
-  repo-nvbench
-  GIT_REPOSITORY https://github.com/NVIDIA/nvbench.git
-  GIT_TAG        d8dced8a64d9ce305add92fa6d274fd49b569b7e
-)
 
 set(BUILD_SHARED_LIBS OFF)
-set(NVBench_ENABLE_EXAMPLES OFF)
-
-FetchContent_MakeAvailable(repo-nvbench)
 
 add_library(gemm2
         gemm.cu
@@ -28,14 +20,6 @@ add_library(gemm2
         kernel/f16_u4g128_f16_tnt_sm75_simt.cu
 )
 
-add_executable(gemm_bench 
-        test/gemm_bench.cu 
-        test/test_utils.cu 
-        test/quantization.cu
-        cache_utils.cu 
-        test/reference.cu)
-target_link_libraries(gemm_bench PRIVATE gemm2 nvbench::nvbench cublas)
-
 
 target_compile_options(gemm2 PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info>)
@@ -50,3 +34,24 @@ add_executable(gemm_test
         test/quantization.cu
         test/reference.cu)
 target_link_libraries(gemm_test PRIVATE gemm2 cublas)
+
+if (NOT MSVC) 
+        FetchContent_Declare(
+        repo-nvbench
+        GIT_REPOSITORY https://github.com/NVIDIA/nvbench.git
+        GIT_TAG        d8dced8a64d9ce305add92fa6d274fd49b569b7e
+        )
+
+        set(NVBench_ENABLE_EXAMPLES OFF)
+
+        FetchContent_MakeAvailable(repo-nvbench)
+
+        add_executable(gemm_bench 
+                test/gemm_bench.cu 
+                test/test_utils.cu 
+                test/quantization.cu
+                cache_utils.cu 
+                test/reference.cu)
+        target_link_libraries(gemm_bench PRIVATE gemm2 nvbench::nvbench cublas)
+endif ()
+
