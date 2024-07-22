@@ -29,6 +29,9 @@ class DefaultLayersBackend(LayersBackend):
         elif layer_type == LayerType.RMSNorm:
             from .norm import DefaultRMSNormBuilder
             return DefaultRMSNormBuilder
+        elif layer_type == LayerType.MultinomialSampling:
+            from .multinomial_sampling import DefaultMultinomialSamplingBuilder
+            return DefaultMultinomialSamplingBuilder
         else:
             raise RuntimeError(f'{layer_type} not supported.')
 

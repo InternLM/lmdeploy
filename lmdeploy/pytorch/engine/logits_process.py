@@ -89,7 +89,8 @@ def _multinomial_sampling(scores: torch.Tensor,
                           offsets: torch.LongTensor,
                           indices: torch.LongTensor = None):
     """sampling."""
-    from lmdeploy.pytorch.kernels import multinomial_sampling
+    from lmdeploy.pytorch.layers.multinomial_sampling import \
+        multinomial_sampling
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
@@ -258,7 +259,7 @@ class FusedLogitsProcessor(LogitsWarper):
 
         stop_words = sampling_inputs.stop_words
         if stop_words is not None:
-            stop_words = stop_words * self.ignore_eos[:, None]
+            stop_words = torch.where(self.ignore_eos[:, None], stop_words, -1)
             scores = _process_bad_words(scores, stop_words)
 
         return scores

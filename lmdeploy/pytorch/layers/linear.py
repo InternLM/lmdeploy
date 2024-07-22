@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from dataclasses import dataclass
 from typing import Any, List
 
 import torch
@@ -10,6 +9,7 @@ from lmdeploy.pytorch.models.q_modules import QLinear
 from lmdeploy.utils import get_logger
 
 from ..backends import LayerType, get_backend
+from ..backends.slora import AdapterInfo
 
 logger = get_logger('lmdeploy')
 
@@ -52,32 +52,24 @@ def _get_world_rank():
     return world_size, rank
 
 
-@dataclass
-class AdapterInfo:
-    r: dict
-    lora_A: nn.ModuleDict
-    lora_B: nn.ModuleDict
-    scaling: dict
-    base_slice: slice
-
-    @staticmethod
-    def from_lora_linear(mod: nn.Module, base_slice: slice = None):
-        return AdapterInfo(
-            r=mod.r,
-            lora_A=mod.lora_A,
-            lora_B=mod.lora_B,
-            scaling=mod.scaling,
-            base_slice=base_slice,
-        )
-
-
 class SLoRA(nn.Module):
 
-    def __init__(self, adapter_infos: List[AdapterInfo]):
+    def __init__(self,
+                 adapter_info: AdapterInfo,
+                 ctx_mgr: Any = None,
+                 colwise: bool = True,
+                 is_tp: bool = True):
         super().__init__()
+        self.adapter_info = adapter_info
+        impl_builder = get_backend().get_layer_impl_builder(LayerType.SLoRA)
+        self.impl = impl_builder.build(adapter_info, ctx_mgr, colwise=colwise)
+        self.target_name = None
+        self.layer_idx = None
+        self.is_tp = is_tp
 
-    def forward(self, x):
-        raise NotImplementedError
+    def forward(self, x, base_output=None):
+        return self.impl.forward(x, base_output, self.target_name,
+                                 self.layer_idx, self.is_tp)
 
 
 class AwqLinear(nn.Module):
@@ -92,8 +84,19 @@ class W8A8Linear(nn.Module):
 
     def __init__(self,
                  mod: nn.Module,
-                 adapter_infos: List[AdapterInfo] = None):
+                 ctx_mgr: Any = None,
+                 colwise: bool = True,
+                 is_tp: bool = False):
         super().__init__()
+        impl_builder = get_backend().get_layer_impl_builder(
+            LayerType.LinearW8A8)
+        self.impl = impl_builder.build(mod, ctx_mgr)
+        self.is_tp = is_tp
+        self.colwise = colwise
+
+    def forward(self, x):
+        is_tp = False if self.colwise else self.is_tp
+        return self.impl.forward(x, is_tp)
 
 
 class BaseLinear(nn.Module):
@@ -102,27 +105,32 @@ class BaseLinear(nn.Module):
                  mod: nn.Module,
                  adapter_infos: List[AdapterInfo] = None,
                  ctx_mgr: Any = None,
-                 all_reduce: bool = False):
+                 colwise: bool = True,
+                 is_tp: bool = False):
         super().__init__()
-        layer_backend = get_backend()
-
-        if isinstance(mod, nn.Linear):
-            impl_builder = layer_backend.get_layer_impl_builder(
-                LayerType.Linear)
-        else:
-            raise NotImplementedError(f'Unsupported linear type: {type(mod)}')
-        self.impl = impl_builder.build(mod, ctx_mgr, all_reduce)
+        impl_builder = get_backend().get_layer_impl_builder(LayerType.Linear)
+        self.impl = impl_builder.build(mod, ctx_mgr)
 
         adapter_infos = adapter_infos if adapter_infos is not None else []
-        self.adapter = None
+        self.lora_adapters = None
         if len(adapter_infos) > 0:
-            self.adapter = SLoRA(adapter_infos)
+            self.lora_adapters = nn.ModuleList(
+                SLoRA(info, ctx_mgr, colwise, is_tp) for info in adapter_infos)
+
+        self.is_tp = is_tp
+        self.colwise = colwise
 
     def forward(self, x):
-        out = self.impl.forward(x)
+        if self.lora_adapters is None:
+            is_tp = False if self.colwise else self.is_tp
+            return self.impl.forward(x, is_tp)
 
-        if self.adapter is not None:
-            out = self.adapter(out)
+        out = self.impl.forward(x, False)
+        if self.lora_adapters is not None:
+            for lora_adapter in self.lora_adapters:
+                out = lora_adapter(x, out)
+        if self.is_tp:
+            dist.all_reduce(out)
         return out
 
 
@@ -161,7 +169,7 @@ def _merge_base_linear(*linears: List[nn.Module]):
 def _merge_qlinear(*linears: List[nn.Module]):
     """merge qlinear."""
     weights = [mod.weight for mod in linears]
-    scalings = [mod.scaling for mod in linears]
+    scales = [mod.scale for mod in linears]
     bias = [mod.bias for mod in linears]
 
     in_features = weights[0].size(1)
@@ -174,7 +182,7 @@ def _merge_qlinear(*linears: List[nn.Module]):
     out_features = sum(w.size(0) for w in weights)
 
     new_weight = torch.cat(weights, dim=0)
-    new_scaling = torch.cat(scalings, dim=0)
+    new_scale = torch.cat(scales, dim=0)
     new_bias = None
     if bias[0] is not None:
         assert all(b is not None for b in bias)
@@ -187,7 +195,7 @@ def _merge_qlinear(*linears: List[nn.Module]):
                             device=device)
     state_dict = dict(
         weight=new_weight,
-        scaling=new_scaling,
+        scale=new_scale,
     )
     if has_bias:
         state_dict['bias'] = new_bias
@@ -242,10 +250,67 @@ def _merge_awqlinear(*linears: List[nn.Module]):
     return merged_linear
 
 
-def build_merged_linear(*linears: List[nn.Module],
-                        ctx_mgr: Any = None,
-                        all_reduce: bool = False,
-                        free_origin=False):
+def build_linear(mod: nn.Module,
+                 adapter_infos: List[AdapterInfo] = None,
+                 ctx_mgr: Any = None,
+                 colwise: bool = True,
+                 is_tp: bool = False) -> nn.Module:
+    """build linear."""
+    if is_tp:
+        world_size, rank = _get_world_rank()
+        is_tp = world_size > 1
+
+    if isinstance(mod, nn.Linear):
+        return BaseLinear(mod,
+                          adapter_infos,
+                          ctx_mgr,
+                          colwise=colwise,
+                          is_tp=is_tp)
+    elif isinstance(mod, WQLinear_GEMM):
+        return AwqLinear(mod, adapter_infos)
+    elif isinstance(mod, QLinear):
+        return W8A8Linear(mod, ctx_mgr, colwise, is_tp)
+    elif isinstance(mod, LoRALinear):
+        base_layer = mod.base_layer
+        adapter_info = AdapterInfo.from_lora_linear(mod)
+        return build_linear(base_layer, [adapter_info],
+                            ctx_mgr=ctx_mgr,
+                            colwise=colwise,
+                            is_tp=is_tp)
+    elif isinstance(mod, AwqLoraLinear):
+        base_layer = mod.base_layer
+        adapter_info = AdapterInfo.from_lora_linear(mod)
+        return build_linear(base_layer, [adapter_info],
+                            ctx_mgr=ctx_mgr,
+                            colwise=colwise,
+                            is_tp=is_tp)
+    else:
+        raise NotImplementedError(f'Unknown linear type: {type(mod)}')
+
+
+def build_colwise_linear(mod: nn.Module,
+                         adapter_infos: List[AdapterInfo] = None,
+                         ctx_mgr: Any = None,
+                         is_tp: bool = False) -> nn.Module:
+    return build_linear(mod, adapter_infos, ctx_mgr, colwise=True, is_tp=is_tp)
+
+
+def build_rowwise_linear(mod: nn.Module,
+                         adapter_infos: List[AdapterInfo] = None,
+                         ctx_mgr: Any = None,
+                         is_tp: bool = False) -> nn.Module:
+    return build_linear(mod,
+                        adapter_infos,
+                        ctx_mgr,
+                        colwise=False,
+                        is_tp=is_tp)
+
+
+def build_merged_colwise_linear(
+    *linears: List[nn.Module],
+    ctx_mgr: Any = None,
+    is_tp: bool = False,
+):
     """merge linear."""
     base_layers = []
     out_features = []
@@ -288,38 +353,8 @@ def build_merged_linear(*linears: List[nn.Module],
         base_layer = _merge_qlinear(*base_layers)
     else:
         raise NotImplementedError(f'Unknown linear type: {type(mod)}')
-    ret = build_linear(base_layer,
-                       adapter_infos,
-                       ctx_mgr=ctx_mgr,
-                       all_reduce=all_reduce)
-    if free_origin:
-        for mod in linears:
-            mod.to('meta')
+    ret = build_colwise_linear(base_layer,
+                               adapter_infos,
+                               ctx_mgr=ctx_mgr,
+                               is_tp=is_tp)
     return ret
-
-
-def build_linear(mod: nn.Module,
-                 adapter_infos: List[AdapterInfo] = None,
-                 ctx_mgr: Any = None,
-                 all_reduce: bool = False) -> nn.Module:
-    """build linear."""
-    if all_reduce:
-        world_size, rank = _get_world_rank()
-        all_reduce = world_size > 1
-
-    if isinstance(mod, nn.Linear):
-        return BaseLinear(mod, adapter_infos, ctx_mgr, all_reduce)
-    elif isinstance(mod, WQLinear_GEMM):
-        return AwqLinear(mod, adapter_infos)
-    elif isinstance(mod, QLinear):
-        return W8A8Linear(mod, adapter_infos)
-    elif isinstance(mod, LoRALinear):
-        base_layer = mod.base_layer
-        adapter_info = AdapterInfo.from_lora_linear(mod)
-        return build_linear(base_layer, [adapter_info])
-    elif isinstance(mod, AwqLoraLinear):
-        base_layer = mod.base_layer
-        adapter_info = AdapterInfo.from_lora_linear(mod)
-        return build_linear(base_layer, [adapter_info])
-    else:
-        raise NotImplementedError(f'Unknown linear type: {type(mod)}')

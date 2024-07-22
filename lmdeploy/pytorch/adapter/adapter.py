@@ -32,11 +32,12 @@ def _cache_weight(cache: Tensor, weight: Tensor, rank_offset: Tensor):
 
 def _get_named_loralinears(model: torch.nn.Module):
     """get all named loralinear."""
-    from peft.tuners.lora import Linear as LoRALinear
     named_loralinear: Dict[str, torch.nn.Module] = dict()
     for name, module in model.named_modules():
-        if isinstance(module, LoRALinear):
-            named_loralinear[name] = module
+        if getattr(module, 'lora_adapters', None) is None:
+            continue
+        for idx, adapter in enumerate(module.lora_adapters):
+            named_loralinear[f'{name}_{idx}'] = adapter
     return named_loralinear
 
 
@@ -83,10 +84,8 @@ def update_lora_linears(lora_linears: Dict,
         """update linear."""
         linear.layer_idx = idx
         linear.target_name = target_name
-        for name in adapter_names:
-            if name in linear.lora_A:
-                linear.lora_A.pop(name)
-                linear.lora_B.pop(name)
+        linear.adapter_info.lora_A = None
+        linear.adapter_info.lora_B = None
 
     adapter_names = [weight_map.adapter_name for weight_map in weight_maps]
 
@@ -115,13 +114,11 @@ class LoRALinearInfo:
     @classmethod
     def from_loralinear(cls, linear: torch.nn.Module):
         """create from lora linear."""
-        from peft.tuners.lora import Linear as LoRALinear
-        assert isinstance(linear, LoRALinear)
-
-        ranks = linear.r
-        scalings = linear.scaling
-        base_weight = linear.base_layer.weight
-        out_features, in_features = base_weight.shape
+        adapter_info = linear.adapter_info
+        ranks = adapter_info.r
+        scalings = adapter_info.scaling
+        out_features = adapter_info.out_features
+        in_features = adapter_info.in_features
         return cls(
             ranks=ranks,
             scalings=scalings,
@@ -209,10 +206,12 @@ class AdapterWeightMap:
         rank_offset = self.rank_offset.reshape(-1, self.max_rank)
         for tidx, target in enumerate(target_modules):
             linear = lora_linear[target]
-            if not (name in linear.lora_A and name in linear.lora_B):
+            adapter_info = linear.adapter_info
+            if not (name in adapter_info.lora_A
+                    and name in adapter_info.lora_B):
                 continue
-            linear_a = linear.lora_A[name]
-            linear_b = linear.lora_B[name]
+            linear_a = adapter_info.lora_A[name]
+            linear_b = adapter_info.lora_B[name]
             weight_a = linear_a.weight
             weight_b = linear_b.weight
             assert weight_a is not None

@@ -24,6 +24,18 @@ class CudaLayersBackend(DefaultLayersBackend):
         elif layer_type == LayerType.RMSNorm:
             from .norm import TritonRMSNormBuilder
             return TritonRMSNormBuilder
+        elif layer_type == LayerType.SLoRA:
+            from .slora import TritonSLoRABuilder
+            return TritonSLoRABuilder
+        elif layer_type == LayerType.LinearW8A8:
+            from .qmodules import TritonLinearW8A8Builder
+            return TritonLinearW8A8Builder
+        elif layer_type == LayerType.RMSNormW8A8:
+            from .qmodules import TritonRMSNormBuilder
+            return TritonRMSNormBuilder
+        elif layer_type == LayerType.MultinomialSampling:
+            from .multinomial_sampling import TritonMultinomialSamplingBuilder
+            return TritonMultinomialSamplingBuilder
         else:
             return super().get_layer_impl_builder(layer_type)
 

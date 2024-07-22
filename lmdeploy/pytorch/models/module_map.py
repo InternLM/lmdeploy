@@ -10,17 +10,11 @@ MODULE_MAP = {
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaAttention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
-    'transformers.models.llama.modeling_llama.LlamaModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
-    'transformers.models.llama.modeling_llama.LlamaDecoderLayer':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaDecoderLayer',
     # support modeling rewritten in lmdeploy
     'modeling_llama.LlamaAttention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
-    'modeling_llama.LlamaModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'modeling_llama.LlamaMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
     'modeling_llama.LlamaForCausalLM':

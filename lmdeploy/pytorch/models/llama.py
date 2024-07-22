@@ -7,9 +7,10 @@ from torch import nn
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from lmdeploy.pytorch.layers import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                     RMSNorm, SiluAndMul, build_linear,
-                                     build_merged_linear,
+                                     RMSNorm, SiluAndMul,
                                      build_rotary_embedding)
+from lmdeploy.pytorch.layers.linear import (build_merged_colwise_linear,
+                                            build_rowwise_linear)
 from lmdeploy.pytorch.model_inputs import StepContextManager
 
 from ..weight_loader.dist_utils import (colwise_parallelize_linear,
@@ -24,17 +25,21 @@ class LlamaAttention(nn.Module):
         world_size = 1
         if dist.is_initialized():
             world_size = dist.get_world_size()
+        is_tp = world_size > 1
         self.ctx_mgr = ctx_mgr
         self.num_heads = origin.num_heads // world_size
         self.num_kv_heads = origin.num_key_value_heads // world_size
         self.head_dim = origin.head_dim
 
         # qkv
-        self.qkv_proj = build_merged_linear(origin.q_proj,
-                                            origin.k_proj,
-                                            origin.v_proj,
-                                            ctx_mgr=ctx_mgr,
-                                            free_origin=True)
+        self.qkv_proj = build_merged_colwise_linear(
+            origin.q_proj,
+            origin.k_proj,
+            origin.v_proj,
+            ctx_mgr=ctx_mgr,
+            is_tp=is_tp,
+        )
+        del origin.q_proj, origin.k_proj, origin.v_proj
 
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
 
@@ -46,9 +51,11 @@ class LlamaAttention(nn.Module):
             v_head_size=self.head_dim,
         )
 
-        self.o_proj = build_linear(origin.o_proj,
-                                   ctx_mgr=ctx_mgr,
-                                   all_reduce=world_size > 1)
+        self.o_proj = build_rowwise_linear(
+            origin.o_proj,
+            ctx_mgr=ctx_mgr,
+            is_tp=is_tp,
+        )
 
     @staticmethod
     def _load_weights(mod, loader, rank: int, world_size: int,
@@ -75,17 +82,18 @@ class LlamaAttention(nn.Module):
                Optional[Tuple[torch.Tensor]]]:
         """Rewrite of LlamaAttention.forward."""
         context = self.ctx_mgr.current_context()
-
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
         qkv_states = qkv_states.unflatten(-1, (-1, self.head_dim))
-        query_states, key_states, value_states = qkv_states.split((
-            self.num_heads,
-            self.num_kv_heads,
-            self.num_kv_heads,
-        ),
-                                                                  dim=1)
+        query_states, key_states, value_states = qkv_states.split(
+            (
+                self.num_heads,
+                self.num_kv_heads,
+                self.num_kv_heads,
+            ),
+            dim=1,
+        )
 
         cos, sin = rotary_pos_emb
         query_states, key_states = self.apply_rotary_pos_emb(
@@ -115,21 +123,26 @@ class LlamaMLP(nn.Module):
 
     def __init__(self, origin: nn.Module, ctx_mgr: StepContextManager):
         super().__init__()
+        world_size = 1
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+        is_tp = world_size > 1
         # gate up
-        self.gate_up_proj = build_merged_linear(
+        self.gate_up_proj = build_merged_colwise_linear(
             origin.gate_proj,
             origin.up_proj,
             ctx_mgr=ctx_mgr,
-            free_origin=True,
+            is_tp=is_tp,
         )
+        del origin.gate_proj, origin.up_proj
 
         # silu and mul
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.down_proj = build_linear(origin.down_proj,
-                                      ctx_mgr=ctx_mgr,
-                                      all_reduce=True)
+        self.down_proj = build_rowwise_linear(origin.down_proj,
+                                              ctx_mgr=ctx_mgr,
+                                              is_tp=is_tp)
 
     @staticmethod
     def _load_weights(mod: nn.Module, loader, rank: int, world_size: int,
@@ -164,12 +177,19 @@ class LlamaDecoderLayer(nn.Module):
 
         # norm
         input_layernorm = origin.input_layernorm
-        self.input_layernorm = RMSNorm(input_layernorm.weight,
-                                       input_layernorm.variance_epsilon)
+        is_w8a8 = hasattr(input_layernorm, 'from_float')
+        self.input_layernorm = RMSNorm(
+            input_layernorm.weight,
+            input_layernorm.variance_epsilon,
+            is_w8a8=is_w8a8,
+        )
         post_attention_layernorm = origin.post_attention_layernorm
+        is_w8a8 = hasattr(post_attention_layernorm, 'from_float')
         self.post_attention_layernorm = RMSNorm(
             post_attention_layernorm.weight,
-            post_attention_layernorm.variance_epsilon)
+            post_attention_layernorm.variance_epsilon,
+            is_w8a8=is_w8a8,
+        )
 
     def forward(
         self,
@@ -213,7 +233,10 @@ class LlamaModel(nn.Module):
             for idx, layer in enumerate(origin.layers)
         ])
         norm = origin.norm
-        self.norm = RMSNorm(norm.weight, norm.variance_epsilon)
+        is_w8a8 = hasattr(norm, 'from_float')
+        self.norm = RMSNorm(norm.weight,
+                            norm.variance_epsilon,
+                            is_w8a8=is_w8a8)
 
         rotary_emb = origin.layers[0].self_attn.rotary_emb
         rotary_name = type(rotary_emb).__name__
@@ -223,11 +246,12 @@ class LlamaModel(nn.Module):
             emb_type = EmbeddingType.LinearScaling
         elif rotary_name == 'LlamaDynamicNTKScalingRotaryEmbedding':
             emb_type = EmbeddingType.DynamicNTKScaling
+        scaling_factor = getattr(rotary_emb, 'scaling_factor', 1.0)
         self.rotary_emb = build_rotary_embedding(
             rotary_emb.dim,
             rotary_emb.max_position_embeddings,
             rotary_emb.base,
-            rotary_emb.scaling_factor,
+            scaling_factor,
             emb_type,
         )
 
@@ -278,7 +302,7 @@ class LlamaForCausalLM(nn.Module):
         super().__init__()
         self.ctx_mgr = ctx_mgr
         self.model = LlamaModel(origin.model, ctx_mgr)
-        self.lm_head = build_linear(origin.lm_head)
+        self.lm_head = build_rowwise_linear(origin.lm_head)
 
     def forward(
         self,
@@ -297,5 +321,4 @@ class LlamaForCausalLM(nn.Module):
 
         logits = self.lm_head(hidden_states)
         logits = logits.float()
-
         return logits

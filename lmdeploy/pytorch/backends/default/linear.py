@@ -9,14 +9,13 @@ from ..linear import LinearBuilder, LinearImpl
 
 class DefaultLinearImpl(LinearImpl):
 
-    def __init__(self, mod: nn.Module, all_reduce: bool = False):
+    def __init__(self, mod: nn.Module):
         super().__init__()
         self.mod = mod
-        self.all_reduce = all_reduce
 
-    def forward(self, x):
+    def forward(self, x, all_reduce: bool = False):
         out = self.mod(x)
-        if self.all_reduce:
+        if all_reduce:
             dist.all_reduce(out)
         return out
 
@@ -24,7 +23,5 @@ class DefaultLinearImpl(LinearImpl):
 class DefaultLinearBuilder(LinearBuilder):
 
     @staticmethod
-    def build(mod: nn.Module,
-              ctx_mgr: StepContextManager = None,
-              all_reduce: bool = False):
-        return DefaultLinearImpl(mod, all_reduce)
+    def build(mod: nn.Module, ctx_mgr: StepContextManager = None):
+        return DefaultLinearImpl(mod)

@@ -15,6 +15,10 @@ class LayerType(Enum):
     ApplyRotaryEmb = auto()
     SiluAndMul = auto()
     RMSNorm = auto()
+    SLoRA = auto()
+    LinearW8A8 = auto()
+    RMSNormW8A8 = auto()
+    MultinomialSampling = auto()
 
 
 class LayersBackend(ABC):
