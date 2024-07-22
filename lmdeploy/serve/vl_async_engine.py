@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 
@@ -43,8 +43,13 @@ class VLAsyncEngine(AsyncEngine):
             _prompts = prompts
         return _prompts
 
-    async def _get_prompt_input(self, prompt: Dict, do_preprocess: bool,
-                                sequence_start: bool, adapter_name: str):
+    async def _get_prompt_input(self,
+                                prompt: Dict,
+                                do_preprocess: bool,
+                                sequence_start: bool,
+                                adapter_name: str,
+                                tools: Optional[List[object]] = None,
+                                **kwargs):
         """get input_ids, embeddings and offsets."""
         if do_preprocess:
             decorated = self.vl_prompt_template.messages2prompt(

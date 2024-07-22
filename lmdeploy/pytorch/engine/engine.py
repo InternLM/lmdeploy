@@ -429,7 +429,7 @@ class Engine:
         history_image_nums = None
         history_image_token_lengths = None
         # only for cogvlm
-        if self.model_config.model_arch == 'CogVLMForCausalLM':
+        if self.model_config.cogvlm_style:
             (history_image_nums,
              history_image_token_lengths) = __get_cogvlm_image_info()
 
@@ -512,7 +512,8 @@ class Engine:
             if msg.status != MessageStatus.RUNNING:
                 continue
             update_token = token
-            if stop or token in eos_token_id:
+            stop = stop or token in eos_token_id
+            if stop:
                 update_token = _EMPTY_TOKEN
             else:
                 msg.num_new_tokens += 1

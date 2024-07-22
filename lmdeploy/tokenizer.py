@@ -196,6 +196,7 @@ class HuggingFaceTokenizer:
     """
 
     def __init__(self, model_dir: str):
+        self._check_transformers_version(model_dir)
         from transformers import AutoTokenizer
         self.logger = get_logger('lmdeploy')
         self.model = AutoTokenizer.from_pretrained(model_dir,
@@ -219,6 +220,30 @@ class HuggingFaceTokenizer:
         self._indexes_tokens_deque = deque(maxlen=10)
         self.max_indexes_num = 5
         self.token2id = {}
+
+    def _check_transformers_version(self, model_dir: str):
+        import transformers
+        from packaging import version
+
+        from lmdeploy.archs import get_model_arch
+
+        logger = get_logger('lmdeploy')
+
+        current_transformers_version = version.parse(transformers.__version__)
+        cfg = get_model_arch(model_dir)[1]
+        cfg_ver = getattr(cfg, 'transformers_version', None)
+        if cfg_ver is None:
+            llm_config = getattr(cfg, 'llm_config', None)
+            if llm_config:
+                cfg_ver = getattr(llm_config, 'transformers_version', None)
+        if cfg_ver is None:
+            return
+        required_transformers_version = version.parse(cfg_ver)
+        if current_transformers_version < required_transformers_version:
+            logger.warning(
+                f'The current version of `transformers` is transformers=={current_transformers_version}, '  # noqa: E501
+                f'which is lower than the required version transformers=={required_transformers_version}. '  # noqa: E501
+                'Please upgrade to the required version.')
 
     @property
     def vocab_size(self):

@@ -9,7 +9,7 @@ class GemmaModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type == 'gemma'
+        return hf_config.model_type in ['gemma', 'gemma2']
 
     @classmethod
     def build(cls, hf_config, model_path: str = None):
