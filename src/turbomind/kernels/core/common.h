@@ -48,3 +48,7 @@ constexpr int WARP_SIZE = 32;
 #ifndef uint
 using uint = unsigned int;
 #endif
+
+#ifndef ushort
+using ushort = unsigned short int;
+#endif
