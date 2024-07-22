@@ -161,7 +161,7 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
     messages = []
     msg = ''
     for prompt_detail in case_info:
-        if result is False:
+        if not result:
             break
         prompt = list(prompt_detail.keys())[0]
         messages.append({'role': 'user', 'content': prompt})
@@ -181,7 +181,7 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
                                                 model_name)
             file.writelines('result:' + str(case_result) + ',reason:' +
                             reason + '\n')
-            if case_result is False:
+            if not case_result:
                 msg += reason
             result = result & case_result
     file.close()
@@ -225,7 +225,7 @@ def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
                                                 prompt_detail.values(), model)
             file.writelines('result:' + str(case_result) + ',reason:' +
                             reason + '\n')
-            if case_result is False:
+            if not case_result:
                 msg += reason
             result = result & case_result
     file.close()

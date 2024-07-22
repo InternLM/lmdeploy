@@ -47,7 +47,7 @@ def hf_command_line_test(config,
                          cuda_prefix: str = None,
                          extra: str = '',
                          use_local_model: bool = True):
-    if use_local_model is True:
+    if use_local_model:
         model_path = config.get('model_path') + '/' + model_case
     else:
         model_path = model_case
@@ -140,7 +140,7 @@ def command_test(config,
                 file.writelines('result:' + str(case_result) + ',reason:' +
                                 reason + '\n')
                 index += 1
-                if case_result is False:
+                if not case_result:
                     msg = reason
                 result = result & case_result
             file.writelines('\n\n\n' + 'full log:' + outputs + '\n')

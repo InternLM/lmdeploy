@@ -56,7 +56,7 @@ def assert_chat_completions_stream_return(output,
         assert message.get('delta').get('role') == 'assistant'
         assert message.get('index') == 0
         assert len(message.get('delta').get('content')) >= 0
-        if is_last is False:
+        if not is_last:
             assert message.get('finish_reason') is None
             if check_logprobs:
                 assert_logprobs(message.get('logprobs'), logprobs_num)

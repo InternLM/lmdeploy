@@ -149,7 +149,7 @@ def assert_pipeline_chat_log(config,
                         result = False
                         msg = line
                         break
-                    if 'result:True, reason:' in line and result is False:
+                    if 'result:True, reason:' in line and not result:
                         result = True
                         msg = ''
 
@@ -187,7 +187,7 @@ def assert_pipeline_common_log(config, log_name):
                 result = False
                 msg = line
                 break
-            if 'result:True, reason:' in line and result is False:
+            if 'result:True, reason:' in line and not result:
                 result = True
                 msg = ''
     subprocess.run([' '.join(['rm -rf', config_log])],
@@ -214,7 +214,7 @@ def assert_pipeline_batch_return(output, size: int = 1):
         return False, 'length is not correct'
     for single_output in output:
         result, msg = assert_pipeline_single_return(single_output)
-        if result is False:
+        if not result:
             return result, msg
     return True, ''
 
@@ -222,10 +222,10 @@ def assert_pipeline_batch_return(output, size: int = 1):
 def assert_pipeline_single_stream_return(output):
     print(output)
     for i in range(0, len(output) - 1):
-        if assert_pipeline_single_element(output[i], is_stream=True) is False:
+        if not assert_pipeline_single_element(output[i], is_stream=True):
             return False, f'single_stream_element is false, index is {i}'
-    if assert_pipeline_single_element(output[-1], is_stream=True,
-                                      is_last=True) is False:
+    if not assert_pipeline_single_element(
+            output[-1], is_stream=True, is_last=True):
         return False, 'last single_stream_element is false'
     return True, ''
 
@@ -234,7 +234,7 @@ def assert_pipeline_batch_stream_return(output, size: int = 1):
     for i in range(size):
         output_list = [item for item in output if item.session_id == i]
         result, msg = assert_pipeline_single_stream_return(output_list)
-        if result is False:
+        if not result:
             return result, msg
     return True, ''
 
@@ -374,7 +374,7 @@ def assert_pipeline_vl_chat_log(config, model_case):
                 result = False
                 msg = line
                 break
-            if 'result:True, reason:' in line and result is False:
+            if 'result:True, reason:' in line and not result:
                 result = True
                 msg = ''
 

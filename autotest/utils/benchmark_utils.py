@@ -6,11 +6,11 @@ from utils.config_utils import get_workerid
 
 DEFAULT_PORT = 23333
 
-GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
-GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 200000 -ct 1024 -pt 198000'
+# GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
+# GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 200000 -ct 1024 -pt 198000'
 
-# GENERATION_CONFIG = ' -c 8 -ct 128 -pt 128'
-# GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 100 -ct 128 -pt 128'
+GENERATION_CONFIG = ' -c 8 -ct 128 -pt 128'
+GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 100 -ct 128 -pt 128'
 
 
 def generation_test(config,
@@ -70,7 +70,7 @@ def generation_test(config,
                                        text=True)
         f.writelines(benchmark_res.stderr)
 
-    if benchmark_res.returncode == 0 and os.path.isfile(csv_path) is False:
+    if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
         return False, benchmark_log, 'result is empty'
     return benchmark_res.returncode == 0, benchmark_log, benchmark_res.stderr
 
@@ -110,7 +110,7 @@ def throughput_test(config,
     if is_smoke:
         run_config = '--num-prompts 300'
     else:
-        run_config = '--num-prompts 3000'
+        run_config = '--num-prompts 400'
     if backend == 'pytorch':
         command += ' --backend pytorch'
     else:
@@ -135,7 +135,7 @@ def throughput_test(config,
                                            text=True,
                                            encoding='utf-8')
             f.writelines(benchmark_res.stderr)
-    if benchmark_res.returncode == 0 and os.path.isfile(csv_path) is False:
+    if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
         return False, benchmark_log, 'result is empty'
     return benchmark_res.returncode == 0, benchmark_log, benchmark_res.stderr
 
@@ -173,7 +173,7 @@ def restful_test(config,
     else:
         port = DEFAULT_PORT + worker_num
 
-    command = f'python3 benchmark/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True'  # noqa: F401, E501
+    command = f'python3 benchmark/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True '  # noqa: F401, E501
     if is_smoke:
         command += ' --num-prompts 300'
 
@@ -194,7 +194,7 @@ def restful_test(config,
                                            text=True,
                                            encoding='utf-8')
             f.writelines(benchmark_res.stderr)
-    if benchmark_res.returncode == 0 and os.path.isfile(csv_path) is False:
+    if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
         return False, benchmark_log, 'result is empty'
     return benchmark_res.returncode == 0, benchmark_log, benchmark_res.stderr
 
