@@ -127,7 +127,6 @@ class AsyncEngine(LogitsMixin):
             config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
-        tp (int): tensor parallel
     """
 
     def __init__(self,
@@ -195,11 +194,10 @@ class AsyncEngine(LogitsMixin):
             model_path: str,
             backend_config: Optional[Union[TurbomindEngineConfig,
                                            PytorchEngineConfig]] = None,
-            tp: int = 1,
             **kwargs):
         """Innter build method for turbomind backend."""
         if backend_config is None:
-            backend_config = TurbomindEngineConfig(tp=tp)
+            backend_config = TurbomindEngineConfig()
         assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
             ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
             'turbomind backend'
