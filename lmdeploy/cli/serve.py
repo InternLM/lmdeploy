@@ -140,9 +140,9 @@ class SubCliServe:
         ArgumentHelper.ssl(parser)
 
         # chat template args
-        ArgumentHelper.meta_instruction(parser)  # TODO remove
+        # ArgumentHelper.meta_instruction(parser)  # TODO remove
         ArgumentHelper.chat_template(parser)
-        ArgumentHelper.cap(parser)
+        # ArgumentHelper.cap(parser)
 
         # model args
         ArgumentHelper.revision(parser)
@@ -206,7 +206,6 @@ class SubCliServe:
         from lmdeploy.archs import autoget_backend
         from lmdeploy.messages import (PytorchEngineConfig,
                                        TurbomindEngineConfig)
-        from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.gradio.app import run
         backend = args.backend
 
@@ -236,13 +235,8 @@ class SubCliServe:
                 cache_block_seq_len=args.cache_block_seq_len,
                 enable_prefix_caching=args.enable_prefix_caching,
             )
-        chat_template_config = ChatTemplateConfig(
-            model_name=args.model_name,
-            meta_instruction=args.meta_instruction,
-            capability=args.cap)
-        if args.chat_template:
-            chat_template_config = ChatTemplateConfig.from_json(
-                args.chat_template)
+        chat_template_config = SubCliServe.get_chat_template(
+            args.chat_template)
         run(args.model_path_or_server,
             server_name=args.server_name,
             server_port=args.server_port,
@@ -255,7 +249,6 @@ class SubCliServe:
     def api_server(args):
         """Serve LLMs with restful api using fastapi."""
         from lmdeploy.archs import autoget_backend
-        from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.openai.api_server import serve as run_api_server
         backend = args.backend
         if backend != 'pytorch':
@@ -289,10 +282,9 @@ class SubCliServe:
                 cache_block_seq_len=args.cache_block_seq_len,
                 enable_prefix_caching=args.enable_prefix_caching,
             )
-        chat_template_config = None
-        if args.chat_template:
-            chat_template_config = ChatTemplateConfig.from_json(
-                args.chat_template)
+        chat_template_config = SubCliServe.get_chat_template(
+            args.chat_template)
+
         from lmdeploy.messages import VisionConfig
         vision_config = VisionConfig(args.vision_max_batch_size)
         run_api_server(args.model_path,
@@ -324,3 +316,19 @@ class SubCliServe:
         SubCliServe.add_parser_gradio()
         SubCliServe.add_parser_api_server()
         SubCliServe.add_parser_api_client()
+
+    @staticmethod
+    def get_chat_template(chat_template):
+        import os
+
+        from lmdeploy.model import ChatTemplateConfig
+        if os.path.isfile(chat_template):
+            return ChatTemplateConfig.from_json(chat_template)
+        elif chat_template:
+            from lmdeploy.model import MODELS
+            assert chat_template in MODELS.module_dict.keys(), \
+                f"chat template '{chat_template}' is not registered. " \
+                f'The builtin chat templates are: {MODELS.module_dict.keys()}'
+            return ChatTemplateConfig(model_name=chat_template)
+        else:
+            return None
