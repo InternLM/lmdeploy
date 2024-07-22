@@ -121,15 +121,11 @@ def get_vl_model_list(tp_num: int = None):
 
 
 def get_cuda_prefix_by_workerid(worker_id, tp_num: int = 1):
-    if worker_id is None or 'gw' not in worker_id:
+    cuda_id = get_cuda_id_by_workerid(worker_id, tp_num)
+    if cuda_id is None or 'gw' not in worker_id:
         return None
     else:
-        if tp_num == 1:
-            return 'CUDA_VISIBLE_DEVICES=' + worker_id.replace('gw', '')
-        elif tp_num == 2:
-            cuda_num = int(worker_id.replace('gw', '')) * 2
-            return 'CUDA_VISIBLE_DEVICES=' + ','.join(
-                [str(cuda_num), str(cuda_num + 1)])
+        return 'CUDA_VISIBLE_DEVICES=' + cuda_id
 
 
 def get_cuda_id_by_workerid(worker_id, tp_num: int = 1):

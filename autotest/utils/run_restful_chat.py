@@ -82,12 +82,12 @@ def start_restful_api(config, param, model, model_path, backend_type,
     http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     sleep(5)
-    for i in range(180):
+    for i in range(300):
         sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
-        if result or total_time >= 180:
+        if result or total_time >= 300:
             break
     return pid, startRes
 

@@ -3,14 +3,11 @@ import subprocess
 from subprocess import PIPE
 
 from utils.config_utils import get_workerid
+from utils.run_restful_chat import health_check
 
 DEFAULT_PORT = 23333
-
-# GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
-# GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 200000 -ct 1024 -pt 198000'
-
-GENERATION_CONFIG = ' -c 8 -ct 128 -pt 128'
-GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 100 -ct 128 -pt 128'
+GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
+GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 200000 -ct 1024 -pt 198000'
 
 
 def generation_test(config,
@@ -34,6 +31,7 @@ def generation_test(config,
 
     create_multi_level_directory(benchmark_path)
 
+    print(cuda_prefix)
     command = f'python3 benchmark/profile_generation.py {model_path} '
     command = get_command_with_extra(command, cuda_prefix)
 
@@ -110,7 +108,7 @@ def throughput_test(config,
     if is_smoke:
         run_config = '--num-prompts 300'
     else:
-        run_config = '--num-prompts 400'
+        run_config = '--num-prompts 3000'
     if backend == 'pytorch':
         command += ' --backend pytorch'
     else:
@@ -173,9 +171,15 @@ def restful_test(config,
     else:
         port = DEFAULT_PORT + worker_num
 
+    http_url = f'http://localhost:{port}'
+    if not health_check(http_url):
+        return False, None, 'server not start'
+
     command = f'python3 benchmark/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True '  # noqa: F401, E501
     if is_smoke:
         command += ' --num-prompts 300'
+    else:
+        command += ' --num-prompts 2000'
 
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/restful_batch_{batch}_1th.csv'
@@ -202,6 +206,7 @@ def restful_test(config,
 def get_command_with_extra(cmd, cuda_prefix: str = None):
     if cuda_prefix is not None and len(cuda_prefix) > 0:
         cmd = ' '.join([cuda_prefix, cmd])
+    print(cmd)
     return cmd
 
 
