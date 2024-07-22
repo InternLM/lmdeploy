@@ -1,4 +1,4 @@
-# MiniCPM-V Deployment
+# MiniCPM-V
 
 ## Introduction
 
