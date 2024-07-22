@@ -82,7 +82,6 @@ struct Operand_C {
         {
             constexpr auto cs = mk2cs<order>(M, N);
             return SmemLayoutV2<cs.y, cs.x, 1, 1>{};
-            // return SmemLayoutV2<cs.y, cs.x, 8, 32, Swizzle<2, 3, 2>>{};
         }
     };
 
