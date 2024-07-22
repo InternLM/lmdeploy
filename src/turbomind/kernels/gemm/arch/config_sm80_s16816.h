@@ -35,10 +35,11 @@ struct Sm80_s16816 {
              class PolicyB,
              int  Stages,
              bool SplitK,
-             int  GroupSizeU = 1,
-             int  GroupSizeV = 1,
-             int  TILE_C_M_  = -1,
-             int  TILE_C_N_  = -1>
+             int  GroupSizeU   = 1,
+             int  GroupSizeV   = 1,
+             int  TILE_C_M_    = -1,
+             int  TILE_C_N_    = -1,
+             bool FusePrefecth = true>
 
     struct Type {
 
@@ -62,7 +63,7 @@ struct Sm80_s16816 {
                                          V,
                                          GroupSizeV,
                                          Stages,
-                                         true>;
+                                         FusePrefecth>;
 
         static constexpr int TILE_C_M = TILE_C_M_ == -1 ? CTA_M : TILE_C_M_;
         static constexpr int TILE_C_N = TILE_C_N_ == -1 ? CTA_N : TILE_C_N_;

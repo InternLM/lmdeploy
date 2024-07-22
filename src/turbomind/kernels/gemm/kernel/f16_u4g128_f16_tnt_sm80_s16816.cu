@@ -149,15 +149,16 @@ void Registry::f16_u4g128_f16_tnt_sm80_s16816()
         Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Default, 3, true, 1, 128>>();   // 7
         // Add<Config::Type<64, 128, 32, 1, 4, 1, Default, Default, 5, true, 1, 128>>();
 
-        // Add<Config::Type<256, 128, 32, 2, 4, 1, Default, Stream, 5, true, 1, 128>>();
-        Add<Config::Type<192, 128, 32, 2, 4, 1, Default, Stream, 5, true, 1, 128>>();  // 1
-        // Add<Config::Type<160, 128, 32, 2, 4, 1, Default, Stream, 5, true, 1, 128>>();
+        Add<Config::Type<128, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128, 128, 128, false>>();
         Add<Config::Type<128, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();  // 7
+        Add<Config::Type<128, 128, 32, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();  // 7
         Add<Config::Type<96, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();   // 3
         Add<Config::Type<96, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();   // 1
         Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();   // 7
         Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
         Add<Config::Type<64, 128, 32, 1, 4, 1, Default, Stream, 6, true, 1, 128>>();
+        Add<Config::Type<48, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
+        Add<Config::Type<48, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
         Add<Config::Type<32, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
         Add<Config::Type<32, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();   // 2
         Add<Config::Type<16, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();   // 4

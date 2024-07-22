@@ -139,7 +139,7 @@ struct Gemm::Impl {
         std::vector<std::pair<float, int>> costs;
 
         for (const auto& k : kernels) {
-            const int max_splits = std::min(k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size), 4);
+            const int max_splits = std::min(k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size), 8);
 
             auto [splits, cost] = k->Estimate(desc.m,
                                               desc.n,
@@ -206,13 +206,13 @@ struct Gemm::Impl {
                                       desc.k,
                                       max_splits,
                                       props_->multiProcessorCount,
-                                      32,
-                                      10,
+                                      16,
+                                      5,
                                       l2_bytes_per_second_,
                                       fma_per_second_);
             for (const auto& [split_k, cost] : splits) {
-                // for (const auto& swizzle : {0, 1, 2, 3}) {
-                for (const auto& swizzle : {3}) {
+                for (const auto& swizzle : {0, 1, 2, 3}) {
+                // for (const auto& swizzle : {3}) {
                     if (auto s = k->GetSwizzle(desc.m, desc.n, desc.k, split_k, swizzle); s != swizzle) {
                         // Skip when swizzle is starting to get truncated
                         break;
@@ -223,9 +223,13 @@ struct Gemm::Impl {
         }
 
         /// TODO: filter kernels by heuristic
-        constexpr int   kMinIteration = 5;
-        constexpr int   kMaxIteration = 50;
-        constexpr float kMaxDuration  = 25;  // std::milli
+        // constexpr int   kMinIteration = 5;
+        // constexpr int   kMaxIteration = 50;
+        // constexpr float kMaxDuration  = 25;  // std::milli
+
+        constexpr int   kMinIteration = 1;
+        constexpr int   kMaxIteration = 20;
+        constexpr float kMaxDuration  = 1;  // std::milli
 
         constexpr float kFloatInf = std::numeric_limits<float>::infinity();
 

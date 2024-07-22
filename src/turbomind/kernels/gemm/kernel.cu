@@ -1,9 +1,9 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include "src/turbomind/kernels/core/math.h"
 #include <algorithm>
 #include <iostream>
 #include <numeric>
@@ -61,15 +61,30 @@ std::vector<std::pair<int, float>> Kernel::Estimate(int   m,
         const float ldg_cost = ldg_volume * wave_count * concurrency / bytes_per_second;
 
         // (CTA_M * CTA_N) * ceil(S * TILED_M * TILED_N / C) * C
-        const float split_cost = splits > 1 ? split_volume * wave_count * concurrency / bytes_per_second : 0;
+        // const float split_cost = splits > 1 ? split_volume * wave_count * concurrency / bytes_per_second : 0;
+
+        // (CTA_M * CTA_N) * (S - 1) * ceil(TILED_M * TILED_N / C) * C
+        const float split_cost =
+            split_volume * (splits - 1) * std::ceil(wave_per_split) * concurrency / bytes_per_second;
+
+        // (CTA_M * CTA_N) * ceil(TILED_M * TILED_N / C) * C
+        const float output_volume = cta_mn * 2;
+        const float output_cost   = output_volume * std::ceil(wave_per_split) * concurrency / bytes_per_second;
+
+        const float epi_cost = split_cost + output_cost;
 
         // Non-perfect latency hiding
-        float cost = std::pow(fma_cost + ldg_cost, 0.2) * std::pow(std::max(fma_cost, ldg_cost), 0.8) + split_cost;
+        float cost = std::pow(fma_cost + ldg_cost, 0.2) * std::pow(std::max(fma_cost, ldg_cost), 0.8) + epi_cost;
 
         // std::cout << splits << " waves=" << waves << " fma=" << fma_cost * 1e3 << " ldg=" << ldg_cost * 1e3
         //           << " spk=" << split_cost * 1e3 << " cost=" << cost * 1e3 << std::endl;
 
         estimations.emplace_back(cost, 0, waves, splits);
+
+        float w = (float)tiled_shape_mn / concurrency;
+        if (splits == 1 && std::ceil(w) - w < 0.05) {
+            break;
+        }
     }
 
     for (auto i = (int)estimations.size() - 1; i >= 1; --i) {
