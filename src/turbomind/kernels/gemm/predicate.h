@@ -12,12 +12,9 @@ struct Predicate {
 
     static_assert(S * kSizeC <= 32);
 
-    uint32_t pred_{};
+    static constexpr bool is_active = true;
 
-    static constexpr std::true_type active()
-    {
-        return {};
-    }
+    uint32_t pred_{};
 
     __device__ int operator()(int s, int c) const
     {
@@ -38,10 +35,7 @@ struct Predicate {
 template<int S, int C>
 struct Predicate<S, C, true, true> {
 
-    static constexpr std::false_type active()
-    {
-        return {};
-    }
+    static constexpr bool is_active = false;
 
     __device__ constexpr std::integral_constant<int, 1> operator()(int, int) const
     {

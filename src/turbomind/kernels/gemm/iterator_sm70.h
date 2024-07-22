@@ -80,7 +80,7 @@ struct GmemIteratorSm70 {
 
         auto src_ptr = reinterpret_cast<const char*>((T*)data);
 
-        if constexpr (pred_.active()) {
+        if constexpr (pred_.is_active) {
             PRAGMA_UNROLL
             for (int s = 0; s < Map::kIterS; ++s) {
                 PRAGMA_UNROLL
