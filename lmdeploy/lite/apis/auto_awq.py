@@ -25,6 +25,7 @@ LAYER_TYPE_MAP = {
     'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
+    'ChatGLMForConditionalGeneration': 'GLMBlock',
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
@@ -37,6 +38,7 @@ NORM_TYPE_MAP = {
     'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
+    'ChatGLMForConditionalGeneration': 'RMSNorm',
 }
 
 
@@ -136,7 +138,7 @@ def auto_awq(model: str,
                   w_sym,
                   w_group_size,
                   device,
-                  skip_if_contains='Plora')  # TODO quant lora weight
+                  skip_if_contains='lora')  # TODO quant lora weight
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,

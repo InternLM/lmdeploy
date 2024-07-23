@@ -231,8 +231,14 @@ class HuggingFaceTokenizer:
 
         current_transformers_version = version.parse(transformers.__version__)
         cfg = get_model_arch(model_dir)[1]
-        required_transformers_version = version.parse(
-            getattr(cfg, 'transformers_version', 'str'))
+        cfg_ver = getattr(cfg, 'transformers_version', None)
+        if cfg_ver is None:
+            llm_config = getattr(cfg, 'llm_config', None)
+            if llm_config:
+                cfg_ver = getattr(llm_config, 'transformers_version', None)
+        if cfg_ver is None:
+            return
+        required_transformers_version = version.parse(cfg_ver)
         if current_transformers_version < required_transformers_version:
             logger.warning(
                 f'The current version of `transformers` is transformers=={current_transformers_version}, '  # noqa: E501

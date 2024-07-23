@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from random import randint
 
 import pytest
+from openai import OpenAI
 from tqdm import tqdm
 from utils.restful_return_check import (assert_chat_completions_batch_return,
                                         assert_chat_completions_stream_return,
@@ -693,6 +694,58 @@ class TestRestfulInterfaceChatCompletions:
             'finish_reason') == 'length'
         assert length == 5 or length == 6
 
+    @pytest.mark.not_pytorch
+    def test_logprobs(self):
+        api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
+        for output in api_client.chat_completions_v1(
+                model=model_name,
+                messages='Hi, pls intro yourself',
+                max_tokens=5,
+                temperature=0.01,
+                logprobs=True,
+                top_logprobs=10):
+            continue
+        assert_chat_completions_batch_return(output,
+                                             model_name,
+                                             check_logprobs=True,
+                                             logprobs_num=10)
+        assert output.get('choices')[0].get('finish_reason') == 'length'
+        assert output.get('usage').get('completion_tokens') == 6 or output.get(
+            'usage').get('completion_tokens') == 5
+
+    @pytest.mark.not_pytorch
+    def test_logprobs_streaming(self):
+        api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
+        outputList = []
+        for output in api_client.chat_completions_v1(
+                model=model_name,
+                messages='Hi, pls intro yourself',
+                stream=True,
+                max_tokens=5,
+                temperature=0.01,
+                logprobs=True,
+                top_logprobs=10):
+            outputList.append(output)
+        assert_chat_completions_stream_return(outputList[-1],
+                                              model_name,
+                                              True,
+                                              check_logprobs=True,
+                                              logprobs_num=10)
+        response = ''
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index],
+                                                  model_name,
+                                                  check_logprobs=True,
+                                                  logprobs_num=10)
+            response += outputList[index].get('choices')[0].get('delta').get(
+                'content')
+        length = api_client.encode(response, add_bos=False)[1]
+        assert outputList[-1].get('choices')[0].get(
+            'finish_reason') == 'length'
+        assert length == 5 or length == 6
+
 
 @pytest.mark.order(8)
 @pytest.mark.turbomind
@@ -1242,3 +1295,148 @@ class TestRestfulInterfaceChatInteractive:
             continue
         assert output.get('code') is None
         assert 'Input should be a valid integer' in str(output)
+
+
+@pytest.mark.order(8)
+@pytest.mark.turbomind
+@pytest.mark.pytorch
+@pytest.mark.flaky(reruns=2)
+class TestRestfulSeverTools:
+
+    def test_one_round_prompt(self):
+        tools = [{
+            'type': 'function',
+            'function': {
+                'name': 'get_current_weather',
+                'description': 'Get the current weather in a given location',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'location': {
+                            'type':
+                            'string',
+                            'description':
+                            'The city and state, e.g. San Francisco, CA',
+                        },
+                        'unit': {
+                            'type': 'string',
+                            'enum': ['celsius', 'fahrenheit']
+                        },
+                    },
+                    'required': ['location'],
+                },
+            }
+        }]
+        messages = [{
+            'role': 'user',
+            'content': "What's the weather like in Boston today?"
+        }]
+
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=BASE_URL + '/v1')
+        model_name = client.models.list().data[0].id
+        response = client.chat.completions.create(model=model_name,
+                                                  messages=messages,
+                                                  temperature=0.01,
+                                                  stream=False,
+                                                  tools=tools)
+        print(response)
+        assert response.choices[0].finish_reason == 'tool_calls'
+        assert response.choices[0].message.tool_calls[
+            0].function.name == 'get_current_weather'
+        assert 'Boston' in response.choices[0].message.tool_calls[
+            0].function.arguments
+        assert response.choices[0].message.tool_calls[0].type == 'function'
+
+    def test_multiple_round_prompt(self):
+
+        def add(a: int, b: int):
+            return a + b
+
+        def mul(a: int, b: int):
+            return a * b
+
+        tools = [{
+            'type': 'function',
+            'function': {
+                'name': 'add',
+                'description': 'Compute the sum of two numbers',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'a': {
+                            'type': 'int',
+                            'description': 'A number',
+                        },
+                        'b': {
+                            'type': 'int',
+                            'description': 'A number',
+                        },
+                    },
+                    'required': ['a', 'b'],
+                },
+            }
+        }, {
+            'type': 'function',
+            'function': {
+                'name': 'mul',
+                'description': 'Calculate the product of two numbers',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'a': {
+                            'type': 'int',
+                            'description': 'A number',
+                        },
+                        'b': {
+                            'type': 'int',
+                            'description': 'A number',
+                        },
+                    },
+                    'required': ['a', 'b'],
+                },
+            }
+        }]
+        messages = [{'role': 'user', 'content': 'Compute (3+5)*2'}]
+
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=BASE_URL + '/v1')
+        model_name = client.models.list().data[0].id
+        response = client.chat.completions.create(model=model_name,
+                                                  messages=messages,
+                                                  temperature=0.01,
+                                                  stream=False,
+                                                  tools=tools)
+        func1_name = response.choices[0].message.tool_calls[0].function.name
+        func1_args = response.choices[0].message.tool_calls[
+            0].function.arguments
+        func1_out = eval(f'{func1_name}(**{func1_args})')
+        assert response.choices[0].finish_reason == 'tool_calls'
+        assert func1_name == 'add'
+        assert func1_args == '{"a": 3, "b": 5}'
+        assert func1_out == 8
+        assert response.choices[0].message.tool_calls[0].type == 'function'
+
+        messages.append({
+            'role': 'assistant',
+            'content': response.choices[0].message.content
+        })
+        messages.append({
+            'role': 'environment',
+            'content': f'3+5={func1_out}',
+            'name': 'plugin'
+        })
+        response = client.chat.completions.create(model=model_name,
+                                                  messages=messages,
+                                                  temperature=0.8,
+                                                  top_p=0.8,
+                                                  stream=False,
+                                                  tools=tools)
+        print(response)
+        func2_name = response.choices[0].message.tool_calls[0].function.name
+        func2_args = response.choices[0].message.tool_calls[
+            0].function.arguments
+        func2_out = eval(f'{func2_name}(**{func2_args})')
+        assert response.choices[0].finish_reason == 'tool_calls'
+        assert func2_name == 'mul'
+        assert func2_args == '{"a": 8, "b": 2}'
+        assert func2_out == 16
+        assert response.choices[0].message.tool_calls[0].type == 'function'
