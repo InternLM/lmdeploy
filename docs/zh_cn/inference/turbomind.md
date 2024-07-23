@@ -57,8 +57,6 @@ TurboMind 的 [KV 缓存管理器](https://github.com/InternLM/lmdeploy/blob/mai
 
 TurboMind 的 Python API 支持流式结果返回和张量并行模式。
 
-同时 TurboMind 也继承了 FasterTransformer 能够注册为 [Triton Inference Server](https://github.com/triton-inference-server/server) 推理后端的能力。但是为了支持 persistent batch 中的并发请求，我们不再像 FasterTransformer 那样使用 sequence batching 或者 dynamic batching 。相反，TurboMind 负责记录和管理请求序列的状态。
-
 ## TurboMind 和 FasterTransformer 的区别
 
 除了上文中提到的功能外，TurboMind 相较于 FasterTransformer 还有不少差别。譬如不少 FasterTransformer 的功能在 TurboMind 中都被去掉了，这其中包括前缀提示词、 beam search 、上下文 embedding、稀疏化 GEMM 操作和对应 GPT 或 T5 等结构的模型的支持等等。

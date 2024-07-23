@@ -77,7 +77,7 @@ def run_pipeline_chat_test(config,
     file.close
 
     for case in cases_info.keys():
-        if ('deepseek-coder' in model_case
+        if ('coder' in model_case
                 or 'CodeLlama' in model_case) and 'code' not in case:
             continue
         case_info = cases_info.get(case)
@@ -126,7 +126,7 @@ def assert_pipeline_chat_log(config,
     allure.attach.file(config_log, attachment_type=allure.attachment_type.TEXT)
 
     for case in cases_info.keys():
-        if ('deepseek-coder' in model_case
+        if ('coder' in model_case
                 or 'CodeLlama' in model_case) and 'code' not in case:
             continue
         msg = 'result is empty, please check again'
@@ -200,8 +200,10 @@ def assert_pipeline_common_log(config, log_name):
     assert result, msg
 
 
-def assert_pipeline_single_return(output):
-    result = assert_pipeline_single_element(output, is_last=True)
+def assert_pipeline_single_return(output, logprobs_num: int = 0):
+    result = assert_pipeline_single_element(output,
+                                            is_last=True,
+                                            logprobs_num=logprobs_num)
     if not result:
         return result, 'single_stream_element is wrong'
     return result & (len(output.token_ids) == output.generate_token_len
@@ -219,13 +221,14 @@ def assert_pipeline_batch_return(output, size: int = 1):
     return True, ''
 
 
-def assert_pipeline_single_stream_return(output):
-    print(output)
+def assert_pipeline_single_stream_return(output, logprobs_num: int = 0):
     for i in range(0, len(output) - 1):
-        if assert_pipeline_single_element(output[i], is_stream=True) is False:
+        if assert_pipeline_single_element(
+                output[i], is_stream=True, logprobs_num=logprobs_num) is False:
             return False, f'single_stream_element is false, index is {i}'
-    if assert_pipeline_single_element(output[-1], is_stream=True,
-                                      is_last=True) is False:
+    if assert_pipeline_single_element(
+            output[-1], is_stream=True, is_last=True,
+            logprobs_num=logprobs_num) is False:
         return False, 'last single_stream_element is false'
     return True, ''
 
@@ -241,7 +244,8 @@ def assert_pipeline_batch_stream_return(output, size: int = 1):
 
 def assert_pipeline_single_element(output,
                                    is_stream: bool = False,
-                                   is_last: bool = False):
+                                   is_last: bool = False,
+                                   logprobs_num: int = 0):
     result = True
     result &= output.generate_token_len > 0
     result &= output.input_token_len > 0
@@ -257,7 +261,19 @@ def assert_pipeline_single_element(output,
         result &= len(output.text) > 0
         result &= output.finish_reason is None
         result &= len(output.token_ids) > 0
-    result &= output.logprobs is None
+    if logprobs_num == 0 or is_last:
+        result &= output.logprobs is None
+    else:
+        if is_stream:
+            result &= len(output.logprobs) == 1
+        else:
+            result &= len(output.logprobs) == output.generate_token_len or len(
+                output.logprobs) == output.generate_token_len + 1
+        if result:
+            for content in output.logprobs:
+                result &= len(content.keys()) <= logprobs_num
+                for key in content.keys():
+                    result &= type(content.get(key)) == float
     return result
 
 

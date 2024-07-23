@@ -36,6 +36,10 @@ NORM_FCS_MAP = {
         'input_layernorm': ['self_attn.qkv_proj'],
         'post_attention_layernorm': ['mlp.gate_up_proj']
     },
+    'GLMBlock': {
+        'input_layernorm': ['self_attention.query_key_value'],
+        'post_attention_layernorm': ['mlp.dense_h_to_4h']
+    }
 }
 
 FC_FCS_MAP = {
@@ -66,6 +70,10 @@ FC_FCS_MAP = {
         'self_attn.qkv_proj': ['self_attn.o_proj'],
         'mlp.gate_up_proj': ['mlp.down_proj']
     },
+    'GLMBlock': {
+        # 'self_attention.query_key_value': ['self_attention.dense']
+        # 'mlp.dense_h_to_4h': ['mlp.dense_4h_to_h']
+    }
 }
 
 
@@ -172,6 +180,7 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
         if getattr(pre_fc, 'bias', None) is not None:
             pre_fc.bias[-size_a:].div_(scales)
     else:
+
         pre_fc.weight.div_(scales.view(-1, 1))
 
         if getattr(pre_fc, 'bias', None) is not None:

@@ -37,7 +37,8 @@ SUPPORTED_ARCHS = dict(
     MGMLlamaForCausalLM='llama',
     MiniGeminiLlamaForCausalLM='llama',
     # chatglm2/3, glm4
-    ChatGLMModel='glm4')
+    ChatGLMModel='glm4',
+    ChatGLMForConditionalGeneration='glm4')
 
 
 def is_supported(model_path: str):
@@ -87,7 +88,7 @@ def is_supported(model_path: str):
                 # qwen2 0.5b size_per_head is 64, which hasn't been supported
                 # by turbomind yet
                 support_by_turbomind = _is_head_dim_128(cfg)
-            elif arch == 'ChatGLMModel':
+            elif arch in ('ChatGLMModel', 'ChatGLMForConditionalGeneration'):
                 # chatglm1/2/3 is not working yet
                 support_by_turbomind = cfg.num_layers == 40
                 if getattr(cfg, 'vision_config', None) is not None:
