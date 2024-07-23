@@ -20,30 +20,18 @@ class QwenReader(LlamaReader):
                  model_cfg: dict):
         super().__init__(new_params, unused_params, last_bin, model_cfg)
 
-    def _attn(self, i: int, kind: str, size_dim: int, dim: int = 0):
+    def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
+        q, k, v, o = (None, ) * 4
         qkv = self.params[f'transformer.h.{i}.attn.c_attn.{kind}']
-        q, k, v = torch.split(qkv, qkv.size(size_dim) // 3, dim=dim)
-        o = self.params.get(f'transformer.h.{i}.attn.c_proj.{kind}', None)
+        qkv = self.transform(qkv, kind)
+        if qkv is not None:
+            q, k, v = torch.split(qkv, qkv.size(0) // 3, dim=0)
+        o = self.params.get(f'transformer.h.{i}.attn.c_proj.{kind}')
+        o = self.transform(o, kind)
         if o is None:
             o = torch.zeros_like(q)
         return q, k, v, o
-
-    def attn(self, i: int):
-        """Get q, k, v, o weight for layer i."""
-        return self._attn(i, 'weight', 0, 0)
-
-    def attn_bias(self, i: int):
-        """Get q, k, v, o bias for layer i."""
-        return self._attn(i, 'bias', -1, 0)
-
-    def attn_zero(self, i: int):
-        """Get q, k, v, o zero point for layer i."""
-        return (None, ) * 4
-
-    def attn_scale(self, i: int):
-        """Get q, k, v, o scale for layer i."""
-        return (None, ) * 4
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
@@ -54,20 +42,9 @@ class QwenReader(LlamaReader):
         result = []
         for key in ['w2', 'c_proj', 'w1']:
             tensor = self.params[f'transformer.h.{i}.mlp.{key}.{kind}']
+            tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-
-    def ffn(self, i: int):
-        """Get ffn weight for layer i."""
-        return self._ffn(i, 'weight')
-
-    def ffn_zero(self, i: int):
-        """Get ffn zero point for layer i."""
-        return (None, ) * 3
-
-    def ffn_scale(self, i: int):
-        """Get ffn scale for layer i."""
-        return (None, ) * 3
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
@@ -133,7 +110,7 @@ class Qwen2Reader(LlamaReader):
         for key in ['q', 'k', 'v']:
             tensor = self.params.get(
                 f'model.layers.{i}.self_attn.{key}_proj.bias')
-            assert tensor is not None
+            tensor = self.transform(tensor, 'bias')
             result.append(tensor)
 
         tensor = self.params.get(f'model.layers.{i}.self_attn.o_proj.weight')

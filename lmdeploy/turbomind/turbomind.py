@@ -144,7 +144,7 @@ class TurboMind:
             self.model_comm = self._from_hf(model_source=model_source,
                                             model_path=model_path,
                                             engine_config=engine_config)
-        
+
         self._process_weight(self.model_comm)
         self._create_engine(self.model_comm)
 
@@ -198,7 +198,7 @@ class TurboMind:
                 tm_params[k].append(v)
 
     def _process_weight(self, model_comm):
-        """On the fly weight transformation"""
+        """On the fly weight transformation."""
 
         def _process(device_id):
             rank = self.node_id * self.gpu_count + device_id
@@ -213,7 +213,7 @@ class TurboMind:
             t.join()
 
     def _create_engine(self, model_comm):
-        """Engine creation & gemm tuning"""
+        """Engine creation & gemm tuning."""
 
         def _create(device_id):
             rank = self.node_id * self.gpu_count + device_id

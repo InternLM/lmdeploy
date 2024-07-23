@@ -22,6 +22,8 @@ class LlamaReader(BaseReader):
     norm_weight_key = 'model.norm.weight'
     output_weight_key = 'lm_head.weight'
 
+    weight_suffix = 'weight'
+
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict):
         super().__init__()
@@ -64,32 +66,34 @@ class LlamaReader(BaseReader):
         """Get output."""
         return self.params.get(self.output_weight_key, None)
 
-    def _attn(self, i: int, kind: str, allow_none=False):
+    def _transform(self, x: torch.Tensor, kind: str):
+        return x.cuda()
+
+    def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params.get(
                 f'{self.attn_layer_prefix}.{i}.self_attn.{key}_proj.{kind}')
-            if not allow_none:
-                assert tensor is not None
+            tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
 
     def attn(self, i: int):
         """Get q, k, v, o weight for layer i."""
-        return self._attn(i, 'weight')
+        return self._attn(i, self.weight_suffix)
 
     def attn_bias(self, i: int):
         """Get q, k, v, o bias for layer i."""
-        return self._attn(i, 'bias', allow_none=True)
+        return self._attn(i, 'bias')
 
     def attn_zero(self, i: int):
         """Get q, k, v, o zero point for layer i."""
-        return (None, ) * 4
+        return self._attn(i, 'qzeros')
 
     def attn_scale(self, i: int):
         """Get q, k, v, o scale for layer i."""
-        return (None, ) * 4
+        return self._attn(i, 'scales')
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
@@ -102,20 +106,21 @@ class LlamaReader(BaseReader):
         for key in ['gate', 'down', 'up']:
             tensor = self.params[
                 f'{self.attn_layer_prefix}.{i}.mlp.{key}_proj.{kind}']
+            tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
 
     def ffn(self, i: int):
         """Get ffn weight for layer i."""
-        return self._ffn(i, 'weight')
+        return self._ffn(i, self.weight_suffix)
 
     def ffn_zero(self, i: int):
         """Get ffn zero point for layer i."""
-        return (None, ) * 3
+        return self._ffn(i, 'qzeros')
 
     def ffn_scale(self, i: int):
         """Get ffn scale for layer i."""
-        return (None, ) * 3
+        return self._ffn(i, 'scales')
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""

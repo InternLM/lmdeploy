@@ -1,52 +1,22 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .base import INPUT_MODELS
-from .llama_awq import LlamaAwqReader, ensure_fp16orint32
-from .qwen import Qwen2Model, QwenModel, QwenReader
-from .internlm2 import unpack_awq_gemm
 import torch
+
+from .base import INPUT_MODELS
+from .llama_awq import LlamaAwqReader, process_awq_gemm
+from .qwen import Qwen2Model, QwenModel, QwenReader
+
 
 class QwenAwqReader(QwenReader):
     """QwenAwqReader."""
+
+    weight_suffix = 'qweight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict):
         super().__init__(new_params, unused_params, last_bin, model_cfg)
 
-    def _transform(self, x: torch.Tensor):
-        x = x.cuda()
-        if x.dtype != torch.int32:
-            return x.T
-        return unpack_awq_gemm(x).T
-
-    def attn(self, i: int):
-        """Get q, k, v, o qweight for layer i."""
-        return tuple(map(self._transform, self._attn(i, 'qweight', -1, -1)))
-
-    def attn_bias(self, i: int):
-        """Get q, k, v, o bias for layer i."""
-        return self._attn(i, 'bias', -1, 0)
-
-    def attn_zero(self, i: int):
-        """Get q, k, v, o qzeros for layer i."""
-        return tuple(map(self._transform, self._attn(i, 'qzeros', -1, -1)))
-
-    def attn_scale(self, i: int):
-        """Get q, k, v, o scales for layer i."""
-        return tuple(map(self._transform, self._attn(i, 'scales', -1, -1)))
-
-    def ffn(self, i: int):
-        """Get ffn qweight for layer i."""
-        # ours: w2(silu(w1(x)) * w3(x))
-        # qwen: c_proj(w1(x) * silu(w2(x)))
-        return tuple(map(self._transform, self._ffn(i, 'qweight')))
-
-    def ffn_zero(self, i: int):
-        """Get ffn qzeros for layer i."""
-        return tuple(map(self._transform, self._ffn(i, 'qzeros')))
-
-    def ffn_scale(self, i: int):
-        """Get ffn scales for layer i."""
-        return tuple(map(self._transform, self._ffn(i, 'scales')))
+    def _transform(self, x: torch.Tensor, kind: str):
+        return process_awq_gemm(x)
 
 
 @INPUT_MODELS.register_module(name='qwen-awq')

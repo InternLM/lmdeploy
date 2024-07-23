@@ -172,6 +172,7 @@ class BaseOutputModel(ABC):
         self.tm_params = {}
         model_info = self.input_model.model_info()
         self.permute_qk = model_info.get('permute_qk', True)
+        self.exporters = []
 
     @abstractmethod
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
@@ -238,6 +239,7 @@ class BaseOutputModel(ABC):
                 else:
                     torch_tensor = torch_tensor.float()
             for tm_tensor in tm_params[name]:
+                print(name, torch_tensor.shape)
                 tm_tensor.copy_from(torch_tensor)
             tm_params.pop(name)
         else:
@@ -248,7 +250,19 @@ class BaseOutputModel(ABC):
                    name: str,
                    split_dim=None,
                    copy=False) -> None:
-        """save split."""
+        """save split.
+
+        - 2D input
+            shape must be (input_dims, output_dims)
+        - 1D input (bias)
+            shape must be (output_dims)
+            split is skipped when split_dim == 0
+        """
+
+        if copy or (tensor.dim() == 1 and split_dim == 0):
+            split_dim = None
+            copy = True
+
         tp = self.cfg.tensor_para_size
         if split_dim is not None:
             tprint(
@@ -318,31 +332,173 @@ class BaseOutputModel(ABC):
             output_weight = pad_weight(output_weight)
             self.export_weight(output_weight, 'output.weight')
 
-    @abstractmethod
     def export_transformer_block(self, bin: BaseReader, i: int) -> None:
         """Export transformer block."""
+        for e in self.exporters:
+            e.export(bin, i)
+
+
+def permute_v2(x: torch.Tensor, size_per_head: int = 128):
+    """
+        Contract: x.size(-1) is output dims
+    """
+
+    assert x.size(-1) > 1
+
+    output_dims = x.size(-1)
+    head_num = output_dims // size_per_head
+
+    return x.view(-1, head_num, 2,
+                  size_per_head // 2).transpose(2, 3).reshape(x.shape)
+
+
+def merge_qkv_v2(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, tp: int):
+    """
+        Contract: x.size(-1) is output dims
+    """
+
+    def reshape(x):
+        return x.view(x.size(0), tp, -1) if q.dim() == 2 else x.view(tp, -1)
+
+    # print('merge_qkv_v2 <<<', q.shape, k.shape, v.shape)
+    qkv = torch.cat(tuple(map(reshape, (q, k, v))), dim=-1)
+
+    qkv = qkv.view(-1, qkv.size(-1) * tp)
+    if q.dim() == 1:
+        qkv.squeeze_()
+
+    # print('merge_qkv_v2 >>>', ret.shape)
+    return qkv
+
+
+def identity(x):
+    return x
+
+
+def transpose(x):
+    return x.t() if x is not None else x
+
+
+def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
+    assert x.dtype == torch.uint8
+    xs = x.view(*x.shape[:-1], -1, 8).split(1, dim=-1)
+    a = torch.zeros(xs[0].shape, dtype=torch.int32, device=x.device)
+    for t in reversed(xs):
+        a = (a << 4) | t
+    return a.squeeze(dim=-1)
+
+
+class BaseExporter(ABC):
+
+    _attn = 'layers.{0}.attention.{1}.{2}'
+    _ffn = 'layers.{0}.feed_forward.{1}.{2}'
+
+    def __init__(self, model: BaseOutputModel):
+        self.model = model
+        self.tp = model.cfg.tensor_para_size
+        self.head_dim = model.cfg.size_per_head
+
+    def export_attn(self, idx: int, qkvo, kind: str, pack_fn=identity):
+        if all(x is None for x in qkvo):
+            return
+        is_lora_a, is_lora_b = self.get_lora_flags(kind)
+        q, k, v, o = map(transpose, qkvo)
+        if self.model.permute_qk:
+            q = permute_v2(q, self.head_dim)
+            k = permute_v2(k, self.head_dim)
+        qkv = merge_qkv_v2(q, k, v, self.tp)
+        if o is None and q.dim() == 1:
+            o = torch.zeros_like(q)
+        qkv = pack_fn(qkv)
+        o = pack_fn(o)
+        self.model.save_split(qkv,
+                              self._attn.format(idx, 'w_qkv', kind),
+                              split_dim=-1,
+                              copy=is_lora_a)
+        self.model.save_split(o,
+                              self._attn.format(idx, 'wo', kind),
+                              split_dim=0,
+                              copy=is_lora_b)
+
+    def export_ffn(self, idx: int, w123, kind: str, pack_fn=identity):
+        is_lora_a, is_lora_b = self.get_lora_flags(kind)
+        w1, w2, w3 = map(pack_fn, map(transpose, w123))
+        self.model.save_split(w1,
+                              self._ffn.format(idx, 'w1', kind),
+                              split_dim=-1,
+                              copy=is_lora_a)
+        self.model.save_split(w3,
+                              self._ffn.format(idx, 'w3', kind),
+                              split_dim=-1,
+                              copy=is_lora_a)
+        self.model.save_split(w2,
+                              self._ffn.format(idx, 'w2', kind),
+                              split_dim=0,
+                              copy=is_lora_b)
+
+    # split out dims -> copy A, split-out-dims B (qkv, w1, w3)
+    # split  in dims -> split-in-dims A,  copy B (  o, w2)
+    def get_lora_flags(self, kind: str):
+        return ('lora_a' in kind, 'lora_b' in kind)
+
+    @abstractmethod
+    def export(self, r: BaseReader, idx: int):
         pass
 
 
-def permute(x: torch.Tensor, size_per_head: int = 128):
-    if x.shape[-1] > 1:
-        dim = x.shape[-1]
-        n_heads = dim // size_per_head
-        return x.view(-1, n_heads, 2,
-                      dim // n_heads // 2).transpose(2, 3).reshape(-1, dim)
-    else:  # scales, zeros
-        dim = x.shape[0]
-        n_heads = dim // size_per_head
-        return x.view(n_heads, 2, dim // n_heads // 2,
-                      1).transpose(1, 2).reshape(dim, 1)
+class WeightExporter(BaseExporter):
+
+    def export(self, r: BaseReader, i: int):
+        self.export_attn(i, r.attn(i), 'weight')
+        self.export_attn(i, r.attn_bias(i), 'bias')
+        self.export_ffn(i, r.ffn(i), 'weight')
 
 
-def merge_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, tp: int,
-              dim: int):
+class LayerNormExporter(BaseExporter):
 
-    def reshape(x):
-        return x.view(x.size(0), tp, -1) if dim == 2 else x.view(tp, -1)
+    def export(self, r: BaseReader, i: int):
+        attn_norm = r.attn_norm(i)
+        ffn_norm = r.ffn_norm(i)
+        self.model.save_split(attn_norm, f'layers.{i}.attention_norm.weight')
+        self.model.save_split(ffn_norm, f'layers.{i}.ffn_norm.weight')
 
-    qkv = torch.cat((reshape(q), reshape(k), reshape(v)), dim=-1)
-    # (input_dim, head_num + 2 * kv_head_num)
-    return qkv.view(q.size(0), -1)
+
+class QuantWeightExporter(BaseExporter):
+
+    def __init__(self, model: BaseOutputModel, pack_fn):
+        super().__init__(model)
+        self.pack_fn = pack_fn
+
+    def export(self, r: BaseReader, i: int):
+
+        def to_half(x: torch.Tensor):
+            return x.to(torch.half)
+
+        self.export_attn(i, r.attn(i), 'qweight', self.pack_fn)
+        self.export_attn(i, r.attn_bias(i), 'bias')
+        self.export_attn(i, r.attn_scale(i), 'scales')
+        self.export_attn(i, r.attn_zero(i), 'zeros', to_half)
+        self.export_ffn(i, r.ffn(i), 'qweight', self.pack_fn)
+        self.export_ffn(i, r.ffn_scale(i), 'scales')
+        self.export_ffn(i, r.ffn_zero(i), 'zeros', to_half)
+
+
+class PLoraExporter(BaseExporter):
+
+    def export_attn_lora_a(self, idx: int, ws, kind: str):
+        is_lora_a, is_lora_b = self.get_lora_flags(kind)
+        qkv, o = map(transpose, ws)
+        self.model.save_split(qkv,
+                              self._attn.format(idx, 'w_qkv', kind),
+                              split_dim=-1,
+                              copy=is_lora_a)
+        self.model.save_split(o,
+                              self._attn.format(idx, 'wo', kind),
+                              split_dim=0,
+                              copy=is_lora_b)
+
+    def export(self, r: BaseReader, i: int):
+        self.export_attn_lora_a(i, r.attn_lora_a(i), 'lora_a.weight')
+        self.export_attn(i, r.attn_lora_b(i), 'lora_b.weight')
+        self.export_ffn(i, r.ffn_lora_a(i), 'lora_a.weight')
+        self.export_ffn(i, r.fnn_lora_b(i), 'lora_b.weight')
