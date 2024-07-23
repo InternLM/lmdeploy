@@ -97,10 +97,9 @@ class ArgumentHelper:
             '--model-name',
             type=str,
             default=None,
-            help='The name of the to-be-deployed model, such as'
-            ' llama-7b, llama-13b, vicuna-7b and etc. You '
-            'can run `lmdeploy list` to get the supported '
-            'model names')
+            help='The name of the served model. It can be accessed '
+            'by the RESTful API `/v1/models`. If it is not specified, '
+            '`model_path` will be adopted')
 
     @staticmethod
     def model_format(parser, default: str = None):

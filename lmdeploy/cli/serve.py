@@ -46,6 +46,7 @@ class SubCliServe:
 
         # common args
         ArgumentHelper.backend(parser)
+        ArgumentHelper.model_name(parser)
         # model args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
@@ -58,7 +59,6 @@ class SubCliServe:
 
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
-        model_name_act = ArgumentHelper.model_name(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -69,7 +69,6 @@ class SubCliServe:
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
         tb_group._group_actions.append(tp_act)
-        tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
@@ -136,6 +135,7 @@ class SubCliServe:
         ArgumentHelper.log_level(parser)
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
+        ArgumentHelper.model_name(parser)
 
         # chat template args
         ArgumentHelper.chat_template(parser)
@@ -150,7 +150,6 @@ class SubCliServe:
         ArgumentHelper.adapters(pt_group)
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
-        model_name_act = ArgumentHelper.model_name(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -161,7 +160,6 @@ class SubCliServe:
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
         tb_group._group_actions.append(tp_act)
-        tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)

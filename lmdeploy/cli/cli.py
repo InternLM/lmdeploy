@@ -54,20 +54,11 @@ class CLI(object):
                             default='workspace',
                             help='The destination path that saves outputs')
         parser.add_argument(
-            '--quant-path',
-            type=str,
-            default=None,
-            help='Path of the quantized model, which can be none')
-        parser.add_argument(
             '--group-size',
             type=int,
             default=0,
             help='A parameter used in awq to quantize fp16 weights '
             'to 4 bits')
-        parser.add_argument('--trust-remote-code',
-                            action='store_true',
-                            help='trust remote code from huggingface')
-
         parser.set_defaults(run=CLI.convert)
 
     @staticmethod
@@ -102,6 +93,7 @@ class CLI(object):
             ' of a model hosted inside a model repo on huggingface.co,'
             ' such as "internlm/internlm-chat-7b", "qwen/qwen-7b-chat "'
             ', "baichuan-inc/baichuan2-7b-chat" and so on')
+        ArgumentHelper.model_name(parser)
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.trust_remote_code(parser)
@@ -117,7 +109,6 @@ class CLI(object):
 
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
-        model_name_act = ArgumentHelper.model_name(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
@@ -126,7 +117,6 @@ class CLI(object):
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
         tb_group._group_actions.append(tp_act)
-        tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(prefix_caching_act)
