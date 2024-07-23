@@ -92,10 +92,11 @@ def get_kvint_model_list(tp_num: int = None, model_type: str = 'chat_model'):
 def get_quantization_model_list(type):
     config = get_config()
     if type == '4bits':
-        return list(
-            set(
-                config.get('turbomind_quatization').get(type) +
-                config.get('pytorch_quatization').get(type)))
+        case_list = config.get('turbomind_quatization').get('4bits')
+        for key in config.get('pytorch_quatization').get('4bits'):
+            if key not in case_list:
+                case_list.append(key)
+        return case_list
     if type == 'kvint':
         return config.get('turbomind_quatization').get(type)
     if type == 'w8a8':
