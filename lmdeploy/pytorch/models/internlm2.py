@@ -233,7 +233,7 @@ class PatchedInternLM2AttentionAscend(nn.Module):
             )
             query_states = qkv_states[..., :self.num_key_value_groups, :]
             query_states = query_states.flatten(1, 2)
-            key_states = qkv_states[..., -2, :]
+            key_states = qkv_states[..., -2, :].contiguous()
             value_states = qkv_states[..., -1, :]
             return query_states, key_states, value_states
 
