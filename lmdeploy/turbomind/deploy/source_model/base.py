@@ -184,7 +184,7 @@ class BaseInputModel(ABC):
             yield mgr
 
 
-def to_gpu(x: torch.Tensor):
+def to_cuda(x: torch.Tensor):
     return x.cuda()
 
 
@@ -208,13 +208,11 @@ def process_awq_gemm(x: torch.Tensor):
     x = x.cuda()
     if x.dtype == torch.int32:
         x = unpack_awq_gemm(x)
-    if len(x.shape) > 1:
-        x = x.t()
-    return x
+    return x.t()
 
 
 def get_input_policy(model_format):
     if model_format == 'awq':
         return ('qweight', process_awq_gemm)
     else:
-        return ('weight', to_gpu)
+        return ('weight', to_cuda)
