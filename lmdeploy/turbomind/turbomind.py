@@ -413,11 +413,12 @@ class TurboMindInstance:
         """End the given session."""
         input_ids = [self.tm_model.tokenizer.eos_token_id]
         end_generator = self.tm_model.create_instance()
-        for outputs in end_generator.stream_infer(session_id,
-                                                  input_ids,
-                                                  request_output_len=0,
-                                                  sequence_start=False,
-                                                  sequence_end=True):
+        for outputs in end_generator.stream_infer(
+                session_id,
+                input_ids,
+                sequence_start=False,
+                sequence_end=True,
+                gen_config=EngineGenerationConfig(max_new_tokens=0)):
             pass
 
     async def async_end(self, session_id: int):
@@ -428,12 +429,13 @@ class TurboMindInstance:
         """Stop current streaming inference."""
         input_ids = [self.tm_model.tokenizer.eos_token_id]
         stop_generator = self.tm_model.create_instance()
-        for outputs in stop_generator.stream_infer(session_id,
-                                                   input_ids,
-                                                   request_output_len=0,
-                                                   sequence_start=False,
-                                                   sequence_end=False,
-                                                   stop=True):
+        for outputs in stop_generator.stream_infer(
+                session_id,
+                input_ids,
+                sequence_start=False,
+                sequence_end=False,
+                stop=True,
+                gen_config=EngineGenerationConfig(max_new_tokens=0)):
             pass
 
     async def async_cancel(self, session_id: int):
