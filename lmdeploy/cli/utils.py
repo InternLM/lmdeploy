@@ -61,6 +61,22 @@ def get_lora_adapters(adapters: List[str]):
     return output
 
 
+def get_chat_template(chat_template):
+    import os
+
+    from lmdeploy.model import ChatTemplateConfig
+    if os.path.isfile(chat_template):
+        return ChatTemplateConfig.from_json(chat_template)
+    elif chat_template:
+        from lmdeploy.model import MODELS
+        assert chat_template in MODELS.module_dict.keys(), \
+            f"chat template '{chat_template}' is not registered. " \
+            f'The builtin chat templates are: {MODELS.module_dict.keys()}'
+        return ChatTemplateConfig(model_name=chat_template)
+    else:
+        return None
+
+
 class ArgumentHelper:
     """Helper class to add unified argument."""
 
@@ -223,18 +239,6 @@ class ArgumentHelper:
                                    help='Parameter to penalize repetition')
 
     @staticmethod
-    def cap(parser):
-        """Add argument cap to parser."""
-
-        return parser.add_argument(
-            '--cap',
-            type=str,
-            default='chat',
-            choices=['completion', 'infilling', 'chat', 'python'],
-            help='The capability of a model. '
-            'Deprecated. Please use --chat-template instead')
-
-    @staticmethod
     def log_level(parser):
         """Add argument log_level to parser."""
 
@@ -346,17 +350,6 @@ class ArgumentHelper:
                                    default='cuda',
                                    choices=['cuda', 'cpu'],
                                    help='Device type of running')
-
-    @staticmethod
-    def meta_instruction(parser):
-        """Add argument meta_instruction to parser."""
-
-        return parser.add_argument(
-            '--meta-instruction',
-            type=str,
-            default=None,
-            help='System prompt for ChatTemplateConfig. Deprecated. '
-            'Please use --chat-template instead')
 
     @staticmethod
     def chat_template(parser):

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .cli import CLI
 from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
-                    convert_args, get_lora_adapters)
+                    convert_args, get_chat_template, get_lora_adapters)
 
 
 class SubCliServe:
@@ -51,9 +51,7 @@ class SubCliServe:
         ArgumentHelper.download_dir(parser)
 
         # chat template args
-        ArgumentHelper.meta_instruction(parser)  # TODO remove
         ArgumentHelper.chat_template(parser)
-        ArgumentHelper.cap(parser)
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -140,9 +138,7 @@ class SubCliServe:
         ArgumentHelper.ssl(parser)
 
         # chat template args
-        # ArgumentHelper.meta_instruction(parser)  # TODO remove
         ArgumentHelper.chat_template(parser)
-        # ArgumentHelper.cap(parser)
 
         # model args
         ArgumentHelper.revision(parser)
@@ -235,8 +231,7 @@ class SubCliServe:
                 cache_block_seq_len=args.cache_block_seq_len,
                 enable_prefix_caching=args.enable_prefix_caching,
             )
-        chat_template_config = SubCliServe.get_chat_template(
-            args.chat_template)
+        chat_template_config = get_chat_template(args.chat_template)
         run(args.model_path_or_server,
             server_name=args.server_name,
             server_port=args.server_port,
@@ -282,8 +277,7 @@ class SubCliServe:
                 cache_block_seq_len=args.cache_block_seq_len,
                 enable_prefix_caching=args.enable_prefix_caching,
             )
-        chat_template_config = SubCliServe.get_chat_template(
-            args.chat_template)
+        chat_template_config = get_chat_template(args.chat_template)
 
         from lmdeploy.messages import VisionConfig
         vision_config = VisionConfig(args.vision_max_batch_size)
@@ -316,19 +310,3 @@ class SubCliServe:
         SubCliServe.add_parser_gradio()
         SubCliServe.add_parser_api_server()
         SubCliServe.add_parser_api_client()
-
-    @staticmethod
-    def get_chat_template(chat_template):
-        import os
-
-        from lmdeploy.model import ChatTemplateConfig
-        if os.path.isfile(chat_template):
-            return ChatTemplateConfig.from_json(chat_template)
-        elif chat_template:
-            from lmdeploy.model import MODELS
-            assert chat_template in MODELS.module_dict.keys(), \
-                f"chat template '{chat_template}' is not registered. " \
-                f'The builtin chat templates are: {MODELS.module_dict.keys()}'
-            return ChatTemplateConfig(model_name=chat_template)
-        else:
-            return None

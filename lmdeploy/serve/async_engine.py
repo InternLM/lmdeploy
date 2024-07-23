@@ -149,13 +149,6 @@ class AsyncEngine(LogitsMixin):
             chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
 
-        # prevent bc
-        for k in list(kwargs.keys()):
-            if hasattr(chat_template_config, k):
-                logger.warning(f'{k} was deprecated. Please use '
-                               'chat_template_config instead')
-                v = kwargs.pop(k)
-                setattr(chat_template_config, k, v)
         logger.info(f'updated chat_template_onfig={chat_template_config}')
 
         # build backend engine

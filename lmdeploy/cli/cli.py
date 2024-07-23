@@ -4,7 +4,7 @@ import os
 
 from ..version import __version__
 from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
-                    convert_args, get_lora_adapters)
+                    convert_args, get_chat_template, get_lora_adapters)
 
 
 class CLI(object):
@@ -106,8 +106,6 @@ class CLI(object):
         ArgumentHelper.backend(parser)
         ArgumentHelper.trust_remote_code(parser)
         # # chat template args
-        ArgumentHelper.meta_instruction(parser)
-        ArgumentHelper.cap(parser)
         ArgumentHelper.chat_template(parser)
         # model args
         ArgumentHelper.revision(parser)
@@ -164,24 +162,8 @@ class CLI(object):
         """List the supported model names."""
         from lmdeploy.model import MODELS
         model_names = list(MODELS.module_dict.keys())
-        deprecate_names = [
-            'baichuan-7b', 'baichuan2-7b', 'chatglm2-6b', 'internlm-chat-20b',
-            'internlm-chat-7b', 'internlm-chat-7b-8k', 'internlm2-1_8b',
-            'internlm-20b', 'internlm2-20b', 'internlm2-7b', 'internlm2-chat',
-            'internlm2-chat-1_8b', 'internlm2-chat-20b', 'internlm2-chat-7b',
-            'llama-2-chat', 'llama-2', 'qwen-14b', 'qwen-7b', 'solar-70b',
-            'yi-200k', 'yi-34b', 'yi-chat', 'Mistral-7B-Instruct',
-            'Mixtral-8x7B-Instruct', 'baichuan-base', 'deepseek-chat',
-            'internlm-chat'
-        ]
-        model_names = [
-            n for n in model_names if n not in deprecate_names + ['base']
-        ]
-        deprecate_names.sort()
         model_names.sort()
-        print('The older chat template name like "internlm2-7b", "qwen-7b"'
-              ' and so on are deprecated and will be removed in the future.'
-              ' The supported chat template names are:')
+        print('The supported chat template names are:')
         print('\n'.join(model_names))
 
     @staticmethod
@@ -254,19 +236,13 @@ class CLI(object):
     def chat(args):
         """Chat with pytorch or turbomind engine."""
         from lmdeploy.archs import autoget_backend
-        from lmdeploy.model import ChatTemplateConfig
+
+        chat_template_config = get_chat_template(args.chat_template)
+
         backend = args.backend
         if backend != 'pytorch':
             # set auto backend mode
             backend = autoget_backend(args.model_path)
-
-        chat_template_config = ChatTemplateConfig(
-            model_name=args.model_name,
-            meta_instruction=args.meta_instruction,
-            capability=args.cap)
-        if args.chat_template:
-            chat_template_config = ChatTemplateConfig.from_json(
-                args.chat_template)
 
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig

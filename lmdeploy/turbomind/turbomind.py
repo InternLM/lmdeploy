@@ -61,17 +61,6 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
     return ret
 
 
-def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
-    if config is None:
-        config = TurbomindEngineConfig()
-    for k, v in kwargs.items():
-        if v and hasattr(config, k):
-            setattr(config, k, v)
-            logger.warning(f'kwargs {k} is deprecated to initialize model, '
-                           'use TurbomindEngineConfig instead.')
-    return config
-
-
 class TurboMind:
     """LMDeploy's inference engine.
 
@@ -387,24 +376,6 @@ class TurboMindInstance:
             f = self.executor.submit(_func, device_id, device_id == 0)
             self.futures[device_id] = f
 
-    def _update_generation_config(self, config: EngineGenerationConfig,
-                                  **kwargs: dict):
-        if config is None:
-            config = EngineGenerationConfig()
-
-        deprecated_kwargs = []
-        for k, v in kwargs.items():
-            if k in config.__dict__:
-                config.__dict__[k] = v
-                deprecated_kwargs.append(k)
-        if 'request_output_len' in kwargs:
-            config.max_new_tokens = kwargs['request_output_len']
-            deprecated_kwargs.append('request_output_len')
-        for k in deprecated_kwargs:
-            logger.warning(f'kwargs {k} is deprecated for inference, '
-                           'use GenerationConfig instead.')
-        return config
-
     def _get_logprobs(self,
                       logprob_vals: torch.Tensor,
                       logprob_indexes: torch.Tensor,
@@ -649,7 +620,6 @@ class TurboMindInstance:
             logger.info(f'Register stream callback for {session_id}')
             self.model_insts[0].register_callback(_forward_callback)
 
-        gen_config = self._update_generation_config(gen_config, **kwargs)
         inputs, input_lengths = self.prepare_inputs(
             session_id=session_id,
             input_ids=input_ids,
