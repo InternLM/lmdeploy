@@ -15,5 +15,5 @@ class RMSNormBuilder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(weight: torch.Tensor, eps: float = 1e-6):
+    def build(weight: torch.Tensor, eps: float = 1e-6, inplace: bool = False):
         raise NotImplementedError

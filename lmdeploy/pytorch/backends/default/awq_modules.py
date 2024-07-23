@@ -28,7 +28,8 @@ class DefaultLinearW4A16Impl(LinearW4A16Impl):
         if input_dtype != torch.float16:
             x = x.half()
 
-        out = dequantize_gemm(self.qweight, self.qzeros, self.scales, self.w_bit, self.group_size)
+        out = dequantize_gemm(self.qweight, self.qzeros, self.scales,
+                              self.w_bit, self.group_size)
         out = torch.matmul(x, out)
 
         out = out + self.bias if self.bias is not None else out

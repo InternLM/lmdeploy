@@ -15,13 +15,12 @@ class TritonRMSNormImpl(RMSNormImpl, nn.Module):
         self.eps = eps
 
     def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
-        if residual is not None:
-            x = x + residual
-            residual = x
-        x = rms_norm(x, self.weight, self.eps)
         if residual is None:
+            x = rms_norm(x, self.weight, self.eps)
             return x
-        return x, residual
+        else:
+            x, residual = rms_norm(x, self.weight, self.eps, residual=residual)
+            return x, residual
 
 
 class TritonRMSNormBuilder(RMSNormBuilder):

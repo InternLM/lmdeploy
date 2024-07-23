@@ -33,8 +33,8 @@ def wq_gemm_forward(
         event_def = torch.cuda.Event()
         event_def.record()
         event_def.wait(default_stream)
-        out = awq_ext.dequantize_weights_cuda(qweight, scales, qzeros, 0,
-                                                0, 0, False)
+        out = awq_ext.dequantize_weights_cuda(qweight, scales, qzeros, 0, 0, 0,
+                                              False)
         event_def = torch.cuda.Event()
         event_def.record(default_stream)
         event_def.wait()
@@ -56,6 +56,7 @@ def wq_gemm_forward(
         out = out.to(dtype=input_dtype)
     return out
 
+
 class AwqLinearW4A16Impl(LinearW4A16Impl):
 
     def __init__(self, mod: nn.Module):
@@ -74,8 +75,8 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
     def forward(self, x, all_reduce: bool = False):
         out_features = self.scales.size(1)
         out = wq_gemm_forward(x, self.qweight, self.qzeros, self.scales,
-                               self.w_bit, self.group_size, self.bias,
-                               out_features)
+                              self.w_bit, self.group_size, self.bias,
+                              out_features)
         if all_reduce:
             dist.all_reduce(out)
         return out
