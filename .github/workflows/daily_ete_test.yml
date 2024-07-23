@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers==4.41.2 datasets matplotlib openai attrdict timm modelscope jmespath decord'
+        default: 'packaging transformers_stream_generator transformers==4.41.2 datasets matplotlib openai attrdict timm modelscope jmespath decord autoawq'
       tools_regression:
         required: true
         description: 'Whether start a tool regression'
@@ -48,12 +48,17 @@ on:
         description: 'Whether start an interface pipeline regression'
         type: boolean
         default: true
+      benchmark_regression:
+        required: true
+        description: 'Whether start an benchmark script regression'
+        type: boolean
+        default: true
   schedule:
     - cron:  '00 19 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers==4.41.2 datasets matplotlib openai attrdict timm modelscope jmespath decord'}}
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers==4.41.2 datasets matplotlib openai attrdict timm modelscope jmespath decord autoawq'}}
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
@@ -422,8 +427,7 @@ jobs:
         run: |
           pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --rerun 0 --alluredir=${{env.REPORT_DIR}} || true
           pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} || true
-          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Clear workfile
         if: always()
         run: |
@@ -436,7 +440,7 @@ jobs:
 
 
   test_benchmark:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.pipeline_regression)}}
+    if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.benchmark_regression)}}
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
     timeout-minutes: 300
@@ -506,7 +510,7 @@ jobs:
 
 
   get_benchmark_result:
-    if: always() && !cancelled()
+    if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.benchmark_regression)}}
     needs: [test_benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]

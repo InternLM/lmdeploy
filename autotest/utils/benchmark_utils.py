@@ -118,9 +118,11 @@ def throughput_test(config,
 
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/throughput_batch_{batch}_1th.csv'
-        cmd = ' '.join(
-            [command, run_config, '--tp',
-             str(tp_num), '--csv ', csv_path])
+        cmd = ' '.join([
+            command, '--concurrency',
+            str(batch), run_config, '--tp',
+            str(tp_num), '--csv ', csv_path
+        ])
 
         with open(benchmark_log, 'w') as f:
             f.writelines('reproduce command: ' + cmd + '\n')

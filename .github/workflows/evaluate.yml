@@ -22,7 +22,7 @@ on:
         required: true
         description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
         type: string
-        default: '[*mmlu_datasets, *cmmlu_datasets, *gsm8k_datasets, *humaneval_datasets]'
+        default: '[*mmlu_datasets, *cmmlu_datasets, *gsm8k_datasets, *humaneval_datasets, *ifeval_datasets]'
       local_config:
         required: true
         description: 'Whether use local eval config'

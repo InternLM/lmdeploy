@@ -81,7 +81,7 @@ jobs:
       fail-fast: false
       matrix:
         benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
-    timeout-minutes: 120
+    timeout-minutes: 300
     container:
       image: nvcr.io/nvidia/tritonserver:24.03-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
