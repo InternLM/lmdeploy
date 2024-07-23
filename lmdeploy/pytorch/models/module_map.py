@@ -71,6 +71,10 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.MLP',
     'modeling_chatglm.RMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedRMSNorm',
+    'modeling_chatglm.Embedding':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedEmbedding',
+    'modeling_chatglm.ChatGLMForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedChatGLMForConditionalGeneration',  # noqa: E501
 })
 
 # internlm
@@ -365,3 +369,24 @@ MODULE_MAP.update({
 ASCEND_MODULE_MAP = dict()
 
 DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)
+
+# ascend llama
+ASCEND_MODULE_MAP.update({
+    'transformers.models.llama.modeling_llama.LlamaFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
+    'transformers.models.llama.modeling_llama.LlamaSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
+    'transformers.models.llama.modeling_llama.LlamaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
+    # support modeling rewritten in lmdeploy
+    'modeling_llama.LlamaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
+})
+
+# ascend internlm2
+ASCEND_MODULE_MAP.update({
+    'modeling_internlm2.InternLM2Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',
+    'modeling_internlm2.InternLM2FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',
+})

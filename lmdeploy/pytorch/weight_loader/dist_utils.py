@@ -43,6 +43,11 @@ def _div_up(a, b):
     return (a + b - 1) // b
 
 
+def _math_lcm(*args):
+    """lcm."""
+    return int(math.prod(args) / math.gcd(*args))
+
+
 def get_prefixed_name(name: str, prefix: str):
     """get prefixed name."""
     if len(prefix) == 0:
@@ -132,7 +137,7 @@ def colwise_parallelize_wqlinear(mod: torch.nn.Module,
     """colwise parallelize wqlinear."""
     elem_per_word = 32 // mod.w_bit
     group_size = mod.group_size
-    lcm = math.lcm(elem_per_word, group_size)
+    lcm = _math_lcm(elem_per_word, group_size)
     num_out = mod.scales.size(1)
 
     split_size = _get_split_size_with_align(num_out, lcm, world_size)
@@ -265,7 +270,7 @@ def rowwise_parallelize_wqlinear(mod: torch.nn.Module,
     """rowwise parallelize linear."""
     elem_per_word = 32 // mod.w_bit
     group_size = mod.group_size
-    lcm = math.lcm(elem_per_word, group_size)
+    lcm = _math_lcm(elem_per_word, group_size)
     num_in = mod.qweight.size(0)
 
     split_size = _get_split_size_with_align(num_in, lcm, world_size)
@@ -400,7 +405,7 @@ def colwise_split_parallelize_wqlinear(module: torch.nn.Module,
     """colwise split wqlinear."""
     elem_per_word = 32 // module.w_bit
     group_size = module.group_size
-    lcm = math.lcm(elem_per_word, group_size)
+    lcm = _math_lcm(elem_per_word, group_size)
 
     for s in sections:
         assert s % lcm == 0
