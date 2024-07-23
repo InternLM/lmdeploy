@@ -1,7 +1,4 @@
 import pytest
-import infer_ext
-from lmdeploy.pytorch.devices.device_manager import DeviceContext, get_device_manager
-get_device_manager().set_context(DeviceContext(device_type='ascend'))
 import torch
 
 from lmdeploy.pytorch.kernels import apply_rotary_pos_emb
@@ -34,7 +31,7 @@ class TestApplyRotary:
 
     @pytest.fixture
     def feature_dim(self):
-        yield 128
+        yield 16
 
     @pytest.fixture
     def seq_length(self, batch_size):
@@ -85,7 +82,7 @@ class TestApplyRotary:
         yield q_embed, k_embed
 
     @pytest.mark.parametrize('dtype',
-                             [torch.bfloat16, torch.float16, torch.float32][1:],
+                             [torch.bfloat16, torch.float16, torch.float32],
                              indirect=True)
     @pytest.mark.parametrize(('num_heads_q', 'num_heads_k'), [(8, 8), (8, 4)],
                              indirect=True)

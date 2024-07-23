@@ -1,8 +1,5 @@
 import pytest
 import torch
-import infer_ext
-from lmdeploy.pytorch.devices.device_manager import DeviceContext, get_device_manager
-get_device_manager().set_context(DeviceContext(device_type='ascend'))
 from torch import nn
 
 from lmdeploy.pytorch.kernels.fused_rotary_emb import fused_rotary_emb
@@ -80,7 +77,7 @@ class TestFusedRotaryEmb:
 
     @pytest.fixture
     def head_dim(self):
-        yield 128
+        yield 64
 
     @pytest.fixture
     def q_num_heads(self):
