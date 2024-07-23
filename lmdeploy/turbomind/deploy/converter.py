@@ -169,9 +169,11 @@ def get_tm_model(model_path,
                  group_size,
                  tp,
                  out_dir: str = None):
-    if model_format == 'awq' and group_size <= 0:
-        raise RuntimeError(
-            'group_size should be specified when the model is awq')
+    # TODO: open the following condition check in another PR,
+    # CLI needs to be updated
+    # if model_format == 'awq' and group_size <= 0:
+    #     raise RuntimeError(
+    #         'group_size should be specified when the model is awq')
 
     model_name = model_name if model_name else model_path
     if chat_template_name is None:
