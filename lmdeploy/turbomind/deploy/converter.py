@@ -111,7 +111,7 @@ def get_output_model_registered_name_and_config(model_path: str,
             weight_type = 'int4'
             register_name = 'plora-w4' \
                 if turbomind_model_arch == 'xcomposer2' else 'w4'
-            # group_size = 128 if group_size == 0 else group_size
+            group_size = 128 if group_size == 0 else group_size
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
             TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16', torch.float16: 'fp16'}
