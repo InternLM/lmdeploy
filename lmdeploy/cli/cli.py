@@ -250,7 +250,6 @@ class CLI(object):
 
             adapters = get_lora_adapters(args.adapters)
             engine_config = PytorchEngineConfig(
-                model_name=args.model_name,
                 tp=args.tp,
                 session_len=args.session_len,
                 cache_max_entry_count=args.cache_max_entry_count,
@@ -265,7 +264,6 @@ class CLI(object):
             from lmdeploy.turbomind.chat import main as run_chat
             kwargs = convert_args(args)
             kwargs.pop('chat_template')
-            kwargs.pop('meta_instruction')
             kwargs.pop('trust_remote_code')
             kwargs.pop('backend')
             kwargs['chat_template_config'] = chat_template_config

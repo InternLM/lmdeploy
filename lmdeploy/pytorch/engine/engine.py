@@ -107,11 +107,9 @@ class Engine:
             check_adapters(list(engine_config.adapters.values()))
 
         self.engine_config = engine_config
-        model_name = engine_config.model_name
         tp = engine_config.tp
 
         self.tp = tp
-        self.model_name = model_name
 
         self.device_context = DeviceContext(
             device_type=engine_config.device_type)

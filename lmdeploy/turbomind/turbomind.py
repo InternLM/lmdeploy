@@ -733,7 +733,6 @@ class TurboMindInstance:
             logger.info(f'Register stream callback for {session_id}')
             self.model_insts[0].register_callback(self._forward_callback)
 
-        gen_config = self._update_generation_config(gen_config, **kwargs)
         inputs, input_lengths = self.prepare_inputs(
             session_id=session_id,
             input_ids=input_ids,

@@ -5,15 +5,16 @@ import random
 from typing import List, Optional
 
 from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
-from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
+from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.serve.async_engine import get_names_from_model
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
-def input_prompt(model_name):
+def input_prompt(chat_template_name):
     """Input a prompt in the consolo interface."""
-    if model_name == 'codellama':
+    if chat_template_name == 'codellama':
         print('\nenter !! to end the input >>>\n', end='')
         sentinel = '!!'
     else:
@@ -79,22 +80,16 @@ def run_chat(model_path: str,
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
-    model_name = engine_config.model_name
-    if model_name is None:
-        model_name = best_match_model(model_path)
-        assert model_name is not None, 'Can not find match model template'
-        print(f'match template: <{model_name}>')
 
-    if chat_template_config is not None:
-        if chat_template_config.model_name is None:
-            chat_template_config.model_name = model_name
-        model = chat_template_config.chat_template
-    else:
-        model = MODELS.get(model_name)()
+    _, chat_template_name = get_names_from_model(model_path)
+    if chat_template_config is None:
+        chat_template_config = ChatTemplateConfig(chat_template_name)
+    model = chat_template_config.chat_template
+
     stop_words = _stop_words(model.stop_words, tokenizer)
 
     while True:
-        prompt = input_prompt(model_name)
+        prompt = input_prompt(chat_template_name)
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':

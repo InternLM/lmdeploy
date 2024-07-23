@@ -61,17 +61,26 @@ def get_lora_adapters(adapters: List[str]):
     return output
 
 
-def get_chat_template(chat_template):
+def get_chat_template(chat_template: str):
+    """get chat template config.
+
+    Args
+        chat_template(str): it could be a builtin chat template name,
+        or a chat template json file
+    """
     import os
 
     from lmdeploy.model import ChatTemplateConfig
+    if chat_template is None:
+        return None
     if os.path.isfile(chat_template):
         return ChatTemplateConfig.from_json(chat_template)
     elif chat_template:
         from lmdeploy.model import MODELS
         assert chat_template in MODELS.module_dict.keys(), \
-            f"chat template '{chat_template}' is not registered. " \
-            f'The builtin chat templates are: {MODELS.module_dict.keys()}'
+            f"chat template '{chat_template}' is not " \
+            f'registered. The builtin chat templates are: ' \
+            f'{MODELS.module_dict.keys()}'
         return ChatTemplateConfig(model_name=chat_template)
     else:
         return None
