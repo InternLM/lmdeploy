@@ -29,7 +29,7 @@
 python3 -m pip install lmdeploy[all]
 
 # 转模型格式
-lmdeploy convert codellama /path/of/codellama/model
+lmdeploy convert /path/of/codellama/model
 ```
 
 接下来，可参考如下章节，在控制台与 codellama 进行交互式对话。
