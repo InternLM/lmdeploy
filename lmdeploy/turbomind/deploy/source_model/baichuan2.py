@@ -2,8 +2,7 @@
 
 import torch
 
-from .baichuan import (BaichuanAwqModel, BaichuanAwqReader, BaichuanModel,
-                       BaichuanReader)
+from .baichuan import BaichuanAwqReader, BaichuanReader
 from .base import INPUT_MODELS
 from .llama import LlamaModel
 

@@ -27,15 +27,15 @@ set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 
-add_executable(gemm_test 
-        test/gemm_test.cu 
-        test/test_utils.cu 
-        cache_utils.cu 
+add_executable(gemm_test
+        test/gemm_test.cu
+        test/test_utils.cu
+        cache_utils.cu
         test/quantization.cu
         test/reference.cu)
 target_link_libraries(gemm_test PRIVATE gemm2 cublas)
 
-if (NOT MSVC) 
+if (NOT MSVC)
         FetchContent_Declare(
         repo-nvbench
         GIT_REPOSITORY https://github.com/NVIDIA/nvbench.git
@@ -46,12 +46,11 @@ if (NOT MSVC)
 
         FetchContent_MakeAvailable(repo-nvbench)
 
-        add_executable(gemm_bench 
-                test/gemm_bench.cu 
-                test/test_utils.cu 
+        add_executable(gemm_bench
+                test/gemm_bench.cu
+                test/test_utils.cu
                 test/quantization.cu
-                cache_utils.cu 
+                cache_utils.cu
                 test/reference.cu)
         target_link_libraries(gemm_bench PRIVATE gemm2 nvbench::nvbench cublas)
 endif ()
-

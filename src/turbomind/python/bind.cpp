@@ -453,9 +453,7 @@ PYBIND11_MODULE(_turbomind, m)
             "rank"_a)
         .def(
             "process_weight",
-            [](AbstractTransformerModel* model, int deviceId, int rank) {
-                model->processWeights(deviceId, rank);
-            },
+            [](AbstractTransformerModel* model, int deviceId, int rank) { model->processWeights(deviceId, rank); },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
             "rank"_a)

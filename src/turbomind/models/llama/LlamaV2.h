@@ -87,7 +87,7 @@ public:
                  const std::unordered_map<std::string, Tensor>* inputs,
                  Control                                        control);
 
-            
+
     void tune();
 
     void stop(const std::vector<uint64_t>& seq_ids);
