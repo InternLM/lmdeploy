@@ -19,6 +19,7 @@ class LayerType(Enum):
     LinearW8A8 = auto()
     RMSNormW8A8 = auto()
     MultinomialSampling = auto()
+    LinearW4A16 = auto()
 
 
 class LayersBackend(ABC):

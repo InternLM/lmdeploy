@@ -139,7 +139,6 @@ def make_step_context(
     return StepContext.new(
         inputs=model_inputs,
         world_size=world_size,
-        device=device,
         kv_caches=kv_caches,
     )
 

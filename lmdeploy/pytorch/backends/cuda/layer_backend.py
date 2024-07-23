@@ -3,8 +3,12 @@ from typing import Tuple
 
 import torch
 
+from lmdeploy.utils import get_logger
+
 from ..base import LayerType
 from ..default import DefaultLayersBackend
+
+logger = get_logger('lmdeploy')
 
 
 class CudaLayersBackend(DefaultLayersBackend):
@@ -36,7 +40,18 @@ class CudaLayersBackend(DefaultLayersBackend):
         elif layer_type == LayerType.MultinomialSampling:
             from .multinomial_sampling import TritonMultinomialSamplingBuilder
             return TritonMultinomialSamplingBuilder
+        elif layer_type == LayerType.LinearW4A16:
+            from awq.modules.linear.gemm import AWQ_INSTALLED
+            if AWQ_INSTALLED:
+                from .awq_modules import AwqLinearW4A16Builder
+                return AwqLinearW4A16Builder
+            else:
+                logger.debug(
+                    f'Op {layer_type} fallback to default implementation.')
+                return super().get_layer_impl_builder(layer_type)
         else:
+            logger.debug(
+                f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
 
     @staticmethod
@@ -78,10 +93,10 @@ class CudaLayersBackend(DefaultLayersBackend):
             step_context.is_decoding,
             step_context.block_offsets,
             q_start_loc=step_context.q_start_loc,
-            q_seqlens=step_context.q_seq_length,
-            kv_seqlens=step_context.kv_seq_length,
-            max_q_seqlen=step_context.max_q_seq_length,
-            max_kv_seqlen=step_context.max_kv_seq_length,
+            q_seqlens=step_context.q_seqlens,
+            kv_seqlens=step_context.kv_seqlens,
+            max_q_seqlen=step_context.max_q_seqlen,
+            max_kv_seqlen=step_context.max_kv_seqlen,
         )
 
         step_context.attn_meta = attn_meta

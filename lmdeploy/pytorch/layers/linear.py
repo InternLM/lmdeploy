@@ -76,8 +76,36 @@ class AwqLinear(nn.Module):
 
     def __init__(self,
                  mod: nn.Module,
-                 adapter_infos: List[AdapterInfo] = None):
+                 adapter_infos: List[AdapterInfo] = None,
+                 ctx_mgr: Any = None,
+                 colwise: bool = True,
+                 is_tp: bool = False):
         super().__init__()
+        impl_builder = get_backend().get_layer_impl_builder(
+            LayerType.LinearW4A16)
+        self.impl = impl_builder.build(mod, ctx_mgr)
+
+        adapter_infos = adapter_infos if adapter_infos is not None else []
+        self.lora_adapters = None
+        if len(adapter_infos) > 0:
+            self.lora_adapters = nn.ModuleList(
+                SLoRA(info, ctx_mgr, colwise, is_tp) for info in adapter_infos)
+
+        self.is_tp = is_tp
+        self.colwise = colwise
+
+    def forward(self, x):
+        if self.lora_adapters is None:
+            is_tp = False if self.colwise else self.is_tp
+            return self.impl.forward(x, is_tp)
+
+        out = self.impl.forward(x, False)
+        if self.lora_adapters is not None:
+            for lora_adapter in self.lora_adapters:
+                out = lora_adapter(x, out)
+        if self.is_tp:
+            dist.all_reduce(out)
+        return out
 
 
 class W8A8Linear(nn.Module):
@@ -216,16 +244,16 @@ def _merge_awqlinear(*linears: List[nn.Module]):
     group_size = group_sizes[0]
     assert all(wb == w_bit for wb in w_bits)
     assert all(gs == group_size for gs in group_sizes)
-    in_features = qweights[0].size(1)
+    in_features = qweights[0].size(0)
     device = qweights[0].device
     for w in qweights:
-        assert w.size(1) == in_features
+        assert w.size(0) == in_features
         assert w.device == device
-    out_features = sum(w.size(0) for w in qweights)
+    out_features = sum(s.size(1) for s in scales)
 
-    new_qweight = torch.cat(qweights, dim=0)
-    new_scales = torch.cat(scales, dim=0)
-    new_qzeros = torch.cat(qzeros, dim=0)
+    new_qweight = torch.cat(qweights, dim=1)
+    new_scales = torch.cat(scales, dim=1)
+    new_qzeros = torch.cat(qzeros, dim=1)
     new_bias = None
     if bias[0] is not None:
         assert all(b is not None for b in bias)
@@ -267,7 +295,11 @@ def build_linear(mod: nn.Module,
                           colwise=colwise,
                           is_tp=is_tp)
     elif isinstance(mod, WQLinear_GEMM):
-        return AwqLinear(mod, adapter_infos)
+        return AwqLinear(mod,
+                         adapter_infos,
+                         ctx_mgr,
+                         colwise=colwise,
+                         is_tp=is_tp)
     elif isinstance(mod, QLinear):
         return W8A8Linear(mod, ctx_mgr, colwise, is_tp)
     elif isinstance(mod, LoRALinear):

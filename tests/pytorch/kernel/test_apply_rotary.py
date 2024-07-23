@@ -72,9 +72,15 @@ class TestApplyRotary:
         yield torch.rand(max_seqlen, feature_dim, dtype=dtype, device='cuda')
 
     @pytest.fixture
-    def gt(self, q_states, k_states, cached_cos, cached_sin, position_ids_1d):
-        cos = cached_cos[position_ids_1d, None, :]
-        sin = cached_sin[position_ids_1d, None, :]
+    def cos(self, cached_cos, position_ids_1d):
+        yield cached_cos[position_ids_1d, None, :]
+
+    @pytest.fixture
+    def sin(self, cached_sin, position_ids_1d):
+        yield cached_sin[position_ids_1d, None, :]
+
+    @pytest.fixture
+    def gt(self, q_states, k_states, cos, sin, position_ids_1d):
 
         q_embed = q_states * cos + _rotate_half(q_states) * sin
         k_embed = k_states * cos + _rotate_half(k_states) * sin
@@ -86,11 +92,8 @@ class TestApplyRotary:
                              indirect=True)
     @pytest.mark.parametrize(('num_heads_q', 'num_heads_k'), [(8, 8), (8, 4)],
                              indirect=True)
-    def test_apply_rotary(self, q_states, k_states, cached_cos, cached_sin,
-                          position_ids_1d, gt):
-        q_embed, k_embed = apply_rotary_pos_emb(q_states, k_states, cached_cos,
-                                                cached_sin, None,
-                                                position_ids_1d)
+    def test_apply_rotary(self, q_states, k_states, cos, sin, gt):
+        q_embed, k_embed = apply_rotary_pos_emb(q_states, k_states, cos, sin)
         q_gt, k_gt = gt
 
         rtol = None

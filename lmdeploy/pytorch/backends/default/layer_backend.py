@@ -32,6 +32,9 @@ class DefaultLayersBackend(LayersBackend):
         elif layer_type == LayerType.MultinomialSampling:
             from .multinomial_sampling import DefaultMultinomialSamplingBuilder
             return DefaultMultinomialSamplingBuilder
+        elif layer_type == LayerType.LinearW4A16:
+            from .awq_modules import DefaultLinearW4A16Builder
+            return DefaultLinearW4A16Builder
         else:
             raise RuntimeError(f'{layer_type} not supported.')
 
