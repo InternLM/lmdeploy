@@ -2,11 +2,12 @@
 import os
 import random
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.messages import EngineGenerationConfig, TurbomindEngineConfig
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.async_engine import deduce_a_name
 from lmdeploy.tokenizer import DetokenizeState
-from lmdeploy.utils import _stop_words
+from lmdeploy.utils import _get_and_verify_max_len, _stop_words
 
 log_level = 'ERROR'
 if os.getenv('TM_LOG_LEVEL') is None:
@@ -91,10 +92,10 @@ def main(model_path: str,
     print('chat_template_config:\n', chat_template_config, sep='', flush=True)
     model = chat_template_config.chat_template
 
-    # engine
-    if session_len is None:
-        session_len = model.session_len
+    _, model_config = get_model_arch(model_path)
+    session_len = _get_and_verify_max_len(model_config, None)
 
+    # engine
     engine_cfg = TurbomindEngineConfig(
         max_batch_size=max_batch_size,
         model_name=model_name,
