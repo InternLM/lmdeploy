@@ -262,13 +262,17 @@ class TurboMind:
         input_model = INPUT_MODELS.get(input_model_name)(
             model_path=model_path, tokenizer_path=model_path, ckpt_path=None)
 
-        output_model_name, cfg = get_output_model_registered_name_and_config(
+        output_model_name, cfg, exporter_factory = get_output_model_registered_name_and_config(
             model_path=model_path,
             model_format=engine_config.model_format,
             group_size=0)
         cfg.update_from_engine_config(engine_config)
         output_model = OUTPUT_MODELS.get(output_model_name)(
-            input_model=input_model, cfg=cfg, to_file=False, out_dir='')
+            input_model=input_model,
+            cfg=cfg,
+            exporter_factory=exporter_factory,
+            to_file=False,
+            out_dir='')
 
         self.config = output_model.cfg
         self.config.model_name = match_name \

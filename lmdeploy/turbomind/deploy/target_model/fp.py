@@ -1,21 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from ..source_model.base import BaseInputModel
-from .base import (OUTPUT_MODELS, BaseOutputModel, LayerNormExporter,
-                   TurbomindModelConfig, WeightExporter)
+from .base import OUTPUT_MODELS, BaseOutputModel, TurbomindModelConfig
 
 
-@OUTPUT_MODELS.register_module(name=['fp16', 'bf16'])
+@OUTPUT_MODELS.register_module(name='tm')
 class TurbomindModel(BaseOutputModel):
     """Export to turbomind fp16 format."""
-
-    def __init__(self,
-                 input_model: BaseInputModel,
-                 cfg: TurbomindModelConfig,
-                 to_file: bool = True,
-                 out_dir: str = ''):
-        super().__init__(input_model, cfg, to_file, out_dir)
-        self.exporters = [WeightExporter(self), LayerNormExporter(self)]
 
     def get_config(self, cfg: TurbomindModelConfig):
         """Get turbomind config."""

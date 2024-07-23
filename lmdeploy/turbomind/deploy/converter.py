@@ -13,7 +13,8 @@ from lmdeploy.utils import get_model
 from ...utils import _get_and_verify_max_len
 from ..supported_models import SUPPORTED_ARCHS, is_supported
 from .source_model.base import INPUT_MODELS
-from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
+from .target_model.base import (OUTPUT_MODELS, TurbomindModelConfig,
+                                get_exporter_factory)
 
 SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', None]
 
@@ -94,7 +95,7 @@ def get_output_model_registered_name_and_config(model_path: str,
             ['meta_llama',  'hf', 'awq']
         group_size (int): the size of group used by awq model
     """
-    register_name = 'fp16'
+    register_name = 'tm'
     turbomind_model_arch = 'llama'
     weight_type = 'fp16'
 
@@ -103,14 +104,11 @@ def get_output_model_registered_name_and_config(model_path: str,
     if model_format == 'meta_llama':
         session_len = 2048
     else:  # hf, awq, None
-        register_name = 'fp16'
         model_arch, model_config = get_model_arch(model_path)
         turbomind_model_arch = SUPPORTED_ARCHS[model_arch]
         session_len = _get_and_verify_max_len(model_config, None)
         if model_format == 'awq':
             weight_type = 'int4'
-            register_name = 'plora-w4' \
-                if turbomind_model_arch == 'xcomposer2' else 'w4'
             group_size = 128 if group_size == 0 else group_size
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
@@ -125,16 +123,16 @@ def get_output_model_registered_name_and_config(model_path: str,
                     'Device does not support bfloat16. Set float16 forcefully')
                 weight_type = 'fp16'
 
-            register_name = weight_type
-            if turbomind_model_arch == 'xcomposer2':
-                register_name = 'plora'
-
     config.model_arch = model_arch
     config.session_len = session_len + 8
     config.weight_type = weight_type
     config.group_size = group_size
 
-    return register_name, config
+    lora_type = 'plora' if turbomind_model_arch == 'xcomposer2' else ''
+
+    exporter_factory = get_exporter_factory(weight_type, lora_type)
+
+    return register_name, config, exporter_factory
 
 
 def pack_model_repository(workspace_path: str):

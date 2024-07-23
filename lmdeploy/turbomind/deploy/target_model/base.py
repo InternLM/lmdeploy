@@ -159,6 +159,7 @@ class BaseOutputModel(ABC):
     def __init__(self,
                  input_model: BaseInputModel,
                  cfg: TurbomindModelConfig,
+                 exporter_factory,
                  to_file: bool = True,
                  out_dir: str = ''):
         super().__init__()
@@ -172,7 +173,7 @@ class BaseOutputModel(ABC):
         self.tm_params = {}
         model_info = self.input_model.model_info()
         self.permute_qk = model_info.get('permute_qk', True)
-        self.exporters = []
+        self.exporters = exporter_factory(self)
 
     @abstractmethod
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
@@ -502,3 +503,21 @@ class PLoraExporter(BaseExporter):
         self.export_attn(i, r.attn_lora_b(i), 'lora_b.weight')
         self.export_ffn(i, r.ffn_lora_a(i), 'lora_a.weight')
         self.export_ffn(i, r.fnn_lora_b(i), 'lora_b.weight')
+
+
+def get_exporter_factory(weight_type, lora_type):
+
+    def get_exporters(model: BaseOutputModel):
+        exporters = [LayerNormExporter(model)]
+
+        if weight_type == 'int4':
+            exporters.append(QuantWeightExporter(model, pack_u4_row))
+        else:
+            exporters.append(WeightExporter(model))
+
+        if lora_type == 'plora':
+            exporters.append(PLoraExporter(model))
+
+        return exporters
+
+    return get_exporters
