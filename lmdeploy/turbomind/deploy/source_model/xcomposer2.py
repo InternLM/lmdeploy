@@ -32,9 +32,6 @@ class Xcomposer2Model(InternLM2Model):
 
     Reader = Xcomposer2Reader
 
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path, **kwargs)
-
     def _lora_cfg_7b(self):
         """lora config for internlm-xcomposer2-7b."""
         return dict(lora_r=256,

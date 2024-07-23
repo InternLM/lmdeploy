@@ -30,8 +30,6 @@ def get_input_model_registered_name(model_path: str, model_format: str):
     """
     arch = get_model_arch(model_path)[0]
     register_name = SUPPORTED_ARCHS[arch]
-    if model_format == 'awq':
-        register_name = register_name + '-awq'
     return register_name
 
 

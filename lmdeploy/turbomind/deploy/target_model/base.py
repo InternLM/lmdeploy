@@ -240,7 +240,6 @@ class BaseOutputModel(ABC):
                 else:
                     torch_tensor = torch_tensor.float()
             for tm_tensor in tm_params[name]:
-                print(name, torch_tensor.shape)
                 tm_tensor.copy_from(torch_tensor)
             tm_params.pop(name)
         else:
@@ -270,7 +269,9 @@ class BaseOutputModel(ABC):
                 f'*** splitting {name}, shape={tensor.shape}, '
                 f'split_dim={split_dim}, tp={tp}',
                 to_file=self.to_file)
-            assert tensor.shape[split_dim] % tp == 0
+            if tensor.shape[split_dim] % tp != 0:
+                raise RuntimeError(
+                    f'{name}: shape={list(tensor.shape)}, tp={tp}')
             split_size = tensor.shape[split_dim] // tp
             splits = torch.split(tensor, split_size, dim=split_dim)
             for i, split in enumerate(splits):
@@ -361,14 +362,12 @@ def merge_qkv_v2(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, tp: int):
     def reshape(x):
         return x.view(x.size(0), tp, -1) if q.dim() == 2 else x.view(tp, -1)
 
-    # print('merge_qkv_v2 <<<', q.shape, k.shape, v.shape)
     qkv = torch.cat(tuple(map(reshape, (q, k, v))), dim=-1)
 
     qkv = qkv.view(-1, qkv.size(-1) * tp)
     if q.dim() == 1:
         qkv.squeeze_()
 
-    # print('merge_qkv_v2 >>>', ret.shape)
     return qkv
 
 

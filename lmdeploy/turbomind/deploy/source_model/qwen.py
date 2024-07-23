@@ -16,10 +16,6 @@ class QwenReader(LlamaReader):
     norm_weight_key = 'transformer.ln_f.weight'
     output_weight_key = 'lm_head.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
-
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
         q, k, v, o = (None, ) * 4
@@ -57,9 +53,6 @@ class QwenModel(LlamaModel):
 
     Reader = QwenReader
 
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path, **kwargs)
-
     def tokenizer_info(self):
         """Read tokenizer info."""
         n_words = 151851
@@ -91,42 +84,15 @@ class QwenModel(LlamaModel):
                     use_logn_attn=use_logn_attn)
 
 
-class Qwen2Reader(LlamaReader):
-    """read qwen2 model weights.
-
-    The weight name of qwen2 model is similar to llama, except its attention
-    bias doesn't include o_proj bias. Therefore, we make a dummy zero o_proj
-    bias to make it comply the definition of turbomind llama format
-    """
-
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
-
-    def attn_bias(self, i: int):
-        """Get q, k, v bias for layer i."""
-        result = []
-
-        for key in ['q', 'k', 'v']:
-            tensor = self.params.get(
-                f'model.layers.{i}.self_attn.{key}_proj.bias')
-            tensor = self.transform(tensor, 'bias')
-            result.append(tensor)
-
-        tensor = self.params.get(f'model.layers.{i}.self_attn.o_proj.weight')
-        dummy_oproj_bias = tensor.new_zeros(tensor.shape[0])
-        result.append(dummy_oproj_bias)
-        return (*result, )
-
-
 @INPUT_MODELS.register_module(name='qwen2')
 class Qwen2Model(LlamaModel):
-    """Qwen model in hf format."""
+    """Qwen model in hf format.
 
-    Reader = Qwen2Reader
+    The weight of qwen2 model is similar to Llama, except its attention bias
+    doesn't include o_proj bias.
+    """
 
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path, **kwargs)
+    Reader = LlamaReader
 
     def tokenizer_info(self):
         """set tokenizer info.

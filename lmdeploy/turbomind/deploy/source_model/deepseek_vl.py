@@ -15,9 +15,10 @@ class DeepSeekVLReader(LlamaReader):
     output_weight_key = 'language_model.lm_head.weight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
+                 model_cfg: dict, **kwargs):
         model_cfg = model_cfg['language_config']
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
+        super().__init__(new_params, unused_params, last_bin, model_cfg,
+                         **kwargs)
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
@@ -35,9 +36,6 @@ class DeepSeekVLModel(LlamaModel):
     """DeepSeekVL model in hf format."""
 
     Reader = DeepSeekVLReader
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path, **kwargs)
 
     def model_info(self):
         """Read model info."""

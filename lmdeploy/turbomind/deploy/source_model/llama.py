@@ -22,10 +22,8 @@ class LlamaReader(BaseReader):
     norm_weight_key = 'model.norm.weight'
     output_weight_key = 'lm_head.weight'
 
-    weight_suffix = 'weight'
-
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
+                 model_cfg: dict, policy):
         super().__init__()
         self.params = unused_params
         self.params.update(new_params)
@@ -34,6 +32,7 @@ class LlamaReader(BaseReader):
         tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
+        self.weight_suffix, self.processor = policy
         self.init_layer_id()
 
     def init_layer_id(self):
@@ -67,7 +66,7 @@ class LlamaReader(BaseReader):
         return self.params.get(self.output_weight_key, None)
 
     def _transform(self, x: torch.Tensor, kind: str):
-        return x.cuda()
+        return self.processor(x)
 
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
@@ -137,6 +136,7 @@ class LlamaModel(BaseInputModel):
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
         ckpt_path = kwargs.get('ckpt_path')
+        self.policy = kwargs.get('input_policy')
         if ckpt_path is None:
             ckpt_path = model_path
         self.ckpt_path = ckpt_path
@@ -175,7 +175,8 @@ class LlamaModel(BaseInputModel):
                 else:
                     new_params = load_file(osp.join(self.ckpt_path, ckpt))
                 ret = self.Reader(new_params, unused_params,
-                                  i == self.nmgrs - 1, self.model_config)
+                                  i == self.nmgrs - 1, self.model_config,
+                                  self.policy)
                 yield ret
                 ret.clean_up(is_last_bin)
         except GeneratorExit:

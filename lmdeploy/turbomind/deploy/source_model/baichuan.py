@@ -4,15 +4,10 @@ import torch
 
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
-from .llama_awq import process_awq_gemm
 
 
 class BaichuanReader(LlamaReader):
     """BaichuanReader."""
-
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
 
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
@@ -33,17 +28,21 @@ class BaichuanModel(LlamaModel):
     Reader = BaichuanReader
 
 
-class BaichuanAwqReader(BaichuanReader):
-    """BaichuanAwqReader."""
+class Baichuan2Reader(BaichuanReader):
+    """Baichuan2Reader."""
 
-    weight_suffix = 'qweight'
+    def output_weight(self):
+        """Get output."""
+        # https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat/blob/main/modeling_baichuan.py#L507
+        tensor = self.params.get('lm_head.weight', None)
+        if tensor is not None:
+            tensor = tensor.cuda()
+            tensor = torch.nn.functional.normalize(tensor)
+        return tensor
 
-    def _transform(self, x: torch.Tensor, kind: str):
-        return process_awq_gemm(x)
 
+@INPUT_MODELS.register_module(name='baichuan2')
+class Baichuan2Model(LlamaModel):
+    """Llama model in baichuan format."""
 
-@INPUT_MODELS.register_module(name='baichuan-awq')
-class BaichuanAwqModel(BaichuanModel):
-    """BaichuanAwqModel."""
-
-    Reader = BaichuanAwqReader
+    Reader = Baichuan2Reader

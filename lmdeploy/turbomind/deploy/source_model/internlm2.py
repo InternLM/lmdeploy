@@ -4,7 +4,6 @@ import torch
 
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
-from .llama_awq import process_awq_gemm
 
 
 class InternLM2Reader(LlamaReader):
@@ -15,10 +14,6 @@ class InternLM2Reader(LlamaReader):
     tok_embeddings_key = 'model.tok_embeddings.weight'
     norm_weight_key = 'model.norm.weight'
     output_weight_key = 'output.weight'
-
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
 
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
@@ -65,19 +60,3 @@ class InternLM2Model(LlamaModel):
     """InternLM2 model in hf format."""
 
     Reader = InternLM2Reader
-
-
-class InternLM2AwqReader(InternLM2Reader):
-    """read weights from internlm2 awq model."""
-
-    weight_suffix = 'qweight'
-
-    def _transform(self, x: torch.Tensor, kind: str):
-        return process_awq_gemm(x)
-
-
-@INPUT_MODELS.register_module(name='internlm2-awq')
-class InternLM2AwqModel(InternLM2Model):
-    """InternLM2 awq model."""
-
-    Reader = InternLM2AwqReader

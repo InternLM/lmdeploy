@@ -21,7 +21,7 @@ from lmdeploy.utils import get_hf_config_content, get_logger, get_model
 from .deploy.converter import (SUPPORTED_FORMATS,
                                get_input_model_registered_name,
                                get_output_model_registered_name_and_config)
-from .deploy.source_model.base import INPUT_MODELS
+from .deploy.source_model.base import INPUT_MODELS, get_input_policy
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 from .supported_models import is_supported
 from .utils import ModelSource, get_model_source
@@ -259,13 +259,18 @@ class TurboMind:
         match_name = best_match_model(model_path)
         input_model_name = get_input_model_registered_name(
             model_path, engine_config.model_format)
+        input_policy = get_input_policy(engine_config.model_format)
         input_model = INPUT_MODELS.get(input_model_name)(
-            model_path=model_path, tokenizer_path=model_path, ckpt_path=None)
-
-        output_model_name, cfg, exporter_factory = get_output_model_registered_name_and_config(
             model_path=model_path,
-            model_format=engine_config.model_format,
-            group_size=0)
+            tokenizer_path=model_path,
+            input_policy=input_policy,
+            ckpt_path=None)
+
+        output_model_name, cfg, exporter_factory = \
+            get_output_model_registered_name_and_config(
+                model_path=model_path,
+                model_format=engine_config.model_format,
+                group_size=0)
         cfg.update_from_engine_config(engine_config)
         output_model = OUTPUT_MODELS.get(output_model_name)(
             input_model=input_model,

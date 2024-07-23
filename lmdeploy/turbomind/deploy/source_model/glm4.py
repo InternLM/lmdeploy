@@ -7,7 +7,6 @@ import torch
 
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
-from .llama_awq import process_awq_gemm
 
 
 class Glm4Reader(LlamaReader):
@@ -105,19 +104,3 @@ class Glm4Model(LlamaModel):
                     max_position_embeddings=seq_length,
                     rotary_embedding=64,
                     permute_qk=False)  # head layout is same as TM
-
-
-class Glm4AwqReader(Glm4Reader):
-    """Glm4AwqReader."""
-
-    weight_suffix = 'qweight'
-
-    def _transform(self, x: torch.Tensor, kind: str):
-        return process_awq_gemm(x)
-
-
-@INPUT_MODELS.register_module(name='glm4-awq')
-class Glm4AwqModel(Glm4Model):
-    """Glm2/3/4 model in hf format."""
-
-    Reader = Glm4AwqReader
