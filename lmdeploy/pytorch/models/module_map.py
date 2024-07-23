@@ -382,3 +382,15 @@ ASCEND_MODULE_MAP.update({
     'modeling_internlm2.InternLM2FlashAttention2':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',
 })
+
+# ascend mixtral
+ASCEND_MODULE_MAP.update({
+    'transformers.models.mixtral.modeling_mixtral.MixtralAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttentionAscend',
+    'transformers.models.mixtral.modeling_mixtral.MixtralFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttentionAscend',
+    'transformers.models.mixtral.modeling_mixtral.MixtralSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttentionAscend',
+    'transformers.models.mixtral.modeling_mixtral.MixtralSparseMoeBlock':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralSparseMoeBlockAscend',  # noqa: E501
+})

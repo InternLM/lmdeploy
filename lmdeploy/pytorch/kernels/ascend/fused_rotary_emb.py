@@ -21,10 +21,12 @@ def fused_rotary_emb(
     position_ids = position_ids.squeeze(0).unsqueeze(-1)
     pos_freq = position_ids / scaling_factor * inv_freq
     if not (hasattr(context, 'cos') or hasattr(context, 'sin')):
-        cos = (torch.cos(pos_freq).view(batch, seqlen, 1, -1)
-                                  .repeat(1, 1, 1, 2).to(query_states.dtype))
-        sin = (torch.sin(pos_freq).view(batch, seqlen, 1, -1)
-                                  .repeat(1, 1, 1, 2).to(query_states.dtype))
+        cos = (torch.cos(pos_freq).view(batch, seqlen, 1,
+                                        -1).repeat(1, 1, 1,
+                                                   2).to(query_states.dtype))
+        sin = (torch.sin(pos_freq).view(batch, seqlen, 1,
+                                        -1).repeat(1, 1, 1,
+                                                   2).to(query_states.dtype))
         if context:
             setattr(context, 'cos', cos)
             setattr(context, 'sin', sin)
