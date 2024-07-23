@@ -576,6 +576,9 @@ class AsyncEngine(LogitsMixin):
         prompt = prompt_input['prompt']
         input_ids = prompt_input['input_ids']
         finish_reason = None
+        if gen_config.n > 1:
+            logger.warning(f"n({gen_config.n}) > 1 hasn't been supported yet. "
+                           f'Fallback to 1')
         logger.info(f'prompt={prompt!r}, '
                     f'gen_config={gen_config}, '
                     f'prompt_token_id={input_ids}, '
