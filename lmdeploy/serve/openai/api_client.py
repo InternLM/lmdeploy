@@ -7,11 +7,15 @@ import requests
 from lmdeploy.utils import get_logger
 
 
-def get_model_list(api_url: str):
+def get_model_list(api_url: str, headers: dict = None):
     """Get model list from api server."""
-    response = requests.get(api_url)
+    response = requests.get(api_url, headers=headers)
+    if not response.ok:
+        logger = get_logger('lmdeploy')
+        logger.error(f'Failed to get the model list: {api_url} returns {response.status_code}')
+        return None
     if hasattr(response, 'text'):
-        model_list = json.loads(response.text)
+        model_list = response.json()
         model_list = model_list.pop('data', [])
         return [item['id'] for item in model_list]
     return None
@@ -59,13 +63,8 @@ class APIClient:
         """Show available models."""
         if self._available_models is not None:
             return self._available_models
-        response = requests.get(self.models_v1_url, headers=self.headers)
-        if hasattr(response, 'text'):
-            model_list = json_loads(response.text)
-            model_list = model_list.pop('data', [])
-            self._available_models = [item['id'] for item in model_list]
-            return self._available_models
-        return None
+        self._available_models = get_model_list(self.models_v1_url, headers=self.headers)
+        return self._available_models
 
     def encode(self,
                input: Union[str, List[str]],
