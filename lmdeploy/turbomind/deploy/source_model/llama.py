@@ -203,6 +203,9 @@ class LlamaModel(BaseInputModel):
             rope_scaling = model_arg.get('rope_scaling', None)
             scaling_factor = 0.0
             use_dynamic_ntk = 0
+            scaling_type = ''
+            low_freq_factor = 1.0
+            high_freq_factor = 1.0
             if isinstance(rope_scaling, dict):
                 llama2_scaling_type = model_arg['rope_scaling'].get('type', '')
                 llama3_scaling_type = model_arg['rope_scaling'].get(
