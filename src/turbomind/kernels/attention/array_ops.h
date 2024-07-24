@@ -7,8 +7,6 @@
 #include <cfloat>
 #include <limits>
 #include <type_traits>
-#define _USE_MATH_DEFINES  // For windows platform, referring
-                           // https://learn.microsoft.com/en-us/cpp/c-runtime-library/math-constants?view=msvc-170
 #include <cmath>
 
 namespace turbomind {
@@ -261,10 +259,19 @@ struct FastRoPE {
         for (int i = 0; i < N; i += 2) {
             inv_freq_[i / 2] = ti_scale * exp2f((idx + i) * scale_factor);
         }
+        /* The [llama3 rope](https://github.com/huggingface/transformers/blob/5f4ee98a7ade33e1c54fdd6181d04ee7b426b392/src/transformers/modeling_rope_utils.py#L298)
+         * used by llama3.1 equals to the following equation, given the precommuted parameters as:
+        ```C++
+        inv_scaling_factor = 1 / factor;
+        inv_diff_freq_factor = 1 / (high_freq_factor - low_freq_factor);
+        alpha = old_context_len / (2 * PI) * inv_diff_freq_factor;
+        beta = low_freq_factor * inv_diff_freq_factor
+        ```
+        */
         if (llama3_inv_scaling_factor > 0.) {
             PRAGMA_UNROLL
             for (int i = 0; i < N; i += 2) {
-                auto  freq       = inv_freq_[i / 2];
+                auto freq        = inv_freq_[i / 2];
                 auto smooth      = fmaxf(0.f, fminf(1.f, llama3_alpha * freq - llama3_beta));
                 inv_freq_[i / 2] = (1 - smooth) * freq * llama3_inv_scaling_factor + smooth * freq;
             }

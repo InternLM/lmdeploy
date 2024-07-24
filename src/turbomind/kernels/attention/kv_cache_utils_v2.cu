@@ -503,9 +503,9 @@ void invokeFlattenKV_v2(T*           k,
                                      const float* rope_base,                                                           \
                                      int          rope_dim,                                                            \
                                      float        rope_ti_scale,                                                       \
-                                     float        llama3_inv_scaling_factor,                                         \
-                                     float        llama3_alpha,                                                      \
-                                     float        llama3_beta,                                                       \
+                                     float        llama3_inv_scaling_factor,                                           \
+                                     float        llama3_alpha,                                                        \
+                                     float        llama3_beta,                                                         \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \
                                      int64_t      stride_h,                                                            \
