@@ -238,18 +238,19 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.rotary_embedding_dim    = params_.rotary_embedding_dim;
         params.rotary_embedding_base   = params_.rotary_embedding_base;
         params.max_position_embeddings = params_.max_position_embeddings;
-        params.rope_scaling_factor     = params_.rope_scaling_factor;
         params.rope_ti_scale           = 1.f;
         if (params_.rope_scaling_type == "linear") {
             params.rope_ti_scale /= params_.rope_scaling_factor;
         }
         if (params_.rope_scaling_type == "llama3") {
-            params.low_freq_factor  = params_.low_freq_factor;
-            params.high_freq_factor = params_.high_freq_factor;
+            const double PI = 3.14159265358979323846;
+            float inv_diff_freq_factor       = 1.0 / (params_.high_freq_factor - params_.low_freq_factor);
+            params.llama3_inv_scaling_factor = 1.0 / params_.rope_scaling_factor;
+            params.llama3_alpha              = params_.original_max_position_embeddings / 2 * PI * inv_diff_freq_factor;
+            params.llama3_beta               = params_.low_freq_factor * inv_diff_freq_factor;
         }
-        params.original_max_position_embeddings = params_.original_max_position_embeddings;
-        params.use_logn_attn                    = params_.use_logn_attn;
-        // printf("original_max_position_embeddings = %d\n", params.original_max_position_embeddings);
+
+        params.use_logn_attn = params_.use_logn_attn;
 
         // Decoding use only for now
         FT_CHECK(barriers_);

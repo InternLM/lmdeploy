@@ -249,10 +249,9 @@ struct FastRoPE {
                         D     dims,
                         float base,
                         float ti_scale,
-                        int   original_max_position_embeddings,
-                        float scaling_factor,
-                        float low_freq_factor,
-                        float high_freq_factor,
+                        float llama3_inv_scaling_factor,
+                        float llama3_alpha,
+                        float llama3_beta,
                         std::integral_constant<int, N>)
     {
         is_valid_ = idx < dims;
@@ -262,25 +261,12 @@ struct FastRoPE {
         for (int i = 0; i < N; i += 2) {
             inv_freq_[i / 2] = ti_scale * exp2f((idx + i) * scale_factor);
         }
-        if (original_max_position_embeddings != 0) {
-            int   old_context_len   = original_max_position_embeddings;
-            float low_freq_wavelen  = old_context_len / low_freq_factor;
-            float high_freq_wavelen = old_context_len / high_freq_factor;
+        if (llama3_inv_scaling_factor > 0.) {
             PRAGMA_UNROLL
             for (int i = 0; i < N; i += 2) {
-                auto  freq    = inv_freq_[i / 2];
-                float wavelen = 2 * M_PI / freq;
-                if (wavelen < high_freq_wavelen) {
-                    freq = freq;
-                }
-                else if (wavelen > low_freq_wavelen) {
-                    freq = freq / scaling_factor;
-                }
-                else {
-                    auto smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor);
-                    freq        = (1 - smooth) * freq / scaling_factor + smooth * freq;
-                }
-                inv_freq_[i / 2] = freq;
+                auto  freq       = inv_freq_[i / 2];
+                auto smooth      = fmaxf(0.f, fminf(1.f, llama3_alpha * freq - llama3_beta));
+                inv_freq_[i / 2] = (1 - smooth) * freq * llama3_inv_scaling_factor + smooth * freq;
             }
         }
     }

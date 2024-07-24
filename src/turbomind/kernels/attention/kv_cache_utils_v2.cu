@@ -23,10 +23,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                                                     const float* rope_base,
                                                     int          rope_dim,
                                                     float        rope_ti_scale,
-                                                    int          original_max_position_embeddings,
-                                                    float        rope_scaling_factor,
-                                                    float        low_freq_factor,
-                                                    float        high_freq_factor,
+                                                    float        llama3_inv_scaling_factor,
+                                                    float        llama3_alpha,
+                                                    float        llama3_beta,
                                                     int64_t      stride_b,
                                                     int64_t      stride_c,
                                                     int64_t      stride_h,
@@ -129,10 +128,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                           rope_dim,
                           base,
                           rope_ti_scale,
-                          original_max_position_embeddings,
-                          rope_scaling_factor,
-                          low_freq_factor,
-                          high_freq_factor,
+                          llama3_inv_scaling_factor,
+                          llama3_alpha,
+                          llama3_beta,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
@@ -206,10 +204,9 @@ void invokeProcessKV_v2(char**       blocks,
                         const float* rope_base,
                         int          rope_dim,
                         float        rope_ti_scale,
-                        int          original_max_position_embeddings,
-                        float        rope_scaling_factor,
-                        float        low_freq_factor,
-                        float        high_freq_factor,
+                        float        llama3_inv_scaling_factor,
+                        float        llama3_1_alpha,
+                        float        llama3_1_beta,
                         int64_t      stride_b,
                         int64_t      stride_c,
                         int64_t      stride_h,
@@ -248,10 +245,9 @@ void invokeProcessKV_v2(char**       blocks,
                                                                               rope_base,
                                                                               rope_dim,
                                                                               rope_ti_scale,
-                                                                              original_max_position_embeddings,
-                                                                              rope_scaling_factor,
-                                                                              low_freq_factor,
-                                                                              high_freq_factor,
+                                                                              llama3_inv_scaling_factor,
+                                                                              llama3_1_alpha,
+                                                                              llama3_1_beta,
                                                                               stride_b,
                                                                               stride_c,
                                                                               stride_h,
@@ -283,10 +279,9 @@ void invokeProcessKV_v2(char**       blocks,
                                      const float* rope_base,                                                           \
                                      int          rope_dim,                                                            \
                                      float        rope_ti_scale,                                                       \
-                                     int          original_max_position_embeddings,                                    \
-                                     float        rope_scaling_factor,                                                 \
-                                     float        low_freq_factor,                                                     \
-                                     float        high_freq_factor,                                                    \
+                                     float        llama3_inv_scaling_factor,                                           \
+                                     float        llama3_1_alpha,                                                      \
+                                     float        llama3_1_beta,                                                       \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \
                                      int64_t      stride_h,                                                            \
@@ -314,10 +309,9 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                                                     const float* rope_base,
                                                     int          rope_dim,
                                                     float        rope_ti_scale,
-                                                    int          original_max_position_embeddings,
-                                                    float        rope_scaling_factor,
-                                                    float        low_freq_factor,
-                                                    float        high_freq_factor,
+                                                    float        llama3_inv_scaling_factor,
+                                                    float        llama3_alpha,
+                                                    float        llama3_beta,
                                                     int64_t      stride_b,
                                                     int64_t      stride_c,
                                                     int64_t      stride_h,
@@ -403,10 +397,9 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                           rope_dim,
                           base,
                           rope_ti_scale,
-                          original_max_position_embeddings,
-                          rope_scaling_factor,
-                          low_freq_factor,
-                          high_freq_factor,
+                          llama3_inv_scaling_factor,
+                          llama3_alpha,
+                          llama3_beta,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
@@ -441,10 +434,9 @@ void invokeFlattenKV_v2(T*           k,
                         const float* rope_base,
                         int          rope_dim,
                         float        rope_ti_scale,
-                        int          original_max_position_embeddings,
-                        float        rope_scaling_factor,
-                        float        low_freq_factor,
-                        float        high_freq_factor,
+                        float        llama3_inv_scaling_factor,
+                        float        llama3_alpha,
+                        float        llama3_beta,
                         int64_t      stride_b,
                         int64_t      stride_c,
                         int64_t      stride_h,
@@ -480,10 +472,9 @@ void invokeFlattenKV_v2(T*           k,
                                                                             rope_base,
                                                                             rope_dim,
                                                                             rope_ti_scale,
-                                                                            original_max_position_embeddings,
-                                                                            rope_scaling_factor,
-                                                                            low_freq_factor,
-                                                                            high_freq_factor,
+                                                                            llama3_inv_scaling_factor,
+                                                                            llama3_alpha,
+                                                                            llama3_beta,
                                                                             stride_b,
                                                                             stride_c,
                                                                             stride_h,
@@ -512,10 +503,9 @@ void invokeFlattenKV_v2(T*           k,
                                      const float* rope_base,                                                           \
                                      int          rope_dim,                                                            \
                                      float        rope_ti_scale,                                                       \
-                                     int          original_max_position_embeddings,                                    \
-                                     float        rope_scaling_factor,                                                 \
-                                     float        low_freq_factor,                                                     \
-                                     float        high_freq_factor,                                                    \
+                                     float        llama3_inv_scaling_factor,                                         \
+                                     float        llama3_alpha,                                                      \
+                                     float        llama3_beta,                                                       \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \
                                      int64_t      stride_h,                                                            \
