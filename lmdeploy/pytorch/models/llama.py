@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -78,10 +78,10 @@ class LlamaAttention(nn.Module):
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        attn_metadata: Any = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """Rewrite of LlamaAttention.forward."""
-        context = self.ctx_mgr.current_context()
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
@@ -109,7 +109,7 @@ class LlamaAttention(nn.Module):
             value_states,
             past_key_value[0],
             past_key_value[1],
-            context.attn_meta,
+            attn_metadata,
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -197,6 +197,7 @@ class LlamaDecoderLayer(nn.Module):
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[List[torch.FloatTensor]],
         residual: Optional[torch.Tensor] = None,
+        attn_metadata: Any = None,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
 
         if residual is None:
@@ -211,6 +212,7 @@ class LlamaDecoderLayer(nn.Module):
             hidden_states=hidden_states,
             rotary_pos_emb=rotary_pos_emb,
             past_key_value=past_key_value,
+            attn_metadata=attn_metadata,
         )
 
         # Fully Connected
@@ -260,6 +262,7 @@ class LlamaModel(nn.Module):
         input_ids: torch.LongTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
+        attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite of LlamaModel.forward."""
@@ -289,6 +292,7 @@ class LlamaModel(nn.Module):
                 rotary_pos_emb=rotary_pos_emb,
                 past_key_value=past_key_value,
                 residual=residual,
+                attn_metadata=attn_metadata,
             )
 
         hidden_states, _ = self.norm(hidden_states, residual)
@@ -309,6 +313,7 @@ class LlamaForCausalLM(nn.Module):
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         past_key_values: List[List[torch.Tensor]],
+        attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
@@ -316,6 +321,7 @@ class LlamaForCausalLM(nn.Module):
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
 

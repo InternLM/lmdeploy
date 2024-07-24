@@ -91,7 +91,7 @@ class CudaLayersBackend(DefaultLayersBackend):
         attn_meta_cls = cls.get_attention_metadata_cls()
         q_seqlens = step_context.q_seqlens
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
-        attn_meta = attn_meta_cls(
+        attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
             q_start_loc=q_start_loc,
@@ -99,5 +99,5 @@ class CudaLayersBackend(DefaultLayersBackend):
             kv_seqlens=step_context.kv_seqlens,
         )
 
-        step_context.attn_meta = attn_meta
+        step_context.attn_metadata = attn_metadata
         return step_context

@@ -238,6 +238,7 @@ class StepContext:
     adapter_params: Dict[str, AdapterInfo] = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
+    attn_metadata = None
 
     _outputs: Dict = field(default_factory=dict)
 

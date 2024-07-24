@@ -151,7 +151,7 @@ def model_forward(
                 input_ids=inputs.input_ids,
                 position_ids=context.position_ids,
                 past_key_values=cache_engine.gpu_cache,
-                context=context,
+                attn_metadata=context.attn_metadata,
             )
     return dict(logits=output)
 
