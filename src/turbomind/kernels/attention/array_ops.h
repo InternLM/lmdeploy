@@ -259,6 +259,7 @@ struct FastRoPE {
         for (int i = 0; i < N; i += 2) {
             inv_freq_[i / 2] = ti_scale * exp2f((idx + i) * scale_factor);
         }
+        // clang-format off
         /* The [llama3 rope](https://github.com/huggingface/transformers/blob/5f4ee98a7ade33e1c54fdd6181d04ee7b426b392/src/transformers/modeling_rope_utils.py#L298)
          * used by llama3.1 equals to the following equation, given the precommuted parameters as:
         ```C++
@@ -268,6 +269,7 @@ struct FastRoPE {
         beta = low_freq_factor * inv_diff_freq_factor
         ```
         */
+       // clang-format on
         if (llama3_inv_scaling_factor > 0.) {
             PRAGMA_UNROLL
             for (int i = 0; i < N; i += 2) {
