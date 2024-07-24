@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import dataclasses
+import json
 import os
 import random
 from contextlib import asynccontextmanager
@@ -660,6 +661,24 @@ class AsyncEngine(LogitsMixin):
                 # TODO modify pytorch or turbomind api
                 if self.backend == 'pytorch' and sequence_end:
                     await self.end_session(session_id)
+
+    def parse_tool_response(self, text, tools, adapter_name):
+        chat_template = self.chat_template
+        if adapter_name in MODELS.module_dict:
+            chat_template = MODELS.module_dict[adapter_name]()
+        chat_template
+        if '<|plugin|>' in text:
+            text, action = text.split('<|action_start|><|plugin|>')
+            action = action.split('<|action_end|>'.strip())[0]
+            action = action[action.find('{'):]
+            action = json.loads(action)
+            name, parameters = action['name'], json.dumps(action['parameters'])
+        elif '<function=' in text:
+            action, text = text.split('</function>\n\n')
+            parameters = action[action.find('{'):]
+            name = action.split('<function=')[1].split('>{')[0]
+        action_id = [tool.function.name for tool in tools].index(name)
+        return text, action_id, name, parameters
 
     def chat(self,
              prompt: str,
