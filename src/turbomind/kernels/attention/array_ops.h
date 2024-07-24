@@ -7,6 +7,7 @@
 #include <cfloat>
 #include <limits>
 #include <type_traits>
+#include <cmath>
 
 namespace turbomind {
 
@@ -242,14 +243,34 @@ struct FastRoPE {
     Array<float, N / 2> inv_freq_;
     bool                is_valid_;
 
+    // __device__ FastRoPE(int idx, D dims, float base, float ti_scale, float scale_factor, float low_freq_factor, float high_freq_factor, std::integral_constant<int, N>)
     __device__ FastRoPE(int idx, D dims, float base, float ti_scale, std::integral_constant<int, N>)
     {
         is_valid_ = idx < dims;
         /// TODO: Take this away from device code
         const float scale_factor = -log2f(base) / dims;
+        // int old_context_len = original_max_position_embeddings;
+        int old_context_len = 8192;
+        float low_freq_factor = 1.0;
+        float high_freq_factor = 4.0;
+        float scaling_factor = 8.0;
+        float low_freq_wavelen = old_context_len / low_freq_factor;
+        float high_freq_wavelen = old_context_len / high_freq_factor;
+        ti_scale = 1;
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
-            inv_freq_[i / 2] = ti_scale * exp2f((idx + i) * scale_factor);
+            auto freq = ti_scale * exp2f((idx + i) * scale_factor);
+            float wavelen = 2 * M_PI / freq;
+            if (wavelen < high_freq_wavelen) {
+                freq = freq;
+            } else if (wavelen > low_freq_wavelen) {
+                freq = freq / scaling_factor;
+            } else {
+                // assert low_freq_wavelen != high_freq_wavelen
+                auto smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor);
+                freq = (1 - smooth) * freq / scaling_factor + smooth * freq;
+            }
+            inv_freq_[i / 2] = freq;
         }
     }
 

@@ -60,6 +60,10 @@ struct AttentionParams {
     float rotary_embedding_base;
     int   max_position_embeddings;
     float rope_ti_scale;  // used for linear RoPE scaling
+    // the following 3 parameters are used by llama3
+    float low_freq_factor;
+    float high_freq_factor;
+    float rope_scaling_factor;
 
     // log(n) attention
     bool use_logn_attn;

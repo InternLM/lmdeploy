@@ -204,8 +204,19 @@ class LlamaModel(BaseInputModel):
             scaling_factor = 0.0
             use_dynamic_ntk = 0
             if isinstance(rope_scaling, dict):
-                scaling_type = model_arg['rope_scaling'].get('type', '')
+                llama2_scaling_type = model_arg['rope_scaling'].get('type', '')
+                llama3_scaling_type = model_arg['rope_scaling'].get(
+                    'rope_type', '')
                 scaling_factor = model_arg['rope_scaling'].get('factor', '')
+                low_freq_factor = model_arg['rope_scaling'].get(
+                    'low_freq_factor', 1.0)
+                high_freq_factor = model_arg['rope_scaling'].get(
+                    'high_freq_factor', 1.0)
+                if llama2_scaling_type and llama3_scaling_type:
+                    raise ValueError(
+                        f'Ambiguous rope_scaling in config: {model_arg}')
+                scaling_type = llama2_scaling_type if llama2_scaling_type \
+                    else llama3_scaling_type
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
 
@@ -216,4 +227,7 @@ class LlamaModel(BaseInputModel):
                     rope_theta=rope_theta,
                     max_position_embeddings=max_position_embeddings,
                     use_dynamic_ntk=use_dynamic_ntk,
-                    rope_scaling_factor=scaling_factor)
+                    rope_scaling_type=scaling_type,
+                    rope_scaling_factor=scaling_factor,
+                    low_freq_factor=low_freq_factor,
+                    high_freq_factor=high_freq_factor)

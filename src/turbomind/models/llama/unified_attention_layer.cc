@@ -242,7 +242,11 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         if (!params_.use_dynamic_ntk && params_.rope_scaling_factor) {
             params.rope_ti_scale /= params_.rope_scaling_factor;
         }
-
+        if (params_.rope_scaling_type == "llama3") {
+            params.low_freq_factor = params_.low_freq_factor;
+            params.high_freq_factor = params_.high_freq_factor;
+            params.rope_scaling_factor = params_.rope_scaling_factor;
+        }
         params.use_logn_attn = params_.use_logn_attn;
 
         // Decoding use only for now
