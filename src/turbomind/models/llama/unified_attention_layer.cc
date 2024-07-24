@@ -239,7 +239,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.rotary_embedding_base   = params_.rotary_embedding_base;
         params.max_position_embeddings = params_.max_position_embeddings;
         params.rope_ti_scale           = 1.f;
-        if (!params_.use_dynamic_ntk && params_.rope_scaling_factor) {
+        if (params_.rope_scaling_type == "linear") {
             params.rope_ti_scale /= params_.rope_scaling_factor;
         }
         if (params_.rope_scaling_type == "llama3") {
