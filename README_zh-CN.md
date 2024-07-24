@@ -26,7 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/07\] 支持 llama3.1
+- \[2024/07\] 支持 Llama3.1
 - \[2024/07\] 支持 [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e) 全系列模型，[InternLM-XComposer2.5](docs/zh_cn/multi_modal/xcomposer2d5.md) 模型和 InternLM2.5 的 [function call 功能](docs/zh_cn/serving/api_server_tools.md)
 - \[2024/06\] PyTorch engine 支持了 DeepSeek-V2 和若干 VLM 模型推理, 比如 CogVLM2，Mini-InternVL，LlaVA-Next
 - \[2024/05\] 在多 GPU 上部署 VLM 模型时，支持把视觉部分的模型均分到多卡上

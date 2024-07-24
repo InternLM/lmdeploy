@@ -269,7 +269,7 @@ struct FastRoPE {
         ```
         */
         // clang-format on
-        if (llama3_inv_scaling_factor > 0.) {
+        if (llama3_inv_scaling_factor > 0.f) {
             PRAGMA_UNROLL
             for (int i = 0; i < N; i += 2) {
                 auto freq        = inv_freq_[i / 2];
