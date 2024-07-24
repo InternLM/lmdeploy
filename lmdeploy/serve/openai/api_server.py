@@ -255,7 +255,7 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
     - n (int): How many chat completion choices to generate for each input
-        message. Only support one here.
+        message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
     - max_tokens (int): output token nums
     - repetition_penalty (float): The parameter for repetition penalty.
@@ -385,7 +385,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
     - n (int): How many chat completion choices to generate for each input
-        message. Only support one here.
+        message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
     - max_tokens (int | None): output token nums. Default to None.
     - repetition_penalty (float): The parameter for repetition penalty.
@@ -614,7 +614,7 @@ async def completions_v1_qos(request: CompletionRequestQos,
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
     - n (int): How many chat completion choices to generate for each input
-        message. Only support one here.
+        message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
@@ -765,7 +765,7 @@ async def completions_v1(request: CompletionRequest,
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
     - n (int): How many chat completion choices to generate for each input
-        message. Only support one here.
+        message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty

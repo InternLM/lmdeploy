@@ -84,31 +84,27 @@ def test_vicuna():
 
 def test_internlm_chat():
     prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('internlm-chat-7b')(capability='completion')
+    model = MODELS.get('internlm')(capability='completion')
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is not None
     assert model.system == '<|System|>:'
-    assert model.session_len == 2048
 
-    model = MODELS.get('internlm-chat-7b')(capability='chat',
-                                           system='Provide answers in Python')
+    model = MODELS.get('internlm')(capability='chat',
+                                   system='Provide answers in Python')
     assert model.get_prompt(prompt, sequence_start=True) != prompt
     assert model.get_prompt(prompt, sequence_start=False) != prompt
     assert model.system == 'Provide answers in Python'
 
-    model = MODELS.get('internlm-chat-7b')(capability='voice')
+    model = MODELS.get('internlm')(capability='voice')
     _prompt = None
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
         assert _prompt is None
 
-    model = MODELS.get('internlm-chat-7b-8k')()
-    assert model.session_len == 8192
-
 
 def test_messages2prompt4internlm2_chat():
-    model = MODELS.get('internlm2-chat-7b')()
+    model = MODELS.get('internlm2')()
     # Test with a single message
     messages = [
         {
@@ -191,14 +187,14 @@ def test_llama3_1():
 
 def test_baichuan():
     prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('baichuan-7b')(capability='completion')
+    model = MODELS.get('baichuan2')(capability='completion')
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is None
 
-    model = MODELS.get('baichuan-7b')(capability='chat')
+    model = MODELS.get('baichuan2')(capability='chat')
     _prompt = model.get_prompt(prompt, sequence_start=True)
-    assert _prompt == prompt
+    assert _prompt == '<reserved_106>' + prompt + '<reserved_107>'
 
 
 def test_llama2():
@@ -233,16 +229,16 @@ def test_llama3():
 
 def test_qwen():
     prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('qwen-7b')(capability='completion')
+    model = MODELS.get('qwen')(capability='completion')
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is not None
 
-    model = MODELS.get('qwen-7b')(capability='chat')
+    model = MODELS.get('qwen')(capability='chat')
     assert model.get_prompt(prompt, sequence_start=True) != prompt
     assert model.get_prompt(prompt, sequence_start=False) != prompt
 
-    model = MODELS.get('qwen-7b')(capability='voice')
+    model = MODELS.get('qwen')(capability='voice')
     _prompt = None
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)

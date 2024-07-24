@@ -104,12 +104,7 @@ class ChatTemplateConfig:
 class BaseModel:
     """Base model."""
 
-    def __init__(self,
-                 session_len=2048,
-                 capability='chat',
-                 stop_words=None,
-                 **kwargs):
-        self.session_len = session_len
+    def __init__(self, capability='chat', stop_words=None, **kwargs):
         self.stop_words = stop_words
         self.capability = capability
 
@@ -361,8 +356,8 @@ class Llavav1(Vicuna):
 class MiniGemini(Vicuna):
     """Chat template of vicuna model."""
 
-    def __init__(self, session_len=4096, **kwargs):
-        super().__init__(session_len=session_len, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
         return super().get_prompt(prompt, sequence_start)[:-1]
@@ -384,8 +379,6 @@ class MiniGemini(Vicuna):
             return 'mini-gemini-vicuna'
 
 
-@MODELS.register_module(name='internlm-chat')
-@MODELS.register_module(name='internlm-chat-7b')
 @MODELS.register_module(name='internlm')
 class InternLMChat7B(BaseChatTemplate):
     """Chat template of InternLM model."""
@@ -429,48 +422,11 @@ class InternLMChat7B(BaseChatTemplate):
             return 'internlm'
 
 
-@MODELS.register_module(name='internlm-chat-20b')
-@MODELS.register_module(name='internlm-chat-7b-8k')
-class InternLMChat7B8K(InternLMChat7B):
-    """Chat template and generation parameters of InternLM-Chat-7B-8K and
-    InternLM-Chat-20B models."""
-
-    def __init__(self, session_len=8192, **kwargs):
-        super(InternLMChat7B8K, self).__init__(**kwargs)
-        self.session_len = session_len
-
-
-@MODELS.register_module(name='internlm-20b')
-class InternLMBaseModel20B(BaseChatTemplate):
-    """Generation parameters of InternLM-20B-Base model."""
-
-    def __init__(self, session_len=4096, capability='completion', **kwargs):
-        super().__init__(session_len=session_len,
-                         capability=capability,
-                         **kwargs)
-
-
-@MODELS.register_module(
-    name=['internlm2-1_8b', 'internlm2-7b', 'internlm2-20b'])
-class InternLM2BaseModel7B(BaseChatTemplate):
-    """Generation parameters of InternLM2-7B-Base model."""
-
-    def __init__(self, session_len=32768, capability='completion', **kwargs):
-        super().__init__(session_len=session_len,
-                         capability=capability,
-                         **kwargs)
-
-
-@MODELS.register_module(name=[
-    'internlm2-chat', 'internlm2-chat-1_8b', 'internlm2-chat-7b',
-    'internlm2-chat-20b'
-])
 @MODELS.register_module(name='internlm2')
 class InternLM2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM2-Chat-7B."""
 
     def __init__(self,
-                 session_len=32768,
                  system='<|im_start|>system\n',
                  user='<|im_start|>user\n',
                  assistant='<|im_start|>assistant\n',
@@ -488,8 +444,7 @@ class InternLM2Chat7B(InternLMChat7B):
         self.interpreter = interpreter
         self.environment = environment
         self.eoenv = eoenv
-        super(InternLM2Chat7B, self).__init__(session_len=session_len,
-                                              system=system,
+        super(InternLM2Chat7B, self).__init__(system=system,
                                               user=user,
                                               assistant=assistant,
                                               eosys=eosys,
@@ -607,14 +562,12 @@ class InternVL2InternLM2(InternLM2Chat7B):
             return 'internvl2-internlm2'
 
 
-@MODELS.register_module(name='internlm-xcomposer2d5')
-@MODELS.register_module(name='internlm-xcomposer2')
+@MODELS.register_module(name=['internlm-xcomposer2', 'internlm-xcomposer2d5'])
 class InternLMXComposer2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM-XComposer2-7b."""
 
     def __init__(
             self,
-            session_len=4096,
             system='[UNUSED_TOKEN_146]system\n',
             meta_instruction="""You are an AI assistant whose name is InternLM-XComposer (浦语·灵笔).
 - InternLM-XComposer (浦语·灵笔) is a multi-modality conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
@@ -628,8 +581,7 @@ class InternLMXComposer2Chat7B(InternLMChat7B):
             separator='\n',
             stop_words=['[UNUSED_TOKEN_145]'],
             **kwargs):
-        super().__init__(session_len=session_len,
-                         system=system,
+        super().__init__(system=system,
                          meta_instruction=meta_instruction,
                          user=user,
                          assistant=assistant,
@@ -654,18 +606,8 @@ class InternLMXComposer2Chat7B(InternLMChat7B):
             return 'internlm-xcomposer2'
 
 
-@MODELS.register_module(name='baichuan-7b')
-@MODELS.register_module(name='baichuan-base')
-class Baichuan7B(BaseChatTemplate):
-    """Generation parameters of Baichuan-7B base model."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-
-@MODELS.register_module(name='baichuan2-7b')
 @MODELS.register_module(name='baichuan2')
-class Baichuan2_7B(BaseChatTemplate):
+class Baichuan2(BaseChatTemplate):
     """Chat template and generation parameters of Baichuan2-7B-Base and
     Baichuan2-7B-Chat models."""
 
@@ -723,7 +665,7 @@ class Puyu(BaseChatTemplate):
             return 'puyu'
 
 
-@MODELS.register_module(name=['llama2', 'llama-2', 'llama-2-chat'])
+@MODELS.register_module(name='llama2')
 class Llama2(BaseChatTemplate):
     """Chat template of LLaMA2 model."""
 
@@ -773,7 +715,6 @@ class Llama3(BaseChatTemplate):
                  user='<|start_header_id|>user<|end_header_id|>\n\n',
                  eoh='<|eot_id|>',
                  stop_words=['<|eot_id|>', '<|end_of_text|>'],
-                 session_len=8192,
                  **kwargs):
         super().__init__(system=system,
                          meta_instruction=meta_instruction,
@@ -783,7 +724,6 @@ class Llama3(BaseChatTemplate):
                          user=user,
                          eoh=eoh,
                          stop_words=stop_words,
-                         session_len=session_len,
                          **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
@@ -914,14 +854,11 @@ Reminder:
             return 'llama3_1'
 
 
-@MODELS.register_module(name='qwen-14b')
-@MODELS.register_module(name='qwen-7b')
 @MODELS.register_module(name='qwen')
 class Qwen7BChat(BaseChatTemplate):
     """Chat template for Qwen-7B-Chat."""
 
     def __init__(self,
-                 session_len=8192,
                  system='<|im_start|>system\n',
                  meta_instruction='You are a helpful assistant.',
                  eosys='<|im_end|>\n',
@@ -941,7 +878,6 @@ class Qwen7BChat(BaseChatTemplate):
                          eoa=eoa,
                          separator=separator,
                          stop_words=stop_words,
-                         session_len=session_len,
                          **kwargs)
 
     @classmethod
@@ -960,12 +896,10 @@ class CodeLlama(Llama2):
 
     def __init__(self,
                  meta_instruction='',
-                 session_len=4096,
                  suffix_first=False,
                  stop_words=None,
                  **kwargs):
         super().__init__(meta_instruction=meta_instruction,
-                         session_len=session_len,
                          stop_words=stop_words,
                          **kwargs)
         caps = ['completion', 'infilling', 'chat', 'python']
@@ -973,7 +907,6 @@ class CodeLlama(Llama2):
             f'{self.capability} is not supported. ' \
             f'The supported capabilities are: {caps}'
         self.meta_instruction = meta_instruction
-        self.session_len = session_len
         self.suffix_first = suffix_first
         self.stop_words = stop_words
         if self.capability == 'infilling':
@@ -1026,7 +959,6 @@ class Falcon(BaseModel):
             return 'falcon'
 
 
-@MODELS.register_module(name='chatglm2-6b')
 @MODELS.register_module(name='chatglm')
 class ChatGLM2(BaseModel):
 
@@ -1084,7 +1016,7 @@ class ChatGLM2(BaseModel):
             return 'chatglm'
 
 
-@MODELS.register_module(name=['solar', 'solar-70b'])
+@MODELS.register_module(name='solar')
 class SOLAR(BaseChatTemplate):
     """Chat template of SOLAR model.
 
@@ -1098,7 +1030,6 @@ class SOLAR(BaseChatTemplate):
                  eoh='\n\n',
                  assistant='### Assistant:\n',
                  meta_instruction='',
-                 session_len=2048,
                  **kwargs):
         super().__init__(**kwargs)
         self.system = system
@@ -1107,7 +1038,6 @@ class SOLAR(BaseChatTemplate):
         self.eoh = eoh
         self.assistant = assistant
         self.meta_instruction = meta_instruction
-        self.session_len = session_len
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -1120,8 +1050,7 @@ class SOLAR(BaseChatTemplate):
             return 'solar'
 
 
-@MODELS.register_module(name='ultracm')
-@MODELS.register_module(name='ultralm')
+@MODELS.register_module(name=['ultracm', 'ultralm'])
 class UltraChat(BaseChatTemplate):
     """Template of UltraCM and UltraLM models.
 
@@ -1140,7 +1069,6 @@ class UltraChat(BaseChatTemplate):
             eoa='</s>',
             separator='\n',
             stop_words=['</s>'],
-            session_len=2048,
             **kwargs):
         super().__init__(system=system,
                          meta_instruction=meta_instruction,
@@ -1151,7 +1079,6 @@ class UltraChat(BaseChatTemplate):
                          eoa=eoa,
                          separator=separator,
                          stop_words=stop_words,
-                         session_len=session_len,
                          **kwargs)
 
     @classmethod
@@ -1167,7 +1094,7 @@ class UltraChat(BaseChatTemplate):
             return 'ultralm'
 
 
-@MODELS.register_module(name=['yi', 'yi-chat', 'yi-200k', 'yi-34b'])
+@MODELS.register_module(name=['yi'])
 class Yi(BaseChatTemplate):
     """Chat template of Yi model."""
 
@@ -1206,7 +1133,6 @@ class Yi(BaseChatTemplate):
 
 
 @MODELS.register_module(name=['mistral', 'mixtral'])
-@MODELS.register_module(name=['Mistral-7B-Instruct', 'Mixtral-8x7B-Instruct'])
 class MistralChat(BaseChatTemplate):
     """Template of Mistral and Mixtral Instruct models.
 
@@ -1214,17 +1140,8 @@ class MistralChat(BaseChatTemplate):
     `https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1`
     """
 
-    def __init__(self,
-                 user='[INST] ',
-                 eoh=' [/INST]',
-                 eoa='</s>',
-                 session_len=2048,
-                 **kwargs):
-        super().__init__(user=user,
-                         eoh=eoh,
-                         eoa=eoa,
-                         session_len=session_len,
-                         **kwargs)
+    def __init__(self, user='[INST] ', eoh=' [/INST]', eoa='</s>', **kwargs):
+        super().__init__(user=user, eoh=eoh, eoa=eoa, **kwargs)
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -1273,7 +1190,6 @@ class Gemma(BaseChatTemplate):
             return 'gemma'
 
 
-@MODELS.register_module(name=['deepseek-chat'])
 @MODELS.register_module(name=['deepseek'])
 class Deepseek(BaseChatTemplate):
 
@@ -1315,13 +1231,11 @@ class InternVLZH(BaseChatTemplate):
                  eoh=' ',
                  assistant='<bot>: ',
                  eoa='</s>',
-                 session_len=4096,
                  **kwargs):
         super().__init__(user=user,
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
-                         session_len=session_len,
                          **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
@@ -1353,7 +1267,6 @@ class DeepseekVL(BaseChatTemplate):
             eoh='\n\n',
             assistant='Assistant: ',
             eoa='<｜end▁of▁sentence｜>',
-            session_len=16384,
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
                          eosys=eosys,
@@ -1361,7 +1274,6 @@ class DeepseekVL(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
-                         session_len=session_len,
                          **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
@@ -1388,7 +1300,6 @@ class DeepSeek(BaseChatTemplate):
 
     def __init__(
             self,
-            session_len=4096,
             system='',
             meta_instruction="""You are an AI programming assistant, utilizing the Deepseek Coder model, developed by Deepseek Company, and you only answer questions related to computer science. For politically sensitive questions, security and privacy issues, and other non-computer science questions, you will refuse to answer\n""",  # noqa: E501
             eosys='',
@@ -1399,8 +1310,7 @@ class DeepSeek(BaseChatTemplate):
             separator='\n',
             stop_words=['<|EOT|>'],
             **kwargs):
-        super().__init__(session_len=session_len,
-                         system=system,
+        super().__init__(system=system,
                          meta_instruction=meta_instruction,
                          eosys=eosys,
                          user=user,
@@ -1512,8 +1422,7 @@ class DbrxInstruct(BaseChatTemplate):
             return 'dbrx'
 
 
-@MODELS.register_module(name=['internvl-zh-hermes2'])
-@MODELS.register_module(name=['llava-chatml'])
+@MODELS.register_module(name=['llava-chatml', 'internvl-zh-hermes2'])
 class ChatmlDirect(BaseChatTemplate):
 
     def __init__(self,
@@ -1525,7 +1434,6 @@ class ChatmlDirect(BaseChatTemplate):
                  assistant='<|im_start|>assistant\n',
                  eoa='<|im_end|>',
                  separator='',
-                 session_len=4096,
                  **kwargs):
         super().__init__(system,
                          meta_instruction=meta_instruction,
@@ -1535,7 +1443,6 @@ class ChatmlDirect(BaseChatTemplate):
                          assistant=assistant,
                          eoa=eoa,
                          separator=separator,
-                         session_len=session_len,
                          **kwargs)
 
     @classmethod
