@@ -21,8 +21,9 @@ from lmdeploy.utils import get_hf_config_content, get_logger, get_model
 from .deploy.converter import (SUPPORTED_FORMATS,
                                get_input_model_registered_name,
                                get_output_model_registered_name_and_config)
-from .deploy.source_model.base import INPUT_MODELS, get_input_policy
+from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
+from .deploy.policy import get_input_policy
 from .supported_models import is_supported
 from .utils import ModelSource, get_model_source
 

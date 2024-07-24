@@ -13,8 +13,8 @@ from lmdeploy.utils import get_model
 from ...utils import _get_and_verify_max_len
 from ..supported_models import SUPPORTED_ARCHS, is_supported
 from .source_model.base import INPUT_MODELS
-from .target_model.base import (OUTPUT_MODELS, TurbomindModelConfig,
-                                get_exporter_factory)
+from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
+from .exporter import get_exporter_factory
 
 SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', None]
 
