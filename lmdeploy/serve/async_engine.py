@@ -667,17 +667,24 @@ class AsyncEngine(LogitsMixin):
                     await self.end_session(session_id)
 
     def parse_tool_response(self, text, tools, adapter_name):
+        """Parse model response containing tool information.
+
+        Args:
+            text(str): model response in string format
+            tools(List): tools from user request
+            adapter_name(str): the adapter name
+        """
         chat_template = self.chat_template
         if adapter_name in MODELS.module_dict:
             chat_template = MODELS.module_dict[adapter_name]()
         chat_template
-        if '<|plugin|>' in text:
+        if '<|plugin|>' in text:  # internlm2
             text, action = text.split('<|action_start|><|plugin|>')
             action = action.split('<|action_end|>'.strip())[0]
             action = action[action.find('{'):]
             action = json.loads(action)
             name, parameters = action['name'], json.dumps(action['parameters'])
-        elif '<function=' in text:
+        elif '<function=' in text:  # llama3.1
             action, text = text.split('</function>')
             parameters = action[action.find('{'):]
             name = action.split('<function=')[1].split('>{')[0]
