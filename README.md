@@ -111,7 +111,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Llama (7B - 65B)</li>
   <li>Llama2 (7B - 70B)</li>
   <li>Llama3 (8B, 70B)</li>
-  <li>Llama3.1 (8B)</li>
+  <li>Llama3.1 (8B, 70B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM2.5 (7B)</li>
