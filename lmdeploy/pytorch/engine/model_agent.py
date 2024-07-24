@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import atexit
 import os
 import warnings
 from dataclasses import dataclass, field, fields
@@ -886,7 +887,7 @@ def _broadcast_inputs(rank: int, inputs: Any, stream: torch.cuda.Stream):
     """get input tensor parallel."""
     # broadcast meta info
     if rank != 0:
-        inputs = [None, None, None]
+        inputs = [None, None, None, None]
 
     with torch.cuda.stream(stream):
         dist.broadcast_object_list(inputs)
@@ -970,8 +971,11 @@ def _tp_model_loop(
                             weight_map=None)
 
     while True:
-        inputs, swap_in_map, swap_out_map = _broadcast_inputs(
+        inputs, swap_in_map, swap_out_map, exit_flag = _broadcast_inputs(
             rank, None, stream)
+
+        if exit_flag:
+            break
 
         cache_swapping(cache_engine,
                        swap_in_map=swap_in_map,
@@ -1152,6 +1156,8 @@ class TPModelAgent(AutoModelAgent):
             if dist.is_initialized():
                 dist.destroy_process_group()
             raise e
+        # Please see Note [Exit By Sending Exit Flag]
+        atexit.register(_exit_by_sending_exit_flag, rank, self)
 
     @torch.inference_mode()
     def _build_model(
@@ -1201,7 +1207,8 @@ class TPModelAgent(AutoModelAgent):
         """forward impl."""
         _check_context_alive(self.mp_context)
         rank = 0
-        _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
+        exit_flag = False
+        _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map, exit_flag],
                           self.stream)
         cache_swapping(self.cache_engine,
                        swap_in_map=swap_in_map,
@@ -1245,6 +1252,25 @@ class TPModelAgent(AutoModelAgent):
         await asyncio.get_event_loop().run_in_executor(None,
                                                        self.stream.synchronize)
         return output
+
+
+# [Note] Exit By Sending Exit Flag
+# the registration to `atexit` of this function should be called
+# after importing torch.multiprocessing and the initialization of
+# distributed process group
+def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):
+    if not hasattr(agent, 'stream'):
+        # agent is not initialized, just exits normally
+        return
+    # send exit_flag to all subprocess relying on all subprocess are alive
+    # and wait at _broadcast_inputs
+    exit_flag = True
+    _broadcast_inputs(rank, [None, None, None, exit_flag], agent.stream)
+    agent.stream.synchronize()
+    # Tricky, extra sleep for subprocess releasing resources
+    import time
+    time.sleep(1)
+    return
 
 
 def build_model_agent(model_path: str,
