@@ -13,8 +13,8 @@ struct LlamaAttentionParams {
     int         rotary_embedding_dim;
     float       rotary_embedding_base;
     int         max_position_embeddings;
-    int         original_max_position_embeddings;
     std::string rope_scaling_type;
+    int         original_max_position_embeddings;
     float       rope_scaling_factor;
     float       low_freq_factor;
     float       high_freq_factor;

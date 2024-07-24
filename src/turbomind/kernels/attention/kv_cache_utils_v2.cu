@@ -22,8 +22,8 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                                                     const int*   cu_block_num,
                                                     const float* rope_base,
                                                     int          rope_dim,
-                                                    int          original_max_position_embeddings,
                                                     float        rope_ti_scale,
+                                                    int          original_max_position_embeddings,
                                                     float        rope_scaling_factor,
                                                     float        low_freq_factor,
                                                     float        high_freq_factor,
@@ -205,8 +205,8 @@ void invokeProcessKV_v2(char**       blocks,
                         const int*   cu_block_num,
                         const float* rope_base,
                         int          rope_dim,
-                        int          original_max_position_embeddings,
                         float        rope_ti_scale,
+                        int          original_max_position_embeddings,
                         float        rope_scaling_factor,
                         float        low_freq_factor,
                         float        high_freq_factor,
@@ -247,8 +247,8 @@ void invokeProcessKV_v2(char**       blocks,
                                                                               cu_block_num,
                                                                               rope_base,
                                                                               rope_dim,
-                                                                              original_max_position_embeddings,
                                                                               rope_ti_scale,
+                                                                              original_max_position_embeddings,
                                                                               rope_scaling_factor,
                                                                               low_freq_factor,
                                                                               high_freq_factor,
@@ -282,8 +282,8 @@ void invokeProcessKV_v2(char**       blocks,
                                      const int*   cu_block_num,                                                        \
                                      const float* rope_base,                                                           \
                                      int          rope_dim,                                                            \
-                                     int          original_max_position_embeddings,                                    \
                                      float        rope_ti_scale,                                                       \
+                                     int          original_max_position_embeddings,                                    \
                                      float        rope_scaling_factor,                                                 \
                                      float        low_freq_factor,                                                     \
                                      float        high_freq_factor,                                                    \
@@ -313,8 +313,8 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                                                     const int*   cu_block_num,
                                                     const float* rope_base,
                                                     int          rope_dim,
-                                                    int          original_max_position_embeddings,
                                                     float        rope_ti_scale,
+                                                    int          original_max_position_embeddings,
                                                     float        rope_scaling_factor,
                                                     float        low_freq_factor,
                                                     float        high_freq_factor,
@@ -440,8 +440,8 @@ void invokeFlattenKV_v2(T*           k,
                         const int*   cu_block_num,
                         const float* rope_base,
                         int          rope_dim,
-                        int          original_max_position_embeddings,
                         float        rope_ti_scale,
+                        int          original_max_position_embeddings,
                         float        rope_scaling_factor,
                         float        low_freq_factor,
                         float        high_freq_factor,
@@ -479,8 +479,8 @@ void invokeFlattenKV_v2(T*           k,
                                                                             cu_block_num,
                                                                             rope_base,
                                                                             rope_dim,
-                                                                            original_max_position_embeddings,
                                                                             rope_ti_scale,
+                                                                            original_max_position_embeddings,
                                                                             rope_scaling_factor,
                                                                             low_freq_factor,
                                                                             high_freq_factor,
@@ -511,8 +511,8 @@ void invokeFlattenKV_v2(T*           k,
                                      const int*   cu_block_num,                                                        \
                                      const float* rope_base,                                                           \
                                      int          rope_dim,                                                            \
-                                     int          original_max_position_embeddings,                                    \
                                      float        rope_ti_scale,                                                       \
+                                     int          original_max_position_embeddings,                                    \
                                      float        rope_scaling_factor,                                                 \
                                      float        low_freq_factor,                                                     \
                                      float        high_freq_factor,                                                    \
