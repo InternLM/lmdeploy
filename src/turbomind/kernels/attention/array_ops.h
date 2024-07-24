@@ -244,6 +244,7 @@ struct FastRoPE {
     bool                is_valid_;
 
     __device__ FastRoPE(int idx, D dims, float base, float ti_scale,
+        int original_max_position_embeddings,
         float scaling_factor, float low_freq_factor, float high_freq_factor,
         std::integral_constant<int, N>)
     {
@@ -257,8 +258,7 @@ struct FastRoPE {
             }
         }
         else {
-            // int old_context_len = original_max_position_embeddings;
-            int old_context_len = 8192;
+            int old_context_len = original_max_position_embeddings;
             float low_freq_wavelen = old_context_len / low_freq_factor;
             float high_freq_wavelen = old_context_len / high_freq_factor;
             PRAGMA_UNROLL

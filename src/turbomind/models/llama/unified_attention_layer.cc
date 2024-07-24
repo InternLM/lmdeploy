@@ -247,7 +247,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             params.high_freq_factor = params_.high_freq_factor;
             params.rope_scaling_factor = params_.rope_scaling_factor;
         }
-        params.use_logn_attn = params_.use_logn_attn;
+        params.original_max_position_embeddings = params_.original_max_position_embeddings;
+        params.use_logn_attn                    = params_.use_logn_attn;
+        // printf("original_max_position_embeddings = %d\n", params.original_max_position_embeddings);
 
         // Decoding use only for now
         FT_CHECK(barriers_);

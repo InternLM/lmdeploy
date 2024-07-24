@@ -232,6 +232,7 @@ struct AttentionUniversal {
                           params.rotary_embedding_dim,
                           rope_base,
                           params.rope_ti_scale,
+                          params.original_max_position_embeddings,
                           params.rope_scaling_factor,
                           params.low_freq_factor,
                           params.high_freq_factor,
