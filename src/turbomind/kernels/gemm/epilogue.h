@@ -221,6 +221,7 @@ struct Epilogue_ {
     using Dtype = typename OperandC::Dtype;
 
     static constexpr auto kOrder = OperandC::kOrder;
+    static constexpr auto SplitK = SplitK_;
 
     using Tc = Tc_;
 
@@ -229,13 +230,11 @@ struct Epilogue_ {
 
     using SmemLayout = decltype(OperandC::GetSmemLayout::apply(pair<TM, TN>{}));
 
-    using Map = decltype(OperandC::GetThreadMap::apply(pair<M, N>{}, constant<THREADS>{}));
-
-    static constexpr auto SplitK = SplitK_;
-
     using SmemAccessorV2 = SmemAccessorV2<Dtype, SmemLayout, kOrder>;
 
     using SharedStorage = Array<Dtype, SmemLayout::kSize>;
+
+    using Map = decltype(OperandC::GetThreadMap::apply(pair<M, N>{}, constant<THREADS>{}));
 
     static constexpr int S       = Map::kIterS;
     static constexpr int C       = Map::kIterC;
