@@ -281,7 +281,7 @@ struct MainloopSm80_v2 {
             }
         };
 
-        auto prefetch_batch = [&](int k) {
+        [[maybe_unused]] auto prefetch_batch = [&](int k) {
             Prefetch(gmem_iters, k, gmem_mask);
             if (k == MMA::kTileIterK - 1) {
                 __pipeline_commit();

@@ -100,7 +100,7 @@ struct GemmUniversal {
         int  log_tile;
         int3 tiled_shape;
 
-        typename Epilogue::Param epilogue;
+        EpilogueParam<Tc> epilogue;
     };
 
     __device__ void operator()(const Param& param, const CtaMap& cta_map, char* smem_buf)

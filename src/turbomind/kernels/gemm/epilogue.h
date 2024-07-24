@@ -198,20 +198,39 @@ struct Silu {
     }
 };
 
+template<class Tc>
+struct EpilogueParam {
+    int m;
+    int n;
+    Tc* C;
+    int ldc;
+
+    float* partial_C;
+    int    partial_C_ld;
+
+    int* locks;  // (m/cta_m, n/cta_n, k)
+
+    ChannelCombination_v3<Tc> combine_chn;
+    MatrixCombination_v3<Tc>  combine_mat;
+    bool                      silu_act;
+};
+
 template<class Tc_, int M, int N, int TM_, int TN_, int THREADS, class RearrangeC, class OperandC, bool SplitK_>
 struct Epilogue_ {
+
+    using Dtype = typename OperandC::Dtype;
+
+    static constexpr auto kOrder = OperandC::kOrder;
+
+    using Tc = Tc_;
 
     static constexpr int TM = TM_;
     static constexpr int TN = TN_;
 
     using SmemLayout = decltype(OperandC::GetSmemLayout::apply(pair<TM, TN>{}));
-    using Map        = decltype(OperandC::GetThreadMap::apply(pair<M, N>{}, constant<THREADS>{}));
 
-    using Dtype = typename OperandC::Dtype;
+    using Map = decltype(OperandC::GetThreadMap::apply(pair<M, N>{}, constant<THREADS>{}));
 
-    using Tc = Tc_;
-
-    static constexpr auto kOrder = OperandC::kOrder;
     static constexpr auto SplitK = SplitK_;
 
     using SmemAccessorV2 = SmemAccessorV2<Dtype, SmemLayout, kOrder>;
@@ -221,22 +240,6 @@ struct Epilogue_ {
     static constexpr int S       = Map::kIterS;
     static constexpr int C       = Map::kIterC;
     static constexpr int kAccess = Map::kAccessC;
-
-    struct Param {
-        int m;
-        int n;
-        Tc* C;
-        int ldc;
-
-        float* partial_C;
-        int    partial_C_ld;
-
-        int* locks;  // (m/cta_m, n/cta_n, k)
-
-        ChannelCombination_v3<Tc> combine_chn;
-        MatrixCombination_v3<Tc>  combine_mat;
-        bool                      silu_act;
-    };
 
     template<class T>
     using OutputC = Array<T, kAccess>;
@@ -321,8 +324,8 @@ struct Epilogue_ {
     }
 
     template<class FragC, class Pred>
-    __device__ void
-    Reduce(FragC& frag_C, int splits, int64_t split_size, const int2& cta_cs, Pred& pred, const Param& param)
+    __device__ void Reduce(
+        FragC& frag_C, int splits, int64_t split_size, const int2& cta_cs, Pred& pred, const EpilogueParam<Tc>& param)
     {
         using Vec         = OutputC<Dtype>;
         const int2 thr_cs = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
@@ -346,7 +349,8 @@ struct Epilogue_ {
     }
 
     template<class FragC, class Pred>
-    __device__ void Reduce_v2(FragC& frag_C, int split_id, bool is_last, int2 cs0, Pred& pred, const Param& param)
+    __device__ void
+    Reduce_v2(FragC& frag_C, int split_id, bool is_last, int2 cs0, Pred& pred, const EpilogueParam<Tc>& param)
     {
         constexpr int dc = sizeof(Dtype) * Map::kDeltaC;
         const int     ds = sizeof(Dtype) * Map::kDeltaS * param.partial_C_ld;
@@ -414,14 +418,14 @@ struct Epilogue_ {
     }
 
     template<class FragC>
-    __device__ void operator()(FragC&         frag_C,
-                               const int3&    tile_offset,
-                               const int3&    tiled_shape,
-                               int            end_m,
-                               int            end_n,
-                               bool           is_last_split,
-                               const Param&   param,
-                               SharedStorage& storage)
+    __device__ void operator()(FragC&                   frag_C,
+                               const int3&              tile_offset,
+                               const int3&              tiled_shape,
+                               int                      end_m,
+                               int                      end_n,
+                               bool                     is_last_split,
+                               const EpilogueParam<Tc>& param,
+                               SharedStorage&           storage)
     {
         const int2 cta_cs = mk2cs<kOrder>(tile_offset.x * M, tile_offset.y * N);
         const int2 end_cs = mk2cs<kOrder>(end_m, end_n);

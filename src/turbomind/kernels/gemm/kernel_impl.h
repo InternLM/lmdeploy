@@ -202,16 +202,16 @@ public:
 
         const int partial_C_ld = mk2cs<Gemm::kOrderC>(Cdesc.rows, Cdesc.cols).x;
 
-        typename Gemm::Epilogue::Param epilogue{m,
-                                                n,
-                                                (Tc*)D,
-                                                Cdesc.ld,
-                                                (float*)workspace.partials,
-                                                partial_C_ld,
-                                                (int*)workspace.barriers,
-                                                {},
-                                                {alpha, beta},
-                                                silu_act};
+        EpilogueParam<Tc> epilogue{m,
+                                   n,
+                                   (Tc*)D,
+                                   Cdesc.ld,
+                                   (float*)workspace.partials,
+                                   partial_C_ld,
+                                   (int*)workspace.barriers,
+                                   {},
+                                   {alpha, beta},
+                                   silu_act};
 
         typename Gemm::Param param{m,
                                    n,
