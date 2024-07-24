@@ -33,7 +33,6 @@ inline void interleave_output_dims(T* fused, const T* a, const T* b, int m, int 
     else if constexpr (bitsof<T> == 32) {
         return dispatch(uint32_t{});
     }
-    __builtin_trap();
 }
 
 }  // namespace turbomind
