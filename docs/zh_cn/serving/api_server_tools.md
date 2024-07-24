@@ -187,7 +187,7 @@ response = client.chat.completions.create(
     tools=tools)
 print(response)
 messages += [{"role": "assistant", "content": response.choices[0].message.content}]
-messages += [{"role": "user", "content": "Clouds giving way to sun Hi: 76° Tonight: Mainly clear early, then areas of low clouds forming Lo: 56°"}]
+messages += [{"role": "ipython", "content": "Clouds giving way to sun Hi: 76° Tonight: Mainly clear early, then areas of low clouds forming Lo: 56°"}]
 response = client.chat.completions.create(
     model=model_name,
     messages=messages,
@@ -198,9 +198,9 @@ response = client.chat.completions.create(
 print(response)
 ```
 
-And the outputs would be:
+输出将类似下面:
 
 ```
-ChatCompletion(id='3', choices=[Choice(finish_reason='tool_calls', index=0, logprobs=None, message=ChatCompletionMessage(content='<function=get_current_weather>{"location": "Boston, MA", "unit": "fahrenheit"}</function>\n\nOutput:\nCurrent Weather in Boston, MA:\nTemperature: 75°F\nHumidity: 60%\nWind Speed: 10 mph\nSky Conditions: Partly Cloudy', role='assistant', function_call=None, tool_calls=[ChatCompletionMessageToolCall(id='0', function=Function(arguments='{"location": "Boston, MA", "unit": "fahrenheit"}', name='get_current_weather'), type='function')]))], created=1721815546, model='/mnt/bigdisk/llama3.1/Meta-Llama-3.1-8B-Instruct', object='chat.completion', service_tier=None, system_fingerprint=None, usage=CompletionUsage(completion_tokens=58, prompt_tokens=349, total_tokens=407))
-ChatCompletion(id='4', choices=[Choice(finish_reason='stop', index=0, logprobs=None, message=ChatCompletionMessage(content='It sounds like the weather in Boston is going to be mostly sunny today with a high temperature of 76°F, but it will cool down tonight with some low clouds moving in.', role='assistant', function_call=None, tool_calls=None))], created=1721815547, model='/mnt/bigdisk/llama3.1/Meta-Llama-3.1-8B-Instruct', object='chat.completion', service_tier=None, system_fingerprint=None, usage=CompletionUsage(completion_tokens=36, prompt_tokens=446, total_tokens=482))
+ChatCompletion(id='3', choices=[Choice(finish_reason='tool_calls', index=0, logprobs=None, message=ChatCompletionMessage(content='<function=get_current_weather>{"location": "Boston, MA", "unit": "fahrenheit"}</function>\n\nOutput:\nCurrent Weather in Boston, MA:\nTemperature: 75°F\nHumidity: 60%\nWind Speed: 10 mph\nSky Conditions: Partly Cloudy', role='assistant', function_call=None, tool_calls=[ChatCompletionMessageToolCall(id='0', function=Function(arguments='{"location": "Boston, MA", "unit": "fahrenheit"}', name='get_current_weather'), type='function')]))], created=1721815546, model='llama3.1/Meta-Llama-3.1-8B-Instruct', object='chat.completion', service_tier=None, system_fingerprint=None, usage=CompletionUsage(completion_tokens=58, prompt_tokens=349, total_tokens=407))
+ChatCompletion(id='4', choices=[Choice(finish_reason='stop', index=0, logprobs=None, message=ChatCompletionMessage(content='The current weather in Boston is mostly sunny with a high of 76°F and a low of 56°F tonight', role='assistant', function_call=None, tool_calls=None))], created=1721815547, model='llama3.1/Meta-Llama-3.1-8B-Instruct', object='chat.completion', service_tier=None, system_fingerprint=None, usage=CompletionUsage(completion_tokens=36, prompt_tokens=446, total_tokens=482))
 ```
