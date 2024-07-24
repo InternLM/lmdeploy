@@ -269,7 +269,7 @@ struct FastRoPE {
         beta = low_freq_factor * inv_diff_freq_factor
         ```
         */
-       // clang-format on
+        // clang-format on
         if (llama3_inv_scaling_factor > 0.) {
             PRAGMA_UNROLL
             for (int i = 0; i < N; i += 2) {
