@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/07\] Support llama3.1
 - \[2024/07\] Support [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/serving/api_server_tools.md) of InternLM2.5
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
@@ -110,6 +111,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Llama (7B - 65B)</li>
   <li>Llama2 (7B - 70B)</li>
   <li>Llama3 (8B, 70B)</li>
+  <li>Llama3.1 (8B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM2.5 (7B)</li>
