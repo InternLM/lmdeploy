@@ -168,11 +168,13 @@ class BaseOutputModel(ABC):
         if not cfg.valid:
             self.cfg = self.get_config(cfg)
         assert self.cfg.valid
+        assert self.cfg.kv_head_num % self.cfg.tensor_para_size == 0
         self.to_file = to_file
         self.out_dir = out_dir
         self.tm_params = {}
         model_info = self.input_model.model_info()
         self.permute_qk = model_info.get('permute_qk', True)
+        # ! Dependency on `self`
         self.exporters = exporter_factory(self)
 
     @abstractmethod
@@ -388,6 +390,19 @@ def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
     return a.squeeze(dim=-1)
 
 
+def pad_out_dims(x: torch.Tensor, dims: int):
+    pad = dims - x.size(-1)
+    assert pad >= 0
+    return torch.nn.functional.pad(x, (0, pad), 'constant', 0)
+
+
+def pad_in_dims(x: torch.Tensor, dims: int):
+    pad = dims - x.size(0)
+    assert x.dim() == 2
+    assert pad >= 0
+    return torch.nn.functional.pad(x, (0, 0, 0, pad), 'constant', 0)
+
+
 class BaseExporter(ABC):
 
     _attn = 'layers.{0}.attention.{1}.{2}'
@@ -397,6 +412,7 @@ class BaseExporter(ABC):
         self.model = model
         self.tp = model.cfg.tensor_para_size
         self.head_dim = model.cfg.size_per_head
+        self.inter_size = model.cfg.inter_size
 
     def export_attn(self, idx: int, qkvo, kind: str, pack_fn=identity):
         if all(x is None for x in qkvo):
@@ -420,9 +436,17 @@ class BaseExporter(ABC):
                               split_dim=0,
                               copy=is_lora_b)
 
-    def export_ffn(self, idx: int, w123, kind: str, pack_fn=identity):
+    def export_ffn(self, idx: int, w123, kind: str, pack_fn=identity, g=1):
         is_lora_a, is_lora_b = self.get_lora_flags(kind)
-        w1, w2, w3 = map(pack_fn, map(transpose, w123))
+        w1, w2, w3 = map(transpose, w123)
+
+        if not is_lora_a:
+            w1 = pad_out_dims(w1, self.inter_size)
+            w3 = pad_out_dims(w3, self.inter_size)
+        if not is_lora_b:
+            w2 = pad_in_dims(w2, self.inter_size // g)
+
+        w1, w2, w3 = map(pack_fn, (w1, w2, w3))
         self.model.save_split(w1,
                               self._ffn.format(idx, 'w1', kind),
                               split_dim=-1,
@@ -468,6 +492,7 @@ class QuantWeightExporter(BaseExporter):
     def __init__(self, model: BaseOutputModel, pack_fn):
         super().__init__(model)
         self.pack_fn = pack_fn
+        self.group_size = model.cfg.group_size
 
     def export(self, r: BaseReader, i: int):
 
@@ -475,12 +500,12 @@ class QuantWeightExporter(BaseExporter):
             return x.to(torch.half)
 
         self.export_attn(i, r.attn(i), 'qweight', self.pack_fn)
-        self.export_attn(i, r.attn_bias(i), 'bias')
-        self.export_attn(i, r.attn_scale(i), 'scales')
+        self.export_attn(i, r.attn_bias(i), 'bias', to_half)
+        self.export_attn(i, r.attn_scale(i), 'scales', to_half)
         self.export_attn(i, r.attn_zero(i), 'zeros', to_half)
         self.export_ffn(i, r.ffn(i), 'qweight', self.pack_fn)
-        self.export_ffn(i, r.ffn_scale(i), 'scales')
-        self.export_ffn(i, r.ffn_zero(i), 'zeros', to_half)
+        self.export_ffn(i, r.ffn_scale(i), 'scales', to_half, self.group_size)
+        self.export_ffn(i, r.ffn_zero(i), 'zeros', to_half, self.group_size)
 
 
 class PLoraExporter(BaseExporter):
