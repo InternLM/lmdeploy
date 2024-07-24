@@ -8,7 +8,6 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 
 from .adapter.adapter import SchedulerAdapter
-from .config import CacheConfig
 
 
 @dataclass
@@ -146,8 +145,6 @@ class ModelInputs:
     seq_length: torch.LongTensor
     history_lengths: torch.LongTensor
     block_offsets: torch.LongTensor
-    max_q_seq_length: int
-    max_history_length: int
     is_decoding: bool
     num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
@@ -159,7 +156,6 @@ class ModelInputs:
         """update input ids."""
         assert self.is_decoding
         self.history_lengths = self.history_lengths + 1
-        self.max_history_length = self.max_history_length + 1
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
@@ -194,8 +190,6 @@ class ModelInputs:
                 seq_length=input_ids.new_tensor([end - start]),
                 block_offsets=block_offsets,
                 history_lengths=self.history_lengths + start,
-                max_q_seq_length=end - start,
-                max_history_length=self.max_history_length + start,
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=self.local_adapter_ids,
@@ -232,15 +226,11 @@ class StepContext:
     patched model might need extra information to perform inference. This
     dataclass provide these infos and tools.
     """
-    inputs: ModelInputs
     block_offsets: torch.LongTensor
     position_ids: torch.LongTensor
-    q_start_loc: torch.LongTensor
     attention_mask: torch.LongTensor
     q_seqlens: torch.LongTensor
     kv_seqlens: torch.LongTensor
-    max_q_seqlen: int
-    max_kv_seqlen: int
     kv_caches: List
     is_decoding: bool
     world_size: int = 1
@@ -257,7 +247,6 @@ class StepContext:
         inputs: ModelInputs,
         world_size: int = 1,
         kv_caches: List = None,
-        cache_config: CacheConfig = None,
     ):
         """build step context.
 
@@ -267,8 +256,8 @@ class StepContext:
             device (str): The device of the tensors.
         """
         q_seqlens = inputs.seq_length
-        max_q_seqlen = inputs.max_q_seq_length
         history_seqlens = inputs.history_lengths
+        device = q_seqlens.device
 
         # for vlm
         input_embeddings, input_embedding_indexing = None, None
@@ -277,16 +266,12 @@ class StepContext:
             input_embeddings, input_embedding_indexing = \
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
 
-        batch_size = len(q_seqlens)
-        device = q_seqlens.device
-
         # q_start_loc and kv_seqlens
         if inputs.is_decoding:
-            q_start_loc = torch.arange(0, batch_size, device=device)
             attention_mask = torch.ones_like(q_seqlens)[:, None]
             position_ids = history_seqlens.unsqueeze(-1)
         else:
-            q_start_loc = q_seqlens.cumsum(0) - q_seqlens
+            max_q_seqlen = q_seqlens.max().item()
             mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
             attention_mask = (mask_range < q_seqlens[:, None]).long()
             position_ids = attention_mask.long().cumsum(-1) - 1
@@ -296,27 +281,19 @@ class StepContext:
         position_ids = cls.get_position_ids_1d(position_ids, q_seqlens)[None]
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
-        max_kv_seqlen = max_q_seqlen + inputs.max_history_length
-
-        window_size = getattr(cache_config, 'window_size', 0)
-        if window_size > 0:
-            kv_seqlens -= inputs.num_ignored_history
+        kv_seqlens -= inputs.num_ignored_history
 
         adapter_params = None
         if inputs.adapter_info is not None:
             adapter_params = inputs.adapter_info.split_by_targets()
 
-        ret = StepContext(inputs=inputs,
-                          block_offsets=inputs.block_offsets,
+        ret = StepContext(block_offsets=inputs.block_offsets,
                           position_ids=position_ids,
                           input_embeddings=input_embeddings,
                           input_embedding_indexing=input_embedding_indexing,
                           attention_mask=attention_mask,
-                          q_start_loc=q_start_loc,
                           q_seqlens=q_seqlens,
                           kv_seqlens=kv_seqlens,
-                          max_q_seqlen=max_q_seqlen,
-                          max_kv_seqlen=max_kv_seqlen,
                           kv_caches=kv_caches,
                           is_decoding=inputs.is_decoding,
                           world_size=world_size,
@@ -351,14 +328,12 @@ class StepContextManager:
         inputs: ModelInputs,
         world_size: int = 1,
         kv_caches: List = None,
-        cache_config: CacheConfig = None,
     ):
         """build context."""
         return StepContext.new(
             inputs,
             world_size,
             kv_caches,
-            cache_config,
         )
 
     @contextmanager

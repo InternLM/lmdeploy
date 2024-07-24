@@ -52,7 +52,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         q_start_loc = attn_metadata.q_start_loc
         q_seqlens = attn_metadata.q_seqlens
         kv_seqlens = attn_metadata.kv_seqlens
-        max_q_seqlen = attn_metadata.max_q_seqlen
+        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
 
         # fill kv cache
         self.fill_kv_cache(

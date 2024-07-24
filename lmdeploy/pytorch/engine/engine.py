@@ -374,7 +374,6 @@ class Engine:
         else:
             seq_length = self._seq_length_buf[:batch_size]
         max_q_seq_length = seq_length.max().item()
-        max_history_length = history_lengths.max().item()
 
         # TODO: get block offsets is slow when block_size = 1
         block_offsets = self.scheduler.get_block_tables(messages)
@@ -456,8 +455,6 @@ class Engine:
                            seq_length=seq_length,
                            history_lengths=history_lengths,
                            block_offsets=block_offsets,
-                           max_q_seq_length=max_q_seq_length,
-                           max_history_length=max_history_length,
                            is_decoding=is_decoding,
                            num_ignored_history=num_ignored_history,
                            local_adapter_ids=local_adapter_ids,

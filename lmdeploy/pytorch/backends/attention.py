@@ -13,8 +13,6 @@ class AttentionMetadata:
     q_start_loc: torch.Tensor = None
     q_seqlens: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
-    max_q_seqlen: int = 0
-    max_kv_seqlen: int = 0
 
 
 T = TypeVar('T', bound=AttentionMetadata)

@@ -89,14 +89,14 @@ class CudaLayersBackend(DefaultLayersBackend):
     def update_step_context(cls, step_context):
         """update step context."""
         attn_meta_cls = cls.get_attention_metadata_cls()
+        q_seqlens = step_context.q_seqlens
+        q_start_loc = q_seqlens.cumsum(0) - q_seqlens
         attn_meta = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
-            q_start_loc=step_context.q_start_loc,
-            q_seqlens=step_context.q_seqlens,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seqlens,
             kv_seqlens=step_context.kv_seqlens,
-            max_q_seqlen=step_context.max_q_seqlen,
-            max_kv_seqlen=step_context.max_kv_seqlen,
         )
 
         step_context.attn_meta = attn_meta

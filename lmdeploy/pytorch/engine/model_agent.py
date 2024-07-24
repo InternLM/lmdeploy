@@ -16,7 +16,7 @@ from ..adapter.adapter import (AdapterWeightMap, get_indexed_lora_linears,
                                get_loralinear_info, update_lora_linears)
 from ..config import CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
-from ..model_inputs import ModelInputs, StepContext
+from ..model_inputs import ModelInputs
 from ..models.patch import patch, update_model
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
@@ -140,13 +140,12 @@ def model_forward(
     with torch.cuda.stream(stream):
         # forward
         inputs = inputs.to_device('cuda')
-        context = StepContext.new(
+        ctx_mgr = model.ctx_mgr
+        context = ctx_mgr.build_context(
             inputs=inputs,
             world_size=world_size,
             kv_caches=cache_engine.gpu_cache,
-            cache_config=cache_engine.cache_config,
         )
-        ctx_mgr = model.ctx_mgr
         with ctx_mgr.context(context):
             output = model(
                 input_ids=inputs.input_ids,
