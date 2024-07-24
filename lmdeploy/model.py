@@ -836,7 +836,11 @@ Reminder:
         for message in messages:
             role = message['role']
             content = message['content']
-            ret += f'{box_map[role]}{content}{eox_map[role]}'
+            if role == 'assistant' and ('<|python_tag|>' in content
+                                        or '</function>' in content):
+                ret += f'{box_map[role]}{content}<|eom_id|>'
+            else:
+                ret += f'{box_map[role]}{content}{eox_map[role]}'
         ret += f'{self.assistant}'
         if sequence_start and not isinstance(messages, str):
             ret = '<|begin_of_text|>' + ret
