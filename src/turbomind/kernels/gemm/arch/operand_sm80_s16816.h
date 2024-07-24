@@ -84,48 +84,47 @@ struct Operand_B {
     using GetGmemIter   = GetGmemIter;
 };
 
+template<Order order>
+struct GetSmemLayoutC {
+    template<int M, int N>
+    static constexpr auto apply(pair<M, N>)
+    {
+        if constexpr (order == kRowMajor) {
+            // x01  23
+            // cccccss
+            //                                    bits base shift
+            return SmemLayoutV2<M, N, 8, 32, Swizzle<2, 3, 2>>{};
+        }
+        else {
+            // 234  x01
+            // 23401x
+            // cccccsss
+            // so that x is not part of swizzling
+            return SmemLayoutV2<N, M, 8, 32, Swizzle<2, 3, 3>>{};
+        }
+    }
+};
+
+template<Order order>
+struct GetThreadMapC {
+    template<int M, int N, int THREADS>
+    static constexpr auto apply(pair<M, N>, constant<THREADS>)
+    {
+        constexpr auto cs    = mk2cs<order>(M, N);
+        constexpr int  WARPS = THREADS / WARP_SIZE;
+
+        return ThreadMap_V2<cs.x, cs.y, 4, Raked, WARPS>{};
+    }
+};
+
 template<class T, Order order>
 struct Operand_C {
     using Dtype = T;
 
     static constexpr Order kOrder = order;
 
-    struct GetSmemLayout {
-        template<int M, int N>
-        static constexpr auto apply(pair<M, N>)
-        {
-            if constexpr (order == kRowMajor) {
-                // x01  23
-                // cccccss
-                //                                    bits base shift
-                return SmemLayoutV2<M, N, 8, 32, Swizzle<2, 3, 2>>{};
-            }
-            else {
-                // 012345
-                // 234  x01
-                //   x01
-                // cccccsss
-                // return SmemLayoutV2<N, M, 8, 32, Swizzle<3, 2, 3>>{};
-
-                // 234  x01
-                // 23401x
-                // cccccsss
-                // so that x is not part of swizzling
-                return SmemLayoutV2<N, M, 8, 32, Swizzle<2, 3, 3>>{};
-            }
-        }
-    };
-
-    struct GetThreadMap {
-        template<int M, int N, int THREADS>
-        static constexpr auto apply(pair<M, N>, constant<THREADS>)
-        {
-            constexpr auto cs    = mk2cs<order>(M, N);
-            constexpr int  WARPS = THREADS / WARP_SIZE;
-
-            return ThreadMap_V2<cs.x, cs.y, 4, Raked, WARPS>{};
-        }
-    };
+    using GetSmemLayout = GetSmemLayoutC<order>;
+    using GetThreadMap = GetThreadMapC<order>;
 };
 
 template<class T>
