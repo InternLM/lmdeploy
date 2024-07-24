@@ -125,7 +125,15 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(di, rope_dim, base, rope_ti_scale, original_max_position_embeddings, rope_scaling_factor, low_freq_factor, high_freq_factor, std::integral_constant<int, kVecSize>{});
+            FastRoPE  rope(di,
+                           rope_dim,
+                           base,
+                           rope_ti_scale,
+                           original_max_position_embeddings,
+                           rope_scaling_factor,
+                           low_freq_factor,
+                           high_freq_factor,
+                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = history_len + offset.y + s * Map::kDeltaS + token_idx;  // sequence local
@@ -391,7 +399,15 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(di, rope_dim, base, rope_ti_scale, original_max_position_embeddings, rope_scaling_factor, low_freq_factor, high_freq_factor, std::integral_constant<int, kVecSize>{});
+            FastRoPE  rope(di,
+                           rope_dim,
+                           base,
+                           rope_ti_scale,
+                           original_max_position_embeddings,
+                           rope_scaling_factor,
+                           low_freq_factor,
+                           high_freq_factor,
+                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
