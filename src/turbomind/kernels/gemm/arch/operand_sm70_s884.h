@@ -70,31 +70,36 @@ struct Operand_V {
     using GetGmemIter = GetGmemIter;
 };
 
+template<Order order>
+struct _GetSmemLayoutC {
+    template<int M, int N>
+    static constexpr auto apply(pair<M, N>)
+    {
+        constexpr auto cs = mk2cs<order>(M, N);
+        return SmemLayoutV2<cs.y, cs.x, 1, 1>{};
+    }
+};
+
+template<Order order>
+struct _GetThreadMapC {
+    template<int M, int N, int THREADS>
+    static constexpr auto apply(pair<M, N>, constant<THREADS>)
+    {
+        constexpr auto cs    = mk2cs<order>(M, N);
+        constexpr int  WARPS = THREADS / WARP_SIZE;
+
+        return ThreadMap_V2<cs.x, cs.y, 4, Raked, WARPS>{};
+    }
+};
+
 template<class T, Order order>
 struct Operand_C {
     using Dtype = T;
 
     static constexpr Order kOrder = order;
 
-    struct GetSmemLayout {
-        template<int M, int N>
-        static constexpr auto apply(pair<M, N>)
-        {
-            constexpr auto cs = mk2cs<order>(M, N);
-            return SmemLayoutV2<cs.y, cs.x, 1, 1>{};
-        }
-    };
-
-    struct GetThreadMap {
-        template<int M, int N, int THREADS>
-        static constexpr auto apply(pair<M, N>, constant<THREADS>)
-        {
-            constexpr auto cs    = mk2cs<order>(M, N);
-            constexpr int  WARPS = THREADS / WARP_SIZE;
-
-            return ThreadMap_V2<cs.x, cs.y, 4, Raked, WARPS>{};
-        }
-    };
+    using GetSmemLayout = _GetSmemLayoutC<order>;
+    using GetThreadMap  = _GetThreadMapC<order>;
 };
 
 template<class T>

@@ -85,7 +85,7 @@ struct Operand_B {
 };
 
 template<Order order>
-struct GetSmemLayoutC {
+struct _GetSmemLayoutC {
     template<int M, int N>
     static constexpr auto apply(pair<M, N>)
     {
@@ -106,7 +106,7 @@ struct GetSmemLayoutC {
 };
 
 template<Order order>
-struct GetThreadMapC {
+struct _GetThreadMapC {
     template<int M, int N, int THREADS>
     static constexpr auto apply(pair<M, N>, constant<THREADS>)
     {
@@ -123,8 +123,8 @@ struct Operand_C {
 
     static constexpr Order kOrder = order;
 
-    using GetSmemLayout = GetSmemLayoutC<order>;
-    using GetThreadMap = GetThreadMapC<order>;
+    using GetSmemLayout = _GetSmemLayoutC<order>;
+    using GetThreadMap  = _GetThreadMapC<order>;
 };
 
 template<class T>
