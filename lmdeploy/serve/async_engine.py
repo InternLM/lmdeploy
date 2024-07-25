@@ -353,6 +353,7 @@ class AsyncEngine(LogitsMixin):
     def batch_infer(
             self,
             prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+            session_ids: Union[List[int], int] = None,
             gen_config: Optional[Union[GenerationConfig,
                                        List[GenerationConfig],
                                        EngineGenerationConfig,
@@ -367,6 +368,8 @@ class AsyncEngine(LogitsMixin):
             prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
                 prompts. It accepts: string prompt, a list of string prompts,
                 a chat history in OpenAI format or a list of chat history.
+            session_ids (List[int] | int): a batch of session_ids. If not
+                provided, it will be [0, number of prompts]
             gen_config (GenerationConfig | None): a instance of or a list of
                 GenerationConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
@@ -389,7 +392,15 @@ class AsyncEngine(LogitsMixin):
         assert len(prompts) == len(gen_config),\
                 'input gen_confg length differs from the length of prompts' # noqa
         prompt_num = len(prompts)
-        outputs = [Response('', 0, 0, i) for i in range(prompt_num)]
+        if session_ids is None:
+            session_ids = range(prompt_num)
+        elif isinstance(session_ids, int):
+            session_ids = [session_ids]
+        assert len(prompts) == len(session_ids), \
+            'input session_ids length differs from the length of prompts'
+        outputs = [
+            Response('', 0, 0, session_ids[i]) for i in range(prompt_num)
+        ]
         generators = []
         if use_tqdm:
             import tqdm
@@ -397,7 +408,7 @@ class AsyncEngine(LogitsMixin):
         for i, prompt in enumerate(prompts):
             generators.append(
                 self.generate(prompt,
-                              i,
+                              session_ids[i],
                               gen_config=gen_config[i],
                               stream_response=True,
                               sequence_start=True,
@@ -432,6 +443,7 @@ class AsyncEngine(LogitsMixin):
     def stream_infer(
             self,
             prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+            session_ids: Union[List[int], int] = None,
             gen_config: Optional[Union[GenerationConfig,
                                        List[GenerationConfig],
                                        EngineGenerationConfig,
@@ -445,6 +457,8 @@ class AsyncEngine(LogitsMixin):
             prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
                 prompts. It accepts: string prompt, a list of string prompts,
                 a chat history in OpenAI format or a list of chat history.
+            session_ids (List[int] | int): a batch of session_ids. If not
+                provided, it will be [0, number of prompts]
             gen_config (GenerationConfig | None): a instance of or a list of
                 GenerationConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
@@ -465,12 +479,18 @@ class AsyncEngine(LogitsMixin):
             gen_config = [gen_config] * len(prompts)
         assert len(prompts) == len(gen_config),\
                 'input gen_confg length differs from the length of prompts' # noqa
+        if session_ids is None:
+            session_ids = range(len(prompts))
+        elif isinstance(session_ids, int):
+            session_ids = [session_ids]
+        assert len(prompts) == len(session_ids), \
+                'input session_ids length differs from the length of prompts' # noqa
         outputs = Queue()
         generators = []
         for i, prompt in enumerate(prompts):
             generators.append(
                 self.generate(prompt,
-                              i,
+                              session_ids[i],
                               gen_config=gen_config[i],
                               stream_response=True,
                               sequence_start=True,
@@ -487,8 +507,10 @@ class AsyncEngine(LogitsMixin):
                              out.token_ids, out.logprobs))
 
         async def gather():
-            await asyncio.gather(
-                *[_inner_call(i, generators[i]) for i in range(len(prompts))])
+            await asyncio.gather(*[
+                _inner_call(session_ids[i], generators[i])
+                for i in range(len(prompts))
+            ])
             outputs.put(None)
 
         loop = _get_event_loop()
