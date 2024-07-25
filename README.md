@@ -115,10 +115,10 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM2.5 (7B)</li>
-  <li>QWen (1.8B - 72B)</li>
-  <li>QWen1.5 (0.5B - 110B)</li>
-  <li>QWen1.5 - MoE (0.5B - 72B)</li>
-  <li>QWen2 (0.5B - 72B)</li>
+  <li>Qwen (1.8B - 72B)</li>
+  <li>Qwen1.5 (0.5B - 110B)</li>
+  <li>Qwen1.5 - MoE (0.5B - 72B)</li>
+  <li>Qwen2 (0.5B - 72B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
@@ -142,7 +142,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>InternLM-XComposer2.5 (7B)</li>
-  <li>QWen-VL (7B)</li>
+  <li>Qwen-VL (7B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-40B)</li>
