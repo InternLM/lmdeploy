@@ -20,6 +20,12 @@
 #define TURBOMIND_ARCH_SM80 0
 #endif
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#define TURBOMIND_ARCH_SM90 1
+#else
+#define TURBOMIND_ARCH_SM90 0
+#endif
+
 #if defined(__CUDA_ARCH__) && !defined(__INTELLISENSE__)
 #if defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
 #define PRAGMA_UNROLL _Pragma("unroll")

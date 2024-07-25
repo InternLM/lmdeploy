@@ -11,9 +11,9 @@ add_library(gemm2
         cache_utils.cu
         gpu_metric.cu
         convert_v2.cu
-        # quantization.cu
         cast.cu
         unpack.cu
+        kernel/f16_u4g128_f16_tnt_sm90_s16816.cu
         kernel/f16_u4g128_f16_tnt_sm80_s16816.cu
         kernel/f16_u4g128_f16_tnt_sm75_s16816.cu
         kernel/f16_u4g128_f16_tnt_sm70_s884.cu
@@ -22,7 +22,11 @@ add_library(gemm2
 
 
 target_compile_options(gemm2 PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info>)
+        $<$<COMPILE_LANGUAGE:CUDA>:
+                -Xptxas=-v 
+                --generate-line-info 
+                --threads 8>
+)
 set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 

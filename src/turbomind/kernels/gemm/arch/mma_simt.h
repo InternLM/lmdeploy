@@ -23,7 +23,8 @@ struct MMA_SIMT {
     using FragB = Array<T, K>;
     using FragC = Array<float, 1>;
 
-    static constexpr int kPieceC = 1;
+    using OffsetC = Array<int2, 1>;
+    using FragC_  = FragC[1];
 
     __device__ static void fma(FragC& d, const FragA& a, const FragB& b, const FragC& c)
     {
@@ -40,16 +41,20 @@ struct MMA_SIMT {
         d[0] = c[0] + float(acc);
     }
 
-    template<class Func>
-    __device__ static void foreach_C(FragC& c, Func&& func)
+    __device__ static constexpr OffsetC static_offset_C()
     {
-        ((Func&&)func)(c, /*idx*/ 0, /*m*/ 0, /*n*/ 0);
+        return {};
     }
 
-    __device__ static int2 get_offset_C()  // -> (m,n)
+    __device__ static int2 thread_offset_C()  // -> (m,n)
     {
         const int lane_id = threadIdx.x % WARP_SIZE;
         return {lane_id / N, lane_id % N};
+    }
+
+    __device__ static void ReshapeC(const FragC& c, FragC_& c_)
+    {
+        c_[0] = c;
     }
 
     __device__ static int get_group_id(int thread_idx)

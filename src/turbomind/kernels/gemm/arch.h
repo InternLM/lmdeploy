@@ -22,8 +22,12 @@ struct Sm75: Arch<750, 800> {
     static constexpr int value = 750;
 };
 
-struct Sm80: Arch<800> {
+struct Sm80: Arch<800, 890> {
     static constexpr int value = 800;
+};
+
+struct Sm90: Arch<900> {
+    static constexpr int value = 900;
 };
 
 inline bool is_arch_compatible(int karch, int darch)
@@ -35,6 +39,8 @@ inline bool is_arch_compatible(int karch, int darch)
             return Sm75::is_compatible(darch);
         case 800:
             return Sm80::is_compatible(darch);
+        case 900:
+            return Sm90::is_compatible(darch);
         default:
             return false;
     }

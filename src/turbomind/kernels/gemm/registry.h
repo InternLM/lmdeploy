@@ -29,6 +29,7 @@ private:
     void f16_u4g128_f16_tnt_sm75_simt();
     void f16_u4g128_f16_tnt_sm75_s16816();
     void f16_u4g128_f16_tnt_sm80_s16816();
+    void f16_u4g128_f16_tnt_sm90_s16816();
 
 private:
     std::shared_ptr<cudaDeviceProp>      device_prop_;

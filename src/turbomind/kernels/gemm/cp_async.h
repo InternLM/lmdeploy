@@ -4,13 +4,13 @@
 
 #include <type_traits>
 
-namespace turbomind {
-
 #if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDACC_VER_MINOR__ >= 4)
 #define L2_CACHEHINT(size) ".L2::" #size "B"
 #else
 #define L2_CACHEHINT(size)
 #endif
+
+namespace turbomind {
 
 enum class CacheOp {
     kDefault,  // use global when possible

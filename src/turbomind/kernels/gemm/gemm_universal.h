@@ -16,6 +16,27 @@
 
 namespace turbomind::gemm {
 
+template<class PtrA, class PtrU, class PtrB, class PtrV, class Tc>
+struct GemmParams {
+    int m;
+    int n;
+    int k;
+
+    PtrA A;
+    int  lda;
+    PtrU U;
+    int  ldu;
+    PtrB B;
+    int  ldb;
+    PtrV V;
+    int  ldv;
+
+    int  log_tile;
+    int3 tiled_shape;
+
+    EpilogueParam<Tc> epilogue;
+};
+
 template<class Arch_, class Mainloop, class Epilogue_, class CtaMap_>
 struct GemmUniversal {
 
@@ -27,7 +48,6 @@ struct GemmUniversal {
     using Tu = typename Impl::Tu;
     using Tv = typename Impl::Tv;
 
-    // using Tc = Tc_;
     using Epilogue = Epilogue_;
 
     using Tc = typename Epilogue::Tc;
@@ -43,10 +63,6 @@ struct GemmUniversal {
     static constexpr int CTA_N = Impl::CTA_N;
     static constexpr int CTA_K = Impl::CTA_K;
 
-    // static constexpr bool AlignedM = AlignedM_;
-    // static constexpr bool AlignedN = AlignedN_;
-
-    // static constexpr bool SplitK = SplitK_;
     static constexpr bool SplitK = Epilogue::SplitK;
 
     using FragC = typename Impl::FragC;
@@ -62,8 +78,6 @@ struct GemmUniversal {
 
     static constexpr int kGroupSizeU = OperandU::kGroupSize;
     static constexpr int kGroupSizeV = OperandV::kGroupSize;
-
-    // using SharedStorage = typename Mainloop::SharedStorage;
 
     union SharedStorage {
         typename Mainloop::SharedStorage mainloop;
@@ -83,25 +97,7 @@ struct GemmUniversal {
     using PtrU = get_pointer_type<Tu>;
     using PtrV = get_pointer_type<Tv>;
 
-    struct Param {
-        int m;
-        int n;
-        int k;
-
-        PtrA A;
-        int  lda;
-        PtrU U;
-        int  ldu;
-        PtrB B;
-        int  ldb;
-        PtrV V;
-        int  ldv;
-
-        int  log_tile;
-        int3 tiled_shape;
-
-        EpilogueParam<Tc> epilogue;
-    };
+    using Param = GemmParams<PtrA, PtrU, PtrB, PtrV, Tc>;
 
     __device__ void operator()(const Param& param, const CtaMap& cta_map, char* smem_buf)
     {
@@ -157,8 +153,8 @@ struct GemmUniversal {
 
 extern __shared__ char smem_buf[];
 
-template<class Kernel>
-__global__ void gemm_kernel(typename Kernel::Param params, typename Kernel::CtaMap cta_map)
+template<class Kernel, class Params, class CtaMap>
+__global__ void gemm_kernel(Params params, CtaMap cta_map)
 {
 #if __CUDA_ARCH__
     if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {

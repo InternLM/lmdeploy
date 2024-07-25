@@ -16,7 +16,7 @@
 
 namespace turbomind::gemm::sm80_s16816 {
 
-template<class A, class TransformA, class U, class B, class TransformB, class V, Order order_c, class Tc>
+template<class Arch, class A, class TransformA, class U, class B, class TransformB, class V, Order order_c, class Tc>
 struct Sm80_s16816 {
 
     static_assert(A::SmemCopyAtom::K == B::SmemCopyAtom::K);
@@ -48,10 +48,7 @@ struct Sm80_s16816 {
         using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, SMEM_M, SMEM_N, SMEM_K, Partition, TG_K>;
         using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
 
-        using Mainloop = MainloopSm80_v2<CTA_M,
-                                         CTA_N,
-                                         CTA_K,
-                                         MMA,
+        using Mainloop = MainloopSm80_v2<MMA,
                                          A,
                                          IteratorSm80<PolicyA>,
                                          TransformA,
@@ -74,11 +71,11 @@ struct Sm80_s16816 {
                                          TILE_C_M,
                                          TILE_C_N,
                                          MMA::kThreadCount,
-                                         typename MMA::Rearrange,
+                                         Rearrange<MMA>,
                                          Operand_C<float, order_c>,
                                          SplitK>;
 
-        using Kernel = GemmUniversal<Sm80, Mainloop, Epilogue, CtaMap>;
+        using Kernel = GemmUniversal<Arch, Mainloop, Epilogue, CtaMap>;
     };
 };
 

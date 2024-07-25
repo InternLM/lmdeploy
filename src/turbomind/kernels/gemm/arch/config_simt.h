@@ -52,10 +52,7 @@ struct Sm75_Simt {
 
         // using MMA_Map = RakedThreadGroupMap<CTA_M, CTA_N, CTA_K, TM, TN, TK, WARP_CNT_M, WARP_CNT_N, WARP_CNT_K>;
 
-        using Mainloop = MainloopSm80_v2<CTA_M,
-                                         CTA_N,
-                                         CTA_K,
-                                         MMA,
+        using Mainloop = MainloopSm80_v2<MMA,
                                          A,
                                          IteratorSm70<cache_policy::Default>,
                                          TransformA,
@@ -75,7 +72,7 @@ struct Sm75_Simt {
                                          CTA_M,
                                          CTA_N,
                                          MMA::kThreadCount,
-                                         typename MMA::Rearrange,
+                                         Rearrange<MMA>,
                                          Operand_C<float, order_c>,
                                          SplitK>;
 

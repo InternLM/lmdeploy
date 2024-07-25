@@ -62,10 +62,7 @@ struct SmemIter {
     }
 };
 
-template<int M_,
-         int N_,
-         int K_,
-         class MMA,
+template<class MMA,
          class OperandA_,
          class IteratorA_,
          class TransformA_,
@@ -87,9 +84,9 @@ struct MainloopSm80_v2 {
 
     static constexpr int Stages = Stages_;
 
-    static constexpr int CTA_M = M_;
-    static constexpr int CTA_N = N_;
-    static constexpr int CTA_K = K_;
+    static constexpr int CTA_M = MMA::M;
+    static constexpr int CTA_N = MMA::N;
+    static constexpr int CTA_K = MMA::K;
 
     static constexpr auto kOpClass = MMA_Atom::kOpClass;
 

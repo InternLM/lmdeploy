@@ -33,10 +33,7 @@ struct Sm75_s16816 {
         using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, SMEM_M, SMEM_N, SMEM_K, Partition, TG_K>;
         using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
 
-        using Mainloop = MainloopSm80_v2<CTA_M,
-                                         CTA_N,
-                                         CTA_K,
-                                         MMA,
+        using Mainloop = MainloopSm80_v2<MMA,
                                          A,
                                          IteratorSm70<cache_policy::Default>,
                                          TransformA,
@@ -56,7 +53,7 @@ struct Sm75_s16816 {
                                          CTA_M,
                                          CTA_N,
                                          MMA::kThreadCount,
-                                         typename MMA::Rearrange,
+                                         Rearrange<MMA>,
                                          Operand_C<float, order_c>,
                                          SplitK>;
 

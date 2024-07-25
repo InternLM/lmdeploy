@@ -51,10 +51,7 @@ struct Sm70_s884 {
 
         using MMA = Tiled_MMA_v2<MMA_Atom, MMA_Map>;
 
-        using Mainloop = MainloopSm80_v2<CTA_M,
-                                         CTA_N,
-                                         CTA_K,
-                                         MMA,
+        using Mainloop = MainloopSm80_v2<MMA,
                                          A,
                                          IteratorSm70<cache_policy::Default>,
                                          TransformA,
@@ -74,7 +71,7 @@ struct Sm70_s884 {
                                          CTA_M,
                                          CTA_N,
                                          MMA::kThreadCount,
-                                         typename MMA::Rearrange,
+                                         Rearrange<MMA>,
                                          Operand_C<float, order_c>,
                                          SplitK>;
 
