@@ -795,7 +795,8 @@ def paged_attention_fwd(
         SPLIT_K = 4
         block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
         acc = q.new_empty(batch, head, SPLIT_K, Lv + 2, dtype=torch.float32)
-        if kv_group_num <= 2 or shared_kv:
+        if False:
+            # TODO: make sure if we need to keep this kernel
             BLOCK_DMODEL = triton.next_power_of_2(Lk)
             if shared_kv:
                 BLOCK_DV = BLOCK_DMODEL
