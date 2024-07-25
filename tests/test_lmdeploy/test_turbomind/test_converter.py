@@ -42,7 +42,7 @@ def test_registered_models():
                                                      model_format=model_format)
         assert input_name in list(INPUT_MODELS.module_dict.keys())
 
-        output_name, config = get_output_model_registered_name_and_config(
+        output_name, config, _ = get_output_model_registered_name_and_config(
             model, model_format=model_format, group_size=0)
         assert output_name == register_name
         assert config.group_size == group_size
@@ -53,7 +53,7 @@ def test_registered_models():
 
 def test_update_from_engine_config():
     import copy
-    _, _config = get_output_model_registered_name_and_config(
+    _, _config, _ = get_output_model_registered_name_and_config(
         'internlm/internlm2-chat-7b', model_format='hf', group_size=0)
     config = copy.deepcopy(_config)
     config.update_from_engine_config(None)
