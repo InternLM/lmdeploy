@@ -1,3 +1,9 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#pragma once
+
+#include <cstdint>
+
 namespace turbomind::gemm {
 
 class CacheFlushing {
