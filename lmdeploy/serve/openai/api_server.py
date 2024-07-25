@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import copy
-import json
 import os
 import time
 from http import HTTPStatus
@@ -541,22 +540,17 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             final_logprobs.extend(res.logprobs)
 
     tool_calls = None
-    if request.tool_choice != 'none' and '<|plugin|>' in text:
+    if request.tool_choice != 'none' and ('<|plugin|>' in text
+                                          or '<function=' in text):
         if final_res.finish_reason == 'stop':
             final_res.finish_reason = 'tool_calls'
-        # TODO may move to generate function
-        text, action = text.split('<|action_start|><|plugin|>')
-        action = action.split('<|action_end|>'.strip())[0]
-        action = action[action.find('{'):]
         try:  # TODO add json_schema guidance to turbomind
-            action = json.loads(action)
-            action_id = [tool.function.name
-                         for tool in request.tools].index(action['name'])
+            text, action_id, name, parameters = VariableInterface.async_engine.parse_tool_response(  # noqa
+                text, request.tools)
             tool_calls = [
                 ToolCall(id=str(action_id),
-                         function=FunctionResponse(name=action['name'],
-                                                   arguments=json.dumps(
-                                                       action['parameters'])))
+                         function=FunctionResponse(name=name,
+                                                   arguments=parameters))
             ]
         except Exception as e:
             logger.error(f'Exception: {e}')
