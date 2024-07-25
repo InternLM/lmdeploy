@@ -212,6 +212,7 @@ class PytorchEngineConfig:
     thread_safe: bool = False
     enable_prefix_caching: bool = False
     device_type: str = 'cuda'
+    eager_mode: bool = False
     download_dir: str = None
     revision: str = None
 

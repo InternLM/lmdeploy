@@ -3,6 +3,7 @@ from typing import Tuple
 
 import torch
 
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 from ..base import LayerType
@@ -101,3 +102,13 @@ class CudaLayersBackend(DefaultLayersBackend):
 
         step_context.attn_metadata = attn_metadata
         return step_context
+
+    @staticmethod
+    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig,
+                           cache_config: CacheConfig,
+                           backend_config: BackendConfig,
+                           device: torch.device):
+        """build graph runner."""
+        from .graph_runner import CUDAGraphRunner
+        return CUDAGraphRunner(model, model_config, cache_config,
+                               backend_config, device)

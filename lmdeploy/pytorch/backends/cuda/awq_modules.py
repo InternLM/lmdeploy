@@ -25,7 +25,7 @@ def wq_gemm_forward(
     if input_dtype != torch.float16:
         x = x.half()
 
-    FP16_MATMUL_HEURISTIC_CONDITION = x.shape[0] * x.shape[1] >= 1024
+    FP16_MATMUL_HEURISTIC_CONDITION = x.size(0) * x.size(1) >= 1024
 
     if FP16_MATMUL_HEURISTIC_CONDITION:
         # TODO: remove event wait if awq kernel set stream

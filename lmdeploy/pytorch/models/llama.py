@@ -11,7 +11,7 @@ from lmdeploy.pytorch.layers import (ApplyRotaryEmb, Attention, EmbeddingType,
                                      build_rotary_embedding)
 from lmdeploy.pytorch.layers.linear import (build_merged_colwise_linear,
                                             build_rowwise_linear)
-from lmdeploy.pytorch.model_inputs import StepContextManager
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 
 from ..weight_loader.dist_utils import (colwise_parallelize_linear,
                                         rowwise_parallelize_linear)
@@ -266,18 +266,8 @@ class LlamaModel(nn.Module):
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite of LlamaModel.forward."""
-        context = self.ctx_mgr.current_context()
-        # get inputs from context
-        vision_embeddings = context.input_embeddings
-        vision_embedding_indexing = context.input_embedding_indexing
-
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-
-        if vision_embeddings is not None and len(vision_embeddings) > 0:
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
 
         hidden_states = inputs_embeds
         residual = None
@@ -301,6 +291,8 @@ class LlamaModel(nn.Module):
 
 
 class LlamaForCausalLM(nn.Module):
+
+    support_cuda_graph = True
 
     def __init__(self, origin: nn.Module, ctx_mgr: StepContextManager):
         super().__init__()
@@ -328,3 +320,32 @@ class LlamaForCausalLM(nn.Module):
         logits = self.lm_head(hidden_states)
         logits = logits.float()
         return logits
+
+    def prepare_inputs_for_generation(
+        self,
+        past_key_values: List[List[torch.Tensor]],
+        inputs_embeds: torch.Tensor = None,
+        context: StepContext = None,
+    ):
+        """prepare input."""
+        input_ids = context.input_ids
+        position_ids = context.position_ids
+        attn_metadata = context.attn_metadata
+        # get inputs from context
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
+
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            if inputs_embeds is None:
+                inputs_embeds = self.model.embed_tokens(input_ids)
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
+
+        return dict(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+        )

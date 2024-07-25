@@ -14,7 +14,8 @@ from lmdeploy.utils import get_logger
 
 from ..adapter.adapter import (AdapterWeightMap, get_indexed_lora_linears,
                                get_loralinear_info, update_lora_linears)
-from ..config import CacheConfig, ModelConfig
+from ..backends import get_backend
+from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..model_inputs import ModelInputs
 from ..models.patch import patch, update_model
@@ -147,12 +148,11 @@ def model_forward(
             kv_caches=cache_engine.gpu_cache,
         )
         with ctx_mgr.context(context):
-            output = model(
-                input_ids=inputs.input_ids,
-                position_ids=context.position_ids,
+            input_dict = model.prepare_inputs_for_generation(
                 past_key_values=cache_engine.gpu_cache,
-                attn_metadata=context.attn_metadata,
+                context=context,
             )
+            output = model(**input_dict)
     return dict(logits=output)
 
 
@@ -267,12 +267,14 @@ class AutoModelAgent:
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
                         cache_config: CacheConfig,
+                        backend_config: BackendConfig,
                         trust_remote_code: bool,
                         adapters: Dict[str, str] = None,
                         tp: int = 1):
         """from pretrained."""
         return build_model_agent(pretrained_model_name_or_path,
                                  cache_config=cache_config,
+                                 backend_config=backend_config,
                                  trust_remote_code=trust_remote_code,
                                  adapters=adapters,
                                  tp=tp)
@@ -294,18 +296,30 @@ class BaseModelAgent(AutoModelAgent):
                  model_path: str,
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
+                 backend_config: BackendConfig,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True):
         super().__init__(model_config=model_config, cache_config=cache_config)
         torch_dtype = model_config.dtype
+        device = 'cuda'
+        self.backend_config = backend_config
 
         self.patched_model = self._build_model(
             model_path,
             torch_dtype=torch_dtype,
             adapters=adapters,
+            device=device,
             trust_remote_code=trust_remote_code)
 
         _update_cache_config(model_config, cache_config)
+
+        backend = get_backend()
+        self.patched_model = backend.build_graph_runner(
+            self.patched_model,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            device=device)
 
         self.cache_engine = CacheEngine(cache_config, model_config)
         self.stream = torch.cuda.Stream()
@@ -314,9 +328,9 @@ class BaseModelAgent(AutoModelAgent):
                      model_path: str,
                      torch_dtype: torch.dtype,
                      adapters: Dict[str, str] = None,
+                     device: torch.device = 'cuda',
                      trust_remote_code: bool = True):
         """build patched model."""
-        device = 'cuda'
         with LoadNoInit(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
             hf_model = self.model_config.auto_model_cls.from_pretrained(
@@ -443,6 +457,7 @@ def _tp_build_model(
     model_path: str,
     model_config: ModelConfig,
     cache_config: CacheConfig,
+    backend_config: BackendConfig,
     adapters: Dict[str, str],
     world_size: int,
     trust_remote_code=True,
@@ -514,6 +529,15 @@ def _tp_build_model(
                              cache_config,
                              gpu_id=rank,
                              world_size=world_size)
+
+        backend = get_backend()
+        patched_model = backend.build_graph_runner(
+            patched_model,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            device='cuda')
+
         cache_config = _broadcast_config(cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,
@@ -580,6 +604,7 @@ def _tp_model_loop(
     model_path: str,
     model_config: ModelConfig,
     cache_config: CacheConfig,
+    backend_config: BackendConfig,
     adapters: Dict[str, str],
     world_size: int,
     trust_remote_code=True,
@@ -602,6 +627,7 @@ def _tp_model_loop(
         model_path,
         model_config,
         cache_config,
+        backend_config,
         adapters,
         world_size=world_size,
         trust_remote_code=trust_remote_code)
@@ -706,6 +732,7 @@ class TPModelAgent(AutoModelAgent):
                  model_path: str,
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
+                 backend_config: BackendConfig,
                  world_size: int,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True) -> None:
@@ -728,10 +755,12 @@ class TPModelAgent(AutoModelAgent):
 
         self.mp_ctx = mp.get_context('spawn')
         self.world_size = world_size
+        self.backend_config = backend_config
 
         self._start_sub_process(model_path,
                                 model_config=model_config,
                                 cache_config=cache_config,
+                                backend_config=backend_config,
                                 adapters=adapters,
                                 world_size=world_size,
                                 trust_remote_code=trust_remote_code)
@@ -740,6 +769,7 @@ class TPModelAgent(AutoModelAgent):
             model_path=model_path,
             model_config=model_config,
             cache_config=cache_config,
+            backend_config=backend_config,
             adapters=adapters,
             world_size=world_size,
             trust_remote_code=trust_remote_code,
@@ -750,7 +780,9 @@ class TPModelAgent(AutoModelAgent):
         self.stream = torch.cuda.Stream()
 
     def _start_sub_process(self, model_path: str, model_config: ModelConfig,
-                           cache_config: CacheConfig, adapters: Dict[str, str],
+                           cache_config: CacheConfig,
+                           backend_config: BackendConfig, adapters: Dict[str,
+                                                                         str],
                            world_size: int, trust_remote_code: bool):
         """Start tensor parallel sub process."""
         port = _find_available_port()
@@ -770,6 +802,7 @@ class TPModelAgent(AutoModelAgent):
                 (model_path, ),
                 dict(model_config=model_config,
                      cache_config=cache_config,
+                     backend_config=backend_config,
                      adapters=adapters,
                      world_size=world_size,
                      trust_remote_code=trust_remote_code),
@@ -800,6 +833,7 @@ class TPModelAgent(AutoModelAgent):
         model_path: str,
         model_config: ModelConfig,
         cache_config: CacheConfig,
+        backend_config: BackendConfig,
         adapters: Dict[str, str],
         world_size: int,
         trust_remote_code=True,
@@ -812,6 +846,7 @@ class TPModelAgent(AutoModelAgent):
             model_path=model_path,
             model_config=model_config,
             cache_config=cache_config,
+            backend_config=backend_config,
             adapters=adapters,
             world_size=world_size,
             trust_remote_code=trust_remote_code,
@@ -890,6 +925,7 @@ class TPModelAgent(AutoModelAgent):
 
 def build_model_agent(model_path: str,
                       cache_config: CacheConfig,
+                      backend_config: BackendConfig,
                       trust_remote_code: bool,
                       adapters: Dict[str, str] = None,
                       tp: int = 1):
@@ -900,12 +936,14 @@ def build_model_agent(model_path: str,
         model_agent = BaseModelAgent(model_path,
                                      model_config=model_config,
                                      cache_config=cache_config,
+                                     backend_config=backend_config,
                                      adapters=adapters,
                                      trust_remote_code=trust_remote_code)
     else:
         model_agent = TPModelAgent(model_path,
                                    model_config=model_config,
                                    cache_config=cache_config,
+                                   backend_config=backend_config,
                                    world_size=tp,
                                    adapters=adapters,
                                    trust_remote_code=trust_remote_code)

@@ -149,7 +149,6 @@ class ModelInputs:
     num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
     adapter_info: AdapterInfo = None
-    meta: Any = None
     vision_inputs: VisionModelInputs = None
 
     def update(self, input_ids: torch.LongTensor):
@@ -194,7 +193,6 @@ class ModelInputs:
                 num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=self.local_adapter_ids,
                 adapter_info=self.adapter_info,
-                meta=self.meta,
                 vision_inputs=self.vision_inputs,
             )
             ret.append(inp)
@@ -226,11 +224,13 @@ class StepContext:
     patched model might need extra information to perform inference. This
     dataclass provide these infos and tools.
     """
+    input_ids: torch.LongTensor
     block_offsets: torch.LongTensor
     position_ids: torch.LongTensor
     attention_mask: torch.LongTensor
     q_seqlens: torch.LongTensor
     kv_seqlens: torch.LongTensor
+    q_start_loc: torch.LongTensor
     kv_caches: List
     is_decoding: bool
     world_size: int = 1
@@ -238,7 +238,7 @@ class StepContext:
     adapter_params: Dict[str, AdapterInfo] = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
-    attn_metadata = None
+    attn_metadata: Any = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -267,7 +267,7 @@ class StepContext:
             input_embeddings, input_embedding_indexing = \
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
 
-        # q_start_loc and kv_seqlens
+        # kv_seqlens
         if inputs.is_decoding:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
             position_ids = history_seqlens.unsqueeze(-1)
@@ -277,6 +277,7 @@ class StepContext:
             attention_mask = (mask_range < q_seqlens[:, None]).long()
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids += history_seqlens.unsqueeze(-1)
+        q_start_loc = q_seqlens.cumsum(0) - q_seqlens
 
         # position ids 1d
         position_ids = cls.get_position_ids_1d(position_ids, q_seqlens)[None]
@@ -288,18 +289,22 @@ class StepContext:
         if inputs.adapter_info is not None:
             adapter_params = inputs.adapter_info.split_by_targets()
 
-        ret = StepContext(block_offsets=inputs.block_offsets,
-                          position_ids=position_ids,
-                          input_embeddings=input_embeddings,
-                          input_embedding_indexing=input_embedding_indexing,
-                          attention_mask=attention_mask,
-                          q_seqlens=q_seqlens,
-                          kv_seqlens=kv_seqlens,
-                          kv_caches=kv_caches,
-                          is_decoding=inputs.is_decoding,
-                          world_size=world_size,
-                          local_adapter_ids=inputs.local_adapter_ids,
-                          adapter_params=adapter_params)
+        ret = StepContext(
+            input_ids=inputs.input_ids,
+            block_offsets=inputs.block_offsets,
+            position_ids=position_ids,
+            input_embeddings=input_embeddings,
+            input_embedding_indexing=input_embedding_indexing,
+            attention_mask=attention_mask,
+            q_seqlens=q_seqlens,
+            kv_seqlens=kv_seqlens,
+            q_start_loc=q_start_loc,
+            kv_caches=kv_caches,
+            is_decoding=inputs.is_decoding,
+            world_size=world_size,
+            local_adapter_ids=inputs.local_adapter_ids,
+            adapter_params=adapter_params,
+        )
 
         ret = get_backend().update_step_context(ret)
         return ret

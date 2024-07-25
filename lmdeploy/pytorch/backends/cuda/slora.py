@@ -51,17 +51,18 @@ class TritonSLoRAImpl(SLoRAImpl):
         cache_len = k_cache.size(0)
         a_cache = k_cache.view(cache_len, -1)
         b_cache = v_cache.view(cache_len, -1)
+        max_q_seq_length = x.numel() // x.size(-1)
 
         return PackedLoRAInput(x=x.flatten(0, -2).contiguous(),
                                a_cache=a_cache,
                                b_cache=b_cache,
                                q_start_loc=context.q_start_loc,
-                               q_seqlens=context.q_seq_length,
+                               q_seqlens=context.q_seqlens,
                                adapter_ids=context.local_adapter_ids,
                                scaling=scaling,
                                rank_offset=rank_offset,
                                ranks=ranks,
-                               max_seq_len=context.max_q_seq_length,
+                               max_seq_len=max_q_seq_length,
                                max_rank=max_rank,
                                is_decoding=context.is_decoding)
 

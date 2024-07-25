@@ -13,7 +13,7 @@ from lmdeploy.utils import get_logger, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager, SchedulerAdapter
 from ..check_env import check_adapters, check_env, check_model
-from ..config import CacheConfig, SchedulerConfig
+from ..config import BackendConfig, CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
 from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
@@ -125,6 +125,7 @@ class Engine:
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
         cache_config = CacheConfig(
+            max_batches=engine_config.max_batch_size,
             block_size=engine_config.block_size,
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
@@ -138,10 +139,20 @@ class Engine:
                                    engine_config.revision)
         self.model_path = model_path
 
+        backend_config = BackendConfig(
+            eager_mode=engine_config.eager_mode,
+            device_type=engine_config.device_type,
+        )
+        if (engine_config.adapters is not None
+                and not backend_config.eager_mode):
+            logger.warning('LoRA adapter require eager_mode=True')
+            backend_config.eager_mode = True
+
         with get_device_manager().context(self.device_context):
             self.model_agent = AutoModelAgent.from_pretrained(
                 model_path,
                 cache_config=cache_config,
+                backend_config=backend_config,
                 trust_remote_code=trust_remote_code,
                 adapters=adapters,
                 tp=tp)
@@ -158,6 +169,7 @@ class Engine:
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
+        self.backend_config = backend_config
         self.stream = torch.cuda.Stream()
 
         self.req_manager = self._bind_request_manager()
@@ -359,8 +371,6 @@ class Engine:
 
         token_ids = [msg.token_ids for msg in messages]
 
-        meta = messages[0].meta
-
         if isinstance(token_ids[0], int):
             token_ids = [token_ids]
 
@@ -451,16 +461,17 @@ class Engine:
                 input_embedding_indexing=input_embedding_indexing,
                 input_embedding_ranges=input_embedding_ranges)
 
-        return ModelInputs(input_ids=input_ids,
-                           seq_length=seq_length,
-                           history_lengths=history_lengths,
-                           block_offsets=block_offsets,
-                           is_decoding=is_decoding,
-                           num_ignored_history=num_ignored_history,
-                           local_adapter_ids=local_adapter_ids,
-                           adapter_info=adapter_info,
-                           vision_inputs=vision_embedding_inputs,
-                           meta=meta)
+        return ModelInputs(
+            input_ids=input_ids,
+            seq_length=seq_length,
+            history_lengths=history_lengths,
+            block_offsets=block_offsets,
+            is_decoding=is_decoding,
+            num_ignored_history=num_ignored_history,
+            local_adapter_ids=local_adapter_ids,
+            adapter_info=adapter_info,
+            vision_inputs=vision_embedding_inputs,
+        )
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,
                                  stop_words: torch.Tensor,

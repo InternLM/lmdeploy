@@ -7,6 +7,8 @@ from typing import Tuple
 
 import torch
 
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+
 
 class LayerType(Enum):
     Attention = auto()
@@ -62,3 +64,11 @@ class LayersBackend(ABC):
     @classmethod
     def update_step_context(cls, step_context):
         return step_context
+
+    @staticmethod
+    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig,
+                           cache_config: CacheConfig,
+                           backend_config: BackendConfig,
+                           device: torch.device):
+        from .graph_runner import GraphRunner
+        return GraphRunner(model)
