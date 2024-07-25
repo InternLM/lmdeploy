@@ -749,6 +749,118 @@ class Llama3(BaseChatTemplate):
             return 'llama3'
 
 
+@MODELS.register_module(name='llama3_1')
+class Llama3_1(Llama3):
+    """Chat template of LLaMA3.1 model."""
+
+    def __init__(
+            self,
+            tools="""# Tool Instructions
+- Always execute python code in messages that you share.
+- When looking for real time information use relevant functions if available else fallback to brave_search
+
+
+
+You have access to the following functions:
+
+""",  # noqa
+            eotools="""
+
+If a you choose to call a function ONLY reply in the following format:
+<{start_tag}={function_name}>{parameters}{end_tag}
+where
+
+start_tag => `<function`
+parameters => a JSON dict with the function argument name as key and function argument value as value.
+end_tag => `</function>`
+
+Here is an example,
+<function=example_function_name>{"example_name": "example_value"}</function>
+
+Reminder:
+- Function calls MUST follow the specified format
+- Required parameters MUST be specified
+- Only call one function at a time
+- Put the entire function call reply on one line"
+- Always add your sources when using search results to answer the user query\n\n""",  #  noqa
+            knowledge='Cutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\n',
+            meta_instruction='You are a helpful assistant.',
+            ipython='<|start_header_id|>ipython<|end_header_id|>\n\n',
+            eoi='<|eot_id|>',
+            stop_words=['<|eot_id|>', '<|end_of_text|>', '<|eom_id|>'],
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         stop_words=stop_words,
+                         **kwargs)
+        self.ipython = ipython
+        self.eoi = eoi
+        self.tools = tools
+        self.eotools = eotools
+        self.knowledge = knowledge
+
+    def messages2prompt(self,
+                        messages,
+                        sequence_start=True,
+                        tools=None,
+                        **kwargs):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        box_map = dict(user=self.user,
+                       ipython=self.ipython,
+                       assistant=self.assistant,
+                       system=self.system)
+        eox_map = dict(user=self.eoh,
+                       ipython=self.eoi,
+                       assistant=self.eoa + self.separator,
+                       system=self.eosys)
+        ret = ''
+        tool_prompt = ''
+        if tools is not None:
+            for tool in tools:
+                tool_prompt += "Use the function '{}' to: {}\n{}\n".format(
+                    tool['name'], tool['description'],
+                    json.dumps(tool, ensure_ascii=False))
+        if self.meta_instruction is not None and sequence_start:
+            if len(messages) and messages[0]['role'] != 'system':
+                if tools is None:
+                    ret += f'{self.system}{self.knowledge}{self.meta_instruction}{self.eosys}'
+                else:
+                    ret += f'{self.system}{self.knowledge}{self.tools}{tool_prompt}{self.eotools}{self.meta_instruction}{self.eosys}'
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            if role == 'assistant' and ('<|python_tag|>' in content
+                                        or '</function>' in content):
+                ret += f'{box_map[role]}{content}<|eom_id|>'
+            elif role == 'system' and tools is not None:
+                ret += f'{box_map[role]}{self.tools}{tool_prompt}{self.eotools}{content}{eox_map[role]}'
+            else:
+                ret += f'{box_map[role]}{content}{eox_map[role]}'
+        ret += f'{self.assistant}'
+        if sequence_start and not isinstance(messages, str):
+            ret = '<|begin_of_text|>' + ret
+        return ret
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'llama-3.1-' in model_path.lower(
+        ) or 'llama3.1-' in model_path.lower():
+            return 'llama3_1'
+
+
 @MODELS.register_module(name='qwen')
 class Qwen7BChat(BaseChatTemplate):
     """Chat template for Qwen-7B-Chat."""
