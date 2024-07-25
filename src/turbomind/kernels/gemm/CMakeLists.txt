@@ -23,8 +23,8 @@ add_library(gemm2
 
 target_compile_options(gemm2 PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:
-                -Xptxas=-v 
-                --generate-line-info 
+                -Xptxas=-v
+                --generate-line-info
                 --threads 8>
 )
 set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)

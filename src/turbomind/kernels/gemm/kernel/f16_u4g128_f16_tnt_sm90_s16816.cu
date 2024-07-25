@@ -43,7 +43,7 @@ void Registry::f16_u4g128_f16_tnt_sm90_s16816()
     Add<Config::Type<32, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
     Add<Config::Type<16, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
     Add<Config::Type<16, 128, 128, 1, 4, 2, Default, Stream, 5, true, 1, 128>>();
-    
+
     // N = 64, streaming
     Add<Config::Type<16, 64, 64, 1, 2, 2, Default, Stream, 5, true, 1, 128>>();
     Add<Config::Type<16, 64, 128, 1, 2, 2, Default, Stream, 3, true, 1, 128>>();

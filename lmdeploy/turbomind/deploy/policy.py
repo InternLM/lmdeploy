@@ -3,6 +3,7 @@ from typing import List
 
 import torch.cuda
 
+
 def to_cuda(x: torch.Tensor):
     return x.cuda()
 

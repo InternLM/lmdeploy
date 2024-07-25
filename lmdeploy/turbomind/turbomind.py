@@ -4,6 +4,7 @@ import os.path as osp
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from configparser import ConfigParser
+from itertools import repeat
 from queue import LifoQueue, Queue
 from typing import Dict, Iterable, List, Optional, Union
 
@@ -21,9 +22,9 @@ from lmdeploy.utils import get_hf_config_content, get_logger, get_model
 from .deploy.converter import (SUPPORTED_FORMATS,
                                get_input_model_registered_name,
                                get_output_model_registered_name_and_config)
+from .deploy.policy import get_input_policy
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
-from .deploy.policy import get_input_policy
 from .supported_models import is_supported
 from .utils import ModelSource, get_model_source
 
@@ -146,8 +147,19 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=engine_config)
 
-        self._process_weight(self.model_comm)
-        self._create_engine(self.model_comm)
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            ranks = [
+                self.node_id * self.gpu_count + device_id
+                for device_id in range(self.gpu_count)
+            ]
+            for _ in e.map(self.model_comm.process_weight,
+                           range(self.gpu_count), ranks):
+                pass
+            # implicit synchronization
+            for _ in e.map(self.model_comm.create_engine,
+                           range(self.gpu_count), ranks,
+                           repeat(self.nccl_params)):
+                pass
 
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
@@ -195,36 +207,6 @@ class TurboMind:
                 if k not in tm_params:
                     tm_params[k] = []
                 tm_params[k].append(v)
-
-    def _process_weight(self, model_comm):
-        """On the fly weight transformation."""
-
-        def _process(device_id):
-            rank = self.node_id * self.gpu_count + device_id
-            model_comm.process_weight(device_id, rank)
-
-        threads = []
-        for device_id in range(self.gpu_count):
-            t = Thread(target=_process, args=(device_id, ))
-            t.start()
-            threads.append(t)
-        for t in threads:
-            t.join()
-
-    def _create_engine(self, model_comm):
-        """Engine creation & gemm tuning."""
-
-        def _create(device_id):
-            rank = self.node_id * self.gpu_count + device_id
-            model_comm.create_engine(device_id, rank, self.nccl_params)
-
-        threads = []
-        for device_id in range(self.gpu_count):
-            t = Thread(target=_create, args=(device_id, ))
-            t.start()
-            threads.append(t)
-        for t in threads:
-            t.join()
 
     def _from_hf(self, model_source: ModelSource, model_path: str,
                  engine_config: TurbomindEngineConfig):

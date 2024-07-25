@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from abc import ABC, abstractmethod
+
 import torch
 
-from abc import ABC, abstractmethod
 from .target_model.base import BaseOutputModel, BaseReader
 
 
