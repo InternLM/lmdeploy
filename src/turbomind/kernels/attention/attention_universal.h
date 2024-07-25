@@ -232,6 +232,9 @@ struct AttentionUniversal {
                           params.rotary_embedding_dim,
                           rope_base,
                           params.rope_ti_scale,
+                          params.llama3_inv_scaling_factor,
+                          params.llama3_alpha,
+                          params.llama3_beta,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
