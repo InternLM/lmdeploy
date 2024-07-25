@@ -546,7 +546,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             final_res.finish_reason = 'tool_calls'
         try:  # TODO add json_schema guidance to turbomind
             text, action_id, name, parameters = VariableInterface.async_engine.parse_tool_response(  # noqa
-                text, request.tools, adapter_name)
+                text, request.tools)
             tool_calls = [
                 ToolCall(id=str(action_id),
                          function=FunctionResponse(name=name,

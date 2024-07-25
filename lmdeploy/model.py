@@ -755,7 +755,6 @@ class Llama3_1(Llama3):
 
     def __init__(
             self,
-            environment='Environment: ipython\nTools: brave_search, wolfram_alpha\n\nCutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\n',  # noqa
             tools="""# Tool Instructions
 - Always execute python code in messages that you share.
 - When looking for real time information use relevant functions if available else fallback to brave_search
@@ -784,7 +783,7 @@ Reminder:
 - Only call one function at a time
 - Put the entire function call reply on one line"
 - Always add your sources when using search results to answer the user query\n\n""",  #  noqa
-            meta_instruction='You are a helpful assistant.',
+            meta_instruction='Cutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\nYou are a helpful assistant.',
             ipython='<|start_header_id|>ipython<|end_header_id|>\n\n',
             eoi='<|eot_id|>',
             stop_words=['<|eot_id|>', '<|end_of_text|>', '<|eom_id|>'],
@@ -794,7 +793,6 @@ Reminder:
                          **kwargs)
         self.ipython = ipython
         self.eoi = eoi
-        self.environment = environment
         self.tools = tools
         self.eotools = eotools
 
@@ -822,23 +820,26 @@ Reminder:
                        assistant=self.eoa + self.separator,
                        system=self.eosys)
         ret = ''
+        tool_prompt = ''
+        if tools is not None:
+            for tool in tools:
+                tool_prompt += "Use the function '{}' to: {}\n{}\n".format(
+                    tool['name'], tool['description'],
+                    json.dumps(tool, ensure_ascii=False))
         if self.meta_instruction is not None and sequence_start:
             if len(messages) and messages[0]['role'] != 'system':
                 if tools is None:
-                    ret += f'{self.system}{self.environment}{self.meta_instruction}{self.eosys}'
+                    ret += f'{self.system}{self.meta_instruction}{self.eosys}'
                 else:
-                    tool_prompt = ''
-                    for tool in tools:
-                        tool_prompt += "Use the function '{}' to: {}\n{}\n".format(
-                            tool['name'], tool['description'],
-                            json.dumps(tool, ensure_ascii=False))
-                    ret += f'{self.system}{self.environment}{self.tools}{tool_prompt}{self.eotools}{self.meta_instruction}{self.eosys}'
+                    ret += f'{self.system}{self.tools}{tool_prompt}{self.eotools}{self.meta_instruction}{self.eosys}'
         for message in messages:
             role = message['role']
             content = message['content']
             if role == 'assistant' and ('<|python_tag|>' in content
                                         or '</function>' in content):
                 ret += f'{box_map[role]}{content}<|eom_id|>'
+            elif role == 'system' and tools is not None:
+                ret += f'{box_map[role]}{self.tools}{tool_prompt}{self.eotools}{content}{eox_map[role]}'
             else:
                 ret += f'{box_map[role]}{content}{eox_map[role]}'
         ret += f'{self.assistant}'
