@@ -50,7 +50,7 @@ on:
         default: true
       benchmark_regression:
         required: true
-        description: 'Whether start an benchmark script regression'
+        description: 'Whether start a benchmark script regression'
         type: boolean
         default: true
   schedule:

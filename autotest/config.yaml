@@ -16,6 +16,8 @@ tp_config:
     InternVL2-40B: 2
 
 turbomind_chat_model:
+    - meta-llama/Meta-Llama-3-1-8B-Instruct
+    - meta-llama/Meta-Llama-3-1-8B-Instruct-AWQ
     - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm2_5-7b-chat
@@ -25,7 +27,6 @@ turbomind_chat_model:
     - internlm/internlm2-chat-7b-4bits
     - internlm/internlm2-chat-20b-4bits
     - internlm/internlm-chat-20b
-    - internlm/internlm-xcomposer2-vl-7b
     - internlm/internlm-xcomposer2-4khd-7b
     - internlm/internlm-xcomposer2d5-7b
     - OpenGVLab/InternVL2-2B
@@ -128,6 +129,7 @@ vl_model:
 
 turbomind_quatization:
     4bits:
+        - meta-llama/Meta-Llama-3-1-8B-Instruct
         - meta-llama/Meta-Llama-3-8B-Instruct
         - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm2_5-7b-chat
@@ -159,6 +161,7 @@ turbomind_quatization:
         - codellama/CodeLlama-7b-hf
         - openbmb/MiniCPM-Llama3-V-2_5
     kvint:
+        - meta-llama/Meta-Llama-3-1-8B-Instruct
         - meta-llama/Meta-Llama-3-8B-Instruct
         - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm2_5-7b-chat
@@ -217,15 +220,15 @@ pytorch_quatization:
 
 
 longtext_model:
-    - meta-llama/Meta-Llama-3-8B-Instruct
+    - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Meta-Llama-3-70B-Instruct
-    - internlm/internlm2_5-7b-chat-1m
+    - internlm/internlm2_5-7b-chat
     - internlm/internlm2-chat-20b
     - Qwen/Qwen2-7B-Instruct
 
 benchmark_model:
     - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Meta-Llama-3-70B-Instruct
-    - internlm/internlm2_5-7b-chat-1m
+    - internlm/internlm2_5-7b-chat
     - internlm/internlm2-chat-20b
     - Qwen/Qwen2-7B-Instruct

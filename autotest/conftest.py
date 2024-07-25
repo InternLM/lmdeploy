@@ -6,6 +6,7 @@ import yaml
 cli_prompt_case_file = 'autotest/chat_prompt_case.yaml'
 common_prompt_case_file = 'autotest/prompt_case.yaml'
 config_file = 'autotest/config.yaml'
+template_file = 'autotest/template.json'
 
 
 @pytest.fixture(scope='session')
