@@ -4,7 +4,7 @@ from typing import List
 import torch.cuda
 
 
-def to_cuda(x: torch.Tensor):
+def to_cuda(x: torch.Tensor, *args):
     return x.cuda()
 
 
@@ -24,15 +24,28 @@ def unpack_awq_gemm(x: torch.Tensor) -> torch.Tensor:
     return torch.stack(ys, dim=-1).view(*x.shape[:-1], -1)
 
 
-def process_awq_gemm(x: torch.Tensor):
+def process_awq_gemm(x: torch.Tensor, *args):
     x = x.cuda()
     if x.dtype == torch.int32:
         x = unpack_awq_gemm(x)
     return x.t()
 
 
+def process_gptq(x: torch.Tensor, kind: str):
+    x = x.cuda()
+    if x.dtype == torch.int32:
+        xs = get_u4_slices(x, torch.uint8)
+        if kind == 'qweight':  # (k/8,n)
+            x = torch.stack(xs, dim=1).view(-1, x.size(-1))
+        else:  # 'qzeros' (k/g,n/8)
+            x = torch.stack(xs, dim=-1).view(x.size(0), -1) + 1
+    return x.t()
+
+
 def get_input_policy(model_format):
     if model_format == 'awq':
         return ('qweight', process_awq_gemm)
+    elif model_format == 'gptq':
+        return ('qweight', process_gptq)
     else:
         return ('weight', to_cuda)

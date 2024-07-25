@@ -16,7 +16,7 @@ from .exporter import get_exporter_factory
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 
-SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', None]
+SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', 'gptq', None]
 
 
 def get_input_model_registered_name(model_path: str, model_format: str):
@@ -105,7 +105,7 @@ def get_output_model_registered_name_and_config(model_path: str,
         model_arch, model_config = get_model_arch(model_path)
         turbomind_model_arch = SUPPORTED_ARCHS[model_arch]
         session_len = _get_and_verify_max_len(model_config, None)
-        if model_format == 'awq':
+        if model_format in ['awq', 'gptq']:
             weight_type = 'int4'
             group_size = 128 if group_size == 0 else group_size
         else:

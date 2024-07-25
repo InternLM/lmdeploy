@@ -66,7 +66,7 @@ class LlamaReader(BaseReader):
         return self.params.get(self.output_weight_key, None)
 
     def _transform(self, x: torch.Tensor, kind: str):
-        return self.processor(x)
+        return self.processor(x, kind)
 
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
