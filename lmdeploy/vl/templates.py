@@ -305,6 +305,8 @@ class GLM4VChatTemplateWrapper(VLChatTemplateWrapper):
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
+    assert type(chat_template) != type(BaseModel()), 'failed to match ' \
+        'chat template, please explicit set chat_template_config' # noqa E721
     if model_name == 'yi-vl':
         return YiVLChatTemplateWrapper(chat_template)
 
