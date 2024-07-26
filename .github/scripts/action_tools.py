@@ -210,7 +210,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
 
         row = ','.join([model, engine_type, prec] +
                        [model_results[_]
-                        for _ in dataset_names] + [task_duration_seconds])
+                        for _ in dataset_names] + [str(task_duration_seconds)])
         hf_res_row = None
         if hf_model_path not in test_model_names:
             test_model_names.add(hf_model_path)
