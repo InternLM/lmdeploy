@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import torch
 
@@ -35,6 +35,7 @@ class CUDASingleGraphRunner:
         max_tokens: int,
         num_blocks: int,
         is_decoding: bool,
+        pool: Tuple[int, int],
         device: torch.device,
     ):
         self.model = model
@@ -44,6 +45,7 @@ class CUDASingleGraphRunner:
         self.max_tokens = max_tokens
         self.num_blocks = num_blocks
         self.is_decoding = is_decoding
+        self.pool = pool
         self._graph: torch.cuda.CUDAGraph = None
 
         self.input_buffers = dict()
@@ -157,13 +159,15 @@ class CUDASingleGraphRunner:
     def capture(self, **kwargs):
         """capture graph."""
         padded_kwargs = self._fill_inputs(**kwargs)
+        current_stream = torch.cuda.current_stream()
 
         # warmup
         output = self.model(**padded_kwargs)
 
         self._graph = torch.cuda.CUDAGraph()
-        current_stream = torch.cuda.current_stream()
-        with torch.cuda.graph(self._graph, stream=current_stream):
+        with torch.cuda.graph(self._graph,
+                              pool=self.pool,
+                              stream=current_stream):
             output = self.model(**padded_kwargs)
 
         self.output_buffers['logits'] = output
@@ -197,6 +201,7 @@ class CUDAGraphRunner(GraphRunner):
 
         self.enable_graph = self.check_enable_graph()
 
+        self.graph_pool_handle = torch.cuda.graph_pool_handle()
         self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
 
     def check_enable_graph(self):
@@ -239,6 +244,7 @@ class CUDAGraphRunner(GraphRunner):
                                            max_tokens=self.max_tokens,
                                            num_blocks=self.num_blocks,
                                            is_decoding=is_decoding,
+                                           pool=self.graph_pool_handle,
                                            device=self.device)
             runner.capture(**kwargs)
             self._runner_map[graph_key] = runner
