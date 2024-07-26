@@ -163,6 +163,28 @@ def test_messages2prompt4internlm2_chat():
     assert actual_prompt == expected_prompt
 
 
+def test_llama3_1():
+    model = MODELS.get('llama3_1')()
+    messages = [
+        dict(role='user',
+             content='Can you check the top 5 trending songs on spotify?')
+    ]
+    tools = [{
+        'name': 'spotify_trending_songs',
+        'description': 'Get top trending songs on Spotify',
+        'parameters': {
+            'n': {
+                'param_type': 'int',
+                'description': 'Number of trending songs to get',
+                'required': True
+            }
+        },
+    }]
+    actual_prompt = model.messages2prompt(messages, tools=tools)
+    expected_prompt = '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\n# Tool Instructions\n- Always execute python code in messages that you share.\n- When looking for real time information use relevant functions if available else fallback to brave_search\n\n\n\nYou have access to the following functions:\n\nUse the function \'spotify_trending_songs\' to: Get top trending songs on Spotify\n{"name": "spotify_trending_songs", "description": "Get top trending songs on Spotify", "parameters": {"n": {"param_type": "int", "description": "Number of trending songs to get", "required": true}}}\n\n\nIf a you choose to call a function ONLY reply in the following format:\n<{start_tag}={function_name}>{parameters}{end_tag}\nwhere\n\nstart_tag => `<function`\nparameters => a JSON dict with the function argument name as key and function argument value as value.\nend_tag => `</function>`\n\nHere is an example,\n<function=example_function_name>{"example_name": "example_value"}</function>\n\nReminder:\n- Function calls MUST follow the specified format\n- Required parameters MUST be specified\n- Only call one function at a time\n- Put the entire function call reply on one line"\n- Always add your sources when using search results to answer the user query\n\nYou are a helpful assistant.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nCan you check the top 5 trending songs on spotify?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n'  # noqa
+    assert actual_prompt == expected_prompt
+
+
 def test_baichuan():
     prompt = 'hello, can u introduce yourself'
     model = MODELS.get('baichuan2')(capability='completion')
