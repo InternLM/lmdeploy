@@ -13,7 +13,7 @@ pip install lmdeploy
 LMDeploy的预编译包默认是基于 CUDA 12 编译的。如果需要在 CUDA 11+ 下安装 LMDeploy，请执行以下命令：
 
 ```shell
-export LMDEPLOY_VERSION=0.5.1
+export LMDEPLOY_VERSION=0.5.2
 export PYTHON_VERSION=38
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
