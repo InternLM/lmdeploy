@@ -21,7 +21,7 @@ pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https:
 
 ```shell
 # cuda 11.8
-export LMDEPLOY_VERSION=0.5.1
+export LMDEPLOY_VERSION=0.5.2
 export PYTHON_VERSION=38
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 # cuda 12.1
