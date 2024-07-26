@@ -189,15 +189,13 @@ def get_benchmark_model_list(tp_num,
             'tp_num': tp_num
         } for item in model_list if '4bits' not in item]
         for kvint in kvint_list:
-            result += [
-                {
-                    'model': item,
-                    'backend': 'turbomind',
-                    'quant_policy': kvint,
-                    'tp_num': tp_num
-                } for item in model_list
-                if item in config.get('turbomind_quatization').get('kvint')
-            ]
+            result += [{
+                'model': item,
+                'backend': 'turbomind',
+                'quant_policy': kvint,
+                'tp_num': tp_num
+            } for item in model_list if item.replace('-inner-4bits', '') in
+                       config.get('turbomind_quatization').get('kvint')]
     return result
 
 

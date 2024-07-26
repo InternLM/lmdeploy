@@ -473,6 +473,38 @@ tb_llama_3_8b_instruct_4bits = deepcopy(tb_llama_3_8b_instruct)
 tb_llama_3_8b_instruct_kvint4 = deepcopy(tb_llama_3_8b_instruct)
 tb_llama_3_8b_instruct_kvint8 = deepcopy(tb_llama_3_8b_instruct)
 
+# ===== Configs for meta-llama/Meta-Llama-3.1-8B-Instruct =====
+tb_llama_3d1_8b_instruct = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_llama_3d1_8b_instruct',
+    path='meta-llama/Meta-Llama-3-1-8B-Instruct',
+    engine_config=engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+    stop_words=['<|eot_id|>', '<|end_of_text|>'],
+)
+
+pt_llama_3d1_8b_instruct = dict(
+    type=LmdeployPytorchModel,
+    abbr='pt_llama_3d1_8b_instruct',
+    path='meta-llama/Meta-Llama-3-1-8B-Instruct',
+    engine_config=pt_engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=128,
+    concurrency=128,
+    meta_template=llama3_meta_template,
+    run_cfg=run_cfg_tp1_template,
+    end_str='[INST]')
+
+tb_llama_3d1_8b_instruct_4bits = deepcopy(tb_llama_3d1_8b_instruct)
+tb_llama_3d1_8b_instruct_kvint4 = deepcopy(tb_llama_3d1_8b_instruct)
+tb_llama_3d1_8b_instruct_kvint8 = deepcopy(tb_llama_3d1_8b_instruct)
+
 # ===== Configs for Qwen/Qwen2-7B-Instruct =====
 tb_qwen2_7b_instruct = dict(
     type=TurboMindModelwithChatTemplate,
