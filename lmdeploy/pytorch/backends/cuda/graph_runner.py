@@ -182,6 +182,10 @@ class CUDASingleGraphRunner:
         output = self.output_buffers['logits'][:, :num_tokens].clone()
         return output
 
+    def __del__(self):
+        """del."""
+        del self._graph
+
 
 class CUDAGraphRunner(GraphRunner):
     """cuda graph runner."""

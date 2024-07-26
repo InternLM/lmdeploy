@@ -940,6 +940,8 @@ def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):
     _broadcast_inputs(rank, [None, None, None, exit_flag], agent.stream)
     agent.stream.synchronize()
 
+    del agent.patched_model
+
     # Tricky, extra sleep for subprocess releasing resources
     import time
     time.sleep(1)
