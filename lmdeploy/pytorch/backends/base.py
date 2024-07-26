@@ -11,6 +11,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 
 
 class LayerType(Enum):
+    """Layer type enumerate."""
     Attention = auto()
     Linear = auto()
     RotaryEmbedding = auto()
@@ -25,20 +26,24 @@ class LayerType(Enum):
 
 
 class LayersBackend(ABC):
+    """Layer backend abstract."""
 
     @staticmethod
     @abstractmethod
     def get_name() -> str:
+        """get backend name."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
     def get_layer_impl_builder(cls, layer_type: LayerType):
+        """get builder of given layer type."""
         raise NotImplementedError
 
     @staticmethod
     @abstractmethod
     def get_attention_metadata_cls():
+        """get attention metadata class."""
         raise NotImplementedError
 
     @staticmethod
@@ -49,6 +54,7 @@ class LayersBackend(ABC):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
+        """get block shape of k."""
         raise NotImplementedError
 
     @staticmethod
@@ -59,10 +65,15 @@ class LayersBackend(ABC):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
+        """get block shape of v."""
         raise NotImplementedError
 
     @classmethod
     def update_step_context(cls, step_context):
+        """update StepContext for inference.
+
+        attention meta should be built here.
+        """
         return step_context
 
     @staticmethod
@@ -70,5 +81,6 @@ class LayersBackend(ABC):
                            cache_config: CacheConfig,
                            backend_config: BackendConfig,
                            device: torch.device):
+        """build graph runner."""
         from .graph_runner import GraphRunner
         return GraphRunner(model)

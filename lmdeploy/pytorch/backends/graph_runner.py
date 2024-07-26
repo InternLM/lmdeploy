@@ -13,6 +13,7 @@ class GraphRunner:
         self.model = model
 
     def __call__(self, **kwargs):
+        """call graph runner forward."""
         return self.model(**kwargs)
 
     def prepare_inputs_for_generation(

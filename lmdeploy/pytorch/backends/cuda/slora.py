@@ -14,6 +14,7 @@ from ..slora import AdapterInfo, SLoRABuilder, SLoRAImpl
 
 @dataclass
 class PackedLoRAInput:
+    """packed lora input."""
     x: torch.Tensor
     a_cache: torch.Tensor
     b_cache: torch.Tensor
@@ -29,6 +30,7 @@ class PackedLoRAInput:
 
 
 class TritonSLoRAImpl(SLoRAImpl):
+    """triton slora implementation."""
 
     def __init__(self,
                  adapter_info: AdapterInfo,
@@ -39,6 +41,7 @@ class TritonSLoRAImpl(SLoRAImpl):
         self.colwise = colwise
 
     def _make_packed_lora_input(self, x, target_name: str, layer_idx: int):
+        """make PackedLoRAInput."""
         context = self.ctx_mgr.current_context()
         adapter_param = context.adapter_params[target_name]
 
@@ -219,6 +222,7 @@ class TritonSLoRAImpl(SLoRAImpl):
                 target_name: str,
                 layer_idx: int,
                 is_tp: bool = True):
+        """forward."""
         lora_input = self._make_packed_lora_input(x, target_name, layer_idx)
         if self.colwise and is_tp:
             return self._forward_colwise(lora_input, base_output)
@@ -227,9 +231,11 @@ class TritonSLoRAImpl(SLoRAImpl):
 
 
 class TritonSLoRABuilder(SLoRABuilder):
+    """triton slora layer builder."""
 
     @staticmethod
     def build(adapter_info: AdapterInfo,
               ctx_mgr: StepContextManager,
               colwise: bool = True):
+        """build."""
         return TritonSLoRAImpl(adapter_info, ctx_mgr, colwise)

@@ -8,6 +8,7 @@ import torch
 
 @dataclass
 class AttentionMetadata:
+    """Base Attention metadata."""
     is_decoding: bool
     block_offsets: torch.Tensor
     q_start_loc: torch.Tensor = None
@@ -19,6 +20,7 @@ T = TypeVar('T', bound=AttentionMetadata)
 
 
 class AttentionImpl(ABC, Generic[T]):
+    """Attention implementation."""
 
     def __init__(
         self,
@@ -29,6 +31,7 @@ class AttentionImpl(ABC, Generic[T]):
         v_head_size: int = None,
         alibi_scale: float = None,
         sliding_window: int = None,
+        logical_softcapping: float = None,
         **kwargs,
     ) -> None:
         if scale is None:
@@ -47,6 +50,7 @@ class AttentionImpl(ABC, Generic[T]):
         self.v_head_size = v_head_size
         self.alibi_scale = alibi_scale
         self.sliding_window = sliding_window
+        self.logical_softcapping = logical_softcapping
 
     @abstractmethod
     def forward(
@@ -58,10 +62,12 @@ class AttentionImpl(ABC, Generic[T]):
         v_cache: torch.Tensor,
         attn_metadata: T,
     ) -> torch.Tensor:
+        """forward."""
         raise NotImplementedError
 
 
 class AttentionBuilder(ABC, Generic[T]):
+    """Attention implementation builder."""
 
     @staticmethod
     @abstractmethod
@@ -73,6 +79,8 @@ class AttentionBuilder(ABC, Generic[T]):
         v_head_size: int = None,
         alibi_scale: float = None,
         sliding_window: int = None,
+        logical_softcapping: float = None,
         **kwargs,
     ) -> AttentionImpl[T]:
+        """build."""
         raise NotImplementedError

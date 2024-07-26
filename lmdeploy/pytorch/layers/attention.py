@@ -7,6 +7,7 @@ from ..backends.attention import AttentionMetadata
 
 
 class Attention(nn.Module):
+    """Attention layer."""
 
     def __init__(
         self,
@@ -17,6 +18,7 @@ class Attention(nn.Module):
         v_head_size: int = None,
         alibi_scale: float = None,
         sliding_window: int = None,
+        logical_softcapping: float = None,
         **kwargs,
     ):
         super().__init__()
@@ -32,6 +34,7 @@ class Attention(nn.Module):
             v_head_size,
             alibi_scale,
             sliding_window,
+            logical_softcapping,
             **kwargs,
         )
 
@@ -45,6 +48,7 @@ class Attention(nn.Module):
         attn_metadata: AttentionMetadata,
         inplace: bool = True,
     ) -> torch.Tensor:
+        """forward."""
         return self.impl.forward(
             query,
             key,

@@ -10,6 +10,7 @@ from lmdeploy.pytorch.model_inputs import StepContextManager
 
 @dataclass
 class AdapterInfo:
+    """Adapter information."""
     r: dict
     lora_A: nn.ModuleDict
     lora_B: nn.ModuleDict
@@ -34,6 +35,7 @@ class AdapterInfo:
 
 
 class SLoRAImpl(ABC):
+    """slora implementation api."""
 
     @abstractmethod
     def forward(self,
@@ -42,14 +44,17 @@ class SLoRAImpl(ABC):
                 target_name: str,
                 layer_idx: int,
                 is_tp: bool = True):
+        """forward."""
         raise NotImplementedError
 
 
 class SLoRABuilder(ABC):
+    """slora implementation builder."""
 
     @staticmethod
     @abstractmethod
     def build(adapter_info: AdapterInfo,
               ctx_mgr: StepContextManager,
               colwise: bool = True):
+        """build."""
         raise NotImplementedError

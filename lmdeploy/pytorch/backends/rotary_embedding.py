@@ -4,19 +4,23 @@ from enum import Enum, auto
 
 
 class EmbeddingType(Enum):
+    """rotary embedding type."""
     Default = auto()
     LinearScaling = auto()
     DynamicNTKScaling = auto()
 
 
 class RotaryEmbeddingImpl(ABC):
+    """rotary embedding implementation api."""
 
     @abstractmethod
     def forward(self, x, position_ids):
+        """forward."""
         raise NotImplementedError
 
 
 class RotaryEmbeddingBuilder(ABC):
+    """rotary embedding implementation builder."""
 
     @staticmethod
     @abstractmethod
@@ -27,4 +31,5 @@ class RotaryEmbeddingBuilder(ABC):
         scaling_factor: float = 1.0,
         emb_type: EmbeddingType = EmbeddingType.Default,
     ):
+        """build."""
         raise NotImplementedError

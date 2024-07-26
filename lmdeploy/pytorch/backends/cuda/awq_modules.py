@@ -58,6 +58,7 @@ def wq_gemm_forward(
 
 
 class AwqLinearW4A16Impl(LinearW4A16Impl):
+    """awq kernel linear."""
 
     def __init__(self, mod: nn.Module):
         super().__init__()
@@ -73,6 +74,7 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
         self.out_features = mod.out_features
 
     def forward(self, x, all_reduce: bool = False):
+        """forward."""
         out_features = self.scales.size(1)
         out = wq_gemm_forward(x, self.qweight, self.qzeros, self.scales,
                               self.w_bit, self.group_size, self.bias,
@@ -83,7 +85,9 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
 
 
 class AwqLinearW4A16Builder(LinearW4A16Builder):
+    """awq linear builder."""
 
     @staticmethod
     def build(mod: nn.Module, ctx_mgr: StepContextManager = None):
+        """build."""
         return AwqLinearW4A16Impl(mod)

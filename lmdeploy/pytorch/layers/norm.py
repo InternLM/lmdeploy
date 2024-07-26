@@ -6,6 +6,7 @@ from ..backends import LayerType, get_backend
 
 
 class RMSNorm(nn.Module):
+    """RMS Norm with add residual."""
 
     def __init__(self,
                  weight: torch.Tensor,
@@ -20,4 +21,5 @@ class RMSNorm(nn.Module):
         self.impl = builder.build(weight, eps)
 
     def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
+        """forward."""
         return self.impl.forward(x, residual)

@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
+from torch import Tensor
 
 from ..apply_rotary_emb import ApplyRotaryEmbBuilder, ApplyRotaryEmbImpl
 
@@ -16,8 +17,15 @@ def rotate_half(x):
 
 
 class DefaultApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
+    """Apply rotary embedding implementation."""
 
-    def forward(self, query, key, cos, sin, inplace: bool = True):
+    def forward(self,
+                query: Tensor,
+                key: Tensor,
+                cos: Tensor,
+                sin: Tensor,
+                inplace: bool = True):
+        """forward."""
         unsqueeze_dim = -2
         cos = cos.unsqueeze(unsqueeze_dim)
         sin = sin.unsqueeze(unsqueeze_dim)
@@ -37,7 +45,9 @@ class DefaultApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
 
 
 class DefaultApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
+    """Apply rotary embedding implementation builder."""
 
     @staticmethod
     def build():
+        """build implementation."""
         return DefaultApplyRotaryEmbImpl()

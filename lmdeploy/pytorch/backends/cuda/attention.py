@@ -5,10 +5,12 @@ from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
 
 
 class TritonAttentionMetadata(AttentionMetadata):
+    """triton attention metadata."""
     pass
 
 
 class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
+    """triton attention implementation."""
 
     def __init__(
         self,
@@ -19,6 +21,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         v_head_size: int = None,
         alibi_scale: float = None,
         sliding_window: int = None,
+        logical_softcapping: float = None,
         **kwargs,
     ):
         super().__init__(
@@ -47,6 +50,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         attn_metadata: TritonAttentionMetadata,
         inplace: bool = True,
     ) -> torch.Tensor:
+        """forward."""
 
         block_offsets = attn_metadata.block_offsets
         q_start_loc = attn_metadata.q_start_loc
@@ -92,6 +96,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
 
 
 class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
+    """triton attention builder."""
 
     @staticmethod
     def build(
@@ -102,8 +107,10 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         v_head_size: int = None,
         alibi_scale: float = None,
         sliding_window: int = None,
+        logical_softcapping: float = None,
         **kwargs,
     ) -> TritonAttentionImpl:
+        """build."""
         return TritonAttentionImpl(num_heads,
                                    head_size,
                                    scale=scale,
@@ -111,4 +118,5 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                    v_head_size=v_head_size,
                                    alibi_scale=alibi_scale,
                                    sliding_window=sliding_window,
+                                   logical_softcapping=logical_softcapping,
                                    **kwargs)

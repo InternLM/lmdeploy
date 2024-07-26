@@ -7,6 +7,7 @@ from ..rotary_embedding import (EmbeddingType, RotaryEmbeddingBuilder,
 
 
 class RotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
+    """base rotary embedding."""
 
     def __init__(self,
                  dim: int,
@@ -21,6 +22,7 @@ class RotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
     def forward(self, x, position_ids):
+        """forward."""
         # x: [bs, num_attention_heads, seq_len, head_size]
         if self.inv_freq.device != x.device:
             self.inv_freq = self.inv_freq.to(x.device)
@@ -57,6 +59,7 @@ class LlamaDynamicNTKScalingRotaryEmbedding(RotaryEmbeddingImpl):
         self.max_position_embeddings = max_position_embeddings
 
     def forward(self, x, position_ids):
+        """forward."""
         seq_len = torch.max(position_ids) + 1
         if seq_len > self.max_position_embeddings:
             base = self.base * ((self.scaling_factor * seq_len /
@@ -73,6 +76,7 @@ class LlamaDynamicNTKScalingRotaryEmbedding(RotaryEmbeddingImpl):
 
 
 class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
+    """rotary embedding builder."""
 
     @staticmethod
     def build(
@@ -82,6 +86,7 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
         scaling_factor: float = 1.0,
         emb_type: EmbeddingType = EmbeddingType.Default,
     ):
+        """build."""
         if emb_type in (EmbeddingType.Default, EmbeddingType.LinearScaling):
             return RotaryEmbeddingImpl(dim, base, scaling_factor)
         elif emb_type == EmbeddingType.DynamicNTKScaling:

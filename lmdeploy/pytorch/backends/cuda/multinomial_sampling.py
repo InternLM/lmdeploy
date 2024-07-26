@@ -5,6 +5,8 @@ from ..multinomial_sampling import MultinomialSamplingBuilder
 
 
 class TritonMultinomialSamplingBuilder(MultinomialSamplingBuilder):
+    """triton multinomial sampling builder."""
 
     def build():
+        """build."""
         return multinomial_sampling

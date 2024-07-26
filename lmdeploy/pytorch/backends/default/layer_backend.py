@@ -14,6 +14,7 @@ class DefaultLayersBackend(LayersBackend):
 
     @classmethod
     def get_layer_impl_builder(cls, layer_type: LayerType):
+        """get builder of given layer type."""
         if layer_type == LayerType.Linear:
             from .linear import DefaultLinearBuilder
             return DefaultLinearBuilder
@@ -45,6 +46,7 @@ class DefaultLayersBackend(LayersBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
+        """get block shape of k."""
         return (
             block_size,
             num_heads,
@@ -58,6 +60,7 @@ class DefaultLayersBackend(LayersBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
+        """get block shape of v."""
         return (
             block_size,
             num_heads,

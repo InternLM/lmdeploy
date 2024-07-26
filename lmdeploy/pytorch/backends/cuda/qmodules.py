@@ -13,6 +13,7 @@ from ..qmodules import (LinearW8A8Builder, LinearW8A8Impl, RMSNormW8A8Builder,
 
 
 class TritonRMSNormW8A8Impl(RMSNormW8A8Impl, nn.Module):
+    """triton RMS norm w8a8 implementation api."""
 
     def __init__(self, weight: torch.Tensor, eps: float = 1e-6):
         super().__init__()
@@ -20,6 +21,7 @@ class TritonRMSNormW8A8Impl(RMSNormW8A8Impl, nn.Module):
         self.eps = eps
 
     def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
+        """forward."""
         if residual is not None:
             x = x + residual
             residual = x
@@ -32,13 +34,16 @@ class TritonRMSNormW8A8Impl(RMSNormW8A8Impl, nn.Module):
 
 
 class TritonRMSNormBuilder(RMSNormW8A8Builder):
+    """triton RMS norm w8a8 implementation builder."""
 
     @staticmethod
     def build(weight: torch.Tensor, eps: float = 1e-6):
+        """build."""
         return TritonRMSNormW8A8Impl(weight, eps)
 
 
 class TritonLinearW8A8Impl(LinearW8A8Impl, nn.Module):
+    """triton linear w8a8 implementation."""
 
     def __init__(self, mod: nn.Module):
         super().__init__()
@@ -47,6 +52,7 @@ class TritonLinearW8A8Impl(LinearW8A8Impl, nn.Module):
         self.bias = mod.bias
 
     def forward(self, x, all_reduce: bool = False):
+        """forward."""
         if isinstance(x, torch.Tensor):
             x = x.contiguous()
             input_quant, input_scale = per_token_quant_int8(x, 1e-7)
@@ -67,7 +73,9 @@ class TritonLinearW8A8Impl(LinearW8A8Impl, nn.Module):
 
 
 class TritonLinearW8A8Builder(LinearW8A8Builder):
+    """triton linear w8a8 implementation builder."""
 
     @staticmethod
     def build(mod: nn.Module, ctx_mgr: StepContextManager = None):
+        """build."""
         return TritonLinearW8A8Impl(mod)

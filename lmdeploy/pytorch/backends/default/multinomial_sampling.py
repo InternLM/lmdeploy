@@ -6,11 +6,13 @@ from ..multinomial_sampling import (MultinomialSamplingBuilder,
 
 
 class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):
+    """multinomial sampling implementation api."""
 
     def forward(scores: torch.Tensor,
                 seeds: torch.LongTensor,
                 offsets: torch.LongTensor,
                 indices: torch.Tensor = None):
+        """forward."""
         sampled_index = torch.multinomial(scores,
                                           num_samples=1,
                                           replacement=True)
@@ -19,6 +21,8 @@ class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):
 
 
 class DefaultMultinomialSamplingBuilder(MultinomialSamplingBuilder):
+    """multinomial sampling implementation builder."""
 
     def build():
+        """build."""
         return DefaultMultinomialSamplingImpl()

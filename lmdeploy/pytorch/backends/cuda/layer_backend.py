@@ -13,13 +13,16 @@ logger = get_logger('lmdeploy')
 
 
 class CudaLayersBackend(DefaultLayersBackend):
+    """cuda layer backend."""
 
     @staticmethod
     def get_name() -> str:
+        """backend name."""
         raise 'cuda'
 
     @classmethod
     def get_layer_impl_builder(cls, layer_type: LayerType):
+        """get cuda layer builder."""
         if layer_type == LayerType.Attention:
             from .attention import TritonAttentionBuilder
             return TritonAttentionBuilder
@@ -57,6 +60,7 @@ class CudaLayersBackend(DefaultLayersBackend):
 
     @staticmethod
     def get_attention_metadata_cls():
+        """get attention metadata class."""
         from .attention import TritonAttentionMetadata
         return TritonAttentionMetadata
 
@@ -67,6 +71,7 @@ class CudaLayersBackend(DefaultLayersBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
+        """get k block shape."""
         return (
             block_size,
             num_heads,
@@ -80,6 +85,7 @@ class CudaLayersBackend(DefaultLayersBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
+        """get v block shape."""
         return (
             block_size,
             num_heads,

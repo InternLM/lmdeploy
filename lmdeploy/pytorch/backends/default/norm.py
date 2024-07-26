@@ -6,6 +6,7 @@ from ..norm import RMSNormBuilder, RMSNormImpl
 
 
 class DefaultRMSNormImpl(RMSNormImpl, nn.Module):
+    """RMS norm implementation api."""
 
     def __init__(self, weight: torch.Tensor, eps: float = 1e-6):
         super().__init__()
@@ -13,6 +14,7 @@ class DefaultRMSNormImpl(RMSNormImpl, nn.Module):
         self.eps = eps
 
     def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
+        """forward."""
         input_dtype = x.dtype
         if residual is not None:
             x = x + residual
@@ -27,7 +29,9 @@ class DefaultRMSNormImpl(RMSNormImpl, nn.Module):
 
 
 class DefaultRMSNormBuilder(RMSNormBuilder):
+    """RMS norm implementation builder."""
 
     @staticmethod
     def build(weight: torch.Tensor, eps: float = 1e-6):
+        """build."""
         return DefaultRMSNormImpl(weight, eps)

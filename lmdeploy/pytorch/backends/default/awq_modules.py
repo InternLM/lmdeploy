@@ -9,6 +9,7 @@ from ..awq_modules import LinearW4A16Builder, LinearW4A16Impl
 
 
 class DefaultLinearW4A16Impl(LinearW4A16Impl):
+    """w4a16 linear implementation."""
 
     def __init__(self, mod: nn.Module):
         super().__init__()
@@ -22,6 +23,7 @@ class DefaultLinearW4A16Impl(LinearW4A16Impl):
         self.out_features = mod.out_features
 
     def forward(self, x, all_reduce: bool = False):
+        """forward."""
         from awq.utils.packing_utils import dequantize_gemm
         out_shape = x.shape[:-1] + (self.out_features, )
         input_dtype = x.dtype
@@ -43,7 +45,9 @@ class DefaultLinearW4A16Impl(LinearW4A16Impl):
 
 
 class DefaultLinearW4A16Builder(LinearW4A16Builder):
+    """w4a16 linear implementation builder."""
 
     @staticmethod
     def build(mod: nn.Module, ctx_mgr: StepContextManager = None):
+        """build."""
         return DefaultLinearW4A16Impl(mod)

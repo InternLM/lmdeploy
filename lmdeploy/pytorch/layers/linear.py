@@ -53,6 +53,7 @@ def _get_world_rank():
 
 
 class SLoRA(nn.Module):
+    """SLoRA layer."""
 
     def __init__(self,
                  adapter_info: AdapterInfo,
@@ -68,11 +69,13 @@ class SLoRA(nn.Module):
         self.is_tp = is_tp
 
     def forward(self, x, base_output=None):
+        """forward of loraA@loraB."""
         return self.impl.forward(x, base_output, self.target_name,
                                  self.layer_idx, self.is_tp)
 
 
 class AwqLinear(nn.Module):
+    """w4a16 linear."""
 
     def __init__(self,
                  mod: nn.Module,
@@ -95,6 +98,7 @@ class AwqLinear(nn.Module):
         self.colwise = colwise
 
     def forward(self, x):
+        """w4a16 forward."""
         if self.lora_adapters is None:
             is_tp = False if self.colwise else self.is_tp
             return self.impl.forward(x, is_tp)
@@ -109,6 +113,7 @@ class AwqLinear(nn.Module):
 
 
 class W8A8Linear(nn.Module):
+    """w8a8 linear."""
 
     def __init__(self,
                  mod: nn.Module,
@@ -123,11 +128,13 @@ class W8A8Linear(nn.Module):
         self.colwise = colwise
 
     def forward(self, x):
+        """forward of w8a8."""
         is_tp = False if self.colwise else self.is_tp
         return self.impl.forward(x, is_tp)
 
 
 class BaseLinear(nn.Module):
+    """linear layer."""
 
     def __init__(self,
                  mod: nn.Module,
@@ -149,6 +156,7 @@ class BaseLinear(nn.Module):
         self.colwise = colwise
 
     def forward(self, x):
+        """forward of linear layer."""
         if self.lora_adapters is None:
             is_tp = False if self.colwise else self.is_tp
             return self.impl.forward(x, is_tp)
@@ -324,6 +332,7 @@ def build_colwise_linear(mod: nn.Module,
                          adapter_infos: List[AdapterInfo] = None,
                          ctx_mgr: Any = None,
                          is_tp: bool = False) -> nn.Module:
+    """build columnwise parallel linear layer."""
     return build_linear(mod, adapter_infos, ctx_mgr, colwise=True, is_tp=is_tp)
 
 
@@ -331,6 +340,7 @@ def build_rowwise_linear(mod: nn.Module,
                          adapter_infos: List[AdapterInfo] = None,
                          ctx_mgr: Any = None,
                          is_tp: bool = False) -> nn.Module:
+    """build rowwise parallel linear layer."""
     return build_linear(mod,
                         adapter_infos,
                         ctx_mgr,
