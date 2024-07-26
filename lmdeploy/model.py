@@ -483,11 +483,13 @@ class InternLM2Chat7B(InternLMChat7B):
         box_map = dict(user=self.user,
                        assistant=self.assistant,
                        system=self.system,
-                       environment=self.environment)
+                       environment=self.environment,
+                       tool=self.environment)
         eox_map = dict(user=self.eoh,
                        assistant=self.eoa + self.separator,
                        system=self.eosys,
-                       environment=self.eoenv)
+                       environment=self.eoenv,
+                       tool=self.eoenv)
         name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
         ret = ''
         if self.meta_instruction is not None and sequence_start:
@@ -506,6 +508,11 @@ class InternLM2Chat7B(InternLMChat7B):
         for message in messages:
             role = message['role']
             content = message['content']
+            if role == 'assistant' and len(message.get('tool_calls', [])):
+                for tool_call in message['tool_calls']:
+                    function = tool_call.get('function', {})
+                    function['arguments'] = function.pop('parameters', {})
+                    content += f'<|action_start|><|plugin|>\n{json.dumps(function)}<|action_end|>'
             begin = box_map[role].strip(
             ) + f" name={name_map[message['name']]}\n" if 'name' in message else box_map[
                 role]
