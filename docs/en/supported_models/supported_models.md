@@ -14,11 +14,11 @@
 |  InternLM-XComposer   |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |  InternLM-XComposer2  | 7B, 4khd-7B  |    Yes    |   Yes   |   Yes   |  Yes  |
 | InternLM-XComposer2.5 |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
-|         QWen          |  1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
-|        QWen1.5        | 1.8B - 110B  |    Yes    |   Yes   |   Yes   |  Yes  |
-|         QWen2         |  1.5B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
+|         Qwen          |  1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Qwen1.5        | 1.8B - 110B  |    Yes    |   Yes   |   Yes   |  Yes  |
+|         Qwen2         |  1.5B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Mistral        |      7B      |    Yes    |   Yes   |   Yes   |  No   |
-|        QWen-VL        |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Qwen-VL        |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |      DeepSeek-VL      |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan        |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan2       |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -26,7 +26,7 @@
 |          YI           |   6B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |    LLaVA(1.5,1.6)     |   7B - 34B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |     InternVL-Chat     |  v1.1- v1.5  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       InternVL2       |    2B-40B    |    Yes    |   Yes   |   Yes   |  Yes  |
+|       InternVL2       |    2B-76B    |    Yes    |   Yes   |   Yes   |  Yes  |
 |        MiniCPM        | Llama3-V-2_5 |    Yes    |   Yes   |   Yes   |  Yes  |
 |    MiniGeminiLlama    |      7B      |    Yes    |   No    |   No    |  Yes  |
 |         GLM4          |      9B      |    Yes    |   Yes   |   Yes   |  No   |
@@ -35,7 +35,7 @@
 "-" means not verified yet.
 
 ```{note}
-The TurboMind engine doesn't support window attention. Therefore, for models that have applied window attention and have the corresponding switch "use_sliding_window" enabled, such as Mistral, QWen1.5 and etc., please choose the PyTorch engine for inference.
+The TurboMind engine doesn't support window attention. Therefore, for models that have applied window attention and have the corresponding switch "use_sliding_window" enabled, such as Mistral, Qwen1.5 and etc., please choose the PyTorch engine for inference.
 ```
 
 ## Models supported by PyTorch
@@ -55,10 +55,10 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |         YI          |  6B - 34B   |    Yes    |   No    |  No  |
 |       Mistral       |     7B      |    Yes    |   No    |  No  |
 |       Mixtral       |    8x7B     |    Yes    |   No    |  No  |
-|        QWen         | 1.8B - 72B  |    Yes    |   No    |  No  |
-|       QWen1.5       | 0.5B - 110B |    Yes    |   No    |  No  |
-|     QWen1.5-MoE     |    A2.7B    |    Yes    |   No    |  No  |
-|        QWen2        | 0.5B - 72B  |    Yes    |   No    |  No  |
+|        Qwen         | 1.8B - 72B  |    Yes    |   No    |  No  |
+|       Qwen1.5       | 0.5B - 110B |    Yes    |   No    |  No  |
+|     Qwen1.5-MoE     |    A2.7B    |    Yes    |   No    |  No  |
+|        Qwen2        | 0.5B - 72B  |    Yes    |   No    |  No  |
 |    DeepSeek-MoE     |     16B     |    Yes    |   No    |  No  |
 |     DeepSeek-V2     |  16B, 236B  |    Yes    |   No    |  No  |
 |        Gemma        |    2B-7B    |    Yes    |   No    |  No  |
@@ -70,7 +70,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |    CogVLM2-Chat     |     19B     |    Yes    |   No    |  No  |
 |   LLaVA(1.5,1.6)    |   7B-34B    |    Yes    |   No    |  No  |
 | InternVL-Chat(v1.5) |   2B-26B    |    Yes    |   No    |  No  |
-|      InternVL2      |   1B-40B    |    Yes    |   No    |  No  |
+|      InternVL2      |   1B-76B    |    Yes    |   No    |  No  |
 |       Gemma2        |   9B-27B    |    Yes    |   No    |  No  |
 |        GLM4         |     9B      |    Yes    |   No    |  No  |
 |      CodeGeeX4      |     9B      |    Yes    |   No    |  No  |
