@@ -12,7 +12,7 @@ tp_config:
     internlm2-20b: 2
     Qwen-VL-Chat: 2
     llava-v1.5-13b: 2
-    Meta-Llama-3-70B-Instruct: 4
+    Meta-Llama-3-1-70B-Instruct: 4
     InternVL2-40B: 2
 
 turbomind_chat_model:
@@ -222,7 +222,7 @@ pytorch_quatization:
 longtext_model:
     - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Meta-Llama-3-8B-Instruct
-    - meta-llama/Meta-Llama-3-70B-Instruct
+    - meta-llama/Meta-Llama-3-1-70B-Instruct
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2-chat-20b
     - Qwen/Qwen2-7B-Instruct
@@ -230,7 +230,7 @@ longtext_model:
 benchmark_model:
     - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Meta-Llama-3-8B-Instruct
-    - meta-llama/Meta-Llama-3-70B-Instruct
+    - meta-llama/Meta-Llama-3-1-70B-Instruct
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2-chat-20b
     - Qwen/Qwen2-7B-Instruct

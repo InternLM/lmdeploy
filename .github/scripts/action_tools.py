@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from collections import OrderedDict
 from typing import List
 
@@ -166,7 +167,11 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
             f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
+        start_time = time.time()
         ret = run_cmd(cmd_eval, log_path=eval_log, cwd=lmdeploy_dir)
+        end_time = time.time()
+        task_duration_seconds = end_time - start_time
+        logging.info(f'task_duration_seconds: {task_duration_seconds}\n')
         if ret != 0:
             continue
         csv_files = glob.glob(f'{work_dir}/*/summary/summary_*.csv')
@@ -204,7 +209,8 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         prec = precision if do_lite else '-'
 
         row = ','.join([model, engine_type, prec] +
-                       [model_results[_] for _ in dataset_names])
+                       [model_results[_]
+                        for _ in dataset_names] + [task_duration_seconds])
         hf_res_row = None
         if hf_model_path not in test_model_names:
             test_model_names.add(hf_model_path)
@@ -217,7 +223,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         if not os.path.exists(output_csv):
             with open(output_csv, 'w') as f:
                 header = ','.join(['Model', 'Engine', 'Precision'] +
-                                  dataset_names)
+                                  dataset_names + ['task_duration_seconds'])
                 f.write(header + '\n')
                 if hf_res_row:
                     f.write(hf_res_row + '\n')
