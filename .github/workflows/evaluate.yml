@@ -37,11 +37,11 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'pynvml packaging protobuf transformers_stream_generator transformers'
+        default: 'pynvml packaging protobuf transformers_stream_generator transformers human_eval'
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'pynvml packaging protobuf transformers_stream_generator transformers'}}
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'pynvml packaging protobuf transformers_stream_generator transformers human_eval'}}
 
 jobs:
   linux-build:
