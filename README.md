@@ -198,7 +198,7 @@ For more information about inference pipeline, please refer to [here](./docs/en/
 
 # Tutorials
 
-Please overview [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
+Please review [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
 
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
