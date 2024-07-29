@@ -96,6 +96,10 @@ def command_test(config,
         file.writelines('reproduce command chat: ' + ' '.join(cmd) + '\n')
 
         spliter = '\n\n'
+        if 'CodeLlama' in model and 'api_client' not in cmd:
+            if 'workspace' in ' '.join(cmd):
+                spliter = '\n!!\n'
+        # join prompt together
         prompt = ''
         for item in case_info:
             prompt += list(item.keys())[0] + spliter
@@ -110,7 +114,7 @@ def command_test(config,
                    shell=True,
                    text=True,
                    encoding='utf-8') as proc:
-            # file.writelines('prompt:' + prompt + '\n')
+            file.writelines('prompt:' + prompt + '\n')
 
             outputs, errors = proc.communicate(input=prompt)
             returncode = proc.returncode
@@ -119,7 +123,7 @@ def command_test(config,
                 result = False
                 return result, chat_log, errors
 
-            outputDialogs = parse_dialogue(outputs, model)
+            outputDialogs = parse_dialogue(outputs, model, spliter)
             file.writelines('answersize:' + str(len(outputDialogs)) + '\n')
 
             # 结果判断
@@ -150,9 +154,12 @@ def command_test(config,
 
 
 # 从输出中解析模型输出的对话内容
-def parse_dialogue(inputs: str, model: str):
+def parse_dialogue(inputs: str, model: str, spliter: str):
     dialogues = inputs.strip()
-    sep = 'double enter to end input >>>'
+    if '!!' in spliter:
+        sep = 'enter !! to end the input >>>'
+    else:
+        sep = 'double enter to end input >>>'
     dialogues = dialogues.strip()
     dialogues = dialogues.split(sep)
     dialogues = [d.strip() for d in dialogues]

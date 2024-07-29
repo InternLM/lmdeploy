@@ -54,6 +54,8 @@ def test_pipeline_chat_tp2(config, common_case_config, model, worker_id):
 @pytest.mark.parametrize('quant_policy', (4, 8))
 def test_pipeline_chat_kvint_tp1(config, common_case_config, model,
                                  quant_policy, worker_id):
+    if quant_policy == 4 and 'Qwen2' in model:
+        return  # kvint4 for qwen2 is not support
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     p = Process(target=run_pipeline_chat_test,
@@ -76,6 +78,8 @@ def test_pipeline_chat_kvint_tp1(config, common_case_config, model,
 @pytest.mark.parametrize('quant_policy', (4, 8))
 def test_pipeline_chat_kvint_tp2(config, common_case_config, model,
                                  quant_policy, worker_id):
+    if quant_policy == 4 and 'Qwen2' in model:
+        return  # kvint4 for qwen2 is not support
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)

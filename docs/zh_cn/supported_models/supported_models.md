@@ -7,17 +7,18 @@
 |         Llama         |   7B - 65B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Llama2         |   7B - 70B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Llama3         |   8B, 70B    |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Llama3.1        |   8B, 70B    |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternLM        |   7B - 20B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternLM2       |   7B - 20B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM2.5      |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |  InternLM-XComposer   |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |  InternLM-XComposer2  | 7B, 4khd-7B  |    Yes    |   Yes   |   Yes   |  Yes  |
 | InternLM-XComposer2.5 |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
-|         QWen          |  1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
-|        QWen1.5        | 1.8B - 110B  |    Yes    |   Yes   |   Yes   |  Yes  |
-|         QWen2         |  1.5B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
+|         Qwen          |  1.8B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Qwen1.5        | 1.8B - 110B  |    Yes    |   Yes   |   Yes   |  Yes  |
+|         Qwen2         |  1.5B - 72B  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Mistral        |      7B      |    Yes    |   Yes   |   Yes   |  No   |
-|        QWen-VL        |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Qwen-VL        |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |      DeepSeek-VL      |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan        |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan2       |      7B      |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -25,7 +26,7 @@
 |          YI           |   6B - 34B   |    Yes    |   Yes   |   Yes   |  No   |
 |    LLaVA(1.5,1.6)     |   7B - 34B   |    Yes    |   Yes   |   Yes   |  Yes  |
 |     InternVL-Chat     |  v1.1- v1.5  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       InternVL2       |    2B-40B    |    Yes    |   Yes   |   Yes   |  Yes  |
+|       InternVL2       |    2B-76B    |    Yes    |   Yes   |   Yes   |  Yes  |
 |        MiniCPM        | Llama3-V-2_5 |    Yes    |   Yes   |   Yes   |  Yes  |
 |    MiniGeminiLlama    |      7B      |    Yes    |   No    |   No    |  Yes  |
 |         GLM4          |      9B      |    Yes    |   Yes   |   Yes   |  No   |
@@ -34,7 +35,7 @@
 “-” 表示还没有验证。
 
 ```{note}
-turbomind 引擎不支持 window attention。所以，对于应用了 window attention，并开启了对应的开关"use_sliding_window"的模型，比如 Mistral、QWen1.5 等，在推理时，请选择 pytorch engine
+turbomind 引擎不支持 window attention。所以，对于应用了 window attention，并开启了对应的开关"use_sliding_window"的模型，比如 Mistral、Qwen1.5 等，在推理时，请选择 pytorch engine
 ```
 
 ### PyTorch 支持的模型
@@ -44,6 +45,7 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |        Llama        |  7B - 65B   |    Yes    |   No    | Yes  |  Yes  |
 |       Llama2        |  7B - 70B   |    Yes    |   No    | Yes  |  Yes  |
 |       Llama3        |   8B, 70B   |    Yes    |   No    | Yes  |  Yes  |
+|      Llama3.1       |   8B, 70B   |    Yes    |   No    |  No  |   -   |
 |      InternLM       |  7B - 20B   |    Yes    |   No    | Yes  |   -   |
 |      InternLM2      |  7B - 20B   |    Yes    |   No    | Yes  |  Yes  |
 |     InternLM2.5     |     7B      |    Yes    |   No    | Yes  |  Yes  |

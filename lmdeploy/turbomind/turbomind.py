@@ -2,9 +2,9 @@
 import asyncio
 import os.path as osp
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from configparser import ConfigParser
 from queue import LifoQueue, Queue
-from threading import Thread
 from typing import Dict, Iterable, List, Optional, Union
 
 import numpy as np
@@ -162,13 +162,12 @@ class TurboMind:
             rank = self.node_id * self.gpu_count + device_id
             model_comm.create_shared_weights(device_id, rank)
 
-        threads = []
-        for device_id in range(self.gpu_count):
-            t = Thread(target=_create_weight_func, args=(device_id, ))
-            t.start()
-            threads.append(t)
-        for t in threads:
-            t.join()
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
+            futures = []
+            for device_id in range(self.gpu_count):
+                futures.append(executor.submit(_create_weight_func, device_id))
+            for future in futures:
+                future.result()
 
     def _get_model_params(self, model_comm, tm_params):
         """Get turbomind model params when loading from hf."""
@@ -179,13 +178,12 @@ class TurboMind:
             que.put(out)
 
         que = Queue()
-        threads = []
-        for device_id in range(self.gpu_count):
-            t = Thread(target=_get_params, args=(device_id, que))
-            t.start()
-            threads.append(t)
-        for t in threads:
-            t.join()
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
+            futures = []
+            for device_id in range(self.gpu_count):
+                futures.append(executor.submit(_get_params, device_id, que))
+            for future in futures:
+                future.result()
 
         for _ in range(self.gpu_count):
             tensor_map = que.get()
@@ -380,18 +378,19 @@ class TurboMindInstance:
 
         # create model instances
         model_insts = [None] * self.gpu_count
-        threads = []
-        for device_id in range(self.gpu_count):
-            t = Thread(target=self._create_model_instance,
-                       args=(device_id, model_insts))
-            t.start()
-            threads.append(t)
-        for t in threads:
-            t.join()
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
+            futures = []
+            for device_id in range(self.gpu_count):
+                futures.append(
+                    executor.submit(self._create_model_instance, device_id,
+                                    model_insts))
+            for future in futures:
+                future.result()
 
         self.model_insts = model_insts
         self.que = Queue()
-        self.threads = [None] * self.gpu_count
+        self.executor: ThreadPoolExecutor = None
+        self.futures = [None] * self.gpu_count
 
     def _create_model_instance(self, device_id, model_insts):
         rank = self.node_id * self.gpu_count + device_id
@@ -411,12 +410,10 @@ class TurboMindInstance:
             if enque_output:
                 self.que.put((True, output))
 
+        self.executor = ThreadPoolExecutor(self.gpu_count)
         for device_id in range(self.gpu_count):
-            t = Thread(target=_func,
-                       args=(device_id, device_id == 0),
-                       daemon=True)
-            t.start()
-            self.threads[device_id] = t
+            f = self.executor.submit(_func, device_id, device_id == 0)
+            self.futures[device_id] = f
 
     def _async_forward_callback(self, result, ctx, que: LifoQueue):
         que.put((False, result))
@@ -430,12 +427,10 @@ class TurboMindInstance:
             if enque_output:
                 que.put((True, output))
 
+        self.executor = ThreadPoolExecutor(self.gpu_count)
         for device_id in range(self.gpu_count):
-            t = Thread(target=_func,
-                       args=(device_id, device_id == 0),
-                       daemon=True)
-            t.start()
-            self.threads[device_id] = t
+            f = self.executor.submit(_func, device_id, device_id == 0)
+            self.futures[device_id] = f
 
     def _update_generation_config(self, config: EngineGenerationConfig,
                                   **kwargs: dict):
@@ -772,8 +767,9 @@ class TurboMindInstance:
             yield outputs
 
             if finish:
-                for t in self.threads:
-                    t.join()
+                for f in self.futures:
+                    f.result()
+                self.executor.shutdown()
                 break
 
         if stream_output and not stop:
@@ -884,8 +880,9 @@ class TurboMindInstance:
             yield outputs
 
             if finish:
-                for t in self.threads:
-                    t.join()
+                for f in self.futures:
+                    f.result()
+                self.executor.shutdown()
                 while self.que.qsize() > 0:
                     self.que.get()
                 break

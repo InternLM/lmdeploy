@@ -18,6 +18,10 @@ from tqdm import tqdm
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
+from lmdeploy.utils import get_logger
+
+get_logger('lmdeploy').setLevel('ERROR')
+os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
 def infer(model, session_id: int, input_ids: List,
@@ -165,15 +169,23 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
                                  3)
     token_latency_ave = np.round(np.mean(np.sum(token_latency_stats, axis=1)),
                                  3)
-    # sort token_latency without the first token's latency
-    sorted_token_latency = np.sort(token_latency_stats[:, 1:].flatten())
-    percentiles = [
-        np.round(
-            sorted_token_latency[int(percent * len(sorted_token_latency))], 3)
-        for percent in [0.5, 0.75, 0.95, 0.99]
-    ]
+    if output_seqlen > 1:
+        # sort token_latency without the first token's latency
+        sorted_token_latency = np.sort(token_latency_stats[:, 1:].flatten())
+        percentiles = [
+            np.round(
+                sorted_token_latency[int(percent * len(sorted_token_latency))],
+                3) for percent in [0.5, 0.75, 0.95, 0.99]
+        ]
+    else:
+        percentiles = [
+            first_token_latency_ave,
+        ] * 4
 
-    throughput = np.round(token_latency_stats.size / elapsed_time, 2)
+    out_token_throughput = np.round(token_latency_stats.size / elapsed_time, 2)
+    total_token_throughput = np.round(
+        concurrency * test_round * (input_seqlen + output_seqlen) /
+        elapsed_time, 2)
     print(f'\n{"-" * 50}\ntotal time: {elapsed_time:.2f}s\n'
           f'concurrency: {concurrency}, test_round: {test_round}\n'
           f'input_tokens: {input_seqlen}, output_tokens: {output_seqlen}\n'
@@ -183,11 +195,13 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
           f'{token_latency_min}s, {token_latency_max}s, '
           f'{token_latency_ave}s\n'
           f'token_latency percentiles(50%,75%,95%,99%)(s): {percentiles}\n'
-          f'throughput: {throughput} token/s\n{"-" * 50}')
+          f'throughput(output): {out_token_throughput} token/s\n'
+          f'throughput(total): {total_token_throughput} token/s\n{"-" * 50}')
     return tm_model.model_name, \
         [first_token_latency_min, first_token_latency_max,
          first_token_latency_ave], \
-        percentiles, throughput, tm_model.gpu_count
+        percentiles, out_token_throughput, total_token_throughput, \
+        tm_model.gpu_count
 
 
 class MemoryMonitor:
@@ -273,11 +287,9 @@ class ProfileResult:
     completion_tokens: int
     first_token_latency: List
     percentiles: List
-    throughput_per_proc: float
-    throughput_per_node: float
-    mem_per_proc: float
+    output_throughput: float
+    total_throughput: float
     mem_per_gpu: float
-    mem_per_node: float
 
 
 def parse_args():
@@ -329,7 +341,6 @@ def parse_args():
     ArgumentHelper.top_p(parser)
     ArgumentHelper.temperature(parser)
     ArgumentHelper.top_k(parser)
-    ArgumentHelper.log_level(parser)
     ArgumentHelper.backend(parser)
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -385,7 +396,6 @@ def main():
         f'mismatched size between `prompt-tokens` and `completion-tokenes`' \
         f', {len(args.prompt_tokens)} vs {len(args.completion_tokens)}'
 
-    os.environ['TM_LOG_LEVEL'] = args.log_level
     results: List[ProfileResult] = []
 
     MemoryMonitor.init()
@@ -434,10 +444,9 @@ def main():
             )
             output = _process_map(profile_target, (args.model_path, ))
             model_name, first_token_latency, percentiles, \
-                throughput_per_proc, tp = output
+                output_throughput, total_throughput, tp = output
             time.sleep(5)  # wait a while for releasing GPU mem
             memory = MemoryMonitor.terminate()
-            device_count = MemoryMonitor.device_count.value
             results.append(
                 ProfileResult(model_name=model_name,
                               batch=batch,
@@ -445,12 +454,9 @@ def main():
                               completion_tokens=completion_tokens,
                               first_token_latency=first_token_latency,
                               percentiles=percentiles,
-                              throughput_per_proc=throughput_per_proc,
-                              throughput_per_node=throughput_per_proc / tp *
-                              device_count,
-                              mem_per_proc=memory,
-                              mem_per_gpu=memory / tp,
-                              mem_per_node=memory / tp * device_count))
+                              output_throughput=output_throughput,
+                              total_throughput=total_throughput,
+                              mem_per_gpu=memory / tp))
     if args.csv:
         with open(args.csv, 'w') as csvfile:
             writer = csv.writer(csvfile)
@@ -458,6 +464,7 @@ def main():
                 'batch',
                 'prompt_tokens',
                 'completion_tokens',
+                'throughput(total tok/s)',
                 'throughput(out tok/s)',
                 'mem(GB)',
                 'FTL(ave)(s)',
@@ -471,7 +478,8 @@ def main():
             for re in results:
                 writer.writerow([
                     re.batch, re.prompt_tokens, re.completion_tokens,
-                    f'{re.throughput_per_proc:.2f}', f'{re.mem_per_gpu:.2f}',
+                    f'{re.total_throughput:.2f}',
+                    f'{re.output_throughput:.2f}', f'{re.mem_per_gpu:.2f}',
                     re.first_token_latency[2], re.first_token_latency[0],
                     re.first_token_latency[1], re.percentiles[0],
                     re.percentiles[1], re.percentiles[2], re.percentiles[3]

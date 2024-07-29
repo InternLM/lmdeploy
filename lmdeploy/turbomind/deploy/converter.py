@@ -1,9 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 import os.path as osp
-import re
 import shutil
-from pathlib import Path
 
 import fire
 import torch
@@ -18,12 +16,6 @@ from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 
 SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', None]
-
-
-def get_package_root_path():
-    """Get lmdeploy root path."""
-    import lmdeploy
-    return Path(lmdeploy.__file__).parent
 
 
 def get_input_model_registered_name(model_path: str, model_format: str):
@@ -52,68 +44,41 @@ def create_workspace(_path: str):
         print(f'remove workspace in directory {_path}')
         shutil.rmtree(_path)
     print(f'create workspace in directory {_path}')
-    os.makedirs(_path)
-
-
-def copy_triton_model_templates(_path: str):
-    """copy triton model templates to the specified path.
-
-    Args:
-        _path (str): the target path
-    Returns:
-        str: the path of the triton models
-    """
-
-    root = get_package_root_path()
-    dir_path = osp.join(root, 'serve', 'turbomind')
-    triton_models_path = osp.join(dir_path, 'triton_models')
-    dst_path = osp.join(_path, 'triton_models')
-    print(f'copy triton model templates from "{triton_models_path}" to '
-          f'"{dst_path}"')
-    shutil.copytree(triton_models_path, dst_path, symlinks=True)
-    service_docker_up_file = osp.join(dir_path, 'service_docker_up.sh')
-    print(f'copy service_docker_up.sh from "{service_docker_up_file}" to '
-          f'"{_path}"')
-    shutil.copy(osp.join(dir_path, 'service_docker_up.sh'), _path)
-    return dst_path
+    weight_path = osp.join(_path, 'triton_models', 'weights')
+    tokenizer_path = osp.join(_path, 'triton_models', 'tokenizer')
+    os.makedirs(weight_path)
+    os.makedirs(tokenizer_path)
+    return weight_path, tokenizer_path
 
 
 def copy_tokenizer(model_path: str, tokenizer_path: str,
-                   triton_models_path: str, trust_remote_code: bool):
+                   tm_tokenizer_path: str):
     """Copy tokenizer."""
+
     if tokenizer_path is not None:
         assert osp.exists(tokenizer_path), f'{tokenizer_path} does not exists.'
 
-        shutil.copy(
-            tokenizer_path,
-            osp.join(triton_models_path,
-                     osp.join('tokenizer', osp.basename(tokenizer_path))))
+        shutil.copy(tokenizer_path,
+                    osp.join(tm_tokenizer_path, osp.basename(tokenizer_path)))
     else:
         from transformers import AutoTokenizer
         try:
-            _ = AutoTokenizer.from_pretrained(
-                model_path, trust_remote_code=trust_remote_code)
-        except Exception:
-            assert 0, (
-                f'Failed to load tokenizer model from path {model_path}.'
-                'please specify tokenizer path by --tokenizer-path')
+            _ = AutoTokenizer.from_pretrained(model_path,
+                                              trust_remote_code=True)
+        except Exception as e:
+            assert 0, f'{e}'
 
     # move tokenizer model to the target path
     candidate = ['tokenizer.model', 'qwen.tiktoken', 'merges.txt']
     for name in candidate:
         tmp_path = osp.join(model_path, name)
         if osp.exists(tmp_path):
-            shutil.copy(tmp_path,
-                        osp.join(triton_models_path, 'tokenizer', name))
-    # move py/json files that are related to tokenizer to the target path
+            shutil.copy(tmp_path, osp.join(tm_tokenizer_path, name))
+    # copy py/json files that are related to tokenizer to the target path
     for _file in os.listdir(model_path):
         if _file.endswith('.json') or _file.endswith('.py'):
             json_path = osp.join(model_path, _file)
-            shutil.copy(json_path,
-                        osp.join(triton_models_path, 'tokenizer', _file))
-    with get_package_root_path() as root_path:
-        shutil.copy(osp.join(root_path, 'tokenizer.py'),
-                    osp.join(triton_models_path, 'tokenizer'))
+            shutil.copy(json_path, osp.join(tm_tokenizer_path, _file))
 
 
 def get_output_model_registered_name_and_config(model_path: str,
@@ -205,7 +170,6 @@ def main(model_name: str,
          tp: int = 1,
          quant_path: str = None,
          group_size: int = 0,
-         trust_remote_code: bool = False,
          revision: str = None,
          download_dir: str = None,
          **kwargs):
@@ -226,8 +190,6 @@ def main(model_name: str,
         quant_path (str): Path of the quantized model, which can be None.
         group_size (int): a parameter used in AWQ to quantize fp16 weights
             to 4 bits
-        trust_remote_code (bool):  Whether or not to allow for custom models
-            defined on the Hub in their own modeling files. Defaults to False
         revision (str): The specific model version to use. It can be a branch
             name, a tag name, or a commit id. If unspecified, will use
             the default version.
@@ -279,44 +241,19 @@ def main(model_name: str,
     cfg.model_name = model_name
     cfg.tensor_para_size = tp
 
-    create_workspace(dst_path)
+    tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
 
-    triton_models_path = copy_triton_model_templates(dst_path)
+    copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
 
-    copy_tokenizer(model_path, tokenizer_path, triton_models_path,
-                   trust_remote_code)
-
-    weight_path = osp.join(triton_models_path, 'weights')
     input_model = INPUT_MODELS.get(input_model_name)(
         model_path=model_path,
         tokenizer_path=tokenizer_path,
         ckpt_path=quant_path)
     output_model = OUTPUT_MODELS.get(output_model_name)(
-        input_model=input_model, cfg=cfg, to_file=True, out_dir=weight_path)
+        input_model=input_model, cfg=cfg, to_file=True, out_dir=tm_weight_path)
     print(f'turbomind model config: {output_model.cfg}')
 
     output_model.export()
-
-    # update `tensor_para_size` in `triton_models/interactive/config.pbtxt`
-    with open(osp.join(triton_models_path, 'interactive', 'config.pbtxt'),
-              'a') as f:
-        param = \
-            'parameters {\n  key: "tensor_para_size"\n  value: {\n    ' \
-            'string_value: ' + f'"{tp}"\n' + '  }\n}\n' + \
-            'parameters {\n  key: "model_name"\n  value: {\n    ' \
-            'string_value: ' + f'"{model_name}"\n' + '  }\n}\n'
-        f.write(param)
-
-    # pack model repository for triton inference server
-    pack_model_repository(dst_path)
-
-    # update the value of $TP in `service_docker_up.sh`
-    file_path = osp.join(dst_path, 'service_docker_up.sh')
-    with open(file_path, 'r') as f:
-        content = f.read()
-        content = re.sub('TP=1', f'TP={tp}', content)
-    with open(file_path, 'w') as f:
-        f.write(content)
 
 
 if __name__ == '__main__':
