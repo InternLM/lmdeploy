@@ -1,14 +1,25 @@
-FROM nvcr.io/nvidia/tritonserver:22.12-py3
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
-RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update && apt-get install -y --no-install-recommends \
-    rapidjson-dev libgoogle-glog-dev gdb python3.8-venv \
-    && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py38
+ARG PYTHON_VERSION=3.10
 
-ENV PATH=/opt/py38/bin:$PATH
+RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get install -y software-properties-common wget vim &&\
+    add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
+    rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
+    && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
+
+ENV PATH=/opt/py3/bin:$PATH
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools==69.5.1 &&\
-    python3 -m pip install --no-cache-dir torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118 &&\
+    python3 -m pip install --no-cache-dir torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cu121 &&\
     python3 -m pip install --no-cache-dir cmake packaging wheel
+
+# install openmpi
+RUN wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz &&\
+    tar xf openmpi-4.1.5.tar.gz && cd openmpi-4.1.5 && ./configure --prefix=/usr/local/openmpi &&\
+    make -j$(nproc) && make install && rm -rf openmpi-4.1.5*
+
+ENV PATH=$PATH:/usr/local/openmpi/bin
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
@@ -33,8 +44,8 @@ RUN cd /opt/lmdeploy &&\
     make -j$(nproc) && make install &&\
     cd .. &&\
     python3 -m pip install -e . &&\
+    python3 -m pip install --no-cache-dir triton==2.1.0 &&\
     rm -rf build
 
-ENV LD_LIBRARY_PATH=/opt/tritonserver/lib:$LD_LIBRARY_PATH
 # explicitly set ptxas path for triton
 ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
