@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import dataclasses
+import json
 import os
 import random
 from contextlib import asynccontextmanager
@@ -566,6 +567,10 @@ class AsyncEngine(LogitsMixin):
         # set random if it is not set and sequence_start is True
         if gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
+        if gen_config.n > 1:
+            logger.warning(f"n({gen_config.n}) > 1 hasn't been supported yet. "
+                           f'Fallback to 1')
+            gen_config.n = 1
         prompt = messages
 
         prompt_input = await self._get_prompt_input(prompt,
@@ -660,6 +665,28 @@ class AsyncEngine(LogitsMixin):
                 # TODO modify pytorch or turbomind api
                 if self.backend == 'pytorch' and sequence_end:
                     await self.end_session(session_id)
+
+    def parse_tool_response(self, text, tools, **kwargs):
+        """Parse model response containing tool information.
+
+        Args:
+            text(str): model response in string format
+            tools(List): tools from user request
+        """
+        if '<|plugin|>' in text:  # internlm2
+            text, action = text.split('<|action_start|><|plugin|>')
+            action = action.split('<|action_end|>'.strip())[0]
+            action = action[action.find('{'):]
+            action = json.loads(action)
+            name, parameters = action['name'], json.dumps(action['parameters'])
+        elif '<function=' in text:  # llama3.1
+            action, _ = text.split('</function>')
+            parameters = action[action.find('{'):]
+            name = action.split('<function=')[1].split('>{')[0]
+        else:
+            raise RuntimeError(f'Unexpected model response: {text}')
+        action_id = [tool.function.name for tool in tools].index(name)
+        return text, action_id, name, parameters
 
     def chat(self,
              prompt: str,
