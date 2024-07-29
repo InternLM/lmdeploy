@@ -444,8 +444,6 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
     timeout-minutes: 300
-    env:
-      REPORT_DIR: /nvme/qa_test_models/benchmark_reports/${{ github.run_id }}
     container:
       image: nvcr.io/nvidia/tritonserver:24.03-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"

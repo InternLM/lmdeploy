@@ -209,8 +209,8 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         prec = precision if do_lite else '-'
 
         row = ','.join([model, engine_type, prec] +
-                       [model_results[_]
-                        for _ in dataset_names] + [str(task_duration_seconds)])
+                       [str(task_duration_seconds)] +
+                       [model_results[_] for _ in dataset_names])
         hf_res_row = None
         if hf_model_path not in test_model_names:
             test_model_names.add(hf_model_path)
@@ -223,7 +223,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         if not os.path.exists(output_csv):
             with open(output_csv, 'w') as f:
                 header = ','.join(['Model', 'Engine', 'Precision'] +
-                                  dataset_names + ['task_duration_seconds'])
+                                  ['task_duration_ses'] + dataset_names)
                 f.write(header + '\n')
                 if hf_res_row:
                     f.write(hf_res_row + '\n')
