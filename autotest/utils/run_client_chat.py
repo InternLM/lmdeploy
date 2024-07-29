@@ -4,6 +4,8 @@ from subprocess import PIPE, Popen
 from utils.get_run_config import get_command_with_extra, get_model_name
 from utils.rule_condition_assert import assert_result
 
+TEMPLATE = 'autotest/template.json'
+
 
 def command_line_test(config,
                       case,
@@ -14,7 +16,6 @@ def command_line_test(config,
                       cuda_prefix: str = None,
                       worker_id: str = ''):
     dst_path = config.get('dst_path')
-    template_file = config.get('template_file')
 
     if type == 'api_client':
         cmd = 'lmdeploy serve api_client ' + extra
@@ -31,7 +32,7 @@ def command_line_test(config,
                                      or 'awq' in model_case.lower())):
             cmd += ' --model-format awq'
         if case == 'base_testcase':
-            cmd += f' --chat-template {template_file}'
+            cmd += ' --chat-template ' + TEMPLATE
     return command_test(config, [cmd],
                         model_case,
                         case,
@@ -48,7 +49,6 @@ def hf_command_line_test(config,
                          cuda_prefix: str = None,
                          extra: str = '',
                          use_local_model: bool = True):
-    template_file = config.get('template_file')
     if use_local_model:
         model_path = config.get('model_path') + '/' + model_case
     else:
@@ -67,7 +67,7 @@ def hf_command_line_test(config,
         cmd += ' --model-format awq'
 
     if case == 'base_testcase':
-        cmd += f' --chat-template {template_file}'
+        cmd += ' --chat-template ' + TEMPLATE
     return command_test(config, [cmd], model_case,
                         '_'.join(['hf', type, case]), case_info, True)
 

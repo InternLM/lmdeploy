@@ -170,7 +170,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         start_time = time.time()
         ret = run_cmd(cmd_eval, log_path=eval_log, cwd=lmdeploy_dir)
         end_time = time.time()
-        task_duration_seconds = end_time - start_time
+        task_duration_seconds = round(end_time - start_time, 2)
         logging.info(f'task_duration_seconds: {task_duration_seconds}\n')
         if ret != 0:
             continue
