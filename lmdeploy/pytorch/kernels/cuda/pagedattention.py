@@ -91,6 +91,7 @@ def _fwd_split_kernel(
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
     shared_kv: tl.constexpr,
+    logit_softcapping: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_DV: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -172,6 +173,10 @@ def _fwd_split_kernel(
 
         qk = tl.sum(q[None, :] * k, 1)
         qk *= sm_scale
+        if logit_softcapping > 0.0:
+            qk = qk / logit_softcapping
+            qk = tl.math.tanh(qk)
+            qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
         qk_mask = history_len >= (start_n + offs_n)
         if window_size > 0:
@@ -280,6 +285,7 @@ def _fwd_grouped_split_kernel(
     head_size_v: tl.constexpr,
     num_heads_q: tl.constexpr,
     shared_kv: tl.constexpr,
+    logit_softcapping: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_DV: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -386,6 +392,10 @@ def _fwd_grouped_split_kernel(
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
         qk *= sm_scale
+        if logit_softcapping > 0.0:
+            qk = qk / logit_softcapping
+            qk = tl.math.tanh(qk)
+            qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
         qk_mask = history_len >= (start_n + offs_n)
         if window_size > 0:
@@ -545,6 +555,7 @@ def _fwd_kernel(
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
     shared_kv: tl.constexpr,
+    logit_softcapping: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_DV: tl.constexpr,
@@ -645,6 +656,10 @@ def _fwd_kernel(
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
         qk *= sm_scale
+        if logit_softcapping > 0.0:
+            qk = qk / logit_softcapping
+            qk = tl.math.tanh(qk)
+            qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
         qk_mask = (history_len + offs_m[:, None]) >= (start_n +
                                                       offs_n[None, :])
@@ -695,6 +710,7 @@ def paged_attention_fwd(
     max_seqlen: int,
     window_size: int = None,
     sm_scale: float = None,
+    logit_softcapping: float = None,
     shared_kv: bool = False,
 ):
     """Paged Attention forward.
@@ -718,6 +734,9 @@ def paged_attention_fwd(
 
     if window_size is None:
         window_size = -1
+
+    if logit_softcapping is None:
+        logit_softcapping = -1.0
 
     def _get_block_d(Lk):
         """get block d."""
@@ -783,6 +802,7 @@ def paged_attention_fwd(
                           head_size=Lk,
                           head_size_v=Lv,
                           shared_kv=shared_kv,
+                          logit_softcapping=logit_softcapping,
                           BLOCK_M=BLOCK_M,
                           BLOCK_DMODEL=BLOCK_DMODEL,
                           BLOCK_DV=BLOCK_DV,
@@ -829,6 +849,7 @@ def paged_attention_fwd(
                                     head_size=Lk,
                                     head_size_v=Lv,
                                     shared_kv=shared_kv,
+                                    logit_softcapping=logit_softcapping,
                                     BLOCK_DMODEL=BLOCK_DMODEL,
                                     BLOCK_DV=BLOCK_DV,
                                     BLOCK_N=BLOCK,
@@ -868,6 +889,7 @@ def paged_attention_fwd(
                 head_size_v=Lv,
                 num_heads_q=head,
                 shared_kv=shared_kv,
+                logit_softcapping=logit_softcapping,
                 BLOCK_DMODEL=BLOCK_DMODEL,
                 BLOCK_DV=BLOCK_DV,
                 BLOCK_N=BLOCK,
