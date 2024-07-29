@@ -87,4 +87,5 @@ class OpsBackend(ABC):
                            device: torch.device):
         """build graph runner."""
         from .graph_runner import GraphRunner
-        return GraphRunner(model)
+        return GraphRunner(model, model_config, cache_config,
+                           backend_config, device)
