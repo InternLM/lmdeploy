@@ -221,6 +221,8 @@ class BaseChatTemplate(BaseModel):
             role = message['role']
             content = message['content']
             ret += f'{box_map[role]}{content}{eox_map[role]}'
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return ret[:-len(eox_map['assistant'])]  # prefix of response
         ret += f'{self.assistant}'
         return ret
 
@@ -510,6 +512,8 @@ class InternLM2Chat7B(InternLMChat7B):
             ) + f" name={name_map[message['name']]}\n" if 'name' in message else box_map[
                 role]
             ret += f'{begin}{content}{eox_map[role]}'
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return ret[:-len(eox_map['assistant'])]  # prefix of response
         ret += f'{self.assistant}'
         return ret
 
@@ -844,9 +848,11 @@ Reminder:
                 ret += f'{box_map[role]}{self.tools}{tool_prompt}{self.eotools}{content}{eox_map[role]}'
             else:
                 ret += f'{box_map[role]}{content}{eox_map[role]}'
-        ret += f'{self.assistant}'
         if sequence_start and not isinstance(messages, str):
             ret = '<|begin_of_text|>' + ret
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return ret[:-len(eox_map['assistant'])]  # prefix of response
+        ret += f'{self.assistant}'
         return ret
 
     @classmethod

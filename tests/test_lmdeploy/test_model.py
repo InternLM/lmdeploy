@@ -82,6 +82,13 @@ def test_vicuna():
         assert _prompt is None
 
 
+def test_prefix_response():
+    model = MODELS.get('internlm2')()
+    messages = [dict(role='assistant', content='prefix test')]
+    prompt = model.messages2prompt(messages)
+    assert prompt[-len('prefix test'):] == 'prefix test'
+
+
 def test_internlm_chat():
     prompt = 'hello, can u introduce yourself'
     model = MODELS.get('internlm')(capability='completion')
