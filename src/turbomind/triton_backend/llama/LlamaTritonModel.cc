@@ -208,10 +208,15 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     // rotary embedding parameters
     attn_params_.rotary_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
     attn_params_.rotary_embedding_base   = reader.GetFloat("llama", "rope_theta", 10000.0f);
+    attn_params_.rope_scaling_type       = reader.Get("llama", "rope_scaling_type", "");
     attn_params_.rope_scaling_factor     = reader.GetFloat("llama", "rope_scaling_factor", 0.f);
+    attn_params_.low_freq_factor         = reader.GetFloat("llama", "low_freq_factor", 1.0);
+    attn_params_.high_freq_factor        = reader.GetFloat("llama", "high_freq_factor", 1.0);
     attn_params_.max_position_embeddings = reader.GetInteger("llama", "max_position_embeddings", 0);
     attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
     attn_params_.use_logn_attn           = reader.GetInteger("llama", "use_logn_attn", 0);
+
+    attn_params_.original_max_position_embeddings = reader.GetInteger("llama", "original_max_position_embeddings", 0);
 
     engine_params_.max_batch_size        = reader.GetInteger("llama", "max_batch_size", 0);
     engine_params_.max_context_token_num = reader.GetInteger("llama", "max_context_token_num", 0);

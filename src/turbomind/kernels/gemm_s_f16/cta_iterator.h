@@ -510,6 +510,9 @@ struct IteratorB {
     int iter_k_{0};
     int iter_n_{0};
 
+    // upper bound N
+    int upper_n_;
+
     IteratorB() = default;
 
     __device__ IteratorB(const half* src, void* smem, int k, int n, int cta_n, int cta_k, int warp_id, int lane_id):
@@ -557,7 +560,10 @@ struct IteratorB {
         tmp_src_offset_   = src_offset_;
         tmp_dst_offset_   = dst_offset_;
         tmp_src_offset_n_ = src_offset_n_;
-        is_valid_n_       = tmp_src_offset_n_ < n_;
+
+        // avoid (global mem -> shared mem) WAW(write after write) conflict
+        upper_n_    = std::min(cta_n_ + CTA_N, n_);
+        is_valid_n_ = tmp_src_offset_n_ < upper_n_;
     }
 
     __device__ void prefetch_stage(bool mask)
@@ -601,7 +607,7 @@ struct IteratorB {
         tmp_src_offset_n_ += kWarpAccessN;
         tmp_src_offset_ += src_step_n_;
         tmp_dst_offset_ += dst_step_n_;
-        is_valid_n_ = tmp_src_offset_n_ < n_;
+        is_valid_n_ = tmp_src_offset_n_ < upper_n_;
         ++iter_n_;
 
         return *this;
@@ -621,7 +627,7 @@ struct IteratorB {
         tmp_dst_offset_   = dst_offset_;
         tmp_src_offset_n_ = src_offset_n_;
 
-        is_valid_n_ = tmp_src_offset_n_ < n_;
+        is_valid_n_ = tmp_src_offset_n_ < upper_n_;
     }
 
     __device__ void prefetch(bool mask)
