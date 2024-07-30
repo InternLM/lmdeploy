@@ -133,7 +133,6 @@ def run_chat(model_path: str,
 
 
 def main(model_path: str,
-         model_name: str = None,
          session_id: int = 1,
          top_k: float = 40,
          top_p: float = 0.8,
@@ -148,7 +147,6 @@ def main(model_path: str,
 
     Args:
         model_path (str): the huggingface model path
-        model_name (str): name of the model.
         session_id (int): the identical id of a session
         top_k (int): sampling top k.
         top_p (int): sampling top p.
@@ -163,9 +161,7 @@ def main(model_path: str,
     adapters = None
     if adapter is not None:
         adapters = dict(default=adapter)
-    engine_config = PytorchEngineConfig(model_name=model_name,
-                                        tp=tp,
-                                        adapters=adapters)
+    engine_config = PytorchEngineConfig(tp=tp, adapters=adapters)
     gen_config = EngineGenerationConfig(max_new_tokens=512,
                                         top_k=top_k,
                                         top_p=top_p,

@@ -18,7 +18,7 @@ def test_get_names_from_hf_model():
         assert _model_name == model_name if model_name else model_path
 
 
-def test_get_names_from_triton_model():
+def test_get_names_from_turbomind_model():
     workspace = tempfile.TemporaryDirectory('internlm2_5-7b-chat').name
     os.makedirs(os.path.join(workspace, 'triton_models', 'weights'),
                 exist_ok=True)

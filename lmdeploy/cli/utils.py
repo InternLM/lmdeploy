@@ -408,15 +408,6 @@ class ArgumentHelper:
             help='The working directory to save results')
 
     @staticmethod
-    def trust_remote_code(parser):
-        """Add argument trust_remote_code to parser."""
-        return parser.add_argument(
-            '--trust-remote-code',
-            action='store_false',
-            default=True,
-            help='Trust remote code for loading hf models')
-
-    @staticmethod
     def cache_block_seq_len(parser):
         """Add argument cache_block_seq_len to parser."""
 

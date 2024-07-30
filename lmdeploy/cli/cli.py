@@ -93,10 +93,8 @@ class CLI(object):
             ' of a model hosted inside a model repo on huggingface.co,'
             ' such as "internlm/internlm-chat-7b", "qwen/qwen-7b-chat "'
             ', "baichuan-inc/baichuan2-7b-chat" and so on')
-        ArgumentHelper.model_name(parser)
         # common args
         ArgumentHelper.backend(parser)
-        ArgumentHelper.trust_remote_code(parser)
         # # chat template args
         ArgumentHelper.chat_template(parser)
         # model args
