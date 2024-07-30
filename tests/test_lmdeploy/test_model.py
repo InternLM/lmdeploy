@@ -162,6 +162,38 @@ def test_messages2prompt4internlm2_chat():
     actual_prompt = model.messages2prompt(messages, tools=tools)
     assert actual_prompt == expected_prompt
 
+    # Test with a message where 'name' is not in name_map
+    messages_invalid_name = [
+        {
+            'role': 'system',
+            'name': 'invalid_name',
+            'content': 'You have access to python environment.'
+        },
+        {
+            'role': 'user',
+            'content': 'use python draw a line'
+        },
+        {
+            'role': 'assistant',
+            'content': '\ncode\n'
+        },
+        {
+            'role': 'environment',
+            'name': 'invalid_name',
+            'content': "[{'type': 'image', 'content': 'image url'}]"
+        },
+    ]
+    expected_prompt_invalid_name = (
+        model.system.strip() +
+        '\nYou have access to python environment.' +
+        model.eosys + model.user + 'use python draw a line' + model.eoh +
+        model.assistant +
+        '\ncode\n' + model.eoa +
+        model.separator + model.environment.strip() +
+        "\n[{'type': 'image', 'content': 'image url'}]" +
+        model.eoenv + model.assistant)
+    actual_prompt_invalid_name = model.messages2prompt(messages_invalid_name)
+    assert actual_prompt_invalid_name == expected_prompt_invalid_name
 
 def test_llama3_1():
     model = MODELS.get('llama3_1')()
