@@ -84,7 +84,8 @@ def main(model_path: str,
     model = chat_template_config.chat_template
 
     _, model_config = get_model_arch(model_path)
-    session_len = _get_and_verify_max_len(model_config, None)
+    if session_len is None:
+        session_len = _get_and_verify_max_len(model_config, None)
 
     # engine
     engine_cfg = TurbomindEngineConfig(

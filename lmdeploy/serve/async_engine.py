@@ -37,7 +37,7 @@ def get_names_from_model(model_path: str, model_name: str = None):
             parser.read_file(f)
         model_name = parser['llama']['model_name']
         # TODO: bc breaking warning
-        chat_template_name = parser['llama']['chat_template_name']
+        chat_template_name = parser['llama']['chat_template']
     return model_name, chat_template_name
 
 

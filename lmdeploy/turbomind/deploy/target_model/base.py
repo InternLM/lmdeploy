@@ -36,7 +36,7 @@ class TurbomindModelConfig:
     """Config for turbomind model."""
 
     model_name: str = ''
-    chat_template_name: str = ''
+    chat_template: str = ''
     model_arch: str = None
     tensor_para_size: int = None
     head_num: int = None

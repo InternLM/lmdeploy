@@ -252,7 +252,6 @@ class CLI(object):
             from lmdeploy.turbomind.chat import main as run_chat
             kwargs = convert_args(args)
             kwargs.pop('chat_template')
-            kwargs.pop('trust_remote_code')
             kwargs.pop('backend')
             kwargs['chat_template_config'] = chat_template_config
             run_chat(**kwargs)
