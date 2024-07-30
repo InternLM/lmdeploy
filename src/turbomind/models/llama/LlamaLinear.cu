@@ -181,28 +181,25 @@ void LlamaLinear<T>::set_measure(bool measure)
 }
 
 template<class T>
-void LlamaLinear<T>::Export()
+int LlamaLinear<T>::Export(std::ostream& os)
 {
-    if (auto path = std::getenv("TM_GEMM_EXPORT")) {
-        std::ofstream ofs(path);
-        if (ofs.is_open()) {
-            const auto n_records = impl_->gemm_.Export(ofs);
-            std::cout << "[Gemm2] " << n_records << " records exported." << std::endl;;
-        }
+    if (os) {
+        return impl_->gemm_.Export(os);
     }
+    return 0;
 }
 
 template<class T>
-void LlamaLinear<T>::Import()
+int LlamaLinear<T>::Import(std::istream& is)
 {
-    if (auto path = std::getenv("TM_GEMM_IMPORT")) {
-        std::ifstream ifs(path);
-        const auto    n_records = impl_->gemm_.Import(ifs);
-        if (n_records) {
-            impl_->dispatch_policy_ = gemm::DispatchPolicy::kReuse;
-        }
-        std::cout << "[Gemm2] " << n_records << " records imported." << std::endl;;
+    auto n_records = 0;
+    if (is) {
+        n_records = impl_->gemm_.Import(is);
     }
+    if (n_records) {
+        impl_->dispatch_policy_ = gemm::DispatchPolicy::kReuse;
+    };
+    return n_records;
 }
 
 #ifdef ENABLE_FP32

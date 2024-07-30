@@ -1,7 +1,6 @@
 
 #include "src/turbomind/kernels/attention/quantization.h"
 
-#include "src/turbomind/kernels/gemm/cache_utils.h"
 #include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/gpu_metric.h"

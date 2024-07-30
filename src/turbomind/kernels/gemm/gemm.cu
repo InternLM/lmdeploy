@@ -1,11 +1,12 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/gemm/cache_utils.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/gpu_metric.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/registry.h"
+#include "src/turbomind/kernels/gemm/tune/args.h"
+#include "src/turbomind/kernels/gemm/tune/sampler.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <algorithm>
 #include <limits>
@@ -68,6 +69,10 @@ struct Gemm::Impl {
     {
         l2_bytes_per_second_ = MeasureL2CacheThroughput();
         fma_per_second_      = MeasureMmaThroughput();
+        if (auto str = std::getenv("TM_GEMM_TUNE_ARGS")) {
+            ParseTuningArgs(tuning_, str);
+        }
+        measurer_.emplace(CreateStoppingCriterion(tuning_.max_iter, tuning_.max_time));
     }
 
     // find launch spec in dispatch cache, dispatch by heuristic on cache miss
@@ -139,14 +144,15 @@ struct Gemm::Impl {
         std::vector<std::pair<float, int>> costs;
 
         for (const auto& k : kernels) {
-            const int max_splits = std::min(k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size), 8);
+            const int max_splits =
+                std::min(k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size), tuning_.max_splits);
 
             auto [splits, cost] = k->Estimate(desc.m,
                                               desc.n,
                                               desc.k,
                                               max_splits,
                                               props_->multiProcessorCount,
-                                              8,
+                                              tuning_.max_waves,
                                               1,
                                               l2_bytes_per_second_,
                                               fma_per_second_)
@@ -169,7 +175,7 @@ struct Gemm::Impl {
 
         for (int i = 0; i < top_k; ++i) {
             const auto& [cost, splits] = costs[idxs[i]];
-            ret.emplace_back(LaunchSpec{kernels[idxs[i]], 3, splits}, static_cast<float>(cost));
+            ret.emplace_back(LaunchSpec{kernels[idxs[i]], tuning_.swizzle[0], splits}, static_cast<float>(cost));
         }
 
         return ret;
@@ -200,116 +206,56 @@ struct Gemm::Impl {
         for (const auto& k : kernels) {
             // std::cout << k->name() << "\n";
             int max_splits = k->GetMaxSplits(desc.m, desc.n, barriers_size, partials_size);
-            max_splits     = std::min(max_splits, 8);
+            max_splits     = std::min(max_splits, tuning_.max_splits);
             auto splits    = k->Estimate(desc.m,  //
                                       desc.n,
                                       desc.k,
                                       max_splits,
                                       props_->multiProcessorCount,
-                                      16,
-                                      5,
+                                      tuning_.max_waves,
+                                      tuning_.top_splits,
                                       l2_bytes_per_second_,
                                       fma_per_second_);
+
+            const auto&      kSwizzle = tuning_.swizzle;
+            std::vector<int> swizzles;
+            for (const auto& swi : kSwizzle) {
+                // To use splits=1 here, swizzling must not depends on split count
+                swizzles.push_back(k->GetSwizzle(desc.m, desc.n, desc.k, 1, swi));
+            }
+            // De-duplicate possible swizzles while keep the order
+            std::sort(swizzles.begin(), swizzles.end());
+            swizzles.erase(std::unique(swizzles.begin(), swizzles.end()), swizzles.end());
+            {
+                std::vector<int> tmp;
+                std::copy_if(kSwizzle.begin(), kSwizzle.end(), std::back_inserter(tmp), [&](int swi) {
+                    return std::find(swizzles.begin(), swizzles.end(), swi) != swizzles.end();
+                });
+                tmp.swap(swizzles);
+            }
+
             for (const auto& [split_k, cost] : splits) {
-                for (const auto& swizzle : {0, 1, 2, 3}) {
-                // for (const auto& swizzle : {3}) {
-                    if (auto s = k->GetSwizzle(desc.m, desc.n, desc.k, split_k, swizzle); s != swizzle) {
-                        // Skip when swizzle is starting to get truncated
-                        break;
-                    }
-                    specs.push_back(LaunchSpec{k, swizzle, split_k, cost});
+                for (const auto& swi : swizzles) {
+                    specs.push_back(LaunchSpec{k, swi, split_k, cost});
                 }
             }
         }
 
-        /// TODO: filter kernels by heuristic
-        // constexpr int   kMinIteration = 5;
-        // constexpr int   kMaxIteration = 50;
-        // constexpr float kMaxDuration  = 25;  // std::milli
+        specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
-        constexpr int   kMinIteration = 1;
-        constexpr int   kMaxIteration = 20;
-        constexpr float kMaxDuration  = 1;  // std::milli
-
-        constexpr float kFloatInf = std::numeric_limits<float>::infinity();
-
-        cudaEvent_t ev_beg;
-        cudaEvent_t ev_end;
-
-        cudaEventCreate(&ev_beg);
-        cudaEventCreate(&ev_end);
-
-        // std::vector<float> measurements;
-
-        for (auto& spec : specs) {
-            int                iter = 0;
-            float              accum{};
-            std::vector<float> duration;
-            // std::cout << "measuring " << spec.kernel->name() << " with swizzle=" << spec.swizzle
-            //           << ", splits=" << spec.splits << "\n";
-            while (true) {
-                CacheFlushing::flush(st);
-                // cudaStreamSynchronize(st);
-
-                cudaEventRecord(ev_beg, st);
-
-                launch_func(spec, st);
-
-                cudaEventRecord(ev_end, st);
-                cudaEventSynchronize(ev_end);
-
-                auto err = cudaGetLastError();
-
-                float delta{};
-                cudaEventElapsedTime(&delta, ev_beg, ev_end);
-                duration.push_back(delta);
-
-                ++iter;
-                accum += delta;
-
-                if (err != cudaSuccess) {
-                    std::cout << cudaGetErrorString(err) << "\n";
-                    // std::abort();
-                    duration.back() = kFloatInf;
-                    break;
-                }
-
-                if (iter >= kMaxIteration) {
-                    break;
-                }
-                if (iter >= kMinIteration && accum >= kMaxDuration) {
-                    break;
-                }
-            }
-
-            spec.measured = accum / static_cast<float>(iter);
-            // measurements.push_back(accum / static_cast<float>(iter));
+        for (const auto& s : specs) {
+            std::cout << s.kernel->name()                                //
+                      << " swizzle=" << s.swizzle                        //
+                      << ", splits=" << s.splits                         //
+                      << ", estimated=" << s.estimated * 1000.f << "ms"  //
+                      << ", measured=" << s.measured << "ms\n";
         }
 
-        cudaEventDestroy(ev_beg);
-        cudaEventDestroy(ev_end);
-
-        std::vector<int> idxs(specs.size());
-        std::iota(idxs.begin(), idxs.end(), 0);
-        std::sort(idxs.begin(), idxs.end(), [&](int i, int j) {  //
-            return specs[i].measured < specs[j].measured;
-        });
-
-        for (const auto& i : idxs) {
-            std::cout << specs[i].kernel->name()                              //
-                      << " swizzle=" << specs[i].swizzle                      //
-                      << ", splits=" << specs[i].splits                       //
-                      << ", estimated=" << specs[i].estimated * 1e3f << "ms"  //
-                      << ", measured=" << specs[i].measured << "ms\n";
-        }
-
-        LaunchSpec spec{};
-        if (!idxs.empty() && specs[idxs[0]].measured != kFloatInf) {
-            spec                  = specs[idxs[0]];
-            dispatch_cache_[desc] = spec;
+        if (!specs.empty()) {
+            dispatch_cache_[desc] = specs.front();
         }
         else {
-            std::cout << "No valid kernel found for problem.\n";
+            std::cerr << "No valid kernel found for the problem\n";
             return -1;
         }
 
@@ -337,6 +283,7 @@ struct Gemm::Impl {
         return dispatch_cache_.size();
     }
 
+    // Print a summary of how many cases a kernel is used
     void Summary(const std::vector<std::pair<GemmDesc, LaunchSpec>>& entries)
     {
         std::vector<Kernel*> uses{nullptr};
@@ -347,7 +294,6 @@ struct Gemm::Impl {
             uses.push_back(s.kernel);
         }
         std::sort(uses.begin(), uses.end());
-        assert(uses[0] == nullptr);
         std::vector<std::pair<int, Kernel*>> count;
         for (size_t i = 1; i < uses.size(); ++i) {
             if (uses[i] != uses[i - 1]) {
@@ -377,6 +323,10 @@ struct Gemm::Impl {
 
     float l2_bytes_per_second_;
     float fma_per_second_;
+
+    TuningArgs tuning_;
+
+    std::optional<Measurer> measurer_;
 
     std::map<GemmDesc, LaunchSpec> dispatch_cache_;
 };

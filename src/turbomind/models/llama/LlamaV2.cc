@@ -22,6 +22,7 @@
 
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
+#include "src/turbomind/kernels/gemm/tune/args.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
@@ -39,6 +40,7 @@
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include <algorithm>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -552,37 +554,49 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
     }
 }
 
-static std::pair<std::vector<int>, std::string> parse_int_list(const char* str)
+template<class First, class Last>
+static std::string Join(First first, Last last, const std::string& delim)
 {
-    if (!str) {
+    if (first == last) {
         return {};
     }
-    std::vector<int>  xs;
-    const std::string bstr(str);
-    std::stringstream ss(bstr);
-    std::string       token;
-    while (getline(ss, token, ',')) {
-        xs.push_back(std::stoi(token));
+    std::ostringstream oss;
+    oss << *first++;
+    while (first != last) {
+        oss << delim << *first++;
     }
-    std::stringstream os;
-    os << "[";
-    for (int i = 0; i < (int)xs.size(); ++i) {
-        os << (i ? "," : "") << xs[i];
-    }
-    os << "]";
-    return {xs, os.str()};
+    return oss.str();
 }
 
+// Only called when `weight_type == INT4` for now
 template<typename T>
 void LlamaV2<T>::tune()
 {
-    auto [bss, str] = parse_int_list(std::getenv("TM_GEMM_TUNE"));
 
-    if (tensor_para_.rank_ == 0 && !bss.empty()) {
+    if (auto str = std::getenv("TM_GEMM_IMPORT")) {
+        std::ifstream ifs(str);
+        const int     n_imported = linear_.Import(ifs);
+        TM_LOG_INFO("[Gemm2] %d records imported", n_imported);
+        return;
+    }
+
+    std::vector<int> bss;
+
+    if (auto str = std::getenv("TM_GEMM_TUNE_SEQS")) {
+        bss = gemm::ParseTuningSequence(str);
+    }
+    else {
+        bss = gemm::GenerateTuningSequence(gemm::GetDefaultTuningGenerators());
+    }
+
+    if (!bss.empty()) {
+        {
+            auto str = Join(bss.begin(), bss.end(), ", ");
+            TM_LOG_ERROR("[Gemm2] Tuning sequence: %s", str.c_str());
+        }
+
         LlamaAttentionWeight<T>& attn = weights_->decoder_layer_weights[0]->self_attn_weights;
         LlamaFfnWeight<T>&       ffn  = weights_->decoder_layer_weights[0]->ffn_weights;
-
-        TM_LOG_ERROR("[Gemm2] Tuning sequence: %s", str.c_str());
 
         std::vector<LlamaDenseWeight<T>*> weights{&attn.qkv, &attn.output, &ffn.output};
 
@@ -615,27 +629,25 @@ void LlamaV2<T>::tune()
 
         linear_.set_measure(true);
 
-        for (auto& w : weights) {
-            for (auto bs : bss) {
+        for (auto bs : bss) {
+            for (auto& w : weights) {
                 linear_.forward(out_data, in_data, bs, *w);
             }
         }
 
         linear_.set_measure(false);
 
-        linear_.Export();
-
         allocator_->free((void**)&in_data);
         allocator_->free((void**)&out_data);
     }
 
-    FT_CHECK(shared_state_ && shared_state_->barrier);
-    shared_state_->barrier->wait();
-
-    /// TODO: handle heterogeneous TP
-    /// TODO: handle uneven TP division
-
-    linear_.Import();
+    if (tensor_para_.rank_ == 0) {
+        if (auto path = std::getenv("TM_GEMM_EXPORT")) {
+            std::ofstream ofs(path);
+            const auto    n_records = linear_.Export(ofs);
+            TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
+        }
+    }
 }
 
 template class LlamaV2<half>;

@@ -8,17 +8,23 @@ add_library(gemm2
         kernel.cu
         registry.cu
         dispatch_cache.cu
-        cache_utils.cu
         gpu_metric.cu
         convert_v2.cu
         cast.cu
         unpack.cu
+        tune/cache_utils.cu
+        tune/measurer.cu
+        tune/sampler.cu
+        tune/stopping_criterion.cc
+        tune/args.cc
         kernel/f16_u4g128_f16_tnt_sm90_s16816.cu
         kernel/f16_u4g128_f16_tnt_sm80_s16816.cu
         kernel/f16_u4g128_f16_tnt_sm75_s16816.cu
         kernel/f16_u4g128_f16_tnt_sm70_s884.cu
         kernel/f16_u4g128_f16_tnt_sm75_simt.cu
 )
+
+target_link_libraries(gemm2 PRIVATE parser)
 
 
 target_compile_options(gemm2 PRIVATE
@@ -34,7 +40,6 @@ set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_executable(gemm_test
         test/gemm_test.cu
         test/test_utils.cu
-        cache_utils.cu
         test/quantization.cu
         test/reference.cu)
 target_link_libraries(gemm_test PRIVATE gemm2 cublas)
@@ -54,7 +59,6 @@ if (NOT MSVC)
                 test/gemm_bench.cu
                 test/test_utils.cu
                 test/quantization.cu
-                cache_utils.cu
                 test/reference.cu)
         target_link_libraries(gemm_bench PRIVATE gemm2 nvbench::nvbench cublas)
 endif ()

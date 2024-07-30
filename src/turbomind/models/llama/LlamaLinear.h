@@ -4,6 +4,8 @@
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
+#include <istream>
+#include <ostream>
 
 namespace turbomind {
 
@@ -33,9 +35,9 @@ public:
 
     void set_measure(bool measure);
 
-    void Export();
+    [[maybe_unused]] int Export(std::ostream& os);
 
-    void Import();
+    [[maybe_unused]] int Import(std::istream& is);
 
 private:
     struct Impl;
