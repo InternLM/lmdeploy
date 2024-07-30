@@ -78,14 +78,12 @@ def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int,
         return
 
     print('start to warmup ...')
-    output_seqlen = gen_config.max_new_tokens
 
     def _infer(model, session_id):
         chatbot = model.create_instance()
         for _ in range(warmup_round):
             for _ in chatbot.stream_infer(session_id,
                                           input_ids=input_ids,
-                                          request_output_len=output_seqlen,
                                           sequence_start=True,
                                           sequence_end=True,
                                           ignore_eos=True,

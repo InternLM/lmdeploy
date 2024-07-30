@@ -38,7 +38,7 @@ def convert(config, model_case, cuda_prefix):
     if 'w4' in model_case or ('4bits' in model_case
                               or 'awq' in model_case.lower()):
         cmd = get_command_with_extra(' '.join([
-            'lmdeploy convert', origin_model_path, '--model-name', model_name,
+            'lmdeploy convert', model_name, origin_model_path, '--dst-path',
             '--dst-path', dst_path, '--model-format awq --group-size 128'
         ]),
                                      config,
@@ -47,8 +47,8 @@ def convert(config, model_case, cuda_prefix):
                                      cuda_prefix=cuda_prefix)
     else:
         cmd = get_command_with_extra(' '.join([
-            'lmdeploy convert', origin_model_path, '--model-name', model_name,
-            '--dst-path', dst_path
+            'lmdeploy convert', model_name, origin_model_path, '--dst-path',
+            dst_path
         ]),
                                      config,
                                      model_case,
