@@ -36,7 +36,7 @@ def getModelList(tp_num):
                          indirect=True)
 def test_restful_chat_tp1(config, common_case_config, prepare_environment,
                           worker_id):
-    if 'llama-3-1' in prepare_environment['model']:
+    if 'llama-3-1' in prepare_environment['model'].lower():
         return
     if get_workerid(worker_id) is None:
         run_all_step(config, common_case_config)
