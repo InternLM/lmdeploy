@@ -20,6 +20,7 @@ def wq_gemm_forward(
 ):
     """wq gemm forward."""
     from awq.modules.linear.gemm import awq_ext
+    from lmdeploy.pytorch.kernels.cuda.awq_kernels import awq_dequantize_weights
     out_shape = x.shape[:-1] + (out_features, )
     input_dtype = x.dtype
     if input_dtype != torch.float16:
@@ -28,16 +29,7 @@ def wq_gemm_forward(
     FP16_MATMUL_HEURISTIC_CONDITION = x.size(0) * x.size(1) >= 1024
 
     if FP16_MATMUL_HEURISTIC_CONDITION:
-        # TODO: remove event wait if awq kernel set stream
-        default_stream = torch.cuda.default_stream()
-        event_def = torch.cuda.Event()
-        event_def.record()
-        event_def.wait(default_stream)
-        out = awq_ext.dequantize_weights_cuda(qweight, scales, qzeros, 0, 0, 0,
-                                              False)
-        event_def = torch.cuda.Event()
-        event_def.record(default_stream)
-        event_def.wait()
+        out = awq_dequantize_weights(qweight, scales, qzeros)
         out = torch.matmul(x, out)
     else:
         x = x.flatten(0, -2)
