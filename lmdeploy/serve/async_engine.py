@@ -171,7 +171,7 @@ class AsyncEngine(LogitsMixin):
             chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(chat_template_name)
-        elif chat_template_config.model_name not in MODELS.module_dict.keys():
+        elif chat_template_config.model_name is None:
             chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
 
