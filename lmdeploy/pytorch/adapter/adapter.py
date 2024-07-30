@@ -33,9 +33,10 @@ def _cache_weight(cache: Tensor, weight: Tensor, rank_offset: Tensor):
 def _get_named_loralinears(model: torch.nn.Module):
     """get all named loralinear."""
     from peft.tuners.lora import Linear as LoRALinear
+    from peft.tuners.lora.awq import AwqLoraLinear
     named_loralinear: Dict[str, torch.nn.Module] = dict()
     for name, module in model.named_modules():
-        if isinstance(module, LoRALinear):
+        if isinstance(module, (LoRALinear, AwqLoraLinear)):
             named_loralinear[name] = module
     return named_loralinear
 
@@ -116,12 +117,13 @@ class LoRALinearInfo:
     def from_loralinear(cls, linear: torch.nn.Module):
         """create from lora linear."""
         from peft.tuners.lora import Linear as LoRALinear
-        assert isinstance(linear, LoRALinear)
+        from peft.tuners.lora.awq import AwqLoraLinear
+        assert isinstance(linear, (LoRALinear, AwqLoraLinear))
 
         ranks = linear.r
         scalings = linear.scaling
-        base_weight = linear.base_layer.weight
-        out_features, in_features = base_weight.shape
+        in_features = linear.base_layer.in_features
+        out_features = linear.base_layer.out_features
         return cls(
             ranks=ranks,
             scalings=scalings,
