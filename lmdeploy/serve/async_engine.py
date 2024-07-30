@@ -26,7 +26,6 @@ def get_names_from_model(model_path: str, model_name: str = None):
     from configparser import ConfigParser
     triton_model_path = os.path.join(model_path, 'triton_models', 'weights')
     if not os.path.exists(triton_model_path):
-        model_name = model_name if model_name else model_path
         chat_template_name = best_match_model(model_path)
     else:
         # `model_path` refers to a turbomind model, reading model_name
@@ -35,9 +34,8 @@ def get_names_from_model(model_path: str, model_name: str = None):
         with open(ini_path, 'r') as f:
             parser = ConfigParser()
             parser.read_file(f)
-        model_name = parser['llama']['model_name']
-        # TODO: bc breaking warning
         chat_template_name = parser['llama']['chat_template']
+    model_name = model_name if model_name else model_path
     return model_name, chat_template_name
 
 

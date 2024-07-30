@@ -209,16 +209,14 @@ def main(model_name: str,
     """deploy llama family models via turbomind.
 
     Args:
-        model_name (str): the name of the served model, which is used in
-            api_server. It can be accessed by the RESTful API `/v1/models`.
-            If it is not specified, `model_path` will be adopted
+        model_name (str): unused any longer
         model_path (str): the directory path of the model
         model_format (str): the format of the model, should choose from
             ['meta_llama', 'hf', 'awq', None]. 'meta_llama' stands for META's
             llama format, 'hf' means huggingface llama format, and 'awq' means
             llama(hf) model quantized by lmdeploy/lite/quantization/awq.py.
             The default value is None
-        chat_template (str): the name of the chat template.
+        chat_template (str): the name of the built-in chat template.
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism, should be 2^n
@@ -241,8 +239,8 @@ def main(model_name: str,
     if chat_template is None:
         chat_template = best_match_model(model_path)
     assert chat_template in MODELS.module_dict.keys(), \
-        f"chat template '{chat_template}' is not registered. " \
-        f'The supported chat templates are: {MODELS.module_dict.keys()}'
+        f"chat template '{chat_template}' is not a built-in template. " \
+        f'The built-ins are: {MODELS.module_dict.keys()}'
     assert is_supported(model_path), (
         f'turbomind does not support {model_path}. '
         'Plz try pytorch engine instead.')

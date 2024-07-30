@@ -34,18 +34,13 @@ class CLI(object):
         parser.add_argument(
             'model_name',
             type=str,
-            help='The name of the to-be-deployed model, such as llama-7b, '
-            'llama-13b, vicuna-7b and etc. You can run `lmdeploy list` to '
-            'get the supported model names')
+            help='deprecated and unused, '
+            'it will be removed on 2024.12.31. It was originally used to '
+            'specify the name of the built-in chat template, but now it '
+            'is substituted with a clearer parameter `--chat-template`')
         parser.add_argument('model_path',
                             type=str,
                             help='The directory path of the model')
-        parser.add_argument(
-            '--model-name',
-            type=str,
-            help='the name of the served model, which is used in '
-            'api_server. It can be accessed by the RESTful API `/v1/models`. '
-            'If it is not specified, `model_path` will be adopted')
         ArgumentHelper.model_format(parser)
         ArgumentHelper.tp(parser)
         # other args
@@ -65,6 +60,12 @@ class CLI(object):
             default=0,
             help='A parameter used in awq to quantize fp16 weights '
             'to 4 bits')
+        parser.add_argument(
+            '--chat-template',
+            type=str,
+            default=None,
+            help='the name of the built-in chat template, which can be '
+            'overviewed by `lmdeploy list`')
         parser.set_defaults(run=CLI.convert)
 
     @staticmethod

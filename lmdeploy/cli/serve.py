@@ -46,7 +46,6 @@ class SubCliServe:
 
         # common args
         ArgumentHelper.backend(parser)
-        ArgumentHelper.model_name(parser)
         # model args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
