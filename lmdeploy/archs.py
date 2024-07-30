@@ -163,7 +163,10 @@ def get_model_arch(model_path: str):
         config = configparser.ConfigParser()
         config.read(config_file)
         model_arch = config['llama']['model_arch']
-        return model_arch, None
+        tm_config = TurbomindEngineConfig()
+        for key in config['llama']:
+            setattr(tm_config, key, config['llama'][key])
+        return model_arch, tm_config
     else:
         # transformers model
         try:

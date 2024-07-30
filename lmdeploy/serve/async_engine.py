@@ -222,12 +222,6 @@ class AsyncEngine(LogitsMixin):
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
                  gen_config: Optional[GenerationConfig] = None,
-                 request_output_len=512,
-                 top_k: int = 40,
-                 top_p: float = 0.8,
-                 temperature: float = 0.8,
-                 repetition_penalty: float = 1.0,
-                 ignore_eos: bool = False,
                  do_preprocess: bool = True,
                  adapter_name: Optional[str] = None,
                  use_tqdm: bool = False,
@@ -240,18 +234,6 @@ class AsyncEngine(LogitsMixin):
                 a chat history in OpenAI format or a list of chat history.
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
-            chat_template_config (ChatTemplateConfig | None):a instance of
-                ChatTemplateConfig. Default to None.
-            request_output_len (int): output token nums
-            top_k (int): The number of the highest probability vocabulary
-              tokens to keep for top-k-filtering
-            top_p (float): If set to float < 1, only the smallest set of most
-              probable tokens with probabilities that add up to top_p or higher
-            are kept for generation.
-            temperature (float): to modulate the next token probability
-            repetition_penalty (float): The parameter for repetition penalty.
-              1.0 means no penalty
-            ignore_eos (bool): indicator for ignoring eos
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
             adapter_name (str): the adapter name of slora for pytorch backend.
@@ -259,13 +241,7 @@ class AsyncEngine(LogitsMixin):
             use_tqdm (bool): Whether use the progress bar. Default to False
         """
         if gen_config is None:
-            gen_config = GenerationConfig(
-                max_new_tokens=request_output_len,
-                top_k=top_k,
-                top_p=top_p,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                ignore_eos=ignore_eos)
+            gen_config = GenerationConfig()
         return self.batch_infer(prompts,
                                 gen_config=gen_config,
                                 do_preprocess=do_preprocess,
