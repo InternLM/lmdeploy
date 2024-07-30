@@ -40,9 +40,11 @@
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <functional>
 #include <memory>
+#include <ratio>
 #include <sstream>
 
 namespace turbomind {
@@ -583,64 +585,78 @@ void LlamaV2<T>::tune()
     std::vector<int> bss;
 
     if (auto str = std::getenv("TM_GEMM_TUNE_SEQS")) {
-        bss = gemm::ParseTuningSequence(str);
+        try {
+            bss = gemm::ParseTuningSequence(str);
+        }
+        catch (...) {
+            TM_LOG_ERROR("[Gemm2] Failed to parse `TM_GEMM_TUNE_SEQS`, default value will be used.");
+            bss = {};
+        }
     }
-    else {
+
+    if (bss.empty()) {
         bss = gemm::GenerateTuningSequence(gemm::GetDefaultTuningGenerators());
     }
 
-    if (!bss.empty()) {
-        {
-            auto str = Join(bss.begin(), bss.end(), ", ");
-            TM_LOG_ERROR("[Gemm2] Tuning sequence: %s", str.c_str());
-        }
-
-        LlamaAttentionWeight<T>& attn = weights_->decoder_layer_weights[0]->self_attn_weights;
-        LlamaFfnWeight<T>&       ffn  = weights_->decoder_layer_weights[0]->ffn_weights;
-
-        std::vector<LlamaDenseWeight<T>*> weights{&attn.qkv, &attn.output, &ffn.output};
-
-        for (auto& layer : weights_->decoder_layer_weights) {
-            if (layer->ffn_weights.gating.kernel) {
-                weights.push_back(&layer->ffn_weights.gating);
-                break;
-            }
-        }
-        for (auto& layer : weights_->decoder_layer_weights) {
-            if (layer->ffn_weights.fused_gating_intermediate.kernel) {
-                weights.push_back(&layer->ffn_weights.fused_gating_intermediate);
-                break;
-            }
-        }
-
-        const int max_bs  = *std::max_element(bss.begin(), bss.end());
-        int       max_in  = 0;
-        int       max_out = 0;
-        for (auto& w : weights) {
-            max_in  = std::max<int>(max_in, w->input_dims);
-            max_out = std::max<int>(max_out, w->output_dims);
-        }
-
-        T* in_data  = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_in);
-        T* out_data = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_out);
-
-        cudaRandomUniform(in_data, (size_t)max_bs * max_in);
-        cudaDeviceSynchronize();
-
-        linear_.set_measure(true);
-
-        for (auto bs : bss) {
-            for (auto& w : weights) {
-                linear_.forward(out_data, in_data, bs, *w);
-            }
-        }
-
-        linear_.set_measure(false);
-
-        allocator_->free((void**)&in_data);
-        allocator_->free((void**)&out_data);
+    {
+        auto str = Join(bss.begin(), bss.end(), ", ");
+        TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
     }
 
+    LlamaAttentionWeight<T>& attn = weights_->decoder_layer_weights[0]->self_attn_weights;
+    LlamaFfnWeight<T>&       ffn  = weights_->decoder_layer_weights[0]->ffn_weights;
+
+    std::vector<LlamaDenseWeight<T>*> weights{&attn.qkv, &attn.output, &ffn.output};
+
+    for (auto& layer : weights_->decoder_layer_weights) {
+        if (layer->ffn_weights.gating.kernel) {
+            weights.push_back(&layer->ffn_weights.gating);
+            break;
+        }
+    }
+    for (auto& layer : weights_->decoder_layer_weights) {
+        if (layer->ffn_weights.fused_gating_intermediate.kernel) {
+            weights.push_back(&layer->ffn_weights.fused_gating_intermediate);
+            break;
+        }
+    }
+
+    const int max_bs  = *std::max_element(bss.begin(), bss.end());
+    int       max_in  = 0;
+    int       max_out = 0;
+    for (auto& w : weights) {
+        max_in  = std::max<int>(max_in, w->input_dims);
+        max_out = std::max<int>(max_out, w->output_dims);
+    }
+
+    T* in_data  = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_in);
+    T* out_data = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_out);
+
+    cudaRandomUniform(in_data, (size_t)max_bs * max_in);
+    cudaDeviceSynchronize();
+
+    linear_.set_measure(true);
+
+    auto tick = std::chrono::steady_clock::now();
+
+    for (auto bs : bss) {
+        TM_LOG_INFO("[Gemm2] %d", bs);
+        for (auto& w : weights) {
+            linear_.forward(out_data, in_data, bs, *w);
+        }
+    }
+
+    auto tock = std::chrono::steady_clock::now();
+
+    TM_LOG_INFO("[Gemm2] Tuning finished in %.2f seconds.",
+                std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
+
+    linear_.set_measure(false);
+
+    allocator_->free((void**)&in_data);
+    allocator_->free((void**)&out_data);
+
+    // Only rank-0 exports the dispatch cache
     if (tensor_para_.rank_ == 0) {
         if (auto path = std::getenv("TM_GEMM_EXPORT")) {
             std::ofstream ofs(path);

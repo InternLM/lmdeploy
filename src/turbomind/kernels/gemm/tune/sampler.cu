@@ -27,7 +27,7 @@ std::vector<LaunchSpec> Sampler::Run(std::vector<LaunchSpec> specs, const Launch
             clusters.push_back({&s});
         }
     }
-    std::cout << "k_clusters=" << k_clusters_ << ", #specs" << specs.size() << ", #clusters" << clusters.size() << "\n";
+    // std::cout << "k_clusters=" << k_clusters_ << ", #specs" << specs.size() << ", #clusters" << clusters.size() << "\n";
 
     std::vector<LaunchSpec> s_1;
     for (const auto& c : clusters) {
@@ -51,7 +51,7 @@ std::vector<LaunchSpec> Sampler::Run(std::vector<LaunchSpec> specs, const Launch
             }
         }
 
-        std::cout << "#s_2=" << s_2.size() << "\n";
+        // std::cout << "#s_2=" << s_2.size() << "\n";
 
         auto m_2 = measurer_.Measure(s_2, launcher, stream);
         // Merge measurements of the 2 runs

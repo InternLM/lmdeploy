@@ -13,7 +13,7 @@ struct TuningArgs {
     // Split-k params
     int max_splits = 8;
     int top_splits = 5;
-    int max_waves  = 16;
+    int max_waves  = 10;
 
     // Swizzling params
     std::vector<int> swizzle{3};
@@ -21,7 +21,7 @@ struct TuningArgs {
     // Sampling params
     int   clusters = 5;
     int   max_iter = 10;
-    float max_time = 5.f;
+    float max_time = 1.f;
 };
 
 // example

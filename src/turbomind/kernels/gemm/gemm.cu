@@ -70,7 +70,13 @@ struct Gemm::Impl {
         l2_bytes_per_second_ = MeasureL2CacheThroughput();
         fma_per_second_      = MeasureMmaThroughput();
         if (auto str = std::getenv("TM_GEMM_TUNE_ARGS")) {
-            ParseTuningArgs(tuning_, str);
+            try {
+                ParseTuningArgs(tuning_, str);
+            }
+            catch (...) {
+                std::cerr << "[Gemm2] Failed to parse `TM_GEMM_TUNE_ARGS`, default value will be used.\n";
+                tuning_ = {};
+            }
         }
         measurer_.emplace(CreateStoppingCriterion(tuning_.max_iter, tuning_.max_time));
     }
@@ -193,7 +199,7 @@ struct Gemm::Impl {
             return 0;
         }
 
-        std::cout << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
+        // std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
 
         std::vector<Kernel*> kernels;
         for (const auto& k : registry_.kernels()) {
@@ -243,13 +249,13 @@ struct Gemm::Impl {
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
-        for (const auto& s : specs) {
-            std::cout << s.kernel->name()                                //
-                      << " swizzle=" << s.swizzle                        //
-                      << ", splits=" << s.splits                         //
-                      << ", estimated=" << s.estimated * 1000.f << "ms"  //
-                      << ", measured=" << s.measured << "ms\n";
-        }
+        // for (const auto& s : specs) {
+        //     std::cout << s.kernel->name()                                //
+        //               << " swizzle=" << s.swizzle                        //
+        //               << ", splits=" << s.splits                         //
+        //               << ", estimated=" << s.estimated * 1000.f << "ms"  //
+        //               << ", measured=" << s.measured << "ms\n";
+        // }
 
         if (!specs.empty()) {
             dispatch_cache_[desc] = specs.front();
