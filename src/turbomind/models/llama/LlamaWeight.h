@@ -51,7 +51,7 @@ struct LlamaWeight {
 
     TensorMap getParams();
 
-    void prepare();
+    void prepare(const cudaDeviceProp& prop);
 
     std::vector<LlamaDecoderLayerWeight<T>*> decoder_layer_weights;
     const T*                                 pre_decoder_embedding_table{};

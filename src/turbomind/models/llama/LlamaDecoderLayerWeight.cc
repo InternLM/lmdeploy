@@ -27,6 +27,7 @@
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include <cstdlib>
+#include <cuda_runtime.h>
 #include <filesystem>
 #include <ios>
 
@@ -459,7 +460,7 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
 }
 
 template<class T>
-static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size)
+static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size, bool use_simt)
 {
     if (weight.type != WeightType::kINT4) {
         return;
@@ -467,7 +468,7 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size)
 
     using namespace gemm;
 
-    auto [order_b, pack_b, order_v, pack_v] = get_weight_and_scales_layout(getSMVersion(), false);
+    auto [order_b, pack_b, order_v, pack_v] = get_weight_and_scales_layout(getSMVersion(), use_simt);
 
     if (order_b == kColMajor) {
         transpose_u4((uint4_t*)workspace, (const uint4_t*)weight.kernel, weight.input_dims, weight.output_dims);
@@ -527,7 +528,7 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size)
     const int scale_count = (weight.input_dims / weight.group_size) * weight.output_dims;
 
     if constexpr (std::is_same_v<T, half>) {
-        std::cout << "fuse_scales_and_zeros\n";
+        // std::cout << "fuse_scales_and_zeros\n";
         fuse_scales_and_zeros((T*)workspace, weight.scales, weight.zeros, scale_count);
         // cudaMemset((T*)workspace, 0, sizeof(T) * scale_count * 2);
         sync_check_cuda_error();
@@ -645,10 +646,12 @@ void chunk(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& 
 }
 
 template<typename T>
-void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size)
+void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cudaDeviceProp& prop)
 {
-    convert(self_attn_weights.qkv, workspace, size);
-    convert(self_attn_weights.output, workspace, size);
+    const bool is_16xx = is_16xx_series(prop.name);
+
+    convert(self_attn_weights.qkv, workspace, size, is_16xx);
+    convert(self_attn_weights.output, workspace, size, is_16xx);
 
     if (fused_up_and_gate_) {
 
@@ -663,17 +666,17 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size)
             chunk(fused_up_and_gate, ffn_weights.gating, ffn_weights.intermediate, workspace, size);
         }
 
-        convert(ffn_weights.fused_gating_intermediate, workspace, size);
+        convert(ffn_weights.fused_gating_intermediate, workspace, size, is_16xx);
 
         freeWeights(ffn_weights.gating);
         freeWeights(ffn_weights.intermediate);
     }
     else {
-        convert(ffn_weights.gating, workspace, size);
-        convert(ffn_weights.intermediate, workspace, size);
+        convert(ffn_weights.gating, workspace, size, is_16xx);
+        convert(ffn_weights.intermediate, workspace, size, is_16xx);
     }
 
-    convert(ffn_weights.output, workspace, size);
+    convert(ffn_weights.output, workspace, size, is_16xx);
 }
 
 #ifdef ENABLE_FP32

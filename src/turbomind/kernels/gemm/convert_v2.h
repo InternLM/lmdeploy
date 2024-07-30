@@ -113,18 +113,18 @@ struct ConvertOperand {
         const int pack_cnt_m = ceil_div(param.m, Atom::M * Pack_M);
 
         if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
-            printf("m=%d, k=%d, lds = %d\n", param.m, param.k, param.lds);
-            printf(
-                "CTA_M=%d, CTA_K=%d, cta_cnt_m=%d, cta_cnt_k=%d, cta_idx_m=%d, ITER_K=%d, pack_cnt_m=%d, pack_cnt_k=%d\n",
-                M_,
-                K_,
-                cta_cnt_m,
-                cta_cnt_k,
-                cta_idx_m,
-                ITER_K,
-                pack_cnt_m,
-                pack_cnt_k);
-            printf("frag_size=%d, frag_num=%d, pack_size=%d\n", kFragSize, kFragNum, kPackSize);
+            // printf("m=%d, k=%d, lds = %d\n", param.m, param.k, param.lds);
+            // printf(
+            //     "CTA_M=%d, CTA_K=%d, cta_cnt_m=%d, cta_cnt_k=%d, cta_idx_m=%d, ITER_K=%d, pack_cnt_m=%d, pack_cnt_k=%d\n",
+            //     M_,
+            //     K_,
+            //     cta_cnt_m,
+            //     cta_cnt_k,
+            //     cta_idx_m,
+            //     ITER_K,
+            //     pack_cnt_m,
+            //     pack_cnt_k);
+            // printf("frag_size=%d, frag_num=%d, pack_size=%d\n", kFragSize, kFragNum, kPackSize);
         }
 
         SmemCopy smem_copy({warp_offset_m, 0});

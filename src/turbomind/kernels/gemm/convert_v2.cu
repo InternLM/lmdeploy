@@ -89,7 +89,7 @@ void Convert_v2_Impl(const void* S, const MatrixLayout& Sdesc, void* D, const Ma
     constexpr int threads = Config::BLOCK_SIZE;
     const int     blocks  = ceil_div(Sdesc.rows, CTA_M);
 
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
+    // std::cout << __PRETTY_FUNCTION__ << std::endl;
     // std::cout << __PRETTY_FUNCTION__ << "\nThreadMap:\n";
     // Print(typename Kernel::GmemIter::ThreadMap{});
 
@@ -128,8 +128,8 @@ int Convert(const void*         S,  //
                 return true;
             }
 
-            std::cerr << __PRETTY_FUNCTION__ << "\n";
-            std::cerr << kPackSize << " " << unit_size(type_c<Dtype>) << "\n";
+            // std::cerr << __PRETTY_FUNCTION__ << "\n";
+            // std::cerr << kPackSize << " " << unit_size(type_c<Dtype>) << "\n";
         }
 
         return false;

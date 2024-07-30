@@ -426,7 +426,11 @@ void LlamaTritonModel<T>::processWeights(int device_id, int rank)
 {
     ft::check_cuda_error(cudaSetDevice(device_id));
     ft::FT_CHECK(shared_weights_[device_id] != nullptr);
-    shared_weights_[device_id]->prepare();
+
+    cudaDeviceProp props{};
+    ft::check_cuda_error(cudaGetDeviceProperties(&props, device_id));
+
+    shared_weights_[device_id]->prepare(props);
     ft::sync_check_cuda_error();
 }
 
@@ -451,10 +455,10 @@ template<typename T>
 std::string LlamaTritonModel<T>::toString()
 {
     std::stringstream ss;
-    ss << "Model: "
-       << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_ << "\nsize_per_head: " << size_per_head_
-       << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_
-       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_params_.max_batch_size
+    ss << "Model: " << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_
+       << "\nsize_per_head: " << size_per_head_ << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_
+       << "\nvocab_size: " << vocab_size_ << "\nattn_bias: " << attn_bias_
+       << "\nmax_batch_size: " << engine_params_.max_batch_size
        << "\nmax_context_token_num: " << engine_params_.max_context_token_num
        << "\nsession_len: " << engine_params_.session_len << "\nstep_length: " << engine_params_.step_length
        << "\ncache_max_entry_count: " << engine_params_.cache_max_block_count

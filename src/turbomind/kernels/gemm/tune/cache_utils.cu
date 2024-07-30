@@ -12,7 +12,7 @@ CacheFlushing::CacheFlushing()
 
     size_ = props.l2CacheSize;
 
-    std::cout << "L2 flushing size: " << (size_ >> 20) << " MB\n";
+    // std::cout << "L2 flushing size: " << (size_ >> 20) << " MB\n";
 
     cudaMalloc(&buffer_, size_);
 }

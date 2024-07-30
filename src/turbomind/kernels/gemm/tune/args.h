@@ -3,7 +3,6 @@
 #pragma once
 
 #include <array>
-#include <cuda_runtime.h>
 #include <string>
 #include <vector>
 
@@ -29,7 +28,7 @@ struct TuningArgs {
 void ParseTuningArgs(TuningArgs& args, const std::string& str);
 
 // example
-//   16-16-128,8192;
+//   16-16-128,256-128-1024,8192;
 std::vector<int> ParseTuningSequence(const std::string& str);
 
 std::vector<int> GenerateTuningSequence(const std::vector<std::array<int, 3>>& generators);

@@ -20,6 +20,7 @@
 
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/utils/memory_utils.h"
+#include <cuda_runtime.h>
 
 namespace turbomind {
 
@@ -149,7 +150,7 @@ TensorMap LlamaWeight<T>::getParams()
 }
 
 template<typename T>
-void LlamaWeight<T>::prepare()
+void LlamaWeight<T>::prepare(const cudaDeviceProp& prop)
 {
     const auto workspace_size = decoder_layer_weights[0]->workspace_size();
     char*      workspace{};
@@ -160,7 +161,7 @@ void LlamaWeight<T>::prepare()
         deviceMalloc((char**)&workspace, workspace_size);
     }
     for (auto& layer : decoder_layer_weights) {
-        layer->prepare(workspace, workspace_size);
+        layer->prepare(workspace, workspace_size, prop);
     }
     deviceFree(workspace);
 }

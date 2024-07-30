@@ -49,7 +49,7 @@ public:
 
     TensorMap getParams(std::string prefix);
 
-    void prepare(void* workspace, size_t size);
+    void prepare(void* workspace, size_t size, const cudaDeviceProp& prop);
 
     size_t workspace_size() const noexcept;
 
