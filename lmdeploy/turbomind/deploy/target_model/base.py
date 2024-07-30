@@ -120,6 +120,7 @@ class TurbomindModelConfig:
             self.max_prefill_iters = (self.session_len +
                                       config.max_prefill_token_num -
                                       1) // config.max_prefill_token_num
+            self.max_context_token_num = config.max_prefill_token_num
 
     def toini(self):
         config = copy.deepcopy(self.__dict__)
