@@ -209,7 +209,6 @@ class SubCliServe:
         if backend == 'pytorch':
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
-                model_name=args.model_name,
                 max_batch_size=args.max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
@@ -218,7 +217,6 @@ class SubCliServe:
             )
         else:
             backend_config = TurbomindEngineConfig(
-                model_name=args.model_name,
                 tp=args.tp,
                 max_batch_size=args.max_batch_size,
                 session_len=args.session_len,
@@ -253,7 +251,6 @@ class SubCliServe:
             adapters = get_lora_adapters(args.adapters)
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
-                model_name=args.model_name,
                 max_batch_size=args.max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
@@ -264,7 +261,6 @@ class SubCliServe:
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(
-                model_name=args.model_name,
                 tp=args.tp,
                 max_batch_size=args.max_batch_size,
                 session_len=args.session_len,
