@@ -289,6 +289,10 @@ class LlamaModel(nn.Module):
 
         return hidden_states
 
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.embed_tokens
+
 
 class LlamaForCausalLM(nn.Module):
 
@@ -321,6 +325,10 @@ class LlamaForCausalLM(nn.Module):
         logits = logits.float()
         return logits
 
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.model.get_input_embeddings()
+
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],
@@ -337,7 +345,7 @@ class LlamaForCausalLM(nn.Module):
 
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
-                inputs_embeds = self.model.embed_tokens(input_ids)
+                inputs_embeds = self.get_input_embeddings()(input_ids)
             inputs_embeds[:,
                           vision_embedding_indexing, :] = vision_embeddings.to(
                               inputs_embeds)

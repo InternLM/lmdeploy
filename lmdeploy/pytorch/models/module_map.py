@@ -321,7 +321,7 @@ MODULE_MAP.update({
 # llava
 MODULE_MAP.update({
     'llava.model.language_model.llava_llama.LlavaLlamaForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaLlamaForCausalLM',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
     'llava.model.language_model.llava_llama.LlavaLlamaModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'llava.model.language_model.llava_mistral.LlavaMistralForCausalLM':

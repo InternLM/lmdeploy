@@ -111,6 +111,17 @@ def _update_module_type(model: Any, cls_type: type, custom_attrs: dict = None):
     return model
 
 
+def get_rewrite_cls(model: torch.nn.Module, module_map: Dict[str, str] = None):
+    """get rewrite cls."""
+    if module_map is None:
+        module_map = _get_module_map()
+    rewrite_qualname = _find_rewrite_module_qualname(model,
+                                                     module_map=module_map)
+    if rewrite_qualname is None:
+        return None
+    return _class_from_qualname(rewrite_qualname)
+
+
 def _patch(model: torch.nn.Module, module_map: Dict[str,
                                                     str]) -> torch.nn.Module:
     """patch the model with rewrite module.

@@ -213,6 +213,9 @@ class CUDAGraphRunner(GraphRunner):
         if self.backend_config.eager_mode:
             return False
 
+        if getattr(self.model, 'support_cuda_graph', False):
+            return False
+
         # TODO: should we enable cudagraph awq now?
         # hf_config = self.model_config.hf_config
         # quantization_config = getattr(hf_config,
