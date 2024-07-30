@@ -26,7 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/07\] 支持 Llama3.1
+- \[2024/07\] 🎉🎉 支持 Llama3.1 8B 和 70B 模型，以及工具调用功能
 - \[2024/07\] 支持 [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e) 全系列模型，[InternLM-XComposer2.5](docs/zh_cn/multi_modal/xcomposer2d5.md) 模型和 InternLM2.5 的 [function call 功能](docs/zh_cn/serving/api_server_tools.md)
 - \[2024/06\] PyTorch engine 支持了 DeepSeek-V2 和若干 VLM 模型推理, 比如 CogVLM2，Mini-InternVL，LlaVA-Next
 - \[2024/05\] 在多 GPU 上部署 VLM 模型时，支持把视觉部分的模型均分到多卡上
@@ -116,10 +116,10 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM2.5 (7B)</li>
-  <li>QWen (1.8B - 72B)</li>
-  <li>QWen1.5 (0.5B - 110B)</li>
-  <li>QWen1.5 - MoE (0.5B - 72B)</li>
-  <li>QWen2 (0.5B - 72B)</li>
+  <li>Qwen (1.8B - 72B)</li>
+  <li>Qwen1.5 (0.5B - 110B)</li>
+  <li>Qwen1.5 - MoE (0.5B - 72B)</li>
+  <li>Qwen2 (0.5B - 72B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
@@ -143,10 +143,10 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>InternLM-XComposer2.5 (7B)</li>
-  <li>QWen-VL (7B)</li>
+  <li>Qwen-VL (7B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
-  <li>InternVL2 (1B-40B)</li>
+  <li>InternVL2 (1B-76B)</li>
   <li>MiniGeminiLlama (7B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
@@ -176,7 +176,7 @@ pip install lmdeploy
 自 v0.3.0 起，LMDeploy 预编译包默认基于 CUDA 12 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，请执行以下命令：
 
 ```shell
-export LMDEPLOY_VERSION=0.5.1
+export LMDEPLOY_VERSION=0.5.2
 export PYTHON_VERSION=38
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```

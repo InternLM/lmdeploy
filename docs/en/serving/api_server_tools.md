@@ -1,8 +1,10 @@
 # Tools
 
+LMDeploy supports tools for InternLM2, InternLM2.5 and llama3.1 models.
+
 ## Single Round Invocation
 
-Currently, LMDeploy supports tools only for InternLM2, InternLM2.5 and llama3.1 models. Please start the service of models before running the following example.
+Please start the service of models before running the following example.
 
 ```python
 from openai import OpenAI
@@ -43,7 +45,7 @@ print(response)
 
 ## Multiple Round Invocation
 
-### InternLM demo
+### InternLM
 
 A complete toolchain invocation process can be demonstrated through the following example.
 
@@ -149,58 +151,96 @@ ChatCompletion(id='2', choices=[Choice(finish_reason='tool_calls', index=0, logp
 16
 ```
 
-### Llama3.1 demo
+### Llama 3.1
+
+Meta announces in [Llama3's official user guide](https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_1) that,
+
+```{text}
+There are three built-in tools (brave_search, wolfram_alpha, and code interpreter) can be turned on using the system prompt:
+
+1. Brave Search: Tool call to perform web searches.
+2. Wolfram Alpha: Tool call to perform complex mathematical calculations.
+3. Code Interpreter: Enables the model to output python code.
+```
+
+Additionally, it cautions: "**Note:** We recommend using Llama 70B-instruct or Llama 405B-instruct for applications that combine conversation and tool calling. Llama 8B-Instruct can not reliably maintain a conversation alongside tool calling definitions. It can be used for zero-shot tool calling, but tool instructions should be removed for regular conversations between the model and the user."
+
+Therefore, we utilize [Meta-Llama-3.1-70B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3.1-70B-Instruct) to show how to invoke the tool calling by LMDeploy `api_server`.
+
+On a A100-SXM-80G node, you can start the service as follows:
+
+```shell
+lmdeploy serve api_server /the/path/of/Meta-Llama-3.1-70B-Instruct/model --tp 4
+```
+
+For an in-depth understanding of the api_server, please refer to the detailed documentation available [here](./api_server.md).
+
+The following code snippet demonstrates how to utilize the 'Wolfram Alpha' tool. It is assumed that you have already registered on the [Wolfram Alpha](https://www.wolframalpha.com) website and obtained an API key. Please ensure that you have a valid API key to access the services provided by Wolfram Alpha
 
 ```python
 from openai import OpenAI
+import requests
 
-tools = [
-  {
-    "type": "function",
-    "function": {
-      "name": "get_current_weather",
-      "description": "Get the current weather in a given location",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "location": {
-            "type": "string",
-            "description": "The city and state, e.g. San Francisco, CA",
-          },
-          "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-        },
-        "required": ["location"],
-      },
+
+def request_llama3_1_service(messages):
+    client = OpenAI(api_key='YOUR_API_KEY',
+                    base_url='http://0.0.0.0:23333/v1')
+    model_name = client.models.list().data[0].id
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        temperature=0.8,
+        top_p=0.8,
+        stream=False)
+    return response.choices[0].message.content
+
+
+# The role of "system" MUST be specified, including the required tools
+messages = [
+    {
+        "role": "system",
+        "content": "Environment: ipython\nTools: wolfram_alpha\n\n Cutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\nYou are a helpful Assistant." # noqa
+    },
+    {
+        "role": "user",
+        "content": "Can you help me solve this equation: x^3 - 4x^2 + 6x - 24 = 0"  # noqa
     }
-  }
 ]
-messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
 
-client = OpenAI(api_key='YOUR_API_KEY',base_url='http://0.0.0.0:23333/v1')
-model_name = client.models.list().data[0].id
-response = client.chat.completions.create(
-    model=model_name,
-    messages=messages,
-    temperature=0.8,
-    top_p=0.8,
-    stream=False,
-    tools=tools)
-print(response)
-messages += [{"role": "assistant", "content": response.choices[0].message.content}]
-messages += [{"role": "ipython", "content": "Clouds giving way to sun Hi: 76° Tonight: Mainly clear early, then areas of low clouds forming Lo: 56°"}]
-response = client.chat.completions.create(
-    model=model_name,
-    messages=messages,
-    temperature=0.8,
-    top_p=0.8,
-    stream=False,
-    tools=tools)
-print(response)
-```
+# send request to the api_server of llama3.1-70b and get the response
+# the "assistant_response" is supposed to be:
+# <|python_tag|>wolfram_alpha.call(query="solve x^3 - 4x^2 + 6x - 24 = 0")
+assistant_response = request_llama3_1_service(messages)
+print(assistant_response)
 
-And the outputs would be:
+# Call the API of Wolfram Alpha with the query generated by the model
+app_id = 'YOUR-Wolfram-Alpha-API-KEY'
+params = {
+    "input": assistant_response,
+    "appid": app_id,
+    "format": "plaintext",
+    "output": "json",
+}
 
-```
-ChatCompletion(id='3', choices=[Choice(finish_reason='tool_calls', index=0, logprobs=None, message=ChatCompletionMessage(content='<function=get_current_weather>{"location": "Boston, MA", "unit": "fahrenheit"}</function>\n\nOutput:\nCurrent Weather in Boston, MA:\nTemperature: 75°F\nHumidity: 60%\nWind Speed: 10 mph\nSky Conditions: Partly Cloudy', role='assistant', function_call=None, tool_calls=[ChatCompletionMessageToolCall(id='0', function=Function(arguments='{"location": "Boston, MA", "unit": "fahrenheit"}', name='get_current_weather'), type='function')]))], created=1721815546, model='llama3.1/Meta-Llama-3.1-8B-Instruct', object='chat.completion', service_tier=None, system_fingerprint=None, usage=CompletionUsage(completion_tokens=58, prompt_tokens=349, total_tokens=407))
-ChatCompletion(id='4', choices=[Choice(finish_reason='stop', index=0, logprobs=None, message=ChatCompletionMessage(content='The current weather in Boston is mostly sunny with a high of 76°F and a low of 56°F tonight.', role='assistant', function_call=None, tool_calls=None))], created=1721815547, model='llama3.1/Meta-Llama-3.1-8B-Instruct', object='chat.completion', service_tier=None, system_fingerprint=None, usage=CompletionUsage(completion_tokens=36, prompt_tokens=446, total_tokens=482))
+wolframalpha_response = requests.get(
+    "https://api.wolframalpha.com/v2/query",
+    params=params
+)
+wolframalpha_response = wolframalpha_response.json()
+
+# Append the contents obtained by the model and the wolframalpha's API
+# to "messages", and send it again to the api_server
+messages += [
+    {
+        "role": "assistant",
+        "content": assistant_response
+    },
+    {
+        "role": "ipython",
+        "content": wolframalpha_response
+    }
+]
+
+assistant_response = request_llama3_1_service(messages)
+print(assistant_response)
 ```
