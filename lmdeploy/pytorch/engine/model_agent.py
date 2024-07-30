@@ -157,6 +157,20 @@ def model_forward(
     return dict(logits=output)
 
 
+def _get_indexed_lora_linears(model):
+    """get indexed lora linears."""
+    if hasattr(model, 'get_model'):
+        model = model.get_model()
+    return get_indexed_lora_linears(model)
+
+
+def _get_loralinear_info(model):
+    """get lora linear info."""
+    if hasattr(model, 'get_model'):
+        model = model.get_model()
+    return get_loralinear_info(model)
+
+
 def _load_adapters(hf_model: torch.nn.Module,
                    adapters: Dict[str, str],
                    device_map: str = 'cpu'):
@@ -357,7 +371,7 @@ class BaseModelAgent(AutoModelAgent):
 
     def get_loralinear_info(self):
         """get lora linear info."""
-        return get_loralinear_info(self.patched_model)
+        return _get_loralinear_info(self.patched_model)
 
     def get_block_numel(self):
         """get block nelement."""
@@ -367,7 +381,7 @@ class BaseModelAgent(AutoModelAgent):
     def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """paging adapter."""
         logger.info('paging adapters.')
-        lora_linears = get_indexed_lora_linears(self.patched_model)
+        lora_linears = _get_indexed_lora_linears(self.patched_model)
         cpu_caches = self.cache_engine.cpu_cache
         num_blocks = self.cache_engine.num_cpu_blocks
         cpu_caches = [(kcache.view(num_blocks,
@@ -493,13 +507,12 @@ def _tp_build_model(
         return config_list[0]
 
     try:
-        config = model_config.hf_config
         torch_dtype = model_config.dtype
         device_map = None
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            model = model_config.auto_model_cls.from_config(
-                config,
+            model = model_config.auto_model_cls.from_pretrained(
+                model_path,
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code,
                 **model_config.init_kwargs)
@@ -507,10 +520,10 @@ def _tp_build_model(
             _remove_unused_modules(model, model_config)
             if rank == 0:
                 device_map = _create_device_map(model, world_size)
-            _add_adapters(model, adapters)
-            if rank == 0:
-                # adapter would remove weight of linear.
-                device_map = _create_device_map(model, world_size, device_map)
+        _add_adapters(model, adapters)
+        if rank == 0:
+            # adapter would remove weight of linear.
+            device_map = _create_device_map(model, world_size, device_map)
 
         model.eval()
         model.config.use_cache = True
@@ -582,7 +595,7 @@ def _tp_paging_adapters(
 
     def __paging(weight_maps):
         """paging."""
-        lora_linears = get_indexed_lora_linears(patched_model)
+        lora_linears = _get_indexed_lora_linears(patched_model)
         cpu_caches = cache_engine.cpu_cache
         num_blocks = cache_engine.num_cpu_blocks
         cpu_caches = [(kcache.view(num_blocks,
@@ -862,7 +875,7 @@ class TPModelAgent(AutoModelAgent):
 
     def get_loralinear_info(self):
         """get lora linear info."""
-        return get_loralinear_info(self.patched_model)
+        return _get_loralinear_info(self.patched_model)
 
     def get_block_numel(self):
         """get block nelement."""

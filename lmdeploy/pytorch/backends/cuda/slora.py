@@ -213,7 +213,6 @@ class TritonSLoRAImpl(SLoRAImpl):
         lora_out = lora_out.reshape(sliced_base.shape)
         sliced_base.add_(lora_out)
         output = base_output
-
         return output
 
     def forward(self,

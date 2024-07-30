@@ -20,6 +20,8 @@ from lmdeploy.model import MODELS, best_match_model
      ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
      ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
      ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
+     ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
+     ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
      ('tiiuae/falcon-7b', ['falcon']), ('workspace', ['base'])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
@@ -82,31 +84,27 @@ def test_vicuna():
 
 def test_internlm_chat():
     prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('internlm-chat-7b')(capability='completion')
+    model = MODELS.get('internlm')(capability='completion')
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is not None
     assert model.system == '<|System|>:'
-    assert model.session_len == 2048
 
-    model = MODELS.get('internlm-chat-7b')(capability='chat',
-                                           system='Provide answers in Python')
+    model = MODELS.get('internlm')(capability='chat',
+                                   system='Provide answers in Python')
     assert model.get_prompt(prompt, sequence_start=True) != prompt
     assert model.get_prompt(prompt, sequence_start=False) != prompt
     assert model.system == 'Provide answers in Python'
 
-    model = MODELS.get('internlm-chat-7b')(capability='voice')
+    model = MODELS.get('internlm')(capability='voice')
     _prompt = None
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
         assert _prompt is None
 
-    model = MODELS.get('internlm-chat-7b-8k')()
-    assert model.session_len == 8192
-
 
 def test_messages2prompt4internlm2_chat():
-    model = MODELS.get('internlm2-chat-7b')()
+    model = MODELS.get('internlm2')()
     # Test with a single message
     messages = [
         {
@@ -165,16 +163,38 @@ def test_messages2prompt4internlm2_chat():
     assert actual_prompt == expected_prompt
 
 
+def test_llama3_1():
+    model = MODELS.get('llama3_1')()
+    messages = [
+        dict(role='user',
+             content='Can you check the top 5 trending songs on spotify?')
+    ]
+    tools = [{
+        'name': 'spotify_trending_songs',
+        'description': 'Get top trending songs on Spotify',
+        'parameters': {
+            'n': {
+                'param_type': 'int',
+                'description': 'Number of trending songs to get',
+                'required': True
+            }
+        },
+    }]
+    actual_prompt = model.messages2prompt(messages, tools=tools)
+    expected_prompt = '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\n# Tool Instructions\n- Always execute python code in messages that you share.\n- When looking for real time information use relevant functions if available else fallback to brave_search\n\n\n\nYou have access to the following functions:\n\nUse the function \'spotify_trending_songs\' to: Get top trending songs on Spotify\n{"name": "spotify_trending_songs", "description": "Get top trending songs on Spotify", "parameters": {"n": {"param_type": "int", "description": "Number of trending songs to get", "required": true}}}\n\n\nIf a you choose to call a function ONLY reply in the following format:\n<{start_tag}={function_name}>{parameters}{end_tag}\nwhere\n\nstart_tag => `<function`\nparameters => a JSON dict with the function argument name as key and function argument value as value.\nend_tag => `</function>`\n\nHere is an example,\n<function=example_function_name>{"example_name": "example_value"}</function>\n\nReminder:\n- Function calls MUST follow the specified format\n- Required parameters MUST be specified\n- Only call one function at a time\n- Put the entire function call reply on one line"\n- Always add your sources when using search results to answer the user query\n\nYou are a helpful assistant.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nCan you check the top 5 trending songs on spotify?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n'  # noqa
+    assert actual_prompt == expected_prompt
+
+
 def test_baichuan():
     prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('baichuan-7b')(capability='completion')
+    model = MODELS.get('baichuan2')(capability='completion')
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is None
 
-    model = MODELS.get('baichuan-7b')(capability='chat')
+    model = MODELS.get('baichuan2')(capability='chat')
     _prompt = model.get_prompt(prompt, sequence_start=True)
-    assert _prompt == prompt
+    assert _prompt == '<reserved_106>' + prompt + '<reserved_107>'
 
 
 def test_llama2():
@@ -209,16 +229,16 @@ def test_llama3():
 
 def test_qwen():
     prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('qwen-7b')(capability='completion')
+    model = MODELS.get('qwen')(capability='completion')
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is not None
 
-    model = MODELS.get('qwen-7b')(capability='chat')
+    model = MODELS.get('qwen')(capability='chat')
     assert model.get_prompt(prompt, sequence_start=True) != prompt
     assert model.get_prompt(prompt, sequence_start=False) != prompt
 
-    model = MODELS.get('qwen-7b')(capability='voice')
+    model = MODELS.get('qwen')(capability='voice')
     _prompt = None
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
@@ -327,7 +347,13 @@ def test_chatglm3():
 
 
 def test_glm4():
-    model = MODELS.get('glm4')()
+    model_path_and_name = 'THUDM/glm-4-9b-chat'
+    deduced_name = best_match_model(model_path_and_name)
+    assert deduced_name == 'glm4'
+
+    model = MODELS.get(deduced_name)()
+    # check stop words
+    assert model.stop_words == ['<|user|>', '<|endoftext|>', '<|observation|>']
     messages = [{
         'role': 'system',
         'content': 'you are a helpful assistant'
@@ -342,7 +368,7 @@ def test_glm4():
         'content': 'AGI is?'
     }]
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained('THUDM/glm-4-9b-chat',
+    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name,
                                               trust_remote_code=True)
     ref = tokenizer.apply_chat_template(messages, tokenize=False)
     res = model.messages2prompt(messages)
@@ -403,3 +429,29 @@ def test_internvl2():
         'assistant\nI am an AI<|im_end|>\n<|im_start|>assistant\n'
     res = model.messages2prompt(messages)
     assert res == expected
+
+
+def test_codegeex4():
+    model_path_and_name = 'THUDM/codegeex4-all-9b'
+    deduced_name = best_match_model(model_path_and_name)
+    assert deduced_name == 'codegeex4'
+    model = MODELS.get(deduced_name)()
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name,
+                                              trust_remote_code=True)
+    ref = tokenizer.apply_chat_template(messages, tokenize=False)
+    res = model.messages2prompt(messages)
+    assert res.startswith(ref)

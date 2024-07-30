@@ -157,15 +157,15 @@ class BaseLinear(nn.Module):
 
     def forward(self, x):
         """forward of linear layer."""
+        is_tp = False if self.colwise else self.is_tp
         if self.lora_adapters is None:
-            is_tp = False if self.colwise else self.is_tp
             return self.impl.forward(x, is_tp)
 
         out = self.impl.forward(x, False)
         if self.lora_adapters is not None:
             for lora_adapter in self.lora_adapters:
                 out = lora_adapter(x, out)
-        if self.is_tp:
+        if is_tp:
             dist.all_reduce(out)
         return out
 

@@ -94,6 +94,11 @@ class InternVLAwqReader(LlamaAwqReader):
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
 
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        model_cfg = model_cfg.get('llm_config')
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
+
 
 class InternVL2AwqReader(InternLM2AwqReader):
     """InternVLReader for InternLM2 model."""

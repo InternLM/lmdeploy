@@ -14,7 +14,7 @@ class GenerationConfig:
 
     Args:
         n (int): Define how many chat completion choices to generate for each
-            input message
+            input message. **Only 1** is supported now.
         max_new_tokens (int): The maximum number of tokens that can be
             generated in the chat completion
         top_p (float): An alternative to sampling with temperature, called

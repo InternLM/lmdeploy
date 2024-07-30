@@ -3,8 +3,6 @@ from functools import partial
 from typing import Union
 
 import torch
-import transformers
-from mmengine import digit_version
 from torch import nn
 from transformers import PreTrainedTokenizer
 
@@ -161,60 +159,10 @@ class CalibrationContext():
             samples = len(batch_args)
 
             m_name = self.mod2name[mod]
-            k_obs = KVCacheObserver.find(m_name, group=self.key_obs_group)
-            v_obs = KVCacheObserver.find(m_name, group=self.value_obs_group)
 
             for i in range(len(batch_args)):
-
-                if k_obs and v_obs:
-                    batch_kwargs[i]['use_cache'] = True
-                    version = digit_version(transformers.__version__)
-                    use_new_cache = type(mod).__name__ in ('LlamaDecoderLayer',
-                                                           'Qwen2DecoderLayer')
-                    if type(mod).__name__ == 'InternLM2DecoderLayer':
-                        use_new_cache = hasattr(mod.attention, 'layer_idx')
-                    if version > digit_version('4.36.0') and use_new_cache:
-                        from transformers.cache_utils import DynamicCache
-                        batch_kwargs[i]['past_key_value'] = DynamicCache()
-
-                        if hasattr(mod, 'self_attn'):
-                            self_attn = mod.self_attn
-                        elif hasattr(mod, 'attention'):
-                            self_attn = mod.attention
-                        else:
-                            raise RuntimeError('Attention layer not found')
-
-                        ori_idx = self_attn.layer_idx
-                        self_attn.layer_idx = 0
-
-                        out = self._ori_forwards[mod](*batch_args[i],
-                                                      **batch_kwargs[i])
-                        self_attn.layer_idx = ori_idx
-
-                        out = list(out)
-                        cache = out.pop(-1)
-
-                        key = cache.key_cache.pop(-1)
-                        value = cache.value_cache.pop(-1)
-
-                        k_obs.observe(key)
-                        v_obs.observe(value)
-
-                    else:
-                        out = self._ori_forwards[mod](*batch_args[i],
-                                                      **batch_kwargs[i])
-                        out = list(out)
-                        key, value = out.pop(-1)
-
-                        k_obs.observe(key)
-                        v_obs.observe(value)
-
-                    del key, value
-                    torch.cuda.empty_cache()
-                    batch_outputs.append(tuple(out))
-                else:
-                    batch_outputs.append(self._ori_forwards[mod](
-                        *batch_args[i], **batch_kwargs[i]))
+                batch_outputs.append(self._ori_forwards[mod](
+                    *batch_args[i], **batch_kwargs[i]))
 
             outputs = concat_decoder_layer_outputs(batch_outputs)
 
@@ -309,14 +257,11 @@ class CalibrationContext():
         out_stats = self.collect_outputs_stats()
         torch.save(out_stats, out_dir / 'outputs_stats.pth')
 
-        key_stats, value_stats = self.collect_kv_stats()
-        torch.save(key_stats, out_dir / 'key_stats.pth')
-        torch.save(value_stats, out_dir / 'value_stats.pth')
-
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
 
-        if type(self.model).__name__ == 'QWenLMHeadModel':
+        if type(self.model).__name__ in ('QWenLMHeadModel',
+                                         'ChatGLMForConditionalGeneration'):
             model = self.model.transformer
         else:
             model = self.model.model
@@ -520,7 +465,7 @@ class CalibrationContextV2(CalibrationContext):
                                  self.w_group_size, obs_group, mod_name)
                 ActivationObserver.enable()
             for key, item in obs_group.items():
-                if key.startswith(f'{mod_name}.'):
+                if key.startswith(f'{mod_name}.') and item.value is not None:
                     item.value.cpu()
                     del item.value
 

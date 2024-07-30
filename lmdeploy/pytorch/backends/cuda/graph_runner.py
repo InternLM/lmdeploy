@@ -215,7 +215,8 @@ class CUDAGraphRunner(GraphRunner):
 
         # TODO: should we enable cudagraph awq now?
         # hf_config = self.model_config.hf_config
-        # quantization_config = getattr(hf_config, 'quantization_config', dict())
+        # quantization_config = getattr(hf_config,
+        #    'quantization_config', dict())
         # quant_method = quantization_config.get('quant_method', None)
         # if quant_method == 'awq':
         #     logger.warning('AWQ model does not support cuda graph yet.')

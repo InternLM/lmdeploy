@@ -66,8 +66,12 @@ class TurbomindModelConfig:
     use_context_fmha: int = 1
     quant_policy: int = 0
     max_position_embeddings: int = 0
+    original_max_position_embeddings: int = 0
+    rope_scaling_type: str = ''
     rope_scaling_factor: float = 0.0
     use_dynamic_ntk: int = 0
+    low_freq_factor: float = 1.0
+    high_freq_factor: float = 1.0
     use_logn_attn: int = 0
     lora_policy: str = ''
     lora_r: int = 0

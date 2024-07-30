@@ -1,7 +1,8 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import triton
 import triton.language as tl
 from torch import Tensor
-import torch
+
 from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
@@ -11,6 +12,7 @@ def _get_unpacked_order(offs_n, elem_per_int):
     origin_order = offs_n % elem_per_int
     unpacked_order = (origin_order % 2) * 4 + origin_order // 2
     return unpacked_order
+
 
 @triton.jit
 def _unpack_weight(weight, order):
@@ -23,7 +25,10 @@ def _unpack_weight(weight, order):
 @wrap_jit_func
 @triton.jit
 def _dequantize_weights_kernel(
-    QWeight, Scales, Qzeros, Out,
+    QWeight,
+    Scales,
+    Qzeros,
+    Out,
     in_size: tl.constexpr,
     out_size: tl.constexpr,
     group_size: tl.constexpr,
@@ -38,7 +43,7 @@ def _dequantize_weights_kernel(
     stride_on: tl.constexpr,
     BLOCK_K: tl.constexpr,
     BLOCK_N: tl.constexpr,
-    ):
+):
     """dequantize weight kernel."""
     k_block_id = tl.program_id(0)
     n_block_id = tl.program_id(1)
@@ -56,10 +61,13 @@ def _dequantize_weights_kernel(
     mask = mask_k[:, None] and mask_n[None, :]
     unpacked_order = _get_unpacked_order(offs_n, elem_per_int)
 
-    qw_ptr = QWeight + offs_wk[:, None] * stride_wk + offs_wn[None, :] * stride_wn
-    s_ptr = Scales + offs_sk[:, None] * stride_sk + offs_sn[None, :] * stride_sn
-    qz_ptr = Qzeros + offs_zk[:, None] * stride_zk + offs_zn[None, :] * stride_zn
-    
+    qw_ptr = QWeight + offs_wk[:,
+                               None] * stride_wk + offs_wn[None, :] * stride_wn
+    s_ptr = Scales + offs_sk[:,
+                             None] * stride_sk + offs_sn[None, :] * stride_sn
+    qz_ptr = Qzeros + offs_zk[:,
+                              None] * stride_zk + offs_zn[None, :] * stride_zn
+
     out_dtype = Out.dtype.element_ty
     qw = tl.load(qw_ptr, mask=mask)
     s = tl.load(s_ptr, mask=mask).to(out_dtype)
@@ -88,8 +96,14 @@ def awq_dequantize_weights(qweight: Tensor, scales: Tensor, qzeros: Tensor):
     kernel_meta = get_kernel_meta(qweight)
     grid = (triton.cdiv(in_size, BLOCK_K), triton.cdiv(out_size, BLOCK_N))
     _dequantize_weights_kernel[grid](
-        qweight, scales, qzeros, output,
-        in_size, out_size, group_size, elem_per_int,
+        qweight,
+        scales,
+        qzeros,
+        output,
+        in_size,
+        out_size,
+        group_size,
+        elem_per_int,
         qweight.stride(0),
         qweight.stride(1),
         scales.stride(0),

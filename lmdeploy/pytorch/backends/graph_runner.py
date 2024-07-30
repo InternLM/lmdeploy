@@ -16,6 +16,10 @@ class GraphRunner:
         """call graph runner forward."""
         return self.model(**kwargs)
 
+    def get_model(self):
+        """get model."""
+        return self.model
+
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],

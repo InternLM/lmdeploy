@@ -20,7 +20,9 @@ def wq_gemm_forward(
 ):
     """wq gemm forward."""
     from awq.modules.linear.gemm import awq_ext
-    from lmdeploy.pytorch.kernels.cuda.awq_kernels import awq_dequantize_weights
+
+    from lmdeploy.pytorch.kernels.cuda.awq_kernels import \
+        awq_dequantize_weights
     out_shape = x.shape[:-1] + (out_features, )
     input_dtype = x.dtype
     if input_dtype != torch.float16:

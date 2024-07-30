@@ -57,8 +57,6 @@ Our implementation of the LLaMa family models is modified from Gpt-NeoX model in
 
 TurboMind supports a Python API that enables streaming output and tensor parallel mode.
 
-The ability to use [tritonserver](https://github.com/triton-inference-server/server) for serving is also inherited from FasterTransformer. However, to support submitting concurrent requests into our persistent batch model, we no longer use sequence batching or dynamic batching as FasterTransformer does. The bookkeeping of request and sequence states are managed by TurboMind instead.
-
 ## Difference between FasterTransformer and TurboMind
 
 Apart of the features described above, there are still many minor differences that we don't cover in this document. Notably, many capabilities of FT are dropped in TurboMind because of the difference in objectives (e.g. prefix prompt, beam search, context embedding, sparse GEMM, GPT/T5/other model families, etc)

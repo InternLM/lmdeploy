@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import copy
-import json
 import os
 import time
 from http import HTTPStatus
@@ -256,7 +255,7 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
     - n (int): How many chat completion choices to generate for each input
-        message. Only support one here.
+        message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
     - max_tokens (int): output token nums
     - repetition_penalty (float): The parameter for repetition penalty.
@@ -386,7 +385,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
     - n (int): How many chat completion choices to generate for each input
-        message. Only support one here.
+        message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
     - max_tokens (int | None): output token nums. Default to None.
     - repetition_penalty (float): The parameter for repetition penalty.
@@ -416,11 +415,17 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    VariableInterface.session_id += 1
-    request.session_id = VariableInterface.session_id
+    if request.session_id == -1:
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    if VariableInterface.async_engine.id2step.get(str(request.session_id),
+                                                  0) != 0:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The session_id `{request.session_id}` is occupied.')
 
     model_name = request.model
     adapter_name = None
@@ -535,22 +540,17 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             final_logprobs.extend(res.logprobs)
 
     tool_calls = None
-    if request.tool_choice != 'none' and '<|plugin|>' in text:
+    if request.tool_choice != 'none' and ('<|plugin|>' in text
+                                          or '<function=' in text):
         if final_res.finish_reason == 'stop':
             final_res.finish_reason = 'tool_calls'
-        # TODO may move to generate function
-        text, action = text.split('<|action_start|><|plugin|>')
-        action = action.split('<|action_end|>'.strip())[0]
-        action = action[action.find('{'):]
         try:  # TODO add json_schema guidance to turbomind
-            action = json.loads(action)
-            action_id = [tool.function.name
-                         for tool in request.tools].index(action['name'])
+            text, action_id, name, parameters = VariableInterface.async_engine.parse_tool_response(  # noqa
+                text, request.tools)
             tool_calls = [
                 ToolCall(id=str(action_id),
-                         function=FunctionResponse(name=action['name'],
-                                                   arguments=json.dumps(
-                                                       action['parameters'])))
+                         function=FunctionResponse(name=name,
+                                                   arguments=parameters))
             ]
         except Exception as e:
             logger.error(f'Exception: {e}')
@@ -614,7 +614,7 @@ async def completions_v1_qos(request: CompletionRequestQos,
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
     - n (int): How many chat completion choices to generate for each input
-        message. Only support one here.
+        message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
@@ -765,7 +765,7 @@ async def completions_v1(request: CompletionRequest,
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
     - n (int): How many chat completion choices to generate for each input
-        message. Only support one here.
+        message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
@@ -785,11 +785,17 @@ async def completions_v1(request: CompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    VariableInterface.session_id += 1
-    request.session_id = VariableInterface.session_id
+    if request.session_id == -1:
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    if VariableInterface.async_engine.id2step.get(str(request.session_id),
+                                                  0) != 0:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'The session_id `{request.session_id}` is occupied.')
 
     model_name = request.model
     adapter_name = None

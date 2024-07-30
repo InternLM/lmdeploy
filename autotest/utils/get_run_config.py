@@ -89,13 +89,12 @@ def get_model_name(model):
         return 'yi-vl'
     if ('qwen' in model_name):
         return 'qwen'
-
     if ('internvl') in model_name:
         return 'internvl-internlm2'
     if ('internlm2') in model_name:
         return 'internlm2'
-    if ('internlm-xcomposer2-4khd-7b') in model_name:
-        return 'internlm-xcomposer2-4khd'
+    if ('internlm-xcomposer2d5') in model_name:
+        return 'internlm-xcomposer2d5'
     if ('internlm-xcomposer2') in model_name:
         return 'internlm-xcomposer2'
     if ('glm-4') in model_name:
