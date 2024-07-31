@@ -14,7 +14,7 @@ from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
 
 # from lmdeploy.lite.utils.export_turbomind import export_turbomind_config
 
-NORM_TYPE_MAP = NORM_TYPE_MAP  # legency
+NORM_TYPE_MAP = NORM_TYPE_MAP  # legacy
 
 
 def save_vl_model(vl_model, model_path, dst_path):
