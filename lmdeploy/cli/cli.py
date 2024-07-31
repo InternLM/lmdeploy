@@ -253,7 +253,6 @@ class CLI(object):
             )
             run_chat(args.model_path,
                      engine_config,
-                     trust_remote_code=args.trust_remote_code,
                      chat_template_config=chat_template_config)
         else:
             from lmdeploy.turbomind.chat import main as run_chat
