@@ -512,6 +512,8 @@ jobs:
     needs: [test_benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
+    env:
+      BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark_reports/${{ github.run_id }}
     steps:
       - name: Clone repository
         uses: actions/checkout@v3
@@ -521,7 +523,7 @@ jobs:
       - name: Get overview
         run: |
           pip install pandas fire mmengine
-          python3 .github/scripts/action_tools.py generate_benchmark_report $REPORT_DIR
+          python3 .github/scripts/action_tools.py generate_benchmark_report $BENCHMARK_REPORT_DIR
 
   notify_to_feishu:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
