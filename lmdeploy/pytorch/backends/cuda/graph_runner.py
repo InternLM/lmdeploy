@@ -213,7 +213,7 @@ class CUDAGraphRunner(GraphRunner):
         if self.backend_config.eager_mode:
             return False
 
-        if getattr(self.model, 'support_cuda_graph', False):
+        if not getattr(self.model, 'support_cuda_graph', False):
             return False
 
         # TODO: should we enable cudagraph awq now?
