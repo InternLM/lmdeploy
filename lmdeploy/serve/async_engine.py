@@ -28,8 +28,8 @@ def get_names_from_model(model_path: str, model_name: str = None):
     if not os.path.exists(triton_model_path):
         chat_template_name = best_match_model(model_path)
     else:
-        # `model_path` refers to a turbomind model, reading model_name
-        # and chat_template_name from the config
+        # `model_path` refers to a turbomind model, reading
+        # chat_template_name from the config
         ini_path = os.path.join(triton_model_path, 'config.ini')
         with open(ini_path, 'r') as f:
             parser = ConfigParser()
