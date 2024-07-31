@@ -235,7 +235,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_params_.enable_prefix_caching = reader.GetBoolean("llama", "enable_prefix_caching", false);
 
     engine_params_.num_tokens_per_iter   = reader.GetInteger("llama", "num_tokens_per_iter", 0);
-    engine_params_.extra_tokens_per_iter = reader.GetInteger("llama", "extra_tokens_per_iter", 0);
     engine_params_.max_prefill_iters     = reader.GetInteger("llama", "max_prefill_iters", 1);
 
     lora_params_.policy        = ft::getLoraPolicy(reader.Get("llama", "lora_policy", ""));

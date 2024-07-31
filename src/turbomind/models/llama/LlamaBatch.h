@@ -301,7 +301,6 @@ private:
     int* h_output_ids_{};
 
     const int num_tokens_per_iter_;
-    const int extra_tokens_per_iter_;
     const int max_prefill_iters_;
 };
 

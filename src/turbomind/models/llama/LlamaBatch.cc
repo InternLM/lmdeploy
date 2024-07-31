@@ -940,7 +940,6 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
     model_(model),
     data_type_(getTensorType<T>()),
     num_tokens_per_iter_(params.num_tokens_per_iter),
-    extra_tokens_per_iter_(params.extra_tokens_per_iter),
     max_prefill_iters_(params.max_prefill_iters)
 {
     stream_         = model_->stream_;
