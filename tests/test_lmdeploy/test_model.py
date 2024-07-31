@@ -82,6 +82,13 @@ def test_vicuna():
         assert _prompt is None
 
 
+def test_prefix_response():
+    model = MODELS.get('internlm2')()
+    messages = [dict(role='assistant', content='prefix test')]
+    prompt = model.messages2prompt(messages)
+    assert prompt[-len('prefix test'):] == 'prefix test'
+
+
 def test_internlm_chat():
     prompt = 'hello, can u introduce yourself'
     model = MODELS.get('internlm')(capability='completion')
@@ -311,6 +318,9 @@ def test_deepseek_coder():
     }, {
         'role': 'assistant',
         'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'hi'
     }]
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -392,6 +402,9 @@ def test_internvl_phi3():
     }, {
         'role': 'assistant',
         'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'hi'
     }]
     res = model.messages2prompt(messages)
     from huggingface_hub import hf_hub_download
@@ -426,7 +439,7 @@ def test_internvl2():
     expected = '<|im_start|>system\n你是由上海人工智能实验室联合商汤科技开发的'\
         '书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。'\
         '<|im_end|>\n<|im_start|>user\nwho are you<|im_end|>\n<|im_start|>'\
-        'assistant\nI am an AI<|im_end|>\n<|im_start|>assistant\n'
+        'assistant\nI am an AI'
     res = model.messages2prompt(messages)
     assert res == expected
 
