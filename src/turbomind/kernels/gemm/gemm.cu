@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <vector>
 
 namespace turbomind::gemm {
