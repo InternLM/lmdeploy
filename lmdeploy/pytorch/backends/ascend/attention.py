@@ -10,8 +10,9 @@ from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
 @dataclass
 class AscendAttentionMetadata(AttentionMetadata):
     kv_start_indices: Optional[Tensor] = None
+    block_size: int = 64
     attention_mask: Sequence[Tensor] = tuple()
-    unpaged_prefill_flag: Optional[Tensor] = None
+    is_unpaged_prefill: Optional[bool] = None
 
 
 class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
@@ -61,13 +62,14 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
         q_start_loc = attn_metadata.q_start_loc
         q_seqlens = attn_metadata.q_seqlens
         kv_seqlens = attn_metadata.kv_seqlens
-        kv_start_indices = attn_metadata.kv_start_indices
         is_decoding = attn_metadata.is_decoding
+        kv_start_indices = attn_metadata.kv_start_indices
+        block_size = attn_metadata.block_size
         attn_mask = attn_metadata.attention_mask
-        unpaged_prefill_flag = attn_metadata.unpaged_prefill_flag
+        is_unpaged_prefill = attn_metadata.is_unpaged_prefill
 
         # fill kv cache
-        self.fill_kv_cache(
+        k_cache, v_cache = self.fill_kv_cache(
             key,
             value,
             k_cache,
@@ -82,7 +84,7 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
             o_shape = q_shape[:-1] + (self.v_head_size, )
             attn_output = query.new_empty(o_shape)
 
-        self.paged_attention_fwd(
+        attn_output = self.paged_attention_fwd(
             query,
             key,
             value,
@@ -94,8 +96,9 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
             is_decoding=is_decoding,
+            block_size=block_size,
             attn_mask=attn_mask,
-            unpaged_prefill_flag=unpaged_prefill_flag,
+            is_unpaged_prefill=is_unpaged_prefill,
         )
 
         return attn_output
