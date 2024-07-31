@@ -114,6 +114,12 @@ void LlamaTritonModel<T>::handleMissingParams()
         TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)engine_params_.session_len);
     }
 
+    if (!engine_params_.max_prefill_token_num) {
+        engine_params_.max_prefill_token_num = 8192;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_prefill_token_num` is not set, default to %d.",
+                       (int)engine_params_.max_prefill_token_num);
+    }
+
     if (!engine_params_.max_context_token_num) {
         engine_params_.max_context_token_num = engine_params_.session_len;
         TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` is not set, default to %d.",
@@ -219,6 +225,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     attn_params_.original_max_position_embeddings = reader.GetInteger("llama", "original_max_position_embeddings", 0);
 
     engine_params_.max_batch_size        = reader.GetInteger("llama", "max_batch_size", 0);
+    engine_params_.max_prefill_token_num = reader.GetInteger("llama", "max_prefill_token_num", 0);
     engine_params_.max_context_token_num = reader.GetInteger("llama", "max_context_token_num", 0);
     engine_params_.session_len           = reader.GetInteger("llama", "session_len", 0);
     engine_params_.step_length           = reader.GetInteger("llama", "step_length", 0);
@@ -268,6 +275,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
         std::cout << "[ERROR] Unsupported weight type: '" << weight_type_str << "'\n";
         ft::FT_CHECK(0);
     }
+
+    TM_LOG_INFO("%s", toString().c_str());
 }
 
 template<typename T>
@@ -433,10 +442,11 @@ template<typename T>
 std::string LlamaTritonModel<T>::toString()
 {
     std::stringstream ss;
-    ss << "Model: "
-       << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_ << "\nsize_per_head: " << size_per_head_
-       << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_
-       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_params_.max_batch_size
+    ss << "Model: " << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_
+       << "\nsize_per_head: " << size_per_head_ << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_
+       << "\nvocab_size: " << vocab_size_ << "\nattn_bias: " << attn_bias_
+       << "\nmax_batch_size: " << engine_params_.max_batch_size
+       << "\nmax_prefill_token_num: " << engine_params_.max_prefill_token_num
        << "\nmax_context_token_num: " << engine_params_.max_context_token_num
        << "\nsession_len: " << engine_params_.session_len << "\nstep_length: " << engine_params_.step_length
        << "\ncache_max_entry_count: " << engine_params_.cache_max_block_count
