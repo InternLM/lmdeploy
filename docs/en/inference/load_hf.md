@@ -58,7 +58,7 @@ The usage is like previous
 
 ```
 # Convert a model
-lmdeploy convert /path/to/model --dst-path ./workspace
+lmdeploy convert $MODEL_NAME /path/to/model --dst-path ./workspace
 
 # Inference by TurboMind
 lmdeploy chat ./workspace --model-name $model_name
