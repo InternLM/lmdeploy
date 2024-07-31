@@ -32,7 +32,6 @@ jobs:
     timeout-minutes: 120
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
-      PYTHON_VERSION: 3.10
     container:
       image: nvidia/cuda:12.4.1-devel-ubuntu22.04
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
@@ -46,7 +45,7 @@ jobs:
         run: |
           rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get install -y software-properties-common wget vim &&\
           add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
-          rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
+          rapidjson-dev libgoogle-glog-dev gdb python3.10 python3.10-dev python3.10-venv \
           && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
       - name: Clone repository
         uses: actions/checkout@v2
