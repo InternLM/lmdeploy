@@ -34,8 +34,20 @@ class AdapterInfo:
         )
 
 
-class SLoRAImpl(ABC):
+class SLoRAImpl(ABC, nn.Module):
     """slora implementation api."""
+
+    def post_init(
+        self,
+        ranks: torch.Tensor,
+        scalings: torch.Tensor,
+        rank_offsets: torch.Tensor,
+        a_cache: torch.Tensor,
+        b_cache: torch.Tensor,
+        max_rank: int,
+    ):
+        """post init."""
+        raise NotImplementedError
 
     @abstractmethod
     def forward(self,

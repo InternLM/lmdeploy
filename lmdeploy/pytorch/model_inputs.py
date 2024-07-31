@@ -12,57 +12,27 @@ from .adapter.adapter import SchedulerAdapter
 
 @dataclass
 class AdapterInfo:
-    ranks: torch.LongTensor
-    scalings: torch.Tensor
+    adapter_ids: torch.LongTensor
     rank_offsets: torch.LongTensor
-    target_modules: List[str]
-    max_rank_per_target: List[int]
-    max_rank: int
 
     @classmethod
     def from_adapters(cls, adapters: List[SchedulerAdapter]):
         """from adapters."""
         if len(adapters) == 0:
             return None
-        target_modules = adapters[0].target_modules
-        max_rank = adapters[0].max_rank
-        ranks = [ada.rank for ada in adapters]
-        scalings = [ada.scaling for ada in adapters]
+        adapter_ids = [ada.adapter_id for ada in adapters]
+        adapter_ids = torch.tensor(adapter_ids)
         rank_offsets = [torch.from_numpy(ada.rank_offset) for ada in adapters]
-        ranks = torch.tensor(ranks)
-        scalings = torch.tensor(scalings)
         rank_offsets = torch.stack(rank_offsets)
-        max_rank_per_target = ranks.max(0)[0].tolist()
 
         return cls(
-            ranks=ranks,
-            scalings=scalings,
+            adapter_ids=adapter_ids,
             rank_offsets=rank_offsets,
-            target_modules=target_modules,
-            max_rank=max_rank,
-            max_rank_per_target=max_rank_per_target,
         )
 
-    def split_by_targets(self):
-        """split by targets."""
-        ret = dict()
-        max_rank = self.max_rank
-        for idx, target in enumerate(self.target_modules):
-            r = self.ranks[:, idx]
-            scaling = self.scalings[:, idx]
-            r_off_start = idx * max_rank
-            r_off_end = r_off_start + max_rank
-            rank_offset = self.rank_offsets[:, r_off_start:r_off_end]
-            max_rank_per_target = [self.max_rank_per_target[idx]]
-            ret[target] = AdapterInfo(
-                r,
-                scaling,
-                rank_offset,
-                target_modules=[target],
-                max_rank=max_rank_per_target[0],
-                max_rank_per_target=max_rank_per_target,
-            )
-        return ret
+    def update_offsets(self, rank_offsets: torch.LongTensor):
+        """update rank offsets."""
+        rank_offsets[self.adapter_ids] = self.rank_offsets
 
     def to_device(self, device: str):
         """to device."""
@@ -285,10 +255,6 @@ class StepContext:
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
 
-        adapter_params = None
-        if inputs.adapter_info is not None:
-            adapter_params = inputs.adapter_info.split_by_targets()
-
         ret = StepContext(
             input_ids=inputs.input_ids,
             block_offsets=inputs.block_offsets,
@@ -303,7 +269,6 @@ class StepContext:
             is_decoding=inputs.is_decoding,
             world_size=world_size,
             local_adapter_ids=inputs.local_adapter_ids,
-            adapter_params=adapter_params,
         )
 
         ret = get_backend().update_step_context(ret)

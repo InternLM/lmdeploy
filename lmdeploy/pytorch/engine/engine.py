@@ -63,6 +63,9 @@ def _paging_adapters(adapters: dict, model_agent: AutoModelAgent,
                      scheduler: Scheduler):
     adapters = adapters or dict()
     weight_maps = []
+    adapter_manager = scheduler.adapter_manager
+    non_adapter = adapter_manager.get_adapter(None)
+    weight_maps.append(non_adapter.build_weight_map())
     for name in adapters:
         weight_map = scheduler.add_adapter(name)
         weight_map.rank_offset = torch.tensor(weight_map.rank_offset)
@@ -80,8 +83,7 @@ def _tensorlize_block_offsets(block_offsets):
 
 def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
     """get adapter ids."""
-    adapter_names_map = dict(
-        (ada.name, idx) for idx, ada in enumerate(adapters))
+    adapter_names_map = dict((ada.name, ada.adapter_id) for ada in adapters)
     adapter_ids = [adapter_names_map[seq.adapter_name] for seq in seqs]
     return adapter_ids
 
@@ -143,10 +145,6 @@ class Engine:
             eager_mode=engine_config.eager_mode,
             device_type=engine_config.device_type,
         )
-        if (engine_config.adapters is not None
-                and not backend_config.eager_mode):
-            logger.warning('LoRA adapter require eager_mode=True')
-            backend_config.eager_mode = True
 
         with get_device_manager().context(self.device_context):
             self.model_agent = AutoModelAgent.from_pretrained(

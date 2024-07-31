@@ -89,7 +89,21 @@ class CUDASingleGraphRunner:
                                                        dtype=torch.int64,
                                                        device=device)
         self.input_buffers['local_adapter_ids'] = torch.zeros(
-            max_batches, dtype=torch.int64, device=device) - 1
+            max_batches, dtype=torch.int64, device=device)
+
+    def _fill_context(self):
+        """fill context."""
+        context = self.ctx_mgr.current_context()
+        local_adapter_ids = context.local_adapter_ids
+        if local_adapter_ids is not None:
+            batch_size = local_adapter_ids.size(0)
+            self.input_buffers['local_adapter_ids'].fill_(0)
+            self.input_buffers[
+                'local_adapter_ids'][:batch_size] = local_adapter_ids
+            context.local_adapter_ids = self.input_buffers['local_adapter_ids']
+        context.q_seqlens = self.input_buffers['q_seqlens']
+        context.kv_seqlens = self.input_buffers['kv_seqlens']
+        context.q_start_loc = self.input_buffers['q_start_loc']
 
     def _fill_inputs(self, input_ids: torch.Tensor, position_ids: torch.Tensor,
                      past_key_values: List, attn_metadata: Any,
@@ -154,6 +168,7 @@ class CUDASingleGraphRunner:
                     'inputs_embeds']
 
         new_inputs.update(kwargs)
+        self._fill_context()
         return new_inputs
 
     def capture(self, **kwargs):

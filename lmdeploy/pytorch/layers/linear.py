@@ -68,6 +68,25 @@ class SLoRA(nn.Module):
         self.layer_idx = None
         self.is_tp = is_tp
 
+    def post_init(
+        self,
+        ranks: torch.Tensor,
+        scalings: torch.Tensor,
+        rank_offsets: torch.Tensor,
+        a_cache: torch.Tensor,
+        b_cache: torch.Tensor,
+        max_rank: int,
+    ):
+        """post init."""
+        self.impl.post_init(
+            ranks,
+            scalings,
+            rank_offsets,
+            a_cache,
+            b_cache,
+            max_rank,
+        )
+
     def forward(self, x, base_output=None):
         """forward of loraA@loraB."""
         return self.impl.forward(x, base_output, self.target_name,
@@ -99,15 +118,15 @@ class AwqLinear(nn.Module):
 
     def forward(self, x):
         """w4a16 forward."""
+        is_tp = False if self.colwise else self.is_tp
         if self.lora_adapters is None:
-            is_tp = False if self.colwise else self.is_tp
             return self.impl.forward(x, is_tp)
 
         out = self.impl.forward(x, False)
         if self.lora_adapters is not None:
             for lora_adapter in self.lora_adapters:
                 out = lora_adapter(x, out)
-        if self.is_tp:
+        if is_tp:
             dist.all_reduce(out)
         return out
 

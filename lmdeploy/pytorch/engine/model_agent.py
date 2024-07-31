@@ -148,6 +148,8 @@ def model_forward(
             world_size=world_size,
             kv_caches=cache_engine.gpu_cache,
         )
+        if inputs.adapter_info is not None:
+            inputs.adapter_info.update_offsets(model.rank_offsets)
         with ctx_mgr.context(context):
             input_dict = model.prepare_inputs_for_generation(
                 past_key_values=cache_engine.gpu_cache,
@@ -209,29 +211,6 @@ def _remove_unused_modules(hf_model: torch.nn.Module, model_cfg: ModelConfig):
             if has_mod:
                 exec(f'del {mod_path}')
     return hf_model
-
-
-def _unparam_lora_weight(model: torch.nn.Module):
-    """unparam lora weight.
-
-    We don't want to move weight of lora to gpu.
-    """
-    from peft.tuners.lora import Linear as LoRALinear
-
-    def _tensorize_weight(linear):
-        """tensorize weight."""
-        w = linear.weight
-        del linear.weight
-        linear.weight = w.data
-
-    for _, mod in model.named_modules():
-        if isinstance(mod, LoRALinear):
-            lora_A = mod.lora_A
-            lora_B = mod.lora_B
-            for linear in lora_A.values():
-                _tensorize_weight(linear)
-            for linear in lora_B.values():
-                _tensorize_weight(linear)
 
 
 SwapMap = Dict[int, int]
@@ -364,9 +343,6 @@ class BaseModelAgent(AutoModelAgent):
 
         patched_model = update_model(hf_model)
 
-        if adapters:
-            _unparam_lora_weight(patched_model)
-
         return patched_model
 
     def get_loralinear_info(self):
@@ -387,9 +363,18 @@ class BaseModelAgent(AutoModelAgent):
         cpu_caches = [(kcache.view(num_blocks,
                                    -1), vcache.view(num_blocks, -1))
                       for kcache, vcache in cpu_caches]
+        gpu_caches = self.cache_engine.gpu_cache
+        num_gpu_blocks = self.cache_engine.num_gpu_blocks
+        gpu_caches = [(kcache.view(num_gpu_blocks,
+                                   -1), vcache.view(num_gpu_blocks, -1))
+                      for kcache, vcache in gpu_caches]
         for weight_map in weight_maps:
             weight_map.cache_adapter(lora_linears, cpu_caches)
-        update_lora_linears(lora_linears, weight_maps, device='cuda')
+        rank_offsets = update_lora_linears(lora_linears,
+                                           weight_maps,
+                                           gpu_caches,
+                                           device='cuda')
+        self.patched_model.rank_offsets = rank_offsets
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
@@ -601,9 +586,18 @@ def _tp_paging_adapters(
         cpu_caches = [(kcache.view(num_blocks,
                                    -1), vcache.view(num_blocks, -1))
                       for kcache, vcache in cpu_caches]
+        gpu_caches = cache_engine.gpu_cache
+        num_gpu_blocks = cache_engine.num_gpu_blocks
+        gpu_caches = [(kcache.view(num_gpu_blocks,
+                                   -1), vcache.view(num_gpu_blocks, -1))
+                      for kcache, vcache in gpu_caches]
         for weight_map in weight_maps:
             weight_map.cache_adapter(lora_linears, cpu_caches)
-        update_lora_linears(lora_linears, weight_maps, device='cuda')
+        rank_offsets = update_lora_linears(lora_linears,
+                                           weight_maps,
+                                           gpu_caches,
+                                           device='cuda')
+        patched_model.rank_offsets = rank_offsets
 
     weight_maps = __get_weight_map()
 

@@ -16,16 +16,10 @@ from ..slora import AdapterInfo, SLoRABuilder, SLoRAImpl
 class PackedLoRAInput:
     """packed lora input."""
     x: torch.Tensor
-    a_cache: torch.Tensor
-    b_cache: torch.Tensor
     q_start_loc: torch.Tensor
     q_seqlens: torch.Tensor
     adapter_ids: torch.Tensor
-    scaling: torch.Tensor
-    rank_offset: torch.Tensor
-    ranks: torch.Tensor
     max_seq_len: int
-    max_rank: int
     is_decoding: bool
 
 
@@ -36,37 +30,40 @@ class TritonSLoRAImpl(SLoRAImpl):
                  adapter_info: AdapterInfo,
                  ctx_mgr: StepContextManager,
                  colwise: bool = True):
+        super().__init__()
         self.base_slice = adapter_info.base_slice
         self.ctx_mgr = ctx_mgr
         self.colwise = colwise
 
-    def _make_packed_lora_input(self, x, target_name: str, layer_idx: int):
+    def post_init(
+        self,
+        ranks: torch.Tensor,
+        scalings: torch.Tensor,
+        rank_offsets: torch.Tensor,
+        a_cache: torch.Tensor,
+        b_cache: torch.Tensor,
+        max_rank: int,
+    ):
+        """post init."""
+        self.ranks = ranks
+        self.scalings = scalings
+        self.rank_offsets = rank_offsets
+        self.a_cache = a_cache
+        self.b_cache = b_cache
+        self.max_rank = max_rank
+
+    def _make_packed_lora_input(self, x):
         """make PackedLoRAInput."""
         context = self.ctx_mgr.current_context()
-        adapter_param = context.adapter_params[target_name]
 
         # adapter cache
-        ranks = adapter_param.ranks
-        scaling = adapter_param.scalings
-        rank_offset = adapter_param.rank_offsets
-        max_rank = adapter_param.max_rank
-        k_cache, v_cache = context.kv_caches[layer_idx]
-        cache_len = k_cache.size(0)
-        a_cache = k_cache.view(cache_len, -1)
-        b_cache = v_cache.view(cache_len, -1)
         max_q_seq_length = x.numel() // x.size(-1)
 
         return PackedLoRAInput(x=x.flatten(0, -2).contiguous(),
-                               a_cache=a_cache,
-                               b_cache=b_cache,
                                q_start_loc=context.q_start_loc,
                                q_seqlens=context.q_seqlens,
                                adapter_ids=context.local_adapter_ids,
-                               scaling=scaling,
-                               rank_offset=rank_offset,
-                               ranks=ranks,
                                max_seq_len=max_q_seq_length,
-                               max_rank=max_rank,
                                is_decoding=context.is_decoding)
 
     def _forward_rowwise(self,
@@ -82,39 +79,39 @@ class TritonSLoRAImpl(SLoRAImpl):
             out_size //= world_size
         if not lora_input.is_decoding:
             xa = mbgmm_a(lora_input.x,
-                         lora_input.a_cache,
+                         self.a_cache,
                          q_start_loc=lora_input.q_start_loc,
                          q_seqlens=lora_input.q_seqlens,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_offset=lora_input.rank_offset,
-                         ranks=lora_input.ranks,
+                         rank_offset=self.rank_offsets,
+                         ranks=self.ranks,
                          max_seq_len=lora_input.max_seq_len,
-                         max_rank=lora_input.max_rank)
+                         max_rank=self.max_rank)
             lora_out = mbgmm_b(xa,
-                               lora_input.b_cache,
+                               self.b_cache,
                                q_start_loc=lora_input.q_start_loc,
                                q_seqlens=lora_input.q_seqlens,
                                adapter_ids=lora_input.adapter_ids,
-                               scaling=lora_input.scaling,
-                               rank_offset=lora_input.rank_offset,
-                               ranks=lora_input.ranks,
+                               scaling=self.scalings,
+                               rank_offset=self.rank_offsets,
+                               ranks=self.ranks,
                                max_seq_len=lora_input.max_seq_len,
-                               max_rank=lora_input.max_rank,
+                               max_rank=self.max_rank,
                                out_size=out_size)
         else:
             xa = mbgmv_a(lora_input.x,
-                         lora_input.a_cache,
+                         self.a_cache,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_offset=lora_input.rank_offset,
-                         ranks=lora_input.ranks,
-                         max_rank=lora_input.max_rank)
+                         rank_offset=self.rank_offsets,
+                         ranks=self.ranks,
+                         max_rank=self.max_rank)
             lora_out = mbgmv_b(xa,
-                               lora_input.b_cache,
+                               self.b_cache,
                                adapter_ids=lora_input.adapter_ids,
-                               scaling=lora_input.scaling,
-                               rank_offset=lora_input.rank_offset,
-                               ranks=lora_input.ranks,
-                               max_rank=lora_input.max_rank,
+                               scaling=self.scalings,
+                               rank_offset=self.rank_offsets,
+                               ranks=self.ranks,
+                               max_rank=self.max_rank,
                                out_size=out_size)
 
         if is_tp:
@@ -151,63 +148,63 @@ class TritonSLoRAImpl(SLoRAImpl):
 
         if not lora_input.is_decoding:
             xa = mbgmm_a(lora_input.x,
-                         lora_input.a_cache,
+                         self.a_cache,
                          q_start_loc=lora_input.q_start_loc,
                          q_seqlens=lora_input.q_seqlens,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_offset=lora_input.rank_offset,
-                         ranks=lora_input.ranks,
+                         rank_offset=self.rank_offsets,
+                         ranks=self.ranks,
                          max_seq_len=lora_input.max_seq_len,
-                         max_rank=lora_input.max_rank,
+                         max_rank=self.max_rank,
                          rank_step=world_size)
             gathered_xa = __gather_xa(xa)
-            if len(lora_input.ranks) > 1:
+            if len(self.ranks) > 1:
                 gathered_xa = rearange_all_gather(
                     gathered_xa,
                     b_start_loc=lora_input.q_start_loc,
                     b_seq_lens=lora_input.q_seqlens,
                     adapter_ids=lora_input.adapter_ids,
-                    ranks=lora_input.ranks,
+                    ranks=self.ranks,
                     world_size=world_size,
                     max_seq_len=lora_input.max_seq_len,
                     output=gathered_xa)
             lora_out = mbgmm_b(gathered_xa,
-                               lora_input.b_cache,
+                               self.b_cache,
                                q_start_loc=lora_input.q_start_loc,
                                q_seqlens=lora_input.q_seqlens,
                                adapter_ids=lora_input.adapter_ids,
-                               scaling=lora_input.scaling,
-                               rank_offset=lora_input.rank_offset,
-                               ranks=lora_input.ranks,
+                               scaling=self.scalings,
+                               rank_offset=self.rank_offsets,
+                               ranks=self.ranks,
                                max_seq_len=lora_input.max_seq_len,
-                               max_rank=lora_input.max_rank,
+                               max_rank=self.max_rank,
                                out_size=out_size)
         else:
             xa = mbgmv_a(lora_input.x,
-                         lora_input.a_cache,
+                         self.a_cache,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_offset=lora_input.rank_offset,
-                         ranks=lora_input.ranks,
-                         max_rank=lora_input.max_rank,
+                         rank_offset=self.rank_offsets,
+                         ranks=self.ranks,
+                         max_rank=self.max_rank,
                          rank_step=world_size)
             gathered_xa = __gather_xa(xa)
-            if len(lora_input.ranks) > 1:
+            if len(self.ranks) > 1:
                 gathered_xa = rearange_all_gather(
                     gathered_xa,
                     b_start_loc=lora_input.q_start_loc,
                     b_seq_lens=lora_input.q_seqlens,
                     adapter_ids=lora_input.adapter_ids,
-                    ranks=lora_input.ranks,
+                    ranks=self.ranks,
                     world_size=world_size,
                     max_seq_len=lora_input.max_seq_len,
                     output=gathered_xa)
             lora_out = mbgmv_b(gathered_xa,
-                               lora_input.b_cache,
+                               self.b_cache,
                                adapter_ids=lora_input.adapter_ids,
-                               scaling=lora_input.scaling,
-                               rank_offset=lora_input.rank_offset,
-                               ranks=lora_input.ranks,
-                               max_rank=lora_input.max_rank,
+                               scaling=self.scalings,
+                               rank_offset=self.rank_offsets,
+                               ranks=self.ranks,
+                               max_rank=self.max_rank,
                                out_size=out_size)
 
         lora_out = lora_out.reshape(sliced_base.shape)
@@ -222,7 +219,7 @@ class TritonSLoRAImpl(SLoRAImpl):
                 layer_idx: int,
                 is_tp: bool = True):
         """forward."""
-        lora_input = self._make_packed_lora_input(x, target_name, layer_idx)
+        lora_input = self._make_packed_lora_input(x)
         if self.colwise and is_tp:
             return self._forward_colwise(lora_input, base_output)
         else:

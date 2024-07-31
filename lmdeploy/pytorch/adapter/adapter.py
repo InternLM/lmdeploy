@@ -77,6 +77,7 @@ def get_indexed_lora_linears(model: torch.nn.Module):
 
 def update_lora_linears(lora_linears: Dict,
                         weight_maps: List['AdapterWeightMap'],
+                        gpu_caches: List[List],
                         device: str = 'cuda'):
     """update lora linears."""
 
@@ -87,14 +88,43 @@ def update_lora_linears(lora_linears: Dict,
         linear.adapter_info.lora_A = None
         linear.adapter_info.lora_B = None
 
+    num_adapters = len(weight_maps)
+    target_modules = weight_maps[0].target_modules
+    num_offs = len(weight_maps[0].rank_offset)
+    max_rank = weight_maps[0].max_rank
+    target_map = dict((name, idx) for idx, name in enumerate(target_modules))
+    all_ranks = [weight_maps[idx].rank for idx in range(num_adapters)]
+    all_ranks = torch.tensor(all_ranks, device=device).t().contiguous()
+    all_scaling = [weight_maps[idx].scaling for idx in range(num_adapters)]
+    all_scaling = torch.tensor(all_scaling, device=device).t().contiguous()
+    all_boffs = torch.zeros(num_adapters,
+                            num_offs,
+                            dtype=torch.int64,
+                            device=device)
+    all_boffs = all_boffs.unflatten(-1, (-1, max_rank))
+
     adapter_names = [weight_map.adapter_name for weight_map in weight_maps]
 
     for idx, lora_linear in lora_linears.items():
+        a_cache, b_cache = gpu_caches[idx]
         for target, linear in lora_linear.items():
+            target_id = target_map[target]
+            ranks = all_ranks[target_id]
+            scalings = all_scaling[target_id]
+            boffs = all_boffs[:, target_id]
+            linear.post_init(
+                ranks,
+                scalings,
+                boffs,
+                a_cache,
+                b_cache,
+                max_rank=max_rank,
+            )
             __update_linear(linear,
                             idx,
                             target_name=target,
                             adapter_names=adapter_names)
+    return all_boffs.flatten(1, 2)
 
 
 @dataclass
@@ -102,7 +132,7 @@ class LoRALinearInfo:
     """lora linear info."""
     ranks: Dict[str, int]
     scalings: Dict[str, int]
-    target_names: List[str]
+    adapter_names: List[str]
     in_features: int
     out_features: int
     rank_stride: int = field(default=0, init=False)
@@ -122,7 +152,7 @@ class LoRALinearInfo:
         return cls(
             ranks=ranks,
             scalings=scalings,
-            target_names=list(ranks.keys()),
+            adapter_names=list(ranks.keys()),
             in_features=in_features,
             out_features=out_features,
         )
@@ -182,8 +212,10 @@ def get_loralinear_info(model: torch.nn.Module):
 
 @dataclass
 class AdapterWeightMap:
+    adapter_id: int
     adapter_name: str
     rank: List[int]
+    scaling: List[int]
     rank_offset: np.ndarray
     max_rank: int
     target_modules: List[str]
@@ -234,6 +266,7 @@ class AdapterWeightMap:
 class SchedulerAdapter:
     """lora adapter."""
 
+    adapter_id: int
     adapter_name: str
     rank: List[int]
     scaling: List[int]
@@ -248,8 +281,9 @@ class SchedulerAdapter:
     _active: bool = field(default=False, init=False)
 
     @classmethod
-    def new(cls, adapter_name: str, linear_infos: Dict[str, LoRALinearInfo],
-            block_numel: int, max_rank: int):
+    def new(cls, adapter_id: int, adapter_name: str,
+            linear_infos: Dict[str, LoRALinearInfo], block_numel: int,
+            max_rank: int):
         """new."""
 
         target_modules = list(linear_infos.keys())
@@ -281,6 +315,7 @@ class SchedulerAdapter:
         block_idx_per_rank = np.concatenate(block_idx_per_rank)
 
         ret = cls(
+            adapter_id=adapter_id,
             adapter_name=adapter_name,
             rank=rank,
             scaling=scaling,
@@ -322,12 +357,22 @@ class SchedulerAdapter:
         """build weight map."""
         assert self.rank_offset is not None
         return AdapterWeightMap(
+            adapter_id=self.adapter_id,
             adapter_name=self.name,
             rank=self.rank,
+            scaling=self.scaling,
             rank_offset=self.rank_offset,
             max_rank=self.max_rank,
             target_modules=self.target_modules,
         )
+
+
+def _get_adapter_names(linear_infos: Dict[str, LoRALinearInfo]):
+    """get adapter names."""
+    adapter_names = set()
+    for info in linear_infos.values():
+        adapter_names.update(info.adapter_names)
+    return list(adapter_names)
 
 
 class AdapterManager:
@@ -338,6 +383,11 @@ class AdapterManager:
         self.linear_infos = linear_infos
         self.block_numel = block_numel
         self._adapters: Dict[str, SchedulerAdapter] = dict()
+
+        adapter_names = _get_adapter_names(linear_infos)
+        self.adapter_id_map = dict(
+            (name, idx + 1) for idx, name in enumerate(adapter_names))
+        self.adapter_id_map[None] = 0
 
         self.max_rank = self._get_max_rank()
         self._add_non_adapter()
@@ -353,7 +403,9 @@ class AdapterManager:
 
     def _add_non_adapter(self):
         """add non adapter."""
-        self.add_adapter(None)
+        adapter = self.add_adapter(None)
+        rank_offset = adapter.inblock_offset.copy()
+        adapter.update_rank_offset(rank_offset)
 
     def _register_adapter(self, adapter: SchedulerAdapter):
         """register adapter."""
@@ -371,7 +423,9 @@ class AdapterManager:
 
     def add_adapter(self, adapter_name: str):
         """add adapter."""
+        adapter_id = self.adapter_id_map[adapter_name]
         adapter = SchedulerAdapter.new(
+            adapter_id,
             adapter_name,
             self.linear_infos,
             self.block_numel,
