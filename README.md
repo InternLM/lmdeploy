@@ -142,7 +142,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>InternLM-XComposer2.5 (7B)</li>
-  <li>QWen-VL (7B)</li>
+  <li>Qwen-VL (7B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
@@ -198,7 +198,7 @@ For more information about inference pipeline, please refer to [here](./docs/en/
 
 # Tutorials
 
-Please overview [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
+Please review [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
 
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 

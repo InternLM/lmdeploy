@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import math
 from typing import List
 
 import torch
@@ -8,15 +9,43 @@ from lmdeploy.utils import get_logger
 
 from .model_weight_loader import ModelWeightLoader
 
+logger = get_logger('lmdeploy')
+
 try:
     from peft.tuners.lora import Linear as LoRALinear
 except ImportError:
+    logger.debug('load peft.tuner.lora.Linear failed.')
 
     class LoRALinear:
         pass
 
 
-logger = get_logger('lmdeploy')
+try:
+    from peft.tuners.lora.awq import AwqLoraLinear
+except ImportError:
+    logger.debug('load peft.tuners.lora.awq.AwqLoraLinear failed.')
+
+    class AwqLoraLinear:
+        pass
+
+
+try:
+    from awq.modules.linear.gemm import WQLinear_GEMM
+except ImportError:
+    logger.debug('load awq.modules.linear.gemm.WQLinearGEMM failed.')
+
+    class WQLinear_GEMM:
+        pass
+
+
+def _div_up(a, b):
+    """div up."""
+    return (a + b - 1) // b
+
+
+def _math_lcm(*args):
+    """lcm."""
+    return int(math.prod(args) / math.gcd(*args))
 
 
 def get_prefixed_name(name: str, prefix: str):
@@ -64,11 +93,15 @@ def colwise_parallelize_loralinear(module: torch.nn.Module,
                                    world_size: int,
                                    prefix: str = ''):
     """colwise parallelize loralinear."""
-    colwise_parallelize_linear_naive(module.base_layer,
-                                     loader,
-                                     rank=rank,
-                                     world_size=world_size,
-                                     prefix=prefix)
+    if isinstance(module.base_layer, WQLinear_GEMM):
+        parallel_base_func = colwise_parallelize_wqlinear
+    else:
+        parallel_base_func = colwise_parallelize_linear_naive
+    parallel_base_func(module.base_layer,
+                       loader,
+                       rank=rank,
+                       world_size=world_size,
+                       prefix=prefix)
     for key, mod in module.lora_A.items():
         ada_loader = loader.adapter(key)
         colwise_parallelize_linear_naive(mod,
@@ -88,6 +121,57 @@ def colwise_parallelize_loralinear(module: torch.nn.Module,
     module._tp_mode = 'colwise'
 
 
+def _get_split_size_with_align(size: int, align: int, num_chunk: int):
+    """get split size with align."""
+    assert size % align == 0
+    num_aligned = size // align
+    split_size = _div_up(num_aligned, num_chunk) * align
+    return split_size
+
+
+def colwise_parallelize_wqlinear(mod: torch.nn.Module,
+                                 loader: ModelWeightLoader,
+                                 rank: int,
+                                 world_size: int,
+                                 prefix: str = ''):
+    """colwise parallelize wqlinear."""
+    elem_per_word = 32 // mod.w_bit
+    group_size = mod.group_size
+    lcm = _math_lcm(elem_per_word, group_size)
+    num_out = mod.scales.size(1)
+
+    split_size = _get_split_size_with_align(num_out, lcm, world_size)
+    qsplit_size = split_size // elem_per_word
+
+    def __update_param(name, param):
+        """update_param."""
+        dtype = param.dtype
+        prefixed_name = get_prefixed_name(name, prefix)
+        if name == 'bias':
+            ssize = split_size
+            dim = 0
+        elif name == 'scales':
+            ssize = split_size
+            dim = 1
+        else:
+            ssize = qsplit_size
+            dim = 1
+        param = loader.pop(prefixed_name)
+        param = param.split(ssize, dim)[rank]
+        param = cast_dtype(param, dtype)
+        return param
+
+    for name, param in mod.named_parameters():
+        param = __update_param(name, param)
+        param = torch.nn.Parameter(param, requires_grad=False)
+        mod.register_parameter(name, param)
+    for name, param in mod.named_buffers():
+        param = __update_param(name, param)
+        mod.register_buffer(name, param)
+    mod.in_features = mod.qweight.size(0)
+    mod.out_features = mod.scales.size(1)
+
+
 def colwise_parallelize_linear(module: torch.nn.Module,
                                loader: ModelWeightLoader,
                                rank: int,
@@ -100,12 +184,18 @@ def colwise_parallelize_linear(module: torch.nn.Module,
                                                 rank=rank,
                                                 world_size=world_size,
                                                 prefix=prefix)
-    elif isinstance(module, LoRALinear):
+    elif isinstance(module, (LoRALinear, AwqLoraLinear)):
         return colwise_parallelize_loralinear(module,
                                               loader,
                                               rank=rank,
                                               world_size=world_size,
                                               prefix=prefix)
+    elif isinstance(module, WQLinear_GEMM):
+        return colwise_parallelize_wqlinear(module,
+                                            loader,
+                                            rank=rank,
+                                            world_size=world_size,
+                                            prefix=prefix)
     else:
         raise TypeError(f'Unsupported module: {type(module)}')
 
@@ -144,11 +234,15 @@ def rowwise_parallelize_loralinear(module: LoRALinear,
                                    world_size: int,
                                    prefix: str = ''):
     """colwise parallelize loralinear."""
-    rowwise_parallelize_linear_naive(module.base_layer,
-                                     loader,
-                                     rank=rank,
-                                     world_size=world_size,
-                                     prefix=prefix)
+    if isinstance(module.base_layer, WQLinear_GEMM):
+        parallel_base_func = rowwise_parallelize_wqlinear
+    else:
+        parallel_base_func = rowwise_parallelize_linear_naive
+    parallel_base_func(module.base_layer,
+                       loader,
+                       rank=rank,
+                       world_size=world_size,
+                       prefix=prefix)
     for key, mod in module.lora_A.items():
         ada_loader = loader.adapter(key)
         rowwise_parallelize_linear_naive(mod,
@@ -168,6 +262,45 @@ def rowwise_parallelize_loralinear(module: LoRALinear,
     module._tp_mode = 'colwise'
 
 
+def rowwise_parallelize_wqlinear(mod: torch.nn.Module,
+                                 loader: ModelWeightLoader,
+                                 rank: int,
+                                 world_size: int,
+                                 prefix: str = ''):
+    """rowwise parallelize linear."""
+    elem_per_word = 32 // mod.w_bit
+    group_size = mod.group_size
+    lcm = _math_lcm(elem_per_word, group_size)
+    num_in = mod.qweight.size(0)
+
+    split_size = _get_split_size_with_align(num_in, lcm, world_size)
+    qsplit_size = split_size // group_size
+
+    def __update_param(name: str, param: torch.Tensor):
+        """update_param."""
+        dtype = param.dtype
+        prefixed_name = get_prefixed_name(name, prefix)
+        param = loader.pop(prefixed_name)
+        if name == 'bias':
+            param /= world_size
+        elif name == 'qweight':
+            param = param.split(split_size)[rank]
+        else:
+            param = param.split(qsplit_size)[rank]
+        param = cast_dtype(param, dtype)
+        return param
+
+    for name, param in mod.named_parameters():
+        param = __update_param(name, param)
+        param = torch.nn.Parameter(param, requires_grad=False)
+        mod.register_parameter(name, param)
+    for name, param in mod.named_buffers():
+        param = __update_param(name, param)
+        mod.register_buffer(name, param)
+    mod.in_features = mod.qweight.size(0)
+    mod.out_features = mod.scales.size(1)
+
+
 def rowwise_parallelize_linear(module: torch.nn.Module,
                                loader: ModelWeightLoader,
                                rank: int,
@@ -180,12 +313,18 @@ def rowwise_parallelize_linear(module: torch.nn.Module,
                                                 rank=rank,
                                                 world_size=world_size,
                                                 prefix=prefix)
-    elif isinstance(module, LoRALinear):
+    elif isinstance(module, (LoRALinear, AwqLoraLinear)):
         return rowwise_parallelize_loralinear(module,
                                               loader,
                                               rank=rank,
                                               world_size=world_size,
                                               prefix=prefix)
+    elif isinstance(module, WQLinear_GEMM):
+        return rowwise_parallelize_wqlinear(module,
+                                            loader,
+                                            rank=rank,
+                                            world_size=world_size,
+                                            prefix=prefix)
     else:
         raise TypeError(f'Unsupported module: {type(module)}')
 
@@ -227,12 +366,16 @@ def colwise_split_parallelize_loralinear(module: LoRALinear,
                                          world_size: int,
                                          prefix: str = ''):
     """colwise split loralinear."""
-    colwise_split_parallelize_linear_naive(module.base_layer,
-                                           sections,
-                                           loader,
-                                           rank=rank,
-                                           world_size=world_size,
-                                           prefix=prefix)
+    if isinstance(module.base_layer, WQLinear_GEMM):
+        parallel_base_func = colwise_split_parallelize_wqlinear
+    else:
+        parallel_base_func = colwise_split_parallelize_linear_naive
+    parallel_base_func(module.base_layer,
+                       sections,
+                       loader,
+                       rank=rank,
+                       world_size=world_size,
+                       prefix=prefix)
     for key, mod in module.lora_A.items():
         ada_loader = loader.adapter(key)
         colwise_parallelize_linear_naive(mod,
@@ -253,6 +396,59 @@ def colwise_split_parallelize_loralinear(module: LoRALinear,
     module._tp_mode = 'colwise'
 
 
+def colwise_split_parallelize_wqlinear(module: torch.nn.Module,
+                                       sections: List[int],
+                                       loader: ModelWeightLoader,
+                                       rank: int,
+                                       world_size: int,
+                                       prefix: str = ''):
+    """colwise split wqlinear."""
+    elem_per_word = 32 // module.w_bit
+    group_size = module.group_size
+    lcm = _math_lcm(elem_per_word, group_size)
+
+    for s in sections:
+        assert s % lcm == 0
+
+    def __update_param(name: str, param: torch.Tensor):
+        dtype = param.dtype
+        prefixed_name = get_prefixed_name(name, prefix)
+        param = loader.pop(prefixed_name)
+        if name == 'bias':
+            dim = 0
+            sec = sections
+        elif name == 'scales':
+            dim = 1
+            sec = sections
+        else:
+            dim = 1
+            sec = [s // elem_per_word for s in sections]
+        splited_param = param.split(sec, dim=dim)
+        updated_param = []
+        for p in splited_param:
+            if name == 'bias':
+                p = p.chunk(world_size)[rank]
+            else:
+                p = p.chunk(world_size, 1)[rank]
+            p = cast_dtype(p, dtype)
+            updated_param.append(p)
+        if name == 'bias':
+            param = torch.cat(updated_param)
+        else:
+            param = torch.cat(updated_param, 1)
+        return param
+
+    for name, param in module.named_parameters():
+        param = __update_param(name, param)
+        param = torch.nn.Parameter(param, requires_grad=False)
+        module.register_parameter(name, param)
+    for name, param in module.named_buffers():
+        param = __update_param(name, param)
+        module.register_buffer(name, param)
+    module.in_features = module.qweight.size(0)
+    module.out_features = module.scales.size(1)
+
+
 def colwise_split_parallelize_linear(module: torch.nn.Module,
                                      sections: List[int],
                                      loader: ModelWeightLoader,
@@ -267,13 +463,20 @@ def colwise_split_parallelize_linear(module: torch.nn.Module,
                                                       rank=rank,
                                                       world_size=world_size,
                                                       prefix=prefix)
-    elif isinstance(module, LoRALinear):
+    elif isinstance(module, (LoRALinear, AwqLoraLinear)):
         return colwise_split_parallelize_loralinear(module,
                                                     sections,
                                                     loader,
                                                     rank=rank,
                                                     world_size=world_size,
                                                     prefix=prefix)
+    elif isinstance(module, WQLinear_GEMM):
+        return colwise_split_parallelize_wqlinear(module,
+                                                  sections,
+                                                  loader,
+                                                  rank=rank,
+                                                  world_size=world_size,
+                                                  prefix=prefix)
     else:
         raise TypeError(f'Unsupported module: {type(module)}')
 
@@ -315,9 +518,9 @@ def default_load_linear(module: torch.nn.Module,
                         rank: int = 0,
                         prefix: str = ''):
     """default load linear."""
-    if isinstance(module, (torch.nn.Linear, QLinear)):
+    if isinstance(module, (torch.nn.Linear, QLinear, WQLinear_GEMM)):
         load_no_recursive(module, loader, rank=rank, prefix=prefix)
-    elif isinstance(module, LoRALinear):
+    elif isinstance(module, (LoRALinear, AwqLoraLinear)):
         raise NotImplementedError('Not implemented, please contact us.')
     else:
         raise TypeError(f'Unsupported module: {type(module)}')
