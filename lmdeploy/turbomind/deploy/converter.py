@@ -13,6 +13,7 @@ from lmdeploy.utils import get_model
 from ...utils import _get_and_verify_max_len
 from ..supported_models import SUPPORTED_ARCHS, is_supported
 from .exporter import get_exporter_factory
+from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 
@@ -227,8 +228,9 @@ def main(model_name: str,
             f'"{input_model_name}". The registered names are {register_names}')
         exit(-1)
 
-    output_model_name, cfg = get_output_model_registered_name_and_config(
-        model_path, model_format, group_size)
+    output_model_name, cfg, exporter_factory = \
+        get_output_model_registered_name_and_config(
+            model_path, model_format, group_size)
     print(f'output_model_registered_name: {output_model_name}')
     register_names = list(OUTPUT_MODELS.module_dict.keys())
     if output_model_name not in register_names:
@@ -241,12 +243,18 @@ def main(model_name: str,
 
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
 
+    input_policy = get_input_policy(model_format)
     input_model = INPUT_MODELS.get(input_model_name)(
         model_path=model_path,
         tokenizer_path=tokenizer_path,
+        input_policy=input_policy,
         ckpt_path=quant_path)
     output_model = OUTPUT_MODELS.get(output_model_name)(
-        input_model=input_model, cfg=cfg, to_file=True, out_dir=tm_weight_path)
+        input_model=input_model,
+        cfg=cfg,
+        exporter_factory=exporter_factory,
+        to_file=True,
+        out_dir=tm_weight_path)
     print(f'turbomind model config: {output_model.cfg}')
 
     output_model.export()
