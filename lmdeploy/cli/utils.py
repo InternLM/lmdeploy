@@ -71,17 +71,16 @@ def get_chat_template(chat_template: str):
     import os
 
     from lmdeploy.model import ChatTemplateConfig
-    if chat_template is None:
-        return None
-    if os.path.isfile(chat_template):
-        return ChatTemplateConfig.from_json(chat_template)
-    elif chat_template:
-        from lmdeploy.model import MODELS
-        assert chat_template in MODELS.module_dict.keys(), \
-            f"chat template '{chat_template}' is not " \
-            f'registered. The builtin chat templates are: ' \
-            f'{MODELS.module_dict.keys()}'
-        return ChatTemplateConfig(model_name=chat_template)
+    if chat_template:
+        if os.path.isfile(chat_template):
+            return ChatTemplateConfig.from_json(chat_template)
+        else:
+            from lmdeploy.model import MODELS
+            assert chat_template in MODELS.module_dict.keys(), \
+                f"chat template '{chat_template}' is not " \
+                f'registered. The builtin chat templates are: ' \
+                f'{MODELS.module_dict.keys()}'
+            return ChatTemplateConfig(model_name=chat_template)
     else:
         return None
 

@@ -23,16 +23,13 @@ def test_get_names_from_turbomind_model():
     os.makedirs(os.path.join(workspace, 'triton_models', 'weights'),
                 exist_ok=True)
 
-    expected_model_name = 'internlm2.5-7b-chat'
     expected_chat_template = 'internlm2'
     config = configparser.ConfigParser()
     config.add_section('llama')
-    config.set('llama', 'model_name', expected_model_name)
-    config.set('llama', 'chat_template_name', expected_chat_template)
+    config.set('llama', 'chat_template', expected_chat_template)
 
     with open(f'{workspace}/triton_models/weights/config.ini', 'w') as f:
         config.write(f)
 
-    model_name, chat_template = get_names_from_model(workspace)
-    assert model_name == expected_model_name
+    _, chat_template = get_names_from_model(workspace)
     assert chat_template == expected_chat_template
