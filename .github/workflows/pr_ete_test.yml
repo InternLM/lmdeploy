@@ -32,6 +32,7 @@ jobs:
     timeout-minutes: 120
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
+      PATH: /opt/py3/bin:$PATH
     container:
       image: nvidia/cuda:12.4.1-devel-ubuntu22.04
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
