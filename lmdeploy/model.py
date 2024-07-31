@@ -508,9 +508,11 @@ class InternLM2Chat7B(InternLMChat7B):
         for message in messages:
             role = message['role']
             content = message['content']
-            begin = box_map[role].strip(
-            ) + f" name={name_map[message['name']]}\n" if 'name' in message else box_map[
-                role]
+            if 'name' in message and message['name'] in name_map:
+                begin = box_map[role].strip(
+                ) + f" name={name_map[message['name']]}\n"
+            else:
+                begin = box_map[role]
             ret += f'{begin}{content}{eox_map[role]}'
         if len(messages) and messages[-1]['role'] == 'assistant':
             return ret[:-len(eox_map['assistant'])]  # prefix of response
