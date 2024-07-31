@@ -3,6 +3,7 @@
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/tune/sampler.h"
+#include <algorithm>
 #include <functional>
 #include <iostream>
 #include <numeric>
@@ -27,7 +28,8 @@ std::vector<LaunchSpec> Sampler::Run(std::vector<LaunchSpec> specs, const Launch
             clusters.push_back({&s});
         }
     }
-    // std::cout << "k_clusters=" << k_clusters_ << ", #specs" << specs.size() << ", #clusters" << clusters.size() << "\n";
+    // std::cout << "k_clusters=" << k_clusters_ << ", #specs" << specs.size() << ", #clusters" << clusters.size() <<
+    // "\n";
 
     std::vector<LaunchSpec> s_1;
     for (const auto& c : clusters) {
