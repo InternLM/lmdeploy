@@ -184,16 +184,15 @@ def test_messages2prompt4internlm2_chat():
         },
     ]
     expected_prompt_invalid_name = (
-        model.system.strip() +
-        '\nYou have access to python environment.' +
+        model.system.strip() + '\nYou have access to python environment.' +
         model.eosys + model.user + 'use python draw a line' + model.eoh +
-        model.assistant +
-        '\ncode\n' + model.eoa +
-        model.separator + model.environment.strip() +
-        "\n[{'type': 'image', 'content': 'image url'}]" +
-        model.eoenv + model.assistant)
+        model.assistant + '\ncode\n' + model.eoa + model.separator +
+        model.environment.strip() +
+        "\n[{'type': 'image', 'content': 'image url'}]" + model.eoenv +
+        model.assistant)
     actual_prompt_invalid_name = model.messages2prompt(messages_invalid_name)
     assert actual_prompt_invalid_name == expected_prompt_invalid_name
+
 
 def test_llama3_1():
     model = MODELS.get('llama3_1')()

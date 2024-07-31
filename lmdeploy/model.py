@@ -507,7 +507,8 @@ class InternLM2Chat7B(InternLMChat7B):
             role = message['role']
             content = message['content']
             if 'name' in message and message['name'] in name_map:
-                begin = box_map[role].strip() + f" name={name_map[message['name']]}\n"
+                begin = box_map[role].strip(
+                ) + f" name={name_map[message['name']]}\n"
             else:
                 begin = box_map[role]
             ret += f'{begin}{content}{eox_map[role]}'
