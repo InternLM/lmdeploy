@@ -32,8 +32,9 @@ jobs:
     timeout-minutes: 120
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
+      PYTHON_VERSION: 3.10
     container:
-      image: nvcr.io/nvidia/tritonserver:24.03-py3
+      image: nvidia/cuda:12.4.1-devel-ubuntu22.04
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
@@ -43,16 +44,16 @@ jobs:
     steps:
       - name: Setup systems
         run: |
-          rm /etc/apt/sources.list.d/cuda*.list
-          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
-              libgoogle-glog-dev libgl1 openjdk-8-jre-headless
-          rm -rf /var/lib/apt/lists/*
+          rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get install -y software-properties-common wget vim &&\
+          add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
+          rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
+          && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
       - name: Clone repository
         uses: actions/checkout@v2
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0
+          python3 -m pip install torch==2.3.0 torchvision==0.18.0
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.5.8+cu122torch2.1cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
       - name: Build lmdeploy
@@ -68,11 +69,10 @@ jobs:
               -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
               -DBUILD_PY_FFI=ON \
               -DBUILD_MULTI_GPU=ON \
+              -DBUILD_CUTLASS_MOE=OFF \
+              -DBUILD_CUTLASS_MIXED_GEMM=OFF \
               -DCMAKE_CUDA_FLAGS="-lineinfo" \
-              -DUSE_NVTX=ON \
-              -DSM=80 \
-              -DCMAKE_CUDA_ARCHITECTURES=80 \
-              -DBUILD_TEST=OFF
+              -DUSE_NVTX=ON &&\
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
