@@ -9,7 +9,10 @@ ENV CUDA_VERSION_SHORT=cu118
 FROM ${CUDA_VERSION} AS final
 
 ARG PYTHON_VERSION=3.10
+
+ARG TORCH_VERSION=2.3.0
 ARG TRITON_VERSION=2.1.0
+ARG TORCHVISION_VERSION=0.18.0
 
 RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get install -y software-properties-common wget vim &&\
     add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
@@ -19,7 +22,7 @@ RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get instal
 ENV PATH=/opt/py3/bin:$PATH
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools==69.5.1 &&\
-    python3 -m pip install --no-cache-dir torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT} &&\
+    python3 -m pip install --no-cache-dir torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} --index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT} &&\
     python3 -m pip install --no-cache-dir cmake packaging wheel
 
 # install openmpi
