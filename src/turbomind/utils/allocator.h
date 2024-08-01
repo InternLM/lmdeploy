@@ -50,13 +50,15 @@
 
 namespace turbomind {
 
-enum class AllocatorType {
+enum class AllocatorType
+{
     CUDA,
     TF,
     TH
 };
 
-enum class ReallocType {
+enum class ReallocType
+{
     INCREASE,
     REUSE,
     DECREASE,
@@ -123,7 +125,8 @@ class Allocator;
 template<>
 class Allocator<AllocatorType::CUDA>: public IAllocator {
 private:
-    enum class MemoryType {
+    enum class MemoryType
+    {
         HOST,
         DEVICE
     };
@@ -153,7 +156,8 @@ private:
     }
 
 public:
-    Allocator(int device_id, bool enable_peer_access): device_id_(device_id), enable_peer_access_(enable_peer_access)
+    Allocator(int device_id, bool enable_peer_access = false):
+        device_id_(device_id), enable_peer_access_(enable_peer_access)
     {
         TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         // pointer_mapping_ = new std::unordered_map<void*, std::pair<size_t, MemoryType>>();

@@ -443,10 +443,10 @@ template<typename T>
 std::string LlamaTritonModel<T>::toString()
 {
     std::stringstream ss;
-    ss << "Model: " << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_
-       << "\nsize_per_head: " << size_per_head_ << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_
-       << "\nvocab_size: " << vocab_size_ << "\nattn_bias: " << attn_bias_
-       << "\nmax_batch_size: " << engine_params_.max_batch_size
+    ss << "Model: "
+       << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_ << "\nsize_per_head: " << size_per_head_
+       << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_
+       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_params_.max_batch_size
        << "\nmax_prefill_token_num: " << engine_params_.max_prefill_token_num
        << "\nmax_context_token_num: " << engine_params_.max_context_token_num
        << "\nsession_len: " << engine_params_.session_len << "\nstep_length: " << engine_params_.step_length
