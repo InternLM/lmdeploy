@@ -92,6 +92,7 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy
         run: |
+          export PATH=/opt/py3/bin:$PATH
           CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test -x --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
