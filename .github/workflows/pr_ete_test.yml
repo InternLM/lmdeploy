@@ -44,7 +44,7 @@ jobs:
     steps:
       - name: Setup systems
         env:
-          PATH:
+          PATH: /opt/py3/bin
         run: |
           rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get install -y software-properties-common wget vim &&\
           add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
