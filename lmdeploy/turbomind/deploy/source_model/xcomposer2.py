@@ -15,7 +15,7 @@ class Xcomposer2Reader(InternLM2Reader):
 
     def attn_lora_b(self, i):
         """Get attn lora_b."""
-        return self._attn(i, 'Plora_B.weight', 0, 0)
+        return self._attn(i, 'Plora_B.weight')
 
     def ffn_lora_a(self, i: int):
         """Get ffn lora_a weight for layer i."""
