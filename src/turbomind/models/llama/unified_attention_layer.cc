@@ -287,7 +287,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         if constexpr (sizeof(T) == 2) {
             invokeProcessKV_v2_(params);
             sync_check_cuda_error();
-            
+
             /// TODO: skip flattening for `sm_80`
             invokeFlattenKV_v2_(params, sum_k_len);
             sync_check_cuda_error();
