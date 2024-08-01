@@ -2,8 +2,6 @@
 
 #pragma once
 
-// #include "src/turbomind/models/llama/LlamaCacheManager.h"
-#include "src/turbomind/layers/sampling_layers/BaseSamplingLayer.h"
 #include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/Request.h"
@@ -14,6 +12,7 @@
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <condition_variable>
+#include <curand_kernel.h>
 #include <mutex>
 #include <type_traits>
 

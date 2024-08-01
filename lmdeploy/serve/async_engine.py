@@ -260,6 +260,7 @@ class AsyncEngine(LogitsMixin):
                  request_output_len=512,
                  top_k: int = 40,
                  top_p: float = 0.8,
+                 min_p: float = 0.0,
                  temperature: float = 0.8,
                  repetition_penalty: float = 1.0,
                  ignore_eos: bool = False,
@@ -300,6 +301,7 @@ class AsyncEngine(LogitsMixin):
                 do_sample=do_sample,
                 top_k=top_k,
                 top_p=top_p,
+                min_p=min_p,
                 temperature=temperature,
                 repetition_penalty=repetition_penalty,
                 ignore_eos=ignore_eos)

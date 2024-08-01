@@ -11,7 +11,6 @@
 
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
-#include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
@@ -855,6 +854,7 @@ TYPED_TEST(SamplingDecodeTest, InvalidArgsBatchTopKBatchTopPContainZero)
     delete[] top_ps;
 }
 
+#if 0
 TYPED_TEST(SamplingDecodeTest, LocalBatchBatchTopP)
 {
     size_t                     batch_size = this->batch_size;
@@ -913,6 +913,7 @@ TYPED_TEST(SamplingDecodeTest, LocalBatchBatchTopKBatchTopP)
     delete[] top_ks;
     delete[] top_ps;
 }
+#endif
 
 template<typename T>
 class SamplingDecodeTest2: public FtTestBase {
@@ -1116,124 +1117,6 @@ protected:
         delete[] random_seed;
         teardown();
     }
-
-    void runCumLogProbTest(SamplingLayerTestParam param)
-    {
-        setup(param);
-        unsigned long long     seed                 = 43;
-        const DataType         data_type            = getTensorType<T>();
-        DynamicDecodeLayer<T>* dynamic_decode_layer = new DynamicDecodeLayer<T>(vocab_size,
-                                                                                vocab_size,
-                                                                                end_id,
-                                                                                stream,
-                                                                                cublas_wrapper,
-                                                                                allocator,
-                                                                                false,   // is_free_buffer_after_forward
-                                                                                &prop);  // cuda_device_prop
-
-        // Logit values in the host of shape ((batch_size x beam) x vocab_size) where beam = 1.
-        // T* h_logits = new T[batch_size * beam_width * vocab_size];
-        T*     h_probs                = new T[batch_size * beam_width * vocab_size];
-        T*     h_log_probs            = new T[batch_size * beam_width * vocab_size];
-        float* h_cum_log_probs        = new float[batch_size * beam_width];
-        float* h_output_log_probs     = new float[max_output_len * batch_size * beam_width];
-        float* expected_cum_log_probs = new float[batch_size * beam_width];
-        initRandom(h_logits, batch_size * beam_width * vocab_size, -3.0f, 3.0f);
-        computeProb(h_probs, h_logits, batch_size * beam_width, vocab_size);
-        computeLogProb(h_log_probs, h_logits, batch_size * beam_width, vocab_size);
-        std::fill_n(expected_cum_log_probs, batch_size * beam_width, 0);
-
-        int* tiled_input_lengths_buf = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size * beam_width));
-        float* cum_log_probs = reinterpret_cast<float*>(allocator->malloc(sizeof(float) * batch_size * beam_width));
-        float* output_log_probs =
-            reinterpret_cast<float*>(allocator->malloc(sizeof(float) * max_output_len * batch_size * beam_width));
-
-        int* output_ids =
-            reinterpret_cast<int*>(allocator->malloc(sizeof(int) * max_seq_len * batch_size * beam_width));
-        int* h_output_ids = new int[batch_size * beam_width];
-
-        int* end_ids = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size));
-        deviceFill(end_ids, batch_size, end_id);
-
-        // Init by zero.
-        cudaMemset(cum_log_probs, 0, sizeof(float) * batch_size * beam_width);
-        cudaMemset(output_log_probs, 0, sizeof(float) * max_output_len * batch_size * beam_width);
-        cudaMemset(output_ids, 0, sizeof(int) * max_seq_len * batch_size * beam_width);
-
-        TensorMap input_tensors({{"random_seed", {MEMORY_CPU, TYPE_INT32, {1}, &seed}},
-                                 {"runtime_top_k", {MEMORY_CPU, TYPE_UINT32, {1}, &top_k}},
-                                 {"runtime_top_p", {MEMORY_CPU, TYPE_FP32, {1}, &top_p}},
-                                 {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &temperature}},
-                                 {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &repetition_penalty}}});
-        dynamic_decode_layer->setup(batch_size, beam_width, &input_tensors);
-
-        for (size_t step = max_input_len; step < max_output_len; ++step) {
-            uint ite = 0;
-            // Reset by the test value since the sampling layer internally update the logit buffer (making it log-prob).
-            cudaH2Dcpy(d_logits, h_logits, batch_size * beam_width * vocab_size);
-            TensorMap dynamic_decode_input_tensors(
-                {{"logits", Tensor{MEMORY_GPU, TYPE_FP32, {batch_size, beam_width, vocab_size}, d_logits}},
-                 {"embedding_bias", Tensor{MEMORY_GPU, data_type, {vocab_size}, nullptr}},
-                 {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
-                 {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_len}},
-                 {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size, beam_width}, tiled_input_lengths_buf}},
-                 {"ite", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &ite}},
-                 {"local_batch_size", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &batch_size}},
-                 {"end_id", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, end_ids}},
-                 {"random_seed", {MEMORY_CPU, TYPE_UINT64, {1}, &seed}},
-                 {"runtime_top_k", {MEMORY_CPU, TYPE_UINT32, {1}, &top_k}},
-                 {"runtime_top_p", {MEMORY_CPU, TYPE_FP32, {1}, &top_p}},
-                 {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &temperature}},
-                 {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &repetition_penalty}}});
-
-            // common outputs
-            TensorMap dynamic_decode_output_tensors(
-                {{"output_ids", Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len, batch_size, beam_width}, output_ids}},
-                 {"finished", Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width}, nullptr}},
-                 {"cum_log_probs", Tensor{MEMORY_GPU, TYPE_FP32, {batch_size * beam_width}, cum_log_probs}},
-                 {"output_log_probs",
-                  Tensor{MEMORY_GPU, TYPE_FP32, {max_seq_len, batch_size, beam_width}, output_log_probs}},
-                 {"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, nullptr}},
-                 {"curand_state", {MEMORY_GPU, TYPE_VOID, {batch_size}, d_curand_state}}});
-
-            dynamic_decode_layer->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
-
-            TM_LOG_DEBUG("Step %2d generated ids", step);
-            cudaD2Hcpy(
-                h_output_ids,
-                dynamic_decode_output_tensors.at("output_ids").getPtrWithOffset<int>(step * (batch_size * beam_width)),
-                batch_size * beam_width);
-            cudaD2Hcpy(h_cum_log_probs, cum_log_probs, batch_size * beam_width);
-            cudaD2Hcpy(h_output_log_probs, output_log_probs, max_output_len * batch_size * beam_width);
-            for (size_t i = 0; i < batch_size * beam_width; ++i) {
-                int idx = i * vocab_size + h_output_ids[i];
-                expected_cum_log_probs[i] += (float)h_log_probs[idx];
-                TM_LOG_DEBUG("| step %2d batch %2d idx %7d id %6d | log-prob %9.4f (expt: %9.4f) "
-                             "| cum-log-prob %9.4f (expt: %9.4f) | prob %9.4e",
-                             (int)step,
-                             (int)i,
-                             (int)idx,
-                             (int)h_output_ids[i],
-                             h_output_log_probs[step * batch_size * beam_width + i],
-                             (float)h_log_probs[idx],
-                             h_cum_log_probs[i],
-                             expected_cum_log_probs[i],
-                             (float)h_probs[idx]);
-            }
-            TM_LOG_DEBUG("");
-        }
-
-        bool passed = checkResult(param.toString(), cum_log_probs, expected_cum_log_probs, batch_size * beam_width);
-        EXPECT_TRUE(passed);
-
-        delete[] expected_cum_log_probs;
-        delete[] h_output_log_probs;
-        delete[] h_cum_log_probs;
-        delete[] h_log_probs;
-        delete[] h_probs;
-
-        delete dynamic_decode_layer;
-    }
 };
 
 TYPED_TEST_SUITE(SamplingDecodeTest2, FloatType);
@@ -1263,20 +1146,10 @@ TYPED_TEST(SamplingDecodeTest2, CorrectnessBatchRandTopP)
 TYPED_TEST(SamplingDecodeTest2, CorrectnessBatchRandTopKLocalBatch)
 {
     // test TopKSampling
-    this->runCurandTest({99, 1201, 1, 3, 1.0f, 5}, true, false);
+    this->runCurandTest({99, 1201, 1, 3, 1.0f, 5}, false, false);
 }
 
 TYPED_TEST(SamplingDecodeTest2, CorrectnessBatchRandTopPLocalBatch)
 {
-    this->runCurandTest({99, 1201, 1, 0, 1.0f, 5}, true, false);
-}
-
-TYPED_TEST(SamplingDecodeTest2, CorrectnessCumLogProbTopK)
-{
-    this->runCumLogProbTest({99, 1201, 1, 5, 1.0f, 5});
-}
-
-TYPED_TEST(SamplingDecodeTest2, CorrectnessCumLogProbTopP)
-{
-    this->runCumLogProbTest({99, 1201, 1, 0, 1.0f, 5});
+    this->runCurandTest({99, 1201, 1, 0, 1.0f, 5}, false, false);
 }

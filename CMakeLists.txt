@@ -317,13 +317,10 @@ endif()
 ########################################
 
 add_library(transformer-shared SHARED
-  $<TARGET_OBJECTS:BaseSamplingLayer>
   $<TARGET_OBJECTS:DynamicDecodeLayer>
   $<TARGET_OBJECTS:Llama>
   $<TARGET_OBJECTS:LlamaTritonBackend>
   $<TARGET_OBJECTS:gemm_s4_f16>
-  $<TARGET_OBJECTS:TopKSamplingLayer>
-  $<TARGET_OBJECTS:TopPSamplingLayer>
   $<TARGET_OBJECTS:TransformerTritonBackend>
   $<TARGET_OBJECTS:activation_kernels>
   $<TARGET_OBJECTS:ban_bad_words>
