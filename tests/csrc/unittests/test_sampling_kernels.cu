@@ -213,7 +213,7 @@ void filterCpu(int    batch_size,
             }
         }
 
-        // topp fiter
+        // topp filter
         if (filter_topp && top_ps[i] != 1.f) {
             float topp    = top_ps[i];
             float sum_val = 0;
