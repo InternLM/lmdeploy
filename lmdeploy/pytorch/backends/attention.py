@@ -31,7 +31,7 @@ class AttentionImpl(ABC, Generic[T]):
         v_head_size: int = None,
         alibi_scale: float = None,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logit_softcapping: float = None,
         **kwargs,
     ) -> None:
         if scale is None:
@@ -50,7 +50,7 @@ class AttentionImpl(ABC, Generic[T]):
         self.v_head_size = v_head_size
         self.alibi_scale = alibi_scale
         self.sliding_window = sliding_window
-        self.logical_softcapping = logical_softcapping
+        self.logit_softcapping = logit_softcapping
 
     @abstractmethod
     def forward(

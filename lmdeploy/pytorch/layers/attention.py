@@ -18,7 +18,7 @@ class Attention(nn.Module):
         v_head_size: int = None,
         alibi_scale: float = None,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logit_softcapping: float = None,
         **kwargs,
     ):
         super().__init__()
@@ -34,7 +34,7 @@ class Attention(nn.Module):
             v_head_size,
             alibi_scale,
             sliding_window,
-            logical_softcapping,
+            logit_softcapping,
             **kwargs,
         )
 

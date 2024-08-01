@@ -21,7 +21,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         v_head_size: int = None,
         alibi_scale: float = None,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logit_softcapping: float = None,
         **kwargs,
     ):
         super().__init__(
@@ -32,6 +32,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             v_head_size,
             alibi_scale,
             sliding_window,
+            logit_softcapping,
             **kwargs,
         )
 
@@ -90,6 +91,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             max_seqlen=max_q_seqlen,
             window_size=self.sliding_window,
             sm_scale=self.scale,
+            logit_softcapping=self.logit_softcapping,
         )
 
         return attn_output
