@@ -40,6 +40,7 @@ class TurbomindModelConfig:
     tensor_para_size: int = None
     head_num: int = None
     kv_head_num: int = None
+    hidden_units: int = None
     vocab_size: int = None
     num_layer: int = None
     inter_size: int = None
@@ -191,9 +192,15 @@ class BaseOutputModel(ABC):
             emb = bin.tok_embeddings()
             if emb is not None:
                 _vocab_size, dim = emb.shape
-                head_num = dim // cfg.size_per_head
+                # legacy, may get removed
+                head_num = final_cfg['head_num'] or dim // cfg.size_per_head
+                hidden_units = final_cfg[
+                    'hidden_units'] or head_num * cfg.size_per_head
                 break
-        final_cfg.update(dict(head_num=head_num, vocab_size=_vocab_size))
+        final_cfg.update(
+            dict(head_num=head_num,
+                 vocab_size=_vocab_size,
+                 hidden_units=hidden_units))
         return TurbomindModelConfig.from_dict(final_cfg, allow_none=True)
 
     def export_config(self) -> None:

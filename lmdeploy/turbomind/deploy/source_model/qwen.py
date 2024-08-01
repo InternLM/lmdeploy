@@ -95,6 +95,7 @@ class QwenModel(LlamaModel):
         params_path = osp.join(self.model_path, 'config.json')
         with open(params_path) as f:
             config = json.load(f)
+            hidden_units = config['hidden_size']
             num_layer = config['num_hidden_layers']
             norm_eps = config['layer_norm_epsilon']
             rope_theta = float(config.get('rotary_emb_base', 10000.0))
@@ -107,6 +108,7 @@ class QwenModel(LlamaModel):
             use_logn_attn = int(config['use_logn_attn'])
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
+                    hidden_units=hidden_units,
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,
                     max_position_embeddings=seq_length,
