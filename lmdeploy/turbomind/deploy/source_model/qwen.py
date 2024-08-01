@@ -132,11 +132,12 @@ class Qwen2Reader(LlamaReader):
 
         for key in ['q', 'k', 'v']:
             tensor = self.params.get(
-                f'model.layers.{i}.self_attn.{key}_proj.bias')
+                f'{self.attn_layer_prefix}.{i}.self_attn.{key}_proj.bias')
             assert tensor is not None
             result.append(tensor)
 
-        tensor = self.params.get(f'model.layers.{i}.self_attn.o_proj.weight')
+        tensor = self.params.get(
+            f'{self.attn_layer_prefix}.{i}.self_attn.o_proj.weight')
         dummy_oproj_bias = tensor.new_zeros(tensor.shape[0])
         result.append(dummy_oproj_bias)
         return (*result, )
