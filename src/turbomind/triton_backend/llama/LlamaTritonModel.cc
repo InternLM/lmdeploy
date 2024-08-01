@@ -288,14 +288,15 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     ft::check_cuda_error(cudaSetDevice(device_id));
     const int comms_rank = device_id % (tensor_para_size_ * pipeline_para_size_);
 
-    std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator(
-        new ft::Allocator<ft::AllocatorType::CUDA>(device_id));
-
     /// TODO: this stream handle is leaked
     cudaStream_t stream{};
     ft::check_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
+    auto allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, false);
     allocator->setStream(stream);
+
+    auto peer_allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, true);
+    peer_allocator->setStream(stream);
 
     cublasHandle_t   cublas_handle;
     cublasLtHandle_t cublaslt_handle;
@@ -353,11 +354,13 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   stream,
                                                   cublas_wrapper.get(),
                                                   allocator.get(),
+                                                  peer_allocator.get(),
                                                   false,  // is_free_buffer_after_forward,
                                                   cuda_device_prop_ptr.get());
 
     return std::make_unique<LlamaTritonSharedModelInstance<T>>(
         LlamaTritonSharedModelInstance<T>{std::move(allocator),
+                                          std::move(peer_allocator),
                                           std::move(cublas_algo_map),
                                           std::move(cublas_wrapper_mutex),
                                           std::move(cublas_wrapper),
@@ -389,8 +392,7 @@ LlamaTritonModel<T>::createModelInstance(int                                    
         }
     }
 
-    std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator(
-        new ft::Allocator<ft::AllocatorType::CUDA>(device_id));
+    auto allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, false);
 
     allocator->setStream(stream);
 
@@ -441,10 +443,10 @@ template<typename T>
 std::string LlamaTritonModel<T>::toString()
 {
     std::stringstream ss;
-    ss << "Model: "
-       << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_ << "\nsize_per_head: " << size_per_head_
-       << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_
-       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_params_.max_batch_size
+    ss << "Model: " << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_
+       << "\nsize_per_head: " << size_per_head_ << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_
+       << "\nvocab_size: " << vocab_size_ << "\nattn_bias: " << attn_bias_
+       << "\nmax_batch_size: " << engine_params_.max_batch_size
        << "\nmax_prefill_token_num: " << engine_params_.max_prefill_token_num
        << "\nmax_context_token_num: " << engine_params_.max_context_token_num
        << "\nsession_len: " << engine_params_.session_len << "\nstep_length: " << engine_params_.step_length
