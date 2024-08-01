@@ -190,7 +190,7 @@ class PLoraExporter(BaseExporter):
         self.export_attn_lora_a(i, r.attn_lora_a(i), 'lora_a.weight')
         self.export_attn(i, r.attn_lora_b(i), 'lora_b.weight')
         self.export_ffn(i, r.ffn_lora_a(i), 'lora_a.weight')
-        self.export_ffn(i, r.fnn_lora_b(i), 'lora_b.weight')
+        self.export_ffn(i, r.ffn_lora_b(i), 'lora_b.weight')
 
 
 def get_exporter_factory(weight_type, lora_type):

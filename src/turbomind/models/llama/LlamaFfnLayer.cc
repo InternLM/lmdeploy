@@ -31,18 +31,12 @@ void LlamaFfnLayer<T>::allocateBuffer(size_t                     token_num,
                                       const LlamaDenseWeight<T>* gating,
                                       const LlamaDenseWeight<T>* inter)
 {
-    // size_t sz           = sizeof(T) * token_num * inter_size_;
-    // size_t sz_gate      = (gating->lora.r > 0) ? sz + sz / inter_size_ * gating->lora.r : sz;
-    // size_t sz_inter     = (inter->lora.r > 0) ? sz + sz / inter_size_ * inter->lora.r : sz;
-    // inter_buf_          = (T*)allocator_->reMalloc(inter_buf_, sz_inter, false);
-    // gating_buf_         = (T*)allocator_->reMalloc(gating_buf_, sz_gate, false);
+    const size_t sz = token_num * inter_size_;
 
-    const size_t sz = sizeof(T) * token_num * inter_size_;
+    const size_t sz_gate  = token_num * gating->lora.r;
+    const size_t sz_inter = token_num * inter->lora.r;
 
-    const size_t sz_gate  = sizeof(T) * token_num * gating->lora.r;
-    const size_t sz_inter = sizeof(T) * token_num * inter->lora.r;
-
-    gating_buf_ = (T*)allocator_->reMalloc(gating_buf_, sz * 2 + sz_gate + sz_inter, false);
+    gating_buf_ = (T*)allocator_->reMalloc(gating_buf_, sizeof(T) * (sz * 2 + sz_gate + sz_inter), false);
     inter_buf_  = gating_buf_ + sz;
 
     // gate & inter is not fused when lora is enabled
