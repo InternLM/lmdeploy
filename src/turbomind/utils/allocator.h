@@ -173,7 +173,7 @@ public:
             props.handleTypes   = cudaMemHandleTypeNone;
             props.location.type = cudaMemLocationTypeDevice;
             props.location.id   = device_id;
-            cudaMemPoolCreate(&mempool_, &props);
+            check_cuda_error(cudaMemPoolCreate(&mempool_, &props));
             cudaMemAccessDesc desc                  = {};
             int               peer_access_available = 0;
             int               device_count          = 1;
@@ -212,7 +212,7 @@ public:
             free(&ptr, size_and_type.second == MemoryType::HOST);
         }
         if (enable_peer_access_) {  // We own the pool in this case
-            cudaMemPoolDestroy(mempool_);
+            check_cuda_error(cudaMemPoolDestroy(mempool_));
             mempool_ = {};
         }
     }
