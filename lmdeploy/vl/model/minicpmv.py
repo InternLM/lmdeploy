@@ -62,9 +62,9 @@ class MiniCPMVModel(VisonModel):
             model.slice_image = processor.image_processor.slice_image
 
             def _reshape_by_patch(x):
-                x = x.numpy()
-                x = processor.image_processor.reshape_by_patch(x)
-                return torch.from_numpy(x)
+                out = x.cpu().numpy()
+                out = processor.image_processor.reshape_by_patch(out)
+                return torch.from_numpy(out).to(device=x.device)
 
             model.reshape_by_patch = _reshape_by_patch
 
