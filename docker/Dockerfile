@@ -11,7 +11,6 @@ FROM ${CUDA_VERSION} AS final
 ARG PYTHON_VERSION=3.10
 
 ARG TORCH_VERSION=2.3.0
-ARG TRITON_VERSION=2.1.0
 ARG TORCHVISION_VERSION=0.18.0
 
 RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get install -y software-properties-common wget vim &&\
@@ -46,7 +45,7 @@ RUN cd /opt/lmdeploy &&\
     cmake .. \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-        -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
+        -DCMAKE_INSTALL_PREFIX=/opt/lmdeploy/install \
         -DBUILD_PY_FFI=ON \
         -DBUILD_MULTI_GPU=ON \
         -DBUILD_CUTLASS_MOE=OFF \
@@ -56,8 +55,10 @@ RUN cd /opt/lmdeploy &&\
     make -j$(nproc) && make install &&\
     cd .. &&\
     python3 -m pip install -e . &&\
-    python3 -m pip install --no-cache-dir triton==${TRITON_VERSION} &&\
     rm -rf build
+
+ENV LD_LIBRARY_PATH=/opt/lmdeploy/install/lib:$LD_LIBRARY_PATH
+ENV PATH=/opt/lmdeploy/install/bin:$PATH
 
 # explicitly set ptxas path for triton
 ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
