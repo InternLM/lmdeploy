@@ -167,6 +167,7 @@ public:
         check_cuda_error(cudaGetDeviceCount(&device_count));
         cudaMemPool_t mempool;
         check_cuda_error(cudaDeviceGetDefaultMemPool(&mempool, device_id));
+#if TM_ENABLE_CUSTOM_ALL_REDUCE
         cudaMemAccessDesc desc                  = {};
         int               peer_access_available = 0;
         for (int i = 0; i < device_count; i++) {
@@ -184,6 +185,7 @@ public:
             desc.flags         = cudaMemAccessFlagsProtReadWrite;
             check_cuda_error(cudaMemPoolSetAccess(mempool, &desc, 1));
         }
+#endif
         // set memory pool threshold to avoid shrinking the pool
         uint64_t setVal = UINT64_MAX;
         check_cuda_error(cudaMemPoolSetAttribute(mempool, cudaMemPoolAttrReleaseThreshold, &setVal));
