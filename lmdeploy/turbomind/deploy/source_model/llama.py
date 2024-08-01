@@ -174,9 +174,11 @@ class LlamaModel(BaseInputModel):
                                             map_location='cpu')
                 else:
                     new_params = load_file(osp.join(self.ckpt_path, ckpt))
-                ret = self.Reader(new_params, unused_params,
-                                  i == self.nmgrs - 1, self.model_config,
-                                  self.policy)
+                ret = self.Reader(new_params,
+                                  unused_params,
+                                  i == self.nmgrs - 1,
+                                  self.model_config,
+                                  policy=self.policy)
                 yield ret
                 ret.clean_up(is_last_bin)
         except GeneratorExit:
