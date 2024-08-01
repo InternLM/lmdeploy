@@ -249,10 +249,18 @@ class LlamaModel(nn.Module):
         elif rotary_name == 'LlamaDynamicNTKScalingRotaryEmbedding':
             emb_type = EmbeddingType.DynamicNTKScaling
         scaling_factor = getattr(rotary_emb, 'scaling_factor', 1.0)
+        config = origin.config
+        rope_dim = config.hidden_size // config.num_attention_heads
+        rope_max_pos_emb = config.max_position_embeddings
+        rope_base = config.rope_theta
+        scaling_factor = 1.0
+        if config.rope_scaling is not None:
+            scaling_factor = config.rope_scaling.get('scaling_factor',
+                                                     scaling_factor)
         self.rotary_emb = build_rotary_embedding(
-            rotary_emb.dim,
-            rotary_emb.max_position_embeddings,
-            rotary_emb.base,
+            rope_dim,
+            rope_max_pos_emb,
+            rope_base,
             scaling_factor,
             emb_type,
         )

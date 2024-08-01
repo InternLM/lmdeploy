@@ -34,7 +34,7 @@ from .triton_utils import get_kernel_meta, wrap_jit_func
     BLOCK_KH=torch.int32,
     BLOCK_N=torch.int32,
 ))
-@triton.jit
+@triton.jit(do_not_specialize=('seq_len', ))
 def apply_rotary_pos_emb_qk_kernel(
     Q,
     K,
