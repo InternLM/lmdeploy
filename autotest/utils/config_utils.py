@@ -160,10 +160,7 @@ def get_benchmark_model_list(tp_num,
                              kvint_list: list = []):
     config = get_config()
     if is_longtext:
-        case_list = [
-            item for item in config.get('benchmark_model')
-            if item in config.get('longtext_model')
-        ]
+        case_list = [item for item in config.get('longtext_model')]
     else:
         case_list = config.get('benchmark_model')
     quatization_case_config = config.get('turbomind_quatization')
