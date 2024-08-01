@@ -156,23 +156,21 @@ struct Schedule {
 
     int last;
 
-    int input_count1;
-    int input_count2;
+    int remaining_input_count;
 
     Sequences        active;
     std::vector<int> block_counts;
     Sequences        inactive;
     Sequences        victims;
 
-    Schedule(Snapshot snapshot, int size, int _input_count1, int _input_count2):
+    Schedule(Snapshot snapshot, int size, int max_input_count):
         free(snapshot.free),
         cached(snapshot.cached),
         last(size),
         use_count_(std::move(snapshot.use_count)),
         unlocked_(size),
         it_(size),
-        input_count1(_input_count1),
-        input_count2(_input_count2)
+        remaining_input_count(max_input_count)
     {
     }
 
@@ -237,7 +235,7 @@ struct Transaction {
 
     void Process()
     {
-        if (schedule_.input_count1 > 0) {
+        if (schedule_.remaining_input_count > 0) {
             int count = block_count_;
 
             int tmp = std::min(schedule_.free, count);
@@ -290,11 +288,8 @@ struct Transaction {
         schedule_.active.push_back(sequences_[index_]);
         schedule_.block_counts.push_back(block_count_);
 
-        if (input_count_ > schedule_.input_count2) {
-            input_count_ = schedule_.input_count1;
-        }
-        schedule_.input_count1 -= input_count_;
-        schedule_.input_count2 -= input_count_;
+        input_count_ = std::min(input_count_, schedule_.remaining_input_count);
+        schedule_.remaining_input_count -= input_count_;
         const_cast<Sequence*>(sequences_[index_])->input_length = input_count_;
     }
 };
@@ -413,12 +408,12 @@ auto SequenceManager::Materialize(Sequences                    sequences,
         }
     }
 
-    auto [input_count1, input_count2] = adjust(sequences, context_lengths);
+    const int max_input_count = adjust(sequences, context_lengths);
 
     std::vector<int> required = CountRequiredBlocks(sequences, context_lengths, step_length);
     // dbg(required);
 
-    Schedule schedule(block_manager_->TakeSnapshot(), sequences.size(), input_count1, input_count2);
+    Schedule schedule(block_manager_->TakeSnapshot(), sequences.size(), max_input_count);
 
     // `schedule.last` is decreasing in the loop
     for (int i = 0; i < schedule.last; ++i) {

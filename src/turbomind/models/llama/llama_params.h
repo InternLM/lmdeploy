@@ -34,9 +34,9 @@ struct EngineParams {
     bool  enable_prefix_caching;
 
     // chunking params
+    int max_prefill_token_num;
     int max_context_token_num;
     int num_tokens_per_iter;
-    int extra_tokens_per_iter;
     int max_prefill_iters;
 };
 

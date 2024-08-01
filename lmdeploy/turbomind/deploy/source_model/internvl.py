@@ -23,6 +23,7 @@ class InternVLReader(LlamaReader):
                          **kwargs)
 
 
+# Note the subtle difference in keys
 class InternVL2Reader(InternLM2Reader):
     """InternVLReader for InternLM2 model."""
 
@@ -49,7 +50,8 @@ class InternVLModel(LlamaModel):
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         arch = config.llm_config.architectures[0]
         _readers = dict(InternLM2ForCausalLM=InternVL2Reader,
-                        LlamaForCausalLM=InternVLReader)
+                        LlamaForCausalLM=InternVLReader,
+                        Qwen2ForCausalLM=InternVLReader)
         self.Reader = _readers[arch]
 
     def model_info(self):

@@ -43,6 +43,8 @@ protected:
     UnifiedAttentionLayer<T>* attn_layer_{};
     LlamaFfnLayer<T>*         ffn_layer_{};
 
+    cudaEvent_t ev_h_cu_x_{};
+
     const DataType dtype_;
 
     // bool need_causal_mask_{false};
