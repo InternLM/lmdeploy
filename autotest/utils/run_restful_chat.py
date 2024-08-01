@@ -3,6 +3,7 @@ import random
 import string
 import subprocess
 from time import sleep, time
+import psutil
 
 import allure
 from pytest import assume
@@ -92,6 +93,8 @@ def start_restful_api(config, param, model, model_path, backend_tpye,
 
 def stop_restful_api(pid, startRes, param):
     if pid > 0:
+        for child in startRes.children(recursive=True):  # or parent.children() for recursive=False
+            child.terminate()
         startRes.terminate()
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
