@@ -215,7 +215,7 @@ class AsyncEngine(LogitsMixin):
         self.gens_set = set()
         for i in range(self.instance_num):
             self.gens_set.add(self.engine.create_instance())
-        self._session_ids = count(0)
+        self._session_id = count(0)
 
     def _build_turbomind(
             self,
@@ -390,9 +390,9 @@ class AsyncEngine(LogitsMixin):
         assert len(prompts) == len(gen_config),\
                 'input gen_confg length differs from the length of prompts' # noqa
         prompt_num = len(prompts)
-        session_ids = [next(self._session_ids) for _ in range(prompt_num)]
+        session_ids = [next(self._session_id) for _ in range(prompt_num)]
         outputs = [
-            Response('', 0, 0, session_ids[i], index_id=i)
+            Response('', 0, 0, session_ids[i], index=i)
             for i in range(prompt_num)
         ]
         generators = []
@@ -470,7 +470,7 @@ class AsyncEngine(LogitsMixin):
             gen_config = [gen_config] * len(prompts)
         assert len(prompts) == len(gen_config),\
                 'input gen_confg length differs from the length of prompts' # noqa
-        session_ids = [next(self._session_ids) for _ in range(len(prompts))]
+        session_ids = [next(self._session_id) for _ in range(len(prompts))]
         outputs = Queue()
         generators = []
         for i, prompt in enumerate(prompts):
@@ -495,7 +495,7 @@ class AsyncEngine(LogitsMixin):
                              out.finish_reason,
                              out.token_ids,
                              out.logprobs,
-                             index_id=i))
+                             index=i))
 
         async def gather():
             await asyncio.gather(

@@ -261,7 +261,7 @@ class Response:
         token_ids: (List[int]): the output token ids.
         logprobs: (List[Dict[int, float]]): the top logprobs for each output
             position.
-        index_id (int): it refers to the position index of the input request
+        index (int): it refers to the position index of the input request
             batch
     """
     text: str
@@ -271,7 +271,7 @@ class Response:
     finish_reason: Optional[Literal['stop', 'length']] = None
     token_ids: List[int] = field(default_factory=list)
     logprobs: List[Dict[int, float]] = None
-    index_id: int = 0
+    index: int = 0
 
 
 @dataclass
