@@ -246,7 +246,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             const double PI                   = 3.14159265358979323846;
             float        inv_diff_freq_factor = 1.0 / (params_.high_freq_factor - params_.low_freq_factor);
             params.llama3_inv_scaling_factor  = 1.0 / params_.rope_scaling_factor;
-            params.llama3_alpha = params_.original_max_position_embeddings / 2 * PI * inv_diff_freq_factor;
+            params.llama3_alpha = params_.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
             params.llama3_beta  = params_.low_freq_factor * inv_diff_freq_factor;
         }
 
@@ -286,9 +286,14 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         auto params = CreateParams(offset, pf_batch_size, 1, pf_stream);
         if constexpr (sizeof(T) == 2) {
             invokeProcessKV_v2_(params);
+            sync_check_cuda_error();
+
             /// TODO: skip flattening for `sm_80`
             invokeFlattenKV_v2_(params, sum_k_len);
+            sync_check_cuda_error();
+
             dispatchAttention(params);
+            sync_check_cuda_error();
         }
     }
 
@@ -296,6 +301,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         auto params = CreateParams(0, dc_batch_size, kMaxKVSplits, dc_stream);
         if constexpr (sizeof(T) == 2) {
             dispatchDecoding<T>(params);
+            sync_check_cuda_error();
         }
     }
 
