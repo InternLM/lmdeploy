@@ -60,8 +60,8 @@ jobs:
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
-          wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz
-          tar xf openmpi-4.1.5.tar.gz && cd openmpi-4.1.5 && ./configure --prefix=/usr/local/openmpi
+          cp -r /nvme/qa_test_models/offline_pkg/openmpi-4.1.5 .
+          cd openmpi-4.1.5 && ./configure --prefix=/usr/local/openmpi
           make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
           export PATH=$PATH:/usr/local/openmpi/bin
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
@@ -89,7 +89,8 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test -x --alluredir=allure-results --clean-alluredir
+          CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test and gpu_num_2 -x --alluredir=allure-results --clean-alluredir
+          CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test and gpu_num_1 -n 2 -x --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
         run: |
