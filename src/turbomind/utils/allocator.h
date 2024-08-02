@@ -160,7 +160,6 @@ public:
         device_id_(device_id), enable_peer_access_(enable_peer_access)
     {
         TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-        // pointer_mapping_ = new std::unordered_map<void*, std::pair<size_t, MemoryType>>();
 #if defined(CUDA_MEMORY_POOL_DISABLED)
         TM_LOG_WARNING(
             "Async cudaMalloc/Free is not supported before CUDA 11.2. Using Sync cudaMalloc/Free."

@@ -712,7 +712,7 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     if (model_->lora_params_.policy == LoraPolicy::kPlora) {
         lora_mask_buf_ = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_forward_token_num_, false);
         size_t sz      = sizeof(T) * max_forward_token_num_ * (hidden_units + model_->lora_params_.max_wo_r);
-        context_decoder_output_buf_ = (T*)allocator_->reMalloc(context_decoder_output_buf_, sz, false);
+        context_decoder_output_buf_ = (T*)peer_allocator_->reMalloc(context_decoder_output_buf_, sz, false);
     }
     else {
         context_decoder_output_buf_ = (T*)peer_allocator_->reMalloc(
