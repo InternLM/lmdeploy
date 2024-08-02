@@ -42,7 +42,7 @@ pip install -e .
 
 But if you are using the TurboMind Engine, you have to build the source as shown below. The `openmmlab/lmdeploy:{tag}` docker image is strongly recommended.
 
-**Step 1** Get LMDeploy's docker image
+**Step 1** - Get LMDeploy's docker image
 
 ```shell
 docker pull openmmlab/lmdeploy:latest
@@ -53,20 +53,20 @@ The "openmmlab/lmdeploy:latest" is based on "nvidia/cuda:12.4.1-devel-ubuntu22.0
 The pattern of the LMDeploy docker image tag is "openmmlab/lmdeploy:{version}-cu(11|12)" since v0.5.3.
 ```
 
-**Step 2** Clone LMDeploy source code and change to its root directory:
+**Step 2** - Clone LMDeploy source code and change to its root directory
 
 ```shell
 git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
 ```
 
-**Step 3** launch docker container in interactive mode
+**Step 3** - launch docker container in interactive mode
 
 ```shell
 docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name lmdeploy -it openmmlab/lmdeploy:latest bin/bash
 ```
 
-**Step 4** build and installation:
+**Step 4** - build and installation
 
 ```shell
 cd /opt/lmdeploy
