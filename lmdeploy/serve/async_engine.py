@@ -261,10 +261,12 @@ class AsyncEngine(LogitsMixin):
                  request_output_len=512,
                  top_k: int = 40,
                  top_p: float = 0.8,
+                 min_p: float = 0.0,
                  temperature: float = 0.8,
                  repetition_penalty: float = 1.0,
                  ignore_eos: bool = False,
                  do_preprocess: bool = True,
+                 do_sample: bool = True,
                  adapter_name: Optional[str] = None,
                  use_tqdm: bool = False,
                  **kwargs):
@@ -297,8 +299,10 @@ class AsyncEngine(LogitsMixin):
         if gen_config is None:
             gen_config = GenerationConfig(
                 max_new_tokens=request_output_len,
+                do_sample=do_sample,
                 top_k=top_k,
                 top_p=top_p,
+                min_p=min_p,
                 temperature=temperature,
                 repetition_penalty=repetition_penalty,
                 ignore_eos=ignore_eos)
