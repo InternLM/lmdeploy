@@ -712,10 +712,10 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     if (model_->lora_params_.policy == LoraPolicy::kPlora) {
         lora_mask_buf_ = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_forward_token_num_, false);
         size_t sz      = sizeof(T) * max_forward_token_num_ * (hidden_units + model_->lora_params_.max_wo_r);
-        context_decoder_output_buf_ = (T*)allocator_->reMalloc(context_decoder_output_buf_, sz, false);
+        context_decoder_output_buf_ = (T*)peer_allocator_->reMalloc(context_decoder_output_buf_, sz, false);
     }
     else {
-        context_decoder_output_buf_ = (T*)allocator_->reMalloc(
+        context_decoder_output_buf_ = (T*)peer_allocator_->reMalloc(
             context_decoder_output_buf_, sizeof(T) * max_forward_token_num_ * hidden_units, false);
     }
 
@@ -850,7 +850,7 @@ void LlamaBatch<T>::FreeBuffer()
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)&context_decoder_input_buf_);
-        allocator_->free((void**)&context_decoder_output_buf_);
+        peer_allocator_->free((void**)&context_decoder_output_buf_);
         allocator_->free((void**)&context_decoder_ids_buf_);
         allocator_->free((void**)&lora_mask_buf_);
 
@@ -871,7 +871,7 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&local_logits_buf_);
 
         if (local_context_logits_buf_) {
-            allocator_->free((void**)&local_context_logits_buf_);
+            peer_allocator_->free((void**)&local_context_logits_buf_);
         }
         if (context_logits_buf_) {
             allocator_->free((void**)&context_logits_buf_);
@@ -944,6 +944,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
 {
     stream_         = model_->stream_;
     allocator_      = model_->allocator_;
+    peer_allocator_ = model_->peer_allcator_;
     cublas_wrapper_ = model_->cublas_wrapper_;
 
     const int elem_bits = quant_policy ? quant_policy : bitsof<T>;
@@ -1172,7 +1173,7 @@ void LlamaBatch<T>::OutputContextLogits(T*                                  cont
             NcclGuard guard(model_->tensor_para_, stream_, true);
             FT_CHECK(model_->vocab_size_padded_ % tp == 0);
             const auto local_vocab_size = model_->vocab_size_padded_ / tp;
-            local_context_logits_buf_   = (float*)allocator_->reMalloc(
+            local_context_logits_buf_   = (float*)peer_allocator_->reMalloc(
                 local_context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * num_token, false);
         }
     }
