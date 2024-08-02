@@ -26,6 +26,8 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/08\] 🔥🔥 LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
+- \[2024/07\] 🎉🎉 Support Llama3.1 8B, 70B and its TOOLS CALLING
 - \[2024/07\] Support [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/serving/api_server_tools.md) of InternLM2.5
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
@@ -110,13 +112,14 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Llama (7B - 65B)</li>
   <li>Llama2 (7B - 70B)</li>
   <li>Llama3 (8B, 70B)</li>
+  <li>Llama3.1 (8B, 70B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM2.5 (7B)</li>
-  <li>QWen (1.8B - 72B)</li>
-  <li>QWen1.5 (0.5B - 110B)</li>
-  <li>QWen1.5 - MoE (0.5B - 72B)</li>
-  <li>QWen2 (0.5B - 72B)</li>
+  <li>Qwen (1.8B - 72B)</li>
+  <li>Qwen1.5 (0.5B - 110B)</li>
+  <li>Qwen1.5 - MoE (0.5B - 72B)</li>
+  <li>Qwen2 (0.5B - 72B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
@@ -140,10 +143,10 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>InternLM-XComposer2.5 (7B)</li>
-  <li>QWen-VL (7B)</li>
+  <li>Qwen-VL (7B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
-  <li>InternVL2 (1B-40B)</li>
+  <li>InternVL2 (1B-76B)</li>
   <li>MiniGeminiLlama (7B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
@@ -173,7 +176,7 @@ pip install lmdeploy
 Since v0.3.0, The default prebuilt package is compiled on **CUDA 12**. However, if CUDA 11+ is required, you can install lmdeploy by:
 
 ```shell
-export LMDEPLOY_VERSION=0.5.1
+export LMDEPLOY_VERSION=0.5.2
 export PYTHON_VERSION=38
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
@@ -196,7 +199,7 @@ For more information about inference pipeline, please refer to [here](docs/en/ll
 
 # Tutorials
 
-Please overview [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
+Please review [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
 
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 

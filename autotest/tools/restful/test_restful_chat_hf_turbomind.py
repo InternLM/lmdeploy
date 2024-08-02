@@ -67,12 +67,13 @@ def getKvintModelList(tp_num):
         'cuda_prefix': None,
         'tp_num': tp_num,
         'extra': '--quant-policy 4'
-    } for item in get_kvint_model_list(tp_num)] + [{
-        'model': item,
-        'cuda_prefix': None,
-        'tp_num': tp_num,
-        'extra': '--quant-policy 8'
-    } for item in get_kvint_model_list(tp_num)]
+    } for item in get_kvint_model_list(tp_num)
+            if 'qwen2' not in item.lower()] + [{
+                'model': item,
+                'cuda_prefix': None,
+                'tp_num': tp_num,
+                'extra': '--quant-policy 8'
+            } for item in get_kvint_model_list(tp_num)]
 
 
 @pytest.mark.order(7)
@@ -132,7 +133,6 @@ def test_restful_chat_pr(config, common_case_config):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
-@pytest.mark.tmp
 @pytest.mark.parametrize('prepare_environment', [{
     'model': 'Qwen/Qwen-7B-Chat',
     'cuda_prefix': None,

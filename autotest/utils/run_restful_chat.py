@@ -110,8 +110,7 @@ def run_all_step(config,
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
-        if ('deepseek-coder' in model
-                or 'codellama' in model) and 'code' not in case:
+        if ('coder' in model or 'codellama' in model) and 'code' not in case:
             continue
 
         case_info = cases_info.get(case)
@@ -167,7 +166,8 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
 
         for output in api_client.chat_completions_v1(model=model_name,
                                                      messages=messages,
-                                                     top_k=1):
+                                                     top_k=1,
+                                                     max_tokens=256):
             output_message = output.get('choices')[0].get('message')
             messages.append(output_message)
 
@@ -215,7 +215,8 @@ def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
         for output in api_client.chat_interactive_v1(prompt=prompt,
                                                      interactive_mode=True,
                                                      session_id=random_chars,
-                                                     top_k=1):
+                                                     top_k=1,
+                                                     request_output_len=256):
             output_content = output.get('text')
             file.writelines('output:' + output_content + '\n')
 

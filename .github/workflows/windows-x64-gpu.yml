@@ -41,11 +41,12 @@ jobs:
       - name: Install python packages
         run: |
           pip install pybind11 wheel
-      - uses: Jimver/cuda-toolkit@v0.2.11
+      - name: Setup CUDA Toolkit
         id: cuda-toolkit
-        with:
-          cuda: ${{ matrix.cudaver }}
-          use-github-cache: false
+        shell: pwsh
+        run: ./builder/windows/setup_cuda.ps1
+        env:
+            INPUT_CUDA_VERSION: ${{ matrix.cudaver }}
       - name: Build wheel
         run: |
           $env:BUILD_TEST="ON"

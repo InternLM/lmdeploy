@@ -1,3 +1,6 @@
+from utils.restful_return_check import (assert_completions_batch_return,
+                                        assert_completions_stream_return)
+
 from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_HTTP_URL = 'http://localhost'
@@ -36,6 +39,36 @@ class TestRestfulInterfaceBase:
         assert input_ids1[0] == 1 and input_ids3[0] == 1
         assert length5 == length2 * 100
         assert input_ids5 == input_ids2 * 100
+
+    def test_return(self):
+        api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
+        for item in api_client.completions_v1(
+                model=model_name,
+                prompt='Hi, pls intro yourself',
+                max_tokens=16,
+                temperature=0.01,
+        ):
+            completion_tokens = item['usage']['completion_tokens']
+            assert completion_tokens > 0
+            assert completion_tokens <= 17
+            assert completion_tokens >= 16
+            assert item.get('choices')[0].get('finish_reason') in ['length']
+        assert_completions_batch_return(item, model_name)
+
+    def test_return_streaming(self):
+        api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
+        outputList = []
+        for item in api_client.completions_v1(model=model_name,
+                                              prompt='Hi, pls intro yourself',
+                                              max_tokens=16,
+                                              stream=True,
+                                              temperature=0.01):
+            outputList.append(item)
+        assert_completions_stream_return(outputList[-1], model_name, True)
+        for index in range(0, len(outputList) - 1):
+            assert_completions_stream_return(outputList[index], model_name)
 
     def test_max_tokens(self):
         api_client = APIClient(BASE_URL)

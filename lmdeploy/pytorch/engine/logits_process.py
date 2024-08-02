@@ -258,7 +258,7 @@ class FusedLogitsProcessor(LogitsWarper):
 
         stop_words = sampling_inputs.stop_words
         if stop_words is not None:
-            stop_words = stop_words * self.ignore_eos[:, None]
+            stop_words = torch.where(self.ignore_eos[:, None], stop_words, -1)
             scores = _process_bad_words(scores, stop_words)
 
         return scores

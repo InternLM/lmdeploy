@@ -96,6 +96,8 @@ class APIClient:
                             messages: Union[str, List[Dict[str, str]]],
                             temperature: Optional[float] = 0.7,
                             top_p: Optional[float] = 1.0,
+                            logprobs: Optional[bool] = False,
+                            top_logprobs: Optional[int] = 0,
                             n: Optional[int] = 1,
                             max_tokens: Optional[int] = None,
                             stop: Optional[Union[str, List[str]]] = None,

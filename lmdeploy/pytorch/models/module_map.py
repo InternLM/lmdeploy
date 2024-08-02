@@ -220,6 +220,8 @@ MODULE_MAP.update({
 # peft
 MODULE_MAP.update({
     'peft.tuners.lora.layer.Linear':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear',
+    'peft.tuners.lora.awq.AwqLoraLinear':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear'
 })
 
@@ -339,6 +341,12 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'modeling_internvl_chat.InternVLChatModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.PatchedInternVLChatModel'
+})
+
+# awq
+MODULE_MAP.update({
+    'awq.modules.linear.gemm.WQLinear_GEMM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.awq_modules.PatchedWQLinear_GEMM'
 })
 
 # phi3 vision
