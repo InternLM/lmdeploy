@@ -27,7 +27,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools==69.5.1 &&\
 # install openmpi
 RUN wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz &&\
     tar xf openmpi-4.1.5.tar.gz && cd openmpi-4.1.5 && ./configure --prefix=/usr/local/openmpi &&\
-    make -j$(nproc) && make install && rm -rf openmpi-4.1.5*
+    make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
 
 ENV PATH=$PATH:/usr/local/openmpi/bin
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
