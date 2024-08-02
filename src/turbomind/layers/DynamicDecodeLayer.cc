@@ -352,7 +352,7 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
 
     if (input_tensors->isExist("sequence_limit_length")) {
         invokeLengthCriterion(output_tensors->at("finished").getPtr<bool>(),
-                              output_tensors->at("should_stop").getPtr<bool>(),
+                              output_tensors->getPtr<bool>("should_stop", nullptr),
                               h_pinned_finished_sum_,
                               input_tensors->at("sequence_limit_length").getPtr<const uint32_t>(),
                               batch_size,

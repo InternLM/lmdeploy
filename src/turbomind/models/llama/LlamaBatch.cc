@@ -1671,8 +1671,6 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
         }
     }
 
-    bool should_stop{};
-
     if (active_size > g.partial) {
         model_->postDecodeEmbedding(logits_buf_, local_logits_buf_, decoder_output_buf_, active_size - g.partial);
 
@@ -1692,7 +1690,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
         model_->dynamicDecode(token_ids_buf_,
                               finished_buf_,
                               sequence_lengths_,
-                              &should_stop,
+                              nullptr,
                               state_->curand_state,
                               &inputs_,
                               &outputs_,
@@ -1737,7 +1735,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
 
     // PrintDecodeTokens(token_ids_buf_, g.step, active_size, stream_, "Forward");
 
-    return !should_stop;
+    return true;
 }
 
 template class LlamaBatch<half>;
