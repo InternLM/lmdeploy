@@ -17,12 +17,12 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[tb_internlm2_chat_7b, tb_internlm2_chat_7b_4bits, tb_internlm2_chat_7b_kvint4, tb_internlm2_chat_7b_kvint8, pt_internlm2_chat_7b, tb_internlm2_5_7b_chat, tb_internlm2_5_7b_chat_4bits, tb_internlm2_5_7b_chat_kvint4, tb_internlm2_5_7b_chat_kvint8, pt_internlm2_5_7b_chat, tb_internlm2_chat_20b, tb_internlm2_chat_20b_4bits, tb_internlm2_chat_20b_kvint4, tb_internlm2_chat_20b_kvint8, pt_internlm2_chat_20b, tb_qwen1_5_7b_chat, tb_qwen1_5_7b_chat_4bits, tb_qwen1_5_7b_chat_kvint4, tb_qwen1_5_7b_chat_kvint8, pt_qwen1_5_7b_chat,  tb_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, tb_llama_3d1_8b_instruct_4bits, tb_llama_3d1_8b_instruct_kvint4, tb_llama_3d1_8b_instruct_kvint8, tb_qwen2_7b_instruct, tb_qwen2_7b_instruct_4bits, tb_qwen2_7b_instruct_kvint8, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]'
+        default: '[tb_internlm2_chat_7b, tb_internlm2_chat_7b_4bits, tb_internlm2_chat_7b_kvint4, tb_internlm2_chat_7b_kvint8, pt_internlm2_chat_7b, tb_internlm2_5_7b_chat, tb_internlm2_5_7b_chat_4bits, tb_internlm2_5_7b_chat_kvint4, tb_internlm2_5_7b_chat_kvint8, pt_internlm2_5_7b_chat, tb_internlm2_5_20b_chat, tb_internlm2_5_20b_chat_4bits, tb_internlm2_5_20b_chat_kvint4, tb_internlm2_5_20b_chat_kvint8, pt_internlm2_5_20b_chat, tb_qwen1_5_7b_chat, tb_qwen1_5_7b_chat_4bits, tb_qwen1_5_7b_chat_kvint4, tb_qwen1_5_7b_chat_kvint8, pt_qwen1_5_7b_chat,  tb_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, tb_llama_3d1_8b_instruct_4bits, tb_llama_3d1_8b_instruct_kvint4, tb_llama_3d1_8b_instruct_kvint8, tb_qwen2_7b_instruct, tb_qwen2_7b_instruct_4bits, tb_qwen2_7b_instruct_kvint8, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]'
       datasets:
         required: true
         description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
         type: string
-        default: '[*mmlu_datasets, *cmmlu_datasets, *gsm8k_datasets, *humaneval_datasets, *ifeval_datasets]'
+        default: '[*mmlu_datasets, *gsm8k_datasets]'
       local_config:
         required: true
         description: 'Whether use local eval config'
