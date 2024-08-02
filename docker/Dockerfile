@@ -15,7 +15,7 @@ ARG TORCHVISION_VERSION=0.18.0
 
 RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get install -y software-properties-common wget vim &&\
     add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
-    rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
+    ninja-build rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
 
 ENV PATH=/opt/py3/bin:$PATH
@@ -42,17 +42,8 @@ WORKDIR /opt/lmdeploy
 RUN cd /opt/lmdeploy &&\
     python3 -m pip install --no-cache-dir -r requirements.txt &&\
     mkdir -p build && cd build &&\
-    cmake .. \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-        -DCMAKE_INSTALL_PREFIX=/opt/lmdeploy/install \
-        -DBUILD_PY_FFI=ON \
-        -DBUILD_MULTI_GPU=ON \
-        -DBUILD_CUTLASS_MOE=OFF \
-        -DBUILD_CUTLASS_MIXED_GEMM=OFF \
-        -DCMAKE_CUDA_FLAGS="-lineinfo" \
-        -DUSE_NVTX=ON &&\
-    make -j$(nproc) && make install &&\
+    sh ../generate.sh &&\
+    ninja -j$(nproc) && ninja install &&\
     cd .. &&\
     python3 -m pip install -e . &&\
     rm -rf build
