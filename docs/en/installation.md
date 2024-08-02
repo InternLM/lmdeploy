@@ -40,27 +40,38 @@ cd lmdeploy
 pip install -e .
 ```
 
-But if you are using the TurboMind Engine, you have to build the source as shown below:
+But if you are using the TurboMind Engine, you have to build the source as shown below. The `openmmlab/lmdeploy:{tag}` docker image is strongly recommended.
 
-Clone LMDeploy source code and change to its root directory:
+**Step 1** Get LMDeploy's docker image
+
+```shell
+docker pull openmmlab/lmdeploy:latest
+```
+
+```{note}
+The "openmmlab/lmdeploy:latest" is based on "nvidia/cuda:12.4.1-devel-ubuntu22.04". If you are working on a platform with cuda 11+ driver, please use "openmmlab/lmdeploy:latest-cu11".
+The pattern of the LMDeploy docker image tag is "openmmlab/lmdeploy:{version}-cu(11|12)" since v0.5.3.
+```
+
+**Step 2** Clone LMDeploy source code and change to its root directory:
 
 ```shell
 git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
 ```
 
-Run the following command to build the whl package according to your CUDA and Python versions.
-Kindly select judiciously from the provided `docker_tag` options `{cuda12.1, cuda11.8}` and the Python version set `{py38, py39, py310, py311, py312}`.
+**Step 3** launch docker container in interactive mode
 
 ```shell
-docker_tag="cuda12.1"
-py_version="py310"
-output_dir="lmdeploy_wheel"
-bash builder/manywheel/build_wheel.sh ${py_version} "manylinux2014_x86_64" ${docker_tag} ${output_dir}
+docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name lmdeploy -it openmmlab/lmdeploy:latest bin/bash
 ```
 
-After the whl is built successfully, you can install it by:
+**Step 4** build and installation:
 
 ```shell
-pip install builder/manywheel/${output_dir}/*.whl
+cd /opt/lmdeploy
+mkdir -p build && cd build
+../generate.sh make
+make -j$(nproc) && make install
+cd ..
 ```
