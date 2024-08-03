@@ -360,6 +360,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                             tensor_para_.rank_,
                             tensor_para_,
                             stream_);
+            sync_check_cuda_error();
         }
         invokeTransposeAxis01(logits, local_logits, tensor_para_.world_size_, batch_size, local_vocab_size, stream_);
         sync_check_cuda_error();

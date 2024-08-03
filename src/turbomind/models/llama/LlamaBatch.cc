@@ -737,8 +737,9 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     cu_block_counts_ = (int*)allocator_->reMalloc(cu_block_counts_, sizeof(int) * (batch_size + 1));
     block_ptrs_      = (uintptr_t*)allocator_->reMalloc(block_ptrs_, sizeof(uintptr_t) * max_batch_block_count);
 
-    logits_buf_       = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
-    local_logits_buf_ = (float*)allocator_->reMalloc(local_logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
+    logits_buf_ = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
+    local_logits_buf_ =
+        (float*)peer_allocator_->reMalloc(local_logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
 
     sampled_logprobs_ =
         (float*)allocator_->reMalloc(sampled_logprobs_, sizeof(float) * batchxbeam * kMaxLogProb, false);
@@ -868,7 +869,7 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&block_ptrs_);
 
         allocator_->free((void**)&logits_buf_);
-        allocator_->free((void**)&local_logits_buf_);
+        peer_allocator_->free((void**)&local_logits_buf_);
 
         if (local_context_logits_buf_) {
             peer_allocator_->free((void**)&local_context_logits_buf_);
