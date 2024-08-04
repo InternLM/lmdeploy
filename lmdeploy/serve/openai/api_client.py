@@ -66,8 +66,8 @@ class APIClient:
         """Show available models."""
         if self._available_models is not None:
             return self._available_models
-        self._available_models = get_model_list(
-            self.models_v1_url, headers=self.headers)
+        self._available_models = get_model_list(self.models_v1_url,
+                                                headers=self.headers)
         return self._available_models
 
     def encode(self,
