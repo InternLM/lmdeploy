@@ -225,21 +225,17 @@ MODULE_MAP.update({
 # mixtral
 MODULE_MAP.update({
     'transformers.models.mixtral.modeling_mixtral.MixtralAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralAttention',
     'transformers.models.mixtral.modeling_mixtral.MixtralFlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralAttention',
     'transformers.models.mixtral.modeling_mixtral.MixtralSdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
-    'transformers.models.mixtral.modeling_mixtral.MixtralModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralModel',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralAttention',
     'transformers.models.mixtral.modeling_mixtral.MixtralBLockSparseTop2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralBLockSparseTop2MLP',
     'transformers.models.mixtral.modeling_mixtral.MixtralBlockSparseTop2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
-    'transformers.models.mixtral.modeling_mixtral.MixtralRMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
-    'transformers.models.mixtral.modeling_mixtral.MixtralSparseMoeBlock':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralSparseMoeBlock',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralBLockSparseTop2MLP',
+    'transformers.models.mixtral.modeling_mixtral.MixtralForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralForCausalLM',
 })
 
 # dbrx

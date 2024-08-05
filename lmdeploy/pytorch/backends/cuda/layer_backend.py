@@ -53,6 +53,9 @@ class CudaLayersBackend(DefaultLayersBackend):
                 logger.debug(
                     f'Op {layer_type} fallback to default implementation.')
                 return super().get_layer_impl_builder(layer_type)
+        elif layer_type == LayerType.FusedMoE:
+            from .moe import TritonFusedMoEBuilder
+            return TritonFusedMoEBuilder
         else:
             logger.debug(
                 f'Op {layer_type} fallback to default implementation.')

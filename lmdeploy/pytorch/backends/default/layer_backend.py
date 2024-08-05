@@ -36,6 +36,9 @@ class DefaultLayersBackend(LayersBackend):
         elif layer_type == LayerType.LinearW4A16:
             from .awq_modules import DefaultLinearW4A16Builder
             return DefaultLinearW4A16Builder
+        elif layer_type == LayerType.SoftmaxTopK:
+            from .moe import DefaultSoftmaxTopKBuilder
+            return DefaultSoftmaxTopKBuilder
         else:
             raise RuntimeError(f'{layer_type} not supported.')
 

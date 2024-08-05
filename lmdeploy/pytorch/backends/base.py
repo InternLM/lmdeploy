@@ -23,6 +23,8 @@ class LayerType(Enum):
     RMSNormW8A8 = auto()
     MultinomialSampling = auto()
     LinearW4A16 = auto()
+    SoftmaxTopK = auto()
+    FusedMoE = auto()
 
 
 class LayersBackend(ABC):

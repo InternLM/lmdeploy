@@ -248,7 +248,6 @@ class LlamaModel(nn.Module):
             emb_type = EmbeddingType.LinearScaling
         elif rotary_name == 'LlamaDynamicNTKScalingRotaryEmbedding':
             emb_type = EmbeddingType.DynamicNTKScaling
-        scaling_factor = getattr(rotary_emb, 'scaling_factor', 1.0)
         config = origin.config
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
@@ -340,7 +339,7 @@ class LlamaForCausalLM(nn.Module):
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: torch.Tensor = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
         """prepare input."""
