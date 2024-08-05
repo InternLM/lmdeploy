@@ -111,7 +111,7 @@ Kernel::Estimate_v2(std::array<int, 3> size, int max_splits, int max_waves, int 
     const int64_t tiled_shape_n = ceil_div(n, desc_.cta_tile.y);
     const int     chunk_cnt_k   = ceil_div(k, chunk_size_k_);
 
-    // Dispite we only have sm_count * constant tensor cores, this is the granularity for scheduling
+    // Despite we only have sm_count * constant tensor cores, this is the granularity for scheduling
     const int   concurrency     = sm_count * desc_.max_active_ctas;
     const float waves_per_split = float(tiled_shape_m * tiled_shape_n) / concurrency;
     const float splits_per_wave = 1.f / waves_per_split;
