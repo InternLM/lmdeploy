@@ -6,6 +6,28 @@ from ..rotary_embedding import (EmbeddingType, RotaryEmbeddingBuilder,
                                 RotaryEmbeddingImpl)
 
 
+def _rotary_embedding_fwd(position_ids: torch.Tensor, inv_freq: torch.Tensor,
+                          scaling_factor: float, dtype: torch.dtype,
+                          device_type: torch.device):
+    """rotary embedding forward."""
+    position_ids = position_ids.float() / scaling_factor
+    inv_freq_expanded = inv_freq[None, :,
+                                 None].float().expand(position_ids.shape[0],
+                                                      -1, 1)
+    position_ids_expanded = position_ids[:, None, :]
+    # Force float32 since bfloat16 loses precision on long contexts
+    # See https://github.com/huggingface/transformers/pull/29285
+    device_type = device_type if isinstance(
+        device_type, str) and device_type != 'mps' else 'cpu'
+    with torch.autocast(device_type=device_type, enabled=False):
+        freqs = (inv_freq_expanded.float()
+                 @ position_ids_expanded.float()).transpose(1, 2)
+        emb = freqs.repeat(1, 1, 2)
+        cos = emb.cos()
+        sin = emb.sin()
+    return cos.to(dtype=dtype), sin.to(dtype=dtype)
+
+
 class RotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
     """base rotary embedding."""
 
@@ -21,27 +43,17 @@ class RotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
             0, self.dim, 2, dtype=torch.int64).float() / self.dim))
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
-    def forward(self, x, position_ids):
+    def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
         """forward."""
-        # x: [bs, num_attention_heads, seq_len, head_size]
+        device_type = x.device.type
+        dtype = x.dtype
         if self.inv_freq.device != x.device:
             self.inv_freq = self.inv_freq.to(x.device)
-        position_ids = position_ids.float() / self.scaling_factor
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(
-            position_ids.shape[0], -1, 1)
-        position_ids_expanded = position_ids[:, None, :]
-        # Force float32 since bfloat16 loses precision on long contexts
-        # See https://github.com/huggingface/transformers/pull/29285
-        device_type = x.device.type
-        device_type = device_type if isinstance(
-            device_type, str) and device_type != 'mps' else 'cpu'
-        with torch.autocast(device_type=device_type, enabled=False):
-            freqs = (inv_freq_expanded.float()
-                     @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos()
-            sin = emb.sin()
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+        return _rotary_embedding_fwd(position_ids,
+                                     self.inv_freq,
+                                     scaling_factor=self.scaling_factor,
+                                     dtype=dtype,
+                                     device_type=device_type)
 
 
 class LlamaDynamicNTKScalingRotaryEmbedding(RotaryEmbeddingImpl):
@@ -58,20 +70,33 @@ class LlamaDynamicNTKScalingRotaryEmbedding(RotaryEmbeddingImpl):
         super().__init__(dim, base, scaling_factor)
         self.max_position_embeddings = max_position_embeddings
 
-    def forward(self, x, position_ids):
-        """forward."""
-        seq_len = torch.max(position_ids) + 1
-        if seq_len > self.max_position_embeddings:
-            base = self.base * ((self.scaling_factor * seq_len /
-                                 self.max_position_embeddings) -
-                                (self.scaling_factor - 1))**(self.dim /
-                                                             (self.dim - 2))
-            inv_freq = 1.0 / (base**(torch.arange(
-                0, self.dim, 2, dtype=torch.int64).float().to(x.device) /
-                                     self.dim))
-            self.register_buffer('inv_freq', inv_freq, persistent=False)
+    def _ntk_inv_freq(self, seq_len: torch.Tensor):
+        """ntk_inv_freq."""
+        device = seq_len.device
+        base = self.base * (
+            (self.scaling_factor * seq_len / self.max_position_embeddings) -
+            (self.scaling_factor - 1))**(self.dim / (self.dim - 2))
+        inv_freq = 1.0 / (base**(torch.arange(
+            0, self.dim, 2, dtype=torch.int64, device=device).float() /
+                                 self.dim))
+        return inv_freq
 
-        cos, sin = super().forward(x, position_ids)
+    def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
+        """forward."""
+        device_type = x.device.type
+        dtype = x.dtype
+        seq_len = torch.max(position_ids) + 1
+        ntk_inv_freq = self._ntk_inv_freq(seq_len)
+        if self.inv_freq.device != x.device:
+            self.inv_freq = self.inv_freq.to(x.device)
+        inv_freq = torch.where(seq_len > self.max_position_embeddings,
+                               ntk_inv_freq, self.inv_freq)
+
+        cos, sin = _rotary_embedding_fwd(position_ids,
+                                         inv_freq,
+                                         scaling_factor=self.scaling_factor,
+                                         dtype=dtype,
+                                         device_type=device_type)
         return cos, sin
 
 
