@@ -43,8 +43,8 @@ def test_pipeline_chat_tp2(config, model, worker_id):
 ])
 def test_pipeline_pr_test(config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(
-            worker_id) + 5
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(
+            int(get_cuda_id_by_workerid(worker_id)) + 5)
     p = Process(target=run_pipeline_vl_chat_test, args=(config, model))
     p.start()
     p.join()

@@ -78,8 +78,9 @@ def test_restful_chat_tp2(config, common_case_config, worker_id):
 }],
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
-    run_all_step(config, {
-                     key: value
-                     for key, value in common_case_config.items()
-                     if key == 'memory_test'
-                 })
+    run_all_step(
+        config, {
+            key: value
+            for key, value in common_case_config.items()
+            if key == 'memory_test'
+        })

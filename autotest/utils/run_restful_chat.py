@@ -94,7 +94,7 @@ def start_restful_api(config, param, model, model_path, backend_tpye,
 def stop_restful_api(pid, startRes, param):
     if pid > 0:
         parent = psutil.Process(pid)
-        for child in parent.children(recursive=True):  
+        for child in parent.children(recursive=True):
             child.terminate()
         parent.terminate()
     if 'modelscope' in param.keys():
