@@ -307,14 +307,13 @@ def parse_args():
                         type=int,
                         help='how many requests launched concurrently',
                         default=[1, 16, 32, 64])
-    parser.add_argument(
-        '-pt',
-        '--prompt-tokens',
-        nargs='+',
-        type=int,
-        help='how many tokens in the prompt. One-to-one '
-        'correspondence with completion-tokens',
-        default=[1, 128, 128, 2048, 2048])
+    parser.add_argument('-pt',
+                        '--prompt-tokens',
+                        nargs='+',
+                        type=int,
+                        help='how many tokens in the prompt. One-to-one '
+                        'correspondence with completion-tokens',
+                        default=[1, 128, 128, 2048, 2048])
     parser.add_argument('-ct',
                         '--completion-tokens',
                         nargs='+',
