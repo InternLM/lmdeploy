@@ -24,6 +24,7 @@ void ParseTuningArgs(TuningArgs& args, const std::string& str)
     try_parse(args.top_splits, "top_splits");
     try_parse(args.max_waves, "max_waves");
     try_parse(args.swizzle, "swizzle");
+    try_parse(args.top_k, "top_k");
     try_parse(args.clusters, "clusters");
     try_parse(args.max_iter, "max_iter");
     try_parse(args.max_time, "max_time");
@@ -89,7 +90,7 @@ std::vector<int> GenerateTuningSequence(const std::vector<std::array<int, 3>>& g
 
 std::vector<std::array<int, 3>> GetDefaultTuningGenerators()
 {
-    /// TODO: set generators based device
+    /// TODO: set generators based on device
     return {{16, 16, 64}, {8192 + 1}};
 }
 

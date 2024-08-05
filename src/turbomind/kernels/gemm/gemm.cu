@@ -57,6 +57,33 @@ inline bool is_compatible(GemmDesc a, GemmDesc b)
     return as_tuple(a) == as_tuple(b);
 }
 
+template<class T>
+std::pair<std::vector<int>, std::vector<int>> ArgsortAndRank(const std::vector<T>& x)
+{
+    std::vector<int> idxs(x.size());
+    std::vector<int> rank(x.size());
+    if (!x.empty()) {
+        std::iota(idxs.begin(), idxs.end(), 0);
+        std::stable_sort(idxs.begin(), idxs.end(), [&](int i, int j) {  //
+            return x[i] < x[j];
+        });
+        int r = 0, c = 1;
+        rank[idxs[0]] = r;
+        for (size_t i = 1; i < idxs.size(); ++i) {
+            if (x[idxs[i]] == x[idxs[i - 1]]) {
+                rank[idxs[i]] = r;
+                ++c;
+            }
+            else {
+                r += c;
+                rank[idxs[i]] = r;
+                c             = 1;
+            }
+        }
+    }
+    return {idxs, rank};
+}
+
 }  // namespace
 
 inline bool operator<(const GemmDesc& a, const GemmDesc& b)
@@ -68,8 +95,6 @@ struct Gemm::Impl {
 
     Impl(): props_{GetCudaDeviceProps()}, arch_{props_->major * 100 + props_->minor * 10}, registry_{props_}
     {
-        l2_bytes_per_second_ = MeasureL2CacheThroughput();
-        fma_per_second_      = MeasureMmaThroughput();
         if (auto str = std::getenv("TM_GEMM_TUNE_ARGS")) {
             try {
                 ParseTuningArgs(tuning_, str);
@@ -101,88 +126,73 @@ struct Gemm::Impl {
         }
 
         auto specs = Find(desc, barriers_size, partials_size, 1);
-
-        if (specs.empty()) {
-            return {};
+        if (!specs.empty()) {
+            dispatch_cache_.emplace(desc, specs.front());
+            return specs.front();
         }
-
-        const auto& [spec, _] = specs.front();
-
-        dispatch_cache_.emplace(desc, spec);
-
-        return spec;
+        return {};
     }
 
-    std::vector<std::pair<LaunchSpec, float>>
-    Find(const GemmDesc& desc, size_t barrier_size, size_t partials_size, int top_k)
+    std::vector<LaunchSpec> Find(const GemmDesc& desc, size_t barrier_size, size_t partials_size, int top_k)
     {
         std::vector<Kernel*> kernels;
-
         for (const auto& k : registry_.kernels()) {
             if (k->is_feasible(desc)) {
                 kernels.push_back(k.get());
             }
         }
-
         if (kernels.empty()) {
             return {};
         }
 
-        // is a better than b
-        auto compare = [&](const Kernel* a, const Kernel* b) {
-            const int m_a = a->cta_tile_size().x;
-            const int m_b = b->cta_tile_size().x;
-            if (std::max(m_a, m_b) <= desc.m) {  // m_0 < m_1 <= M
-                return m_a > m_b;
-            }
-            if (desc.m <= std::min(m_a, m_b)) {  // M <= m_0 < m_1
-                return m_a < m_b;
-            }
-            // m_0 <= M <= m_1
-            return m_a > m_b;
-        };
-
-        auto best_cta_m = (*std::min_element(kernels.begin(), kernels.end(), compare))->cta_tile_size().x;
-        kernels.erase(
-            std::remove_if(kernels.begin(), kernels.end(), [&](auto k) { return k->cta_tile_size().x != best_cta_m; }),
-            kernels.end());
-
-        //                    cost     splits
-        std::vector<std::pair<float, int>> costs;
+        std::vector<std::tuple<Kernel*, int, KernelMetric>> metrics;
 
         for (const auto& k : kernels) {
-            const int max_splits =
-                std::min(k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size), tuning_.max_splits);
+            const int max_splits = k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
 
-            auto [splits, cost] = k->Estimate(desc.m,
-                                              desc.n,
-                                              desc.k,
-                                              max_splits,
-                                              props_->multiProcessorCount,
-                                              tuning_.max_waves,
-                                              1,
-                                              l2_bytes_per_second_,
-                                              fma_per_second_)
-                                      .front();
+            auto ms = k->Estimate_v2({desc.m, desc.n, desc.k},  //
+                                     std::min(max_splits, tuning_.max_splits),
+                                     tuning_.max_waves,
+                                     props_->multiProcessorCount);
 
-            costs.emplace_back(cost, splits);
+            for (const auto& [splits, metric] : ms) {
+                metrics.emplace_back(k, splits, metric);
+            }
         }
 
-        std::vector<int> idxs(kernels.size());
-        std::iota(idxs.begin(), idxs.end(), 0);
+        std::vector<int64_t> mio_cost;
+        std::vector<int64_t> mma_cost;
+        for (const auto& [_, s, m] : metrics) {
+            mio_cost.push_back(m.mio_cost);
+            mma_cost.push_back(m.mma_cost);
+        }
 
-        top_k = std::min<int>(idxs.size(), top_k);
+        const auto mio_max = *std::max_element(mio_cost.begin(), mio_cost.end());
+        const auto mma_max = *std::max_element(mma_cost.begin(), mma_cost.end());
 
-        std::partial_sort(idxs.begin(), idxs.begin() + top_k, idxs.end(), [&](int i, int j) {
-            return costs[i] < costs[j];  //
-        });
+        std::vector<float> mio_ratio;
+        std::vector<float> mma_ratio;
+        std::vector<float> avg_ratio;
+        for (size_t i = 0; i < metrics.size(); ++i) {
+            mio_ratio.push_back(static_cast<float>(mio_cost[i]) / mio_max);
+            mma_ratio.push_back(static_cast<float>(mma_cost[i]) / mma_max);
+            avg_ratio.push_back(.5f * (mio_ratio.back() + mma_ratio.back()));
+        }
 
-        std::vector<std::pair<LaunchSpec, float>> ret;
+        auto&& [idxs, rank] = ArgsortAndRank(avg_ratio);
+
+        // for (const auto& i : idxs) {
+        //     auto [k, s, m] = metrics[i];
+        //     std::cout << k->name() << " s" << s << " " << avg_ratio[i] << " " << mio_ratio[i] << " " << mma_ratio[i]
+        //               << " " << m.mio_cost << " " << m.mma_cost << "\n";
+        // }
+
+        top_k = top_k > 0 ? std::min<int>(idxs.size(), top_k) : (int)idxs.size();
+        std::vector<LaunchSpec> ret;
         ret.reserve(top_k);
-
         for (int i = 0; i < top_k; ++i) {
-            const auto& [cost, splits] = costs[idxs[i]];
-            ret.emplace_back(LaunchSpec{kernels[idxs[i]], tuning_.swizzle[0], splits}, static_cast<float>(cost));
+            const auto& [kernel, splits, cost] = metrics[idxs[i]];
+            ret.push_back(LaunchSpec{kernel, tuning_.swizzle.at(0), splits});
         }
 
         return ret;
@@ -196,67 +206,32 @@ struct Gemm::Impl {
                 LaunchFunc      launch_func,
                 cudaStream_t    st)
     {
+        // Early exit on exact match
         if (dispatch_cache_.find(desc) != dispatch_cache_.end()) {
             return 0;
         }
+        std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
 
-        // std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
-
-        std::vector<Kernel*> kernels;
-        for (const auto& k : registry_.kernels()) {
-            if (k->is_feasible(desc)) {
-                kernels.push_back(k.get());
-            }
-        }
+        const auto tmp = Find(desc, barriers_size, partials_size, tuning_.top_k);
 
         std::vector<LaunchSpec> specs;
-        for (const auto& k : kernels) {
-            // std::cout << k->name() << "\n";
-            int max_splits = k->GetMaxSplits(desc.m, desc.n, barriers_size, partials_size);
-            max_splits     = std::min(max_splits, tuning_.max_splits);
-            auto splits    = k->Estimate(desc.m,  //
-                                      desc.n,
-                                      desc.k,
-                                      max_splits,
-                                      props_->multiProcessorCount,
-                                      tuning_.max_waves,
-                                      tuning_.top_splits,
-                                      l2_bytes_per_second_,
-                                      fma_per_second_);
-
-            const auto&      kSwizzle = tuning_.swizzle;
-            std::vector<int> swizzles;
-            for (const auto& swi : kSwizzle) {
-                // To use splits=1 here, swizzling must not depends on split count
-                swizzles.push_back(k->GetSwizzle(desc.m, desc.n, desc.k, 1, swi));
-            }
-            // De-duplicate possible swizzles while keep the order
-            std::sort(swizzles.begin(), swizzles.end());
-            swizzles.erase(std::unique(swizzles.begin(), swizzles.end()), swizzles.end());
-            {
-                std::vector<int> tmp;
-                std::copy_if(kSwizzle.begin(), kSwizzle.end(), std::back_inserter(tmp), [&](int swi) {
-                    return std::find(swizzles.begin(), swizzles.end(), swi) != swizzles.end();
-                });
-                tmp.swap(swizzles);
-            }
-
-            for (const auto& [split_k, cost] : splits) {
-                for (const auto& swi : swizzles) {
-                    specs.push_back(LaunchSpec{k, swi, split_k, cost});
-                }
+        for (const auto& spec : tmp) {
+            // populate swizzle parameters
+            const auto swis = FilterSwizzleParam(*spec.kernel, desc.m, desc.n, desc.k, tuning_.swizzle);
+            for (const auto& swi : swis) {
+                specs.push_back(spec);
+                specs.back().swizzle = swi;
             }
         }
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
-        // for (const auto& s : specs) {
-        //     std::cout << s.kernel->name()                                //
-        //               << " swizzle=" << s.swizzle                        //
-        //               << ", splits=" << s.splits                         //
-        //               << ", estimated=" << s.estimated * 1000.f << "ms"  //
-        //               << ", measured=" << s.measured << "ms\n";
-        // }
+        for (const auto& s : specs) {
+            std::cout << s.kernel->name()          //
+                      << " swizzle=" << s.swizzle  //
+                      << ", splits=" << s.splits   //
+                      << ", measured=" << s.measured << "ms\n";
+        }
 
         if (!specs.empty()) {
             dispatch_cache_[desc] = specs.front();
@@ -267,6 +242,30 @@ struct Gemm::Impl {
         }
 
         return 0;
+    }
+
+    std::vector<int> FilterSwizzleParam(Kernel& kernel, int m, int n, int k, const std::vector<int>& swis)
+    {
+        std::vector<int> swizzles;
+        for (const auto& swi : swis) {
+            // To use splits=1 here, swizzling must not depends on split count
+            swizzles.push_back(kernel.GetSwizzle(m, n, k, 1, swi));
+        }
+        if (swizzles.size() == 1) {
+            return swizzles;
+        }
+
+        // De-duplicate possible swizzles while keep the order
+        std::sort(swizzles.begin(), swizzles.end());
+        swizzles.erase(std::unique(swizzles.begin(), swizzles.end()), swizzles.end());
+
+        std::vector<int> tmp;
+        std::copy_if(swis.begin(), swis.end(), std::back_inserter(tmp), [&](int swi) {
+            return std::find(swizzles.begin(), swizzles.end(), swi) != swizzles.end();
+        });
+        tmp.swap(swizzles);
+
+        return swizzles;
     }
 
     int Export(std::ostream& os)

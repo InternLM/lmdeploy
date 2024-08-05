@@ -18,13 +18,14 @@ struct TuningArgs {
     std::vector<int> swizzle{3};
 
     // Sampling params
+    float top_k    = 0;
     int   clusters = 5;
     int   max_iter = 10;
-    float max_time = 1.f;
+    float max_time = 50.f;
 };
 
 // example
-//   max_splits=8,top_splits=5,max_waves=16,swizzle=[2,3,4],clusters=5,max_iter=10,max_time=10.0
+//   max_splits=8,top_splits=5,max_waves=16,top_k=10,swizzle=[2,3,4],clusters=5,max_iter=10,max_time=10.0
 void ParseTuningArgs(TuningArgs& args, const std::string& str);
 
 // example

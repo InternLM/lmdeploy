@@ -4,12 +4,18 @@
 
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include <array>
 #include <cuda_runtime.h>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace turbomind::gemm {
+
+struct KernelMetric {
+    int64_t mio_cost;
+    int64_t mma_cost;
+};
 
 class Kernel {
 public:
@@ -50,6 +56,14 @@ public:
                                                 int   top_k,
                                                 float bytes_per_second,
                                                 float fma_per_second);
+
+    int64_t GetTilingCost(const std::array<int, 3>& size) const;
+
+    std::vector<std::pair<int, int64_t>>
+    GetSplitingCost(const std::array<int, 3>& size, int max_splits, int max_waves, int sm_count) const;
+
+    std::vector<std::pair<int, KernelMetric>>
+    Estimate_v2(std::array<int, 3> size, int max_splits, int max_waves, int sm_count) const;
 
     virtual int GetSwizzle(int m, int n, int k, int splits, int swizzle) = 0;
 
@@ -109,5 +123,12 @@ protected:
 
     std::string name_;
 };
+
+struct ClusteringParam {
+    bool cache_policy;
+    bool stages;
+};
+
+std::vector<std::vector<LaunchSpec>> Cluster(const std::vector<LaunchSpec>& specs, const ClusteringParam& param);
 
 }  // namespace turbomind::gemm

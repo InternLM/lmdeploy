@@ -16,11 +16,6 @@ public:
     std::vector<LaunchSpec> Run(std::vector<LaunchSpec> specs, const Launcher& launcher, cudaStream_t stream);
 
 private:
-    std::vector<int> ArgSort(const std::vector<Measurement>& ms);
-
-    std::vector<std::vector<LaunchSpec*>> Cluster(std::vector<LaunchSpec>& specs);
-
-private:
     Measurer& measurer_;
     int       k_clusters_;
 };

@@ -43,6 +43,12 @@ struct bitsof_t<uint6_t>: std::integral_constant<int, 6> {};  // 4 + 2
 template<class T>
 inline constexpr bitsof_t<T> bitsof{};
 
+struct fp8 {
+    char v;
+};
+struct fp8_e4m3: fp8 {};
+struct fp8_e5m2: fp8 {};
+
 namespace detail {
 
 struct __uint4_t {

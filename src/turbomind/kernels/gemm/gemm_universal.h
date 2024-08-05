@@ -107,6 +107,8 @@ struct GemmUniversal {
 
         const int chunk_cnt = (param.k + kChunkSizeK - 1) / kChunkSizeK;
 
+        // Sub-optimal when the split is uneven
+        //   e.g. ceil_div(10, 3) = 4 -> [4, 4, 2], however [3, 3, 4] is better in every aspect
         const int chunk_per_split = (chunk_cnt + tiled_shape.z - 1) / tiled_shape.z;
 
         const int offset_k = chunk_per_split * kChunkSizeK * tile_offset.z;

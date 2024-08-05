@@ -71,6 +71,8 @@ enum class DataType : int {
     U16,
     U32,
     U64,
+    F8_E4M3,
+    F8_E5M2,
     F16,
     F32,
     BF16,
