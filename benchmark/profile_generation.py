@@ -312,14 +312,14 @@ def parse_args():
         '--prompt-tokens',
         nargs='+',
         type=int,
-        help='how many requests launched concurrently. One-to-one '
+        help='how many tokens in the prompt. One-to-one '
         'correspondence with completion-tokens',
         default=[1, 128, 128, 2048, 2048])
     parser.add_argument('-ct',
                         '--completion-tokens',
                         nargs='+',
                         type=int,
-                        help='how many tokens to be generated. One-to-one'
+                        help='how many tokens to be generated. One-to-one '
                         'correspondence with prompt-tokens',
                         default=[128, 128, 2048, 128, 2048])
     parser.add_argument('--csv',
