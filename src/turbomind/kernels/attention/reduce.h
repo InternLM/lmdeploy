@@ -6,8 +6,8 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/thread_map.h"
 #include <cstddef>
-#include <type_traits>
 #include <cuda_runtime.h>
+#include <type_traits>
 
 namespace turbomind::attention {
 

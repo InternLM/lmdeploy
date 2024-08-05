@@ -28,7 +28,8 @@ struct GemmDesc {
     int       k;
 };
 
-enum class OpClass {
+enum class OpClass
+{
     kSIMT,
     kMMA_s884,
     kMMA_s16816,

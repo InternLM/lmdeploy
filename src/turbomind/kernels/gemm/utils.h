@@ -75,7 +75,8 @@ struct PackingImpl {
 };
 
 template<Pack pack, Order order>
-struct Packing_v2: PackingImpl<get_mma_tag(pack), get_operand_tag(pack), get_pack_num(pack), order> {};
+struct Packing_v2: PackingImpl<get_mma_tag(pack), get_operand_tag(pack), get_pack_num(pack), order> {
+};
 
 template<int num>
 struct PackingImpl<HMMA_16816, OPERAND_A, num, kRowMajor> {
@@ -94,7 +95,8 @@ struct PackingImpl<HMMA_16816, OPERAND_A, num, kColMajor> {
 };
 
 template<int num, Order order>
-struct PackingImpl<HMMA_16816, OPERAND_B, num, order>: PackingImpl<HMMA_16816, OPERAND_A, num, order> {};
+struct PackingImpl<HMMA_16816, OPERAND_B, num, order>: PackingImpl<HMMA_16816, OPERAND_A, num, order> {
+};
 
 template<int num>
 struct PackingImpl<HMMA_SIMT, OPERAND_A, num, kRowMajor> {

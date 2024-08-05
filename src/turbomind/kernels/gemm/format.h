@@ -7,7 +7,8 @@
 namespace turbomind::gemm {
 
 template<class Tin, class Tout>
-struct Converter {};
+struct Converter {
+};
 
 template<class T>
 struct Converter<T, T> {

@@ -30,7 +30,7 @@ struct SmemCopy_MMA_SIMT_A {
     template<class S, class D>
     __device__ static void copy(S&& src_ptr, D&& dst_ptr, bool)  // -> (m, k)
     {
-        Lds(*(Frag*)dst_ptr, (S&&)src_ptr);
+        Lds(*(Frag*)dst_ptr, (S &&) src_ptr);
     }
 
     __device__ static int2 unique(int thread_idx, int pack_idx)  // -> (unique id, repeat id)
@@ -60,7 +60,7 @@ struct SmemCopy_MMA_SIMT_B {
     template<class S, class D>
     __device__ static void copy(S&& src_ptr, D&& dst_ptr, bool)
     {
-        Lds(*(Frag*)dst_ptr, (S&&)src_ptr);
+        Lds(*(Frag*)dst_ptr, (S &&) src_ptr);
     }
 
     __device__ static int2 unique(int thread_idx, int pack_idx)  // -> (unique id, repeat id)

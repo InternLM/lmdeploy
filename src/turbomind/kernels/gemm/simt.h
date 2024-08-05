@@ -16,4 +16,4 @@ constexpr int OP_M = 1;
 constexpr int OP_N = 32;
 constexpr int OP_K = 8;
 
-}  // namespace turbomind::gemm::sm75_simt
+}  // namespace turbomind::gemm::simt

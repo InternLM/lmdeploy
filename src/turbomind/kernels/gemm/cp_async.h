@@ -12,7 +12,8 @@
 
 namespace turbomind {
 
-enum class CacheOp {
+enum class CacheOp
+{
     kDefault,  // use global when possible
     kAlways,
     kGlobal,
@@ -33,7 +34,8 @@ struct GetCacheOp<CacheOp::kDefault, size> {
     static constexpr auto value = CacheOp::kAlways;
 };
 
-enum class EvictPolicy {
+enum class EvictPolicy
+{
     kEvictNormal,
     kEvictFirst,
     kEvictLast,
@@ -59,7 +61,8 @@ struct Reuse {
 };  // namespace cache_policy
 
 template<CacheOp, int size, int prefetch_size>
-struct CP_ASYNC {};
+struct CP_ASYNC {
+};
 
 template<int prefetch_size>
 struct CP_ASYNC<CacheOp::kGlobal, 16, prefetch_size> {

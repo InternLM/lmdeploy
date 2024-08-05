@@ -617,15 +617,15 @@ struct ConvertKvCache<uint4_t, float> {
 #else
     static __device__ Array<half, 8> cvt_f16x8_u4_biased(const Array<uint4_t, 8>& vi)
     {
-        Array<half, 8>            result;
-        uint32_t*                 h           = reinterpret_cast<uint32_t*>(&result);
-        uint32_t const&           i4s         = reinterpret_cast<uint32_t const&>(vi);
-        static constexpr uint32_t immLut      = (0xf0 & 0xcc) | 0xaa;
-        static constexpr uint32_t BOT_MASK    = 0x000f000f;
-        static constexpr uint32_t TOP_MASK    = 0x00f000f0;
+        Array<half, 8> result;
+        uint32_t* h = reinterpret_cast<uint32_t*>(&result);
+        uint32_t const& i4s = reinterpret_cast<uint32_t const&>(vi);
+        static constexpr uint32_t immLut = (0xf0 & 0xcc) | 0xaa;
+        static constexpr uint32_t BOT_MASK = 0x000f000f;
+        static constexpr uint32_t TOP_MASK = 0x00f000f0;
         static constexpr uint32_t MAGIC_NUM_1 = 0x54005400;        // `64`
         static constexpr uint32_t MAGIC_NUM_2 = MAGIC_NUM_1 >> 4;  // `64` >> 4
-        const uint32_t            top_i4s     = i4s >> 8;
+        const uint32_t top_i4s = i4s >> 8;
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[0]) : "r"(i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[1]) : "r"(i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[2]) : "r"(top_i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
@@ -634,12 +634,12 @@ struct ConvertKvCache<uint4_t, float> {
         h[2] <<= 4;
         return result;
     }
-    float      scale_;
-    float      zero_;
+    float scale_;
+    float zero_;
     __device__ ConvertKvCache(float scale, float zero)
     {
         scale_ = scale;
-        zero_  = zero - scale * 64.f;
+        zero_ = zero - scale * 64.f;
     }
     template<int N>
     __device__ auto operator()(const Array<uint4_t, N>& vi) const
@@ -691,6 +691,55 @@ struct ConvertKvCache<uint8_t, T> {
             vo[i] = vo[i] * scale_ + zero_;
         }
         return vo;
+    }
+};
+
+inline __device__ Array<nv_bfloat16, 4> cvt_bf16x4_e4m3(const Array<fp8_e4m3, 4>& v)
+{
+#if TURBOMIND_ARCH_SM80
+    static constexpr uint32_t EM_MASK = 0x7f007f00;
+    static constexpr uint32_t S_MASK  = 0x80008000;
+
+    Array<nv_bfloat16, 4> result;
+    uint32_t*             h = reinterpret_cast<uint32_t*>(&result);
+
+    const uint32_t& i2s_0 = reinterpret_cast<const uint32_t&>(v);
+    const uint32_t  i2s_1 = i2s_0 << 8;
+
+    /// TODO: Check LOP3 is generated for (a | (b & c))
+    h[0] = ((i2s_0 & EM_MASK) >> 4) | (i2s_0 & S_MASK);
+    h[1] = ((i2s_1 & EM_MASK) >> 4) | (i2s_1 & S_MASK);
+
+    // SEEEEEEE EMMMMMMM
+    //  1111011 1         // 2^(127-7)  0x7b80
+
+    /// TODO: fuse this with per channel scaling
+    const nv_bfloat16 exp_shfit = __ushort_as_bfloat16(0x7b80);  // 2^120
+    PRAGMA_UNROLL
+    for (int i = 0; i < 4; ++i) {
+        result[i] *= exp_shfit;
+    }
+#else
+    return {};
+#endif
+};
+
+template<class T>
+struct ConvertKvCache<fp8_e4m3, T> {
+    template<int N>
+    __device__ static auto convert(const Array<fp8_e4m3, N>& vi)
+    {
+        Array<T, N> vo;
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; n += 4) {
+            auto& ui = (const Array<fp8_e4m3, 4>&)vi[n];
+            if constexpr (std::is_same_v<T, nv_bfloat16>) {
+                return cvt_bf16x4_e4m3(ui);
+            }
+            else {
+                static_assert(!std::is_same_v<T, T>, "not implemented");
+            }
+        }
     }
 };
 

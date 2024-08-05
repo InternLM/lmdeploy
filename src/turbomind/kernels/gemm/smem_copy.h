@@ -39,7 +39,8 @@ struct VoidSmemCopyAtom {
 };
 
 template<class T, class Layout, Order order>
-struct SmemAccessorV2 {};
+struct SmemAccessorV2 {
+};
 
 template<class T, class Layout>
 struct SmemAccessorV2<T, Layout, kRowMajor>: SmemAccessor<T, Layout> {
@@ -50,7 +51,7 @@ template<class T, class Layout>
 struct SmemAccessorV2<T, Layout, kColMajor> {
     SmemAccessor<T, Layout> base_;
 
-    __device__    SmemAccessorV2(get_pointer_type<T> ptr): base_{ptr} {}
+    __device__ SmemAccessorV2(get_pointer_type<T> ptr): base_{ptr} {}
     __device__ T& operator()(int m, int k)
     {
         return base_(k, m);

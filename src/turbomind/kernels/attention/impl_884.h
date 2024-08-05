@@ -5,8 +5,8 @@
 #include "src/turbomind/kernels/attention/impl.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/layout.h"
-#include "src/turbomind/kernels/core/thread_map.h"
 #include "src/turbomind/kernels/core/mma.h"
+#include "src/turbomind/kernels/core/thread_map.h"
 
 #include <cmath>
 

@@ -85,7 +85,8 @@ __host__ __device__ static constexpr int2 idx2mk(int idx, pair<M, K>)
     }
 }
 
-enum class Partition {
+enum class Partition
+{
     kBlocked,
     kRaked,
 };

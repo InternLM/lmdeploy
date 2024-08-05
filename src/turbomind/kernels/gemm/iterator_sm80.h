@@ -16,7 +16,6 @@
 
 namespace turbomind::gemm {
 
-
 template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS, class Policy_>
 struct GmemIteratorSm80 {
 

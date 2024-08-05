@@ -76,7 +76,7 @@ struct SmemCopy_MMA_16816_A {
     template<class S, class D>
     __device__ static void copy(S&& src_ptr, D&& dst_ptr, bool)
     {
-        LDSM_x4<trans>::apply((S&&)src_ptr, (D&&)dst_ptr);
+        LDSM_x4<trans>::apply((S &&) src_ptr, (D &&) dst_ptr);
     }
 
     __device__ static int2 unique(int thread_idx, int pack_idx)
@@ -107,7 +107,7 @@ struct SmemCopy_MMA_16816_B {
     template<class S, class D>
     __device__ static void copy(S&& src_ptr, D&& dst_ptr, bool)
     {
-        LDSM_x4<trans>::apply((S&&)src_ptr, (D&&)dst_ptr);
+        LDSM_x4<trans>::apply((S &&) src_ptr, (D &&) dst_ptr);
     }
 
     __device__ static int2 unique(int thread_idx, int pack_idx)
@@ -153,13 +153,13 @@ struct LDSM_SM75_8x8 {
     {
         constexpr bool trans = thr_order != kRowMajor;
         if constexpr (sizeof(Frag) == 16) {
-            LDSM_x4<trans>::apply((S&&)src_ptr, (D&&)dst_ptr);
+            LDSM_x4<trans>::apply((S &&) src_ptr, (D &&) dst_ptr);
         }
         else if constexpr (sizeof(Frag) == 8) {
-            LDSM_x2<trans>::apply((S&&)src_ptr, (D&&)dst_ptr);
+            LDSM_x2<trans>::apply((S &&) src_ptr, (D &&) dst_ptr);
         }
         else if constexpr (sizeof(Frag) == 4) {
-            LDSM_x1<trans>::apply((S&&)src_ptr, (D&&)dst_ptr);
+            LDSM_x1<trans>::apply((S &&) src_ptr, (D &&) dst_ptr);
         }
         else {
             static_assert(sizeof(S) != sizeof(S), "not implemented");
