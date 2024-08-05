@@ -82,7 +82,7 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging transformers_stream_generator transformers datasets openai einops timm
+          python3 -m pip install packaging transformers_stream_generator transformers datasets openai einops
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
       - name: Check env
