@@ -155,7 +155,7 @@ void LlamaWeight<T>::prepare(const cudaDeviceProp& prop)
     const auto workspace_size = decoder_layer_weights[0]->workspace_size();
     char*      workspace{};
 
-    TM_LOG_ERROR("[LlamaWeight<T>::prepare] workspace size: %d\n", workspace_size);
+    TM_LOG_INFO("[LlamaWeight<T>::prepare] workspace size: %d\n", workspace_size);
 
     if (workspace_size) {
         deviceMalloc((char**)&workspace, workspace_size);

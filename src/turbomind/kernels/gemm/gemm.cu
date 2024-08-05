@@ -84,7 +84,7 @@ struct Gemm::Impl {
                 tuning_ = {};
             }
         }
-        measurer_.emplace(CreateStoppingCriterion(tuning_.max_iter, tuning_.max_time));
+        measurer_.emplace(CreateStoppingCriterion(tuning_.min_iter, tuning_.max_iter, tuning_.max_time));
     }
 
     // find launch spec in dispatch cache, dispatch by heuristic on cache miss
@@ -134,8 +134,6 @@ struct Gemm::Impl {
                 tmp.push_back(spec);
             }
             clusters = Cluster(tmp, ClusteringParam{false, true});
-
-            // std::cerr << "#kernel: " << kernels.size() << ", #clusters: " << clusters.size() << "\n";
         }
         std::vector<Kernel*> proxies;
         proxies.reserve(clusters.size());
@@ -160,6 +158,9 @@ struct Gemm::Impl {
                 metrics.emplace_back(cluster_id, splits, metric);
             }
         }
+
+        // std::cerr << "#kernel: " << kernels.size() << ", #cluster: " << clusters.size()
+        //           << ", #metric: " << metrics.size() << "\n";
 
         std::vector<int64_t> mio_cost;
         std::vector<int64_t> mma_cost;
@@ -216,7 +217,7 @@ struct Gemm::Impl {
         if (dispatch_cache_.find(desc) != dispatch_cache_.end()) {
             return 0;
         }
-        std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
+        // std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
 
         const auto tmp = Find(desc, barriers_size, partials_size, tuning_.top_k);
 
@@ -232,12 +233,12 @@ struct Gemm::Impl {
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
-        for (const auto& s : specs) {
-            std::cout << s.kernel->name()          //
-                      << " swizzle=" << s.swizzle  //
-                      << ", splits=" << s.splits   //
-                      << ", measured=" << s.measured << "ms\n";
-        }
+        // for (const auto& s : specs) {
+        //     std::cout << s.kernel->name()          //
+        //               << " swizzle=" << s.swizzle  //
+        //               << ", splits=" << s.splits   //
+        //               << ", measured=" << s.measured << "ms\n";
+        // }
 
         if (!specs.empty()) {
             dispatch_cache_[desc] = specs.front();

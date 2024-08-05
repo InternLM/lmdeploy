@@ -12,6 +12,6 @@ public:
     virtual bool should_stop(const Stats& stats) = 0;
 };
 
-std::unique_ptr<StoppingCriterion> CreateStoppingCriterion(int max_iter, float max_ms);
+std::unique_ptr<StoppingCriterion> CreateStoppingCriterion(int min_iter, int max_iter, float max_ms);
 
 }  // namespace turbomind::gemm
