@@ -24,7 +24,8 @@
 
 namespace turbomind {
 
-enum class WeightType : int {
+enum class WeightType : int
+{
     kFP32,
     kFP16,
     kFP8,  // not supported yet
@@ -52,7 +53,8 @@ inline size_t getBitSize(WeightType type)
     return 0;
 }
 
-enum class LoraPolicy : int {
+enum class LoraPolicy : int
+{
     kNull,
     kPlora,
 };

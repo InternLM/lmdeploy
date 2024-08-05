@@ -12,33 +12,46 @@
 
 namespace turbomind {
 
-struct uint1_t {};
-struct uint2_t {};
-struct uint3_t {};
-struct uint4_t {};
-struct uint5_t {};
-struct uint6_t {};
+struct uint1_t {
+};
+struct uint2_t {
+};
+struct uint3_t {
+};
+struct uint4_t {
+};
+struct uint5_t {
+};
+struct uint6_t {
+};
 
 template<class T>
-struct bitsof_t: std::integral_constant<int, sizeof(T) * 8> {};
+struct bitsof_t: std::integral_constant<int, sizeof(T) * 8> {
+};
 
 template<>
-struct bitsof_t<uint1_t>: std::integral_constant<int, 1> {};
+struct bitsof_t<uint1_t>: std::integral_constant<int, 1> {
+};
 
 template<>
-struct bitsof_t<uint2_t>: std::integral_constant<int, 2> {};
+struct bitsof_t<uint2_t>: std::integral_constant<int, 2> {
+};
 
 template<>
-struct bitsof_t<uint3_t>: std::integral_constant<int, 3> {};  // 2 + 1
+struct bitsof_t<uint3_t>: std::integral_constant<int, 3> {
+};  // 2 + 1
 
 template<>
-struct bitsof_t<uint4_t>: std::integral_constant<int, 4> {};
+struct bitsof_t<uint4_t>: std::integral_constant<int, 4> {
+};
 
 template<>
-struct bitsof_t<uint5_t>: std::integral_constant<int, 5> {};  // 4 + 1
+struct bitsof_t<uint5_t>: std::integral_constant<int, 5> {
+};  // 4 + 1
 
 template<>
-struct bitsof_t<uint6_t>: std::integral_constant<int, 6> {};  // 4 + 2
+struct bitsof_t<uint6_t>: std::integral_constant<int, 6> {
+};  // 4 + 2
 
 template<class T>
 inline constexpr bitsof_t<T> bitsof{};
@@ -46,8 +59,10 @@ inline constexpr bitsof_t<T> bitsof{};
 struct fp8 {
     char v;
 };
-struct fp8_e4m3: fp8 {};
-struct fp8_e5m2: fp8 {};
+struct fp8_e4m3: fp8 {
+};
+struct fp8_e5m2: fp8 {
+};
 
 namespace detail {
 

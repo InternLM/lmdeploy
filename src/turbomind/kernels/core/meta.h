@@ -30,7 +30,8 @@ struct constant {
 };
 
 template<auto u, auto v>
-struct pair {};
+struct pair {
+};
 
 template<auto u, auto v>
 constexpr auto first(pair<u, v>)
@@ -45,6 +46,7 @@ constexpr auto second(pair<u, v>)
 }
 
 template<auto u, auto v, auto w>
-struct triplet {};
+struct triplet {
+};
 
 }  // namespace turbomind
