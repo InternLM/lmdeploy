@@ -2,14 +2,12 @@
 
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
-#include "src/turbomind/kernels/gemm/gpu_metric.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/tune/args.h"
 #include "src/turbomind/kernels/gemm/tune/sampler.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <algorithm>
-#include <limits>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -57,31 +55,13 @@ inline bool is_compatible(GemmDesc a, GemmDesc b)
     return as_tuple(a) == as_tuple(b);
 }
 
-template<class T>
-std::pair<std::vector<int>, std::vector<int>> ArgsortAndRank(const std::vector<T>& x)
+template<class Cmp>
+std::vector<int> ArgSort(size_t size, const Cmp& cmp)
 {
-    std::vector<int> idxs(x.size());
-    std::vector<int> rank(x.size());
-    if (!x.empty()) {
-        std::iota(idxs.begin(), idxs.end(), 0);
-        std::stable_sort(idxs.begin(), idxs.end(), [&](int i, int j) {  //
-            return x[i] < x[j];
-        });
-        int r = 0, c = 1;
-        rank[idxs[0]] = r;
-        for (size_t i = 1; i < idxs.size(); ++i) {
-            if (x[idxs[i]] == x[idxs[i - 1]]) {
-                rank[idxs[i]] = r;
-                ++c;
-            }
-            else {
-                r += c;
-                rank[idxs[i]] = r;
-                c             = 1;
-            }
-        }
-    }
-    return {idxs, rank};
+    std::vector<int> idxs(size);
+    std::iota(idxs.begin(), idxs.end(), 0);
+    std::stable_sort(idxs.begin(), idxs.end(), cmp);
+    return idxs;
 }
 
 }  // namespace
@@ -179,7 +159,9 @@ struct Gemm::Impl {
             avg_ratio.push_back(.5f * (mio_ratio.back() + mma_ratio.back()));
         }
 
-        auto&& [idxs, rank] = ArgsortAndRank(avg_ratio);
+        auto idxs = ArgSort(metrics.size(), [&](int i, int j) {  //
+            return avg_ratio[i] < avg_ratio[j];
+        });
 
         // for (const auto& i : idxs) {
         //     auto [k, s, m] = metrics[i];
@@ -324,11 +306,10 @@ struct Gemm::Impl {
     }
 
     std::shared_ptr<cudaDeviceProp> props_;
-    int                             arch_;
-    Registry                        registry_;
 
-    float l2_bytes_per_second_;
-    float fma_per_second_;
+    int arch_;
+
+    Registry registry_;
 
     TuningArgs tuning_;
 

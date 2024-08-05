@@ -47,21 +47,6 @@ public:
     // true if this kernel can be used to compute the gemm
     bool is_feasible(const GemmDesc& desc) const noexcept;
 
-    std::vector<std::pair<int, float>> Estimate(int   m,
-                                                int   n,
-                                                int   k,
-                                                int   max_split_k,
-                                                int   sm_count,
-                                                int   max_wave_count,
-                                                int   top_k,
-                                                float bytes_per_second,
-                                                float fma_per_second);
-
-    int64_t GetTilingCost(const std::array<int, 3>& size) const;
-
-    std::vector<std::pair<int, int64_t>>
-    GetSplitingCost(const std::array<int, 3>& size, int max_splits, int max_waves, int sm_count) const;
-
     std::vector<std::pair<int, KernelMetric>>
     Estimate_v2(std::array<int, 3> size, int max_splits, int max_waves, int sm_count) const;
 
