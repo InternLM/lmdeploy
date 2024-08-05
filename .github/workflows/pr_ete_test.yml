@@ -91,7 +91,7 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test and gpu_num_2 -x --alluredir=allure-results --clean-alluredir
+          CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m 'pr_test and gpu_num_2' -x --alluredir=allure-results --clean-alluredir
           CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m 'pr_test and gpu_num_1' -n 2 -x --alluredir=allure-results
       - name: Generate reports
         if: always()
