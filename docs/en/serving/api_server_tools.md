@@ -119,14 +119,11 @@ func1_args = response.choices[0].message.tool_calls[0].function.arguments
 func1_out = eval(f'{func1_name}(**{func1_args})')
 print(func1_out)
 
+messages.append(response.choices[0].message)
 messages.append({
-    'role': 'assistant',
-    'content': response.choices[0].message.content
-})
-messages.append({
-    'role': 'environment',
+    'role': 'tool',
     'content': f'3+5={func1_out}',
-    'name': 'plugin'
+    'tool_call_id': response.choices[0].message.tool_calls[0].id
 })
 response = client.chat.completions.create(
     model=model_name,
@@ -145,9 +142,9 @@ print(func2_out)
 Using the InternLM2-Chat-7B model to execute the above example, the following results will be printed.
 
 ```
-ChatCompletion(id='1', choices=[Choice(finish_reason='tool_calls', index=0, logprobs=None, message=ChatCompletionMessage(content='', role='assistant', function_call=None, tool_calls=[ChatCompletionMessageToolCall(id='1', function=Function(arguments={'a': 3, 'b': 5}, name='add'), type='function')]))], created=1719369986, model='/nvme/shared_data/InternLM/internlm2-chat-7b', object='chat.completion', system_fingerprint=None, usage=CompletionUsage(completion_tokens=25, prompt_tokens=263, total_tokens=288))
+ChatCompletion(id='1', choices=[Choice(finish_reason='tool_calls', index=0, logprobs=None, message=ChatCompletionMessage(content='', role='assistant', function_call=None, tool_calls=[ChatCompletionMessageToolCall(id='0', function=Function(arguments='{"a": 3, "b": 5}', name='add'), type='function')]))], created=1722852901, model='/nvme/shared_data/InternLM/internlm2-chat-7b', object='chat.completion', system_fingerprint=None, usage=CompletionUsage(completion_tokens=25, prompt_tokens=263, total_tokens=288))
 8
-ChatCompletion(id='2', choices=[Choice(finish_reason='tool_calls', index=0, logprobs=None, message=ChatCompletionMessage(content='', role='assistant', function_call=None, tool_calls=[ChatCompletionMessageToolCall(id='2', function=Function(arguments={'a': 8, 'b': 2}, name='mul'), type='function')]))], created=1719369987, model='/nvme/shared_data/InternLM/internlm2-chat-7b', object='chat.completion', system_fingerprint=None, usage=CompletionUsage(completion_tokens=25, prompt_tokens=282, total_tokens=307))
+ChatCompletion(id='2', choices=[Choice(finish_reason='tool_calls', index=0, logprobs=None, message=ChatCompletionMessage(content='', role='assistant', function_call=None, tool_calls=[ChatCompletionMessageToolCall(id='1', function=Function(arguments='{"a": 8, "b": 2}', name='mul'), type='function')]))], created=1722852901, model='/nvme/shared_data/InternLM/internlm2-chat-7b', object='chat.completion', system_fingerprint=None, usage=CompletionUsage(completion_tokens=25, prompt_tokens=293, total_tokens=318))
 16
 ```
 
