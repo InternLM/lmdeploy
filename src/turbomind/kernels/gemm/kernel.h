@@ -104,14 +104,13 @@ protected:
 
     int chunk_size_k_;
     int smem_size_;
-    int max_active_ctas_;
 
     std::string name_;
 };
 
 struct ClusteringParam {
     bool cache_policy;
-    bool stages;
+    bool max_active_ctas;
 };
 
 std::vector<std::vector<LaunchSpec>> Cluster(const std::vector<LaunchSpec>& specs, const ClusteringParam& param);

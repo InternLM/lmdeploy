@@ -86,7 +86,7 @@ public:
         }
 
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-            &max_active_ctas_, gemm_kernel<Gemm, Params, CtaMap>, Impl::WARPS * WARP_SIZE, smem_size_);
+            &desc_.max_active_ctas, gemm_kernel<Gemm, Params, CtaMap>, Impl::WARPS * WARP_SIZE, smem_size_);
 
         name_ = GetName();
     }

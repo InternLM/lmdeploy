@@ -4,7 +4,6 @@
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/tune/sampler.h"
 #include <algorithm>
-#include <functional>
 #include <iostream>
 #include <numeric>
 #include <vector>
@@ -24,7 +23,7 @@ std::vector<LaunchSpec> Sampler::Run(std::vector<LaunchSpec> specs, const Launch
 {
     std::vector<std::vector<LaunchSpec>> clusters;  // ptr into `specs`
     if (k_clusters_) {
-        clusters = Cluster(specs, ClusteringParam{true, false});
+        clusters = Cluster(specs, ClusteringParam{true, true});
     }
     else {
         for (auto& s : specs) {

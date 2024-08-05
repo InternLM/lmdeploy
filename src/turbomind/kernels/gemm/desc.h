@@ -72,6 +72,7 @@ struct KernelDesc {
     int2      c_tile;
     int       stages;
     bool      split_k;
+    int       max_active_ctas;  // set by `KernelImpl`
 };
 
 class Kernel;

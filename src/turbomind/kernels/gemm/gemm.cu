@@ -125,18 +125,39 @@ struct Gemm::Impl {
             return {};
         }
 
-        std::vector<std::tuple<Kernel*, int, KernelMetric>> metrics;
+        std::vector<std::vector<LaunchSpec>> clusters;
+        {
+            std::vector<LaunchSpec> tmp;
+            tmp.reserve(kernels.size());
+            for (const auto& k : kernels) {
+                LaunchSpec spec{k};
+                tmp.push_back(spec);
+            }
+            clusters = Cluster(tmp, ClusteringParam{false, true});
 
-        for (const auto& k : kernels) {
-            const int max_splits = k->GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
+            // std::cerr << "#kernel: " << kernels.size() << ", #clusters: " << clusters.size() << "\n";
+        }
+        std::vector<Kernel*> proxies;
+        proxies.reserve(clusters.size());
 
-            auto ms = k->Estimate_v2({desc.m, desc.n, desc.k},  //
-                                     std::min(max_splits, tuning_.max_splits),
-                                     tuning_.max_waves,
-                                     props_->multiProcessorCount);
+        for (const auto& c : clusters) {
+            proxies.push_back(c.front().kernel);
+        }
+
+        //             cluster_id, splits, metrics
+        std::vector<std::tuple<int, int, KernelMetric>> metrics;
+
+        for (int cluster_id = 0; cluster_id < (int)proxies.size(); ++cluster_id) {
+            auto&     kernel     = *proxies[cluster_id];
+            const int max_splits = kernel.GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
+
+            auto ms = kernel.Estimate_v2({desc.m, desc.n, desc.k},  //
+                                         std::min(max_splits, tuning_.max_splits),
+                                         tuning_.max_waves,
+                                         props_->multiProcessorCount);
 
             for (const auto& [splits, metric] : ms) {
-                metrics.emplace_back(k, splits, metric);
+                metrics.emplace_back(cluster_id, splits, metric);
             }
         }
 
@@ -173,8 +194,11 @@ struct Gemm::Impl {
         std::vector<LaunchSpec> ret;
         ret.reserve(top_k);
         for (int i = 0; i < top_k; ++i) {
-            const auto& [kernel, splits, cost] = metrics[idxs[i]];
-            ret.push_back(LaunchSpec{kernel, tuning_.swizzle.at(0), splits});
+            const auto& [cluster_id, splits, cost] = metrics[idxs[i]];
+            // Apply `splits` to all kernels in the cluster
+            for (const auto& s : clusters[cluster_id]) {
+                ret.push_back(LaunchSpec{s.kernel, tuning_.swizzle.at(0), splits});
+            }
         }
 
         return ret;

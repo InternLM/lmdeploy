@@ -112,7 +112,7 @@ Kernel::Estimate_v2(std::array<int, 3> size, int max_splits, int max_waves, int 
     const int     chunk_cnt_k   = ceil_div(k, chunk_size_k_);
 
     // Dispite we only have sm_count * constant tensor cores, this is the granularity for scheduling
-    const int   concurrency     = sm_count * max_active_ctas_;
+    const int   concurrency     = sm_count * desc_.max_active_ctas;
     const float waves_per_split = float(tiled_shape_m * tiled_shape_n) / concurrency;
     const float splits_per_wave = 1.f / waves_per_split;
 
@@ -137,7 +137,7 @@ Kernel::Estimate_v2(std::array<int, 3> size, int max_splits, int max_waves, int 
         const int   grid_size    = tiled_shape_m * tiled_shape_n * splits;
         const int   full_waves   = grid_size / concurrency;
         const int   residue      = grid_size % concurrency;
-        const float partial_wave = (float)ceil_div(residue, sm_count) / max_active_ctas_;
+        const float partial_wave = (float)ceil_div(residue, sm_count) / desc_.max_active_ctas;
         const float waves        = full_waves + partial_wave;
 
         if (splits > 1 && waves > max_waves) {
@@ -219,8 +219,10 @@ std::vector<std::vector<LaunchSpec>> Cluster(const std::vector<LaunchSpec>& spec
                 return pa < pb;
             }
         }
-        if (param.stages && a.stages != b.stages) {
-            return a.stages < b.stages;
+        if (param.max_active_ctas) {
+            if (a.max_active_ctas != b.max_active_ctas) {
+                return a.max_active_ctas < b.max_active_ctas;
+            }
         }
         return u->splits < v->splits;
     };
