@@ -1,6 +1,4 @@
 gradio
 protobuf
 tritonclient[grpc]
-timm
-flash-attn
 openai

@@ -18,3 +18,4 @@ torchvision<=0.18.1,>=0.15.0
 transformers
 triton>=2.1.0,<=2.3.1; sys_platform == "linux"
 uvicorn
+flash-attn

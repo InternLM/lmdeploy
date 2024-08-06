@@ -1,7 +1,7 @@
 #docker build -t  openmmlab/lmdeploy-builder:cuda12.2 . -f docker/Dockerfile
 ARG CUDA_VERSION=cu12
 
-FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS cu12
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS cu12
 ENV CUDA_VERSION_SHORT=cu121
 
 FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 AS cu11
@@ -14,7 +14,7 @@ ARG PYTHON_VERSION=3.10
 ARG TORCH_VERSION=2.3.0
 ARG TORCHVISION_VERSION=0.18.0
 
-RUN apt-get update -y && apt-get install -y software-properties-common wget vim &&\
+RUN apt-get update -y && apt-get install -y software-properties-common wget vim git &&\
     add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
     ninja-build rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
@@ -48,7 +48,6 @@ COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 
 RUN cd /opt/lmdeploy &&\
-    apt-get install -y git &&\
     python3 -m pip install --no-cache-dir -r requirements.txt &&\
     mkdir -p build && cd build &&\
     sh ../generate.sh &&\

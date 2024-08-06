@@ -3,7 +3,7 @@ version: '3.5'
 services:
   lmdeploy:
     container_name: lmdeploy
-    image: openmmlab/lmdeploy-builder:cuda12.2
+    image: openmmlab/lmdeploy-builder:latest
     ports:
       - "23333:23333"
     environment:
