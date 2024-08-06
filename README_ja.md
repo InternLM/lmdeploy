@@ -10,7 +10,7 @@
 [🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started.html) |
 [🤔Reporting Issues](https://github.com/InternLM/lmdeploy/issues/new/choose)
 
-English | [简体中文](README_zh-CN.md) | 日本語
+[English](README.md) | [简体中文](README_zh-CN.md) | 日本語
 
 ## 最新ニュース 🎉
 
