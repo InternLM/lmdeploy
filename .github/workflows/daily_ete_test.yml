@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord autoawq@https://github.com/casper-hansen/AutoAWQ/releases/download/v0.2.5/autoawq-0.2.5+cu118-cp310-cp310-linux_x86_64.whl'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord'
       tools_regression:
         required: true
         description: 'Whether start a tool regression'
@@ -58,7 +58,7 @@ on:
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord autoawq@https://github.com/casper-hansen/AutoAWQ/releases/download/v0.2.5/autoawq-0.2.5+cu118-cp310-cp310-linux_x86_64.whl'}}
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord'}}
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
@@ -146,6 +146,7 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install /root/packages/autoawq_kernels-0.0.6+cu118-cp310-cp310-linux_x86_64.whl
           python3 -m pip install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
           python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
