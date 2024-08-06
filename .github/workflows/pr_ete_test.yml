@@ -67,21 +67,9 @@ jobs:
           make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
           export PATH=$PATH:/usr/local/openmpi/bin
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
-          mkdir build
-          cd build
-          cmake .. \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-              -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-              -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
-              -DBUILD_PY_FFI=ON \
-              -DBUILD_MULTI_GPU=ON \
-              -DBUILD_CUTLASS_MOE=OFF \
-              -DBUILD_CUTLASS_MIXED_GEMM=OFF \
-              -DCMAKE_CUDA_FLAGS="-lineinfo" \
-              -DUSE_NVTX=ON &&\
-          make -j$(nproc) && make install
-      - name: Install lmdeploy
-        run: |
+          mkdir -p build && cd build &&\
+          sh ../generate.sh &&\
+          ninja -j$(nproc) && ninja install &&\
           python3 -m pip install packaging transformers_stream_generator transformers datasets openai einops timm decord
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
