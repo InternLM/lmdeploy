@@ -14,7 +14,7 @@ class BaichuanReader(LlamaReader):
         q, k, v, o = (None, ) * 4
         pack_key = f'model.layers.{i}.self_attn.W_pack.{kind}'
         qkv = self.transform(self.params.get(pack_key), kind)
-        if qkv:
+        if qkv is not None:
             q, k, v = torch.split(qkv, qkv.shape[0] // 3, dim=0)
         o = self.params.get(f'model.layers.{i}.self_attn.o_proj.{kind}')
         o = self.transform(o, kind)

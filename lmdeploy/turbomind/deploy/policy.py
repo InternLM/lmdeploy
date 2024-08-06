@@ -24,11 +24,13 @@ def unpack_awq_gemm(x: torch.Tensor) -> torch.Tensor:
     return torch.stack(ys, dim=-1).view(*x.shape[:-1], -1)
 
 
-def process_awq_gemm(x: torch.Tensor, *args):
+def process_awq_gemm(x: torch.Tensor, kind: str):
     x = x.cuda()
     if x.dtype == torch.int32:
         x = unpack_awq_gemm(x)
-    return x.t()
+    if kind in ['qweight', 'qzeros', 'scales']:
+        x = x.t()
+    return x
 
 
 def process_gptq(x: torch.Tensor, kind: str):
@@ -39,7 +41,9 @@ def process_gptq(x: torch.Tensor, kind: str):
             x = torch.stack(xs, dim=1).view(-1, x.size(-1))
         else:  # 'qzeros' (k/g,n/8)
             x = torch.stack(xs, dim=-1).view(x.size(0), -1) + 1
-    return x.t()
+    if kind in ['qweight', 'qzeros', 'scales']:
+        x = x.t()
+    return x
 
 
 def get_input_policy(model_format):

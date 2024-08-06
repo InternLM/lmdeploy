@@ -9,8 +9,8 @@ class Optimistic: public StoppingCriterion {
 public:
     Optimistic(int min_iter, int max_iter, float max_ms)
     {
-        min_iter_ = min_iter ? min_iter > 0 : 1;
-        max_iter_ = max_iter ? max_iter > 0 : std::numeric_limits<int>::max();
+        min_iter_ = std::max(min_iter, 1);
+        max_iter_ = max_iter > 0 ? max_iter : std::numeric_limits<int>::max();
         max_ms_   = max_ms > 0 ? max_ms : std::numeric_limits<float>::infinity();
     }
     bool should_stop(const Stats& stats) override
