@@ -11,7 +11,7 @@
 [🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started.html) |
 [🤔Reporting Issues](https://github.com/InternLM/lmdeploy/issues/new/choose)
 
-English | [简体中文](README_zh-CN.md)
+English | [简体中文](README_zh-CN.md) | [日本語](README_ja.md)
 
 👋 join us on [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=wechat&label=WeChat)](https://cdn.vansin.top/internlm/lmdeploy.jpg)
 [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=twitter&label=Twitter)](https://twitter.com/intern_lm)
