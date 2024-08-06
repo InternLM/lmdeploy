@@ -1,4 +1,3 @@
-#docker build -t  openmmlab/lmdeploy-builder:cuda12.2 . -f docker/Dockerfile
 ARG CUDA_VERSION=cu12
 
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS cu12
