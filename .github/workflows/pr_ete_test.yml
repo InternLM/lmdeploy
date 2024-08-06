@@ -69,7 +69,7 @@ jobs:
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
           mkdir -p build && cd build &&\
           sh ../generate.sh &&\
-          ninja -j$(nproc) && ninja install &&\
+          ninja -j$(nproc) && ninja install &&\ cd ..
           python3 -m pip install packaging transformers_stream_generator transformers datasets openai einops timm decord
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
