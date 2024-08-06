@@ -61,9 +61,10 @@ class VLAsyncEngine(AsyncEngine):
         results = {}
         input_ids = []
         if len(segs) > 1:
-            images = await self.vl_prompt_template.async_collect_pil_images(
+            images_with_kwargs = await self.vl_prompt_template.async_collect_pil_images(  # noqa: E501
                 prompt)
-            features = await self.vl_encoder.async_infer(images)
+            images, image_kwargs = list(zip(*images_with_kwargs))
+            features = await self.vl_encoder.async_infer(images, image_kwargs)
 
             from lmdeploy.vl.templates import MiniCPMVTempateWrapper
             if isinstance(self.vl_prompt_template, MiniCPMVTempateWrapper):
