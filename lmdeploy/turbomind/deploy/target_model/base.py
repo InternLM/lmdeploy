@@ -320,7 +320,7 @@ class BaseOutputModel(ABC):
             self.export_weight(norm_weight, 'norm.weight')
         if output_weight is not None:
             output_weight = pad_weight(output_weight)
-            self.export_weight(output_weight, 'output.weight')
+            self.save_split(output_weight, 'output.weight', 0)
 
     @abstractmethod
     def export_transformer_block(self, bin: BaseReader, i: int) -> None:

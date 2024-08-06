@@ -339,8 +339,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                               batch_size,
                               hidden_units_,  // k
                               &alpha,
-                              weights_->post_decoder_embedding_kernel
-                                  + tensor_para_.rank_ * local_vocab_size * hidden_units_,
+                              weights_->post_decoder_embedding_kernel,
                               data_type,
                               hidden_units_,  // k
                               decoder_output,

@@ -129,10 +129,10 @@ TensorMap LlamaWeight<T>::getParams()
     output.insert("norm.weight",
                   Tensor{MEMORY_GPU, getTensorType<T>(), {hidden_units_ * sizeof(T)}, output_norm_weight});
 
-    output.insert("output.weight",
+    output.insert("output." + std::to_string(tensor_para_rank_) + ".weight",
                   Tensor{MEMORY_GPU,
                          getTensorType<T>(),
-                         {hidden_units_ * vocab_size_padded_ * sizeof(T)},
+                         {hidden_units_ * vocab_size_padded_ * sizeof(T) / tensor_para_size_},
                          post_decoder_embedding_kernel});
 
     // transformer layers
