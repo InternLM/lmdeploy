@@ -1,0 +1,25 @@
+version: '3.5'
+
+services:
+  lmdeploy:
+    container_name: lmdeploy
+    image: openmmlab/lmdeploy-builder:cuda12.2
+    ports:
+      - "23333:23333"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: <secret>
+      CUDA_VISIBLE_DEVICES: 0,1,2,3
+    volumes:
+      #- ~/.cache/huggingface:/root/.cache/huggingface
+      - ./root:/root
+    stdin_open: true
+    tty: true        
+    ipc: host #for nccl,it is necessary
+    command: lmdeploy serve api_server OpenGVLab/InternVL2-40B  --server-name 0.0.0.0 --server-port 23333  --tp 4 --model-name internvl2-internlm2 --cache-max-entry-count 0.5 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: "all"
+              capabilities: [gpu]
