@@ -82,6 +82,13 @@ def test_vicuna():
         assert _prompt is None
 
 
+def test_prefix_response():
+    model = MODELS.get('internlm2')()
+    messages = [dict(role='assistant', content='prefix test')]
+    prompt = model.messages2prompt(messages)
+    assert prompt[-len('prefix test'):] == 'prefix test'
+
+
 def test_internlm_chat():
     prompt = 'hello, can u introduce yourself'
     model = MODELS.get('internlm')(capability='completion')
@@ -161,6 +168,37 @@ def test_messages2prompt4internlm2_chat():
         model.eoenv + model.assistant)
     actual_prompt = model.messages2prompt(messages, tools=tools)
     assert actual_prompt == expected_prompt
+
+    # Test with a message where 'name' is not in name_map
+    messages_invalid_name = [
+        {
+            'role': 'system',
+            'name': 'invalid_name',
+            'content': 'You have access to python environment.'
+        },
+        {
+            'role': 'user',
+            'content': 'use python draw a line'
+        },
+        {
+            'role': 'assistant',
+            'content': '\ncode\n'
+        },
+        {
+            'role': 'environment',
+            'name': 'invalid_name',
+            'content': "[{'type': 'image', 'content': 'image url'}]"
+        },
+    ]
+    expected_prompt_invalid_name = (
+        model.system.strip() + '\nYou have access to python environment.' +
+        model.eosys + model.user + 'use python draw a line' + model.eoh +
+        model.assistant + '\ncode\n' + model.eoa + model.separator +
+        model.environment.strip() +
+        "\n[{'type': 'image', 'content': 'image url'}]" + model.eoenv +
+        model.assistant)
+    actual_prompt_invalid_name = model.messages2prompt(messages_invalid_name)
+    assert actual_prompt_invalid_name == expected_prompt_invalid_name
 
 
 def test_llama3_1():
@@ -311,6 +349,9 @@ def test_deepseek_coder():
     }, {
         'role': 'assistant',
         'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'hi'
     }]
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -392,6 +433,9 @@ def test_internvl_phi3():
     }, {
         'role': 'assistant',
         'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'hi'
     }]
     res = model.messages2prompt(messages)
     from huggingface_hub import hf_hub_download
@@ -426,7 +470,7 @@ def test_internvl2():
     expected = '<|im_start|>system\n你是由上海人工智能实验室联合商汤科技开发的'\
         '书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。'\
         '<|im_end|>\n<|im_start|>user\nwho are you<|im_end|>\n<|im_start|>'\
-        'assistant\nI am an AI<|im_end|>\n<|im_start|>assistant\n'
+        'assistant\nI am an AI'
     res = model.messages2prompt(messages)
     assert res == expected
 
