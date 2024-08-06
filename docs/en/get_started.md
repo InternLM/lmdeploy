@@ -50,7 +50,7 @@ pipe = pipeline('internlm/internlm2_5-7b-chat',
 ```{note}
 The parameter "cache_max_entry_count" significantly influences the GPU memory usage. It means the proportion of FREE GPU memory occupied by the K/V cache after the model weights are loaded.
 The default value is 0.8. Once allocated, the K/V cache memory is reused repeatedly, which is why it is common to observe that the built pipeline and the api_server mentioned later in the next consumes a substantial amount of GPU memory.
-If you encounter an Out-of-Memory(OOM) error, you may need to consider lowering the value of cache_max_entry_count“.
+If you encounter an Out-of-Memory(OOM) error, you may need to consider lowering the value of "cache_max_entry_count".
 ```
 
 When use the callable `pipe()` to perform token generation with given prompts, you can set the sampling parameters via `GenerationConfig` as below:
