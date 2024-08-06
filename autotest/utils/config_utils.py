@@ -32,7 +32,7 @@ def get_torch_model_list(tp_num: int = None, model_type: str = 'chat_model'):
             case_list.append(key + '-inner-w8a8')
     for key in quatization_case_config.get('4bits'):
         if key in case_list:
-           case_list.append(key + '-inner-4bits')
+            case_list.append(key + '-inner-4bits')
 
     if tp_num is not None:
         return [
