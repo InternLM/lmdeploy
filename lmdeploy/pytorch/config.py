@@ -102,6 +102,7 @@ class ModelConfig:
     unused_modules: List[str] = None
     auto_model_cls: Any = AutoModelForCausalLM
     cogvlm_style: bool = False
+    custom_module_map: str = None
 
     def get_head_size(self):
         """get head size."""

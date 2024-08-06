@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib
 import inspect
+import os.path as osp
 import re
+import sys
 from copy import copy
 from typing import Any, Dict
 
@@ -10,7 +12,8 @@ import torch
 from lmdeploy.utils import get_logger
 
 from ..devices import get_device_manager
-from .module_map import DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP
+from .module_map import (CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP,
+                         MODULE_MAP)
 
 logger = get_logger('lmdeploy')
 
@@ -157,6 +160,8 @@ def _get_module_map():
     if device_type != 'cuda':
         device_map = DEVICE_SPECIAL_MODULE_MAP.get(device_type, dict())
         module_map.update(device_map)
+    # add custom module map
+    module_map.update(CUSTOM_MODULE_MAP)
     return module_map
 
 
@@ -191,3 +196,42 @@ def update_model(model: torch.nn.Module):
         model_cls = _class_from_qualname(rewrite_qualname)
 
     return model_cls(model, ctx_mgr)
+
+
+def update_custom_module_map(module_map_path: str):
+    """moad custom module map from file."""
+    from importlib.machinery import SourceFileLoader
+
+    from lmdeploy.pytorch.models.module_map import LMDEPLOY_PYTORCH_MODEL_PATH
+    assert osp.exists(module_map_path), (
+        f'custom module map path: "{module_map_path}" not exists.')
+
+    module_map_path = osp.abspath(module_map_path)
+    folder = osp.split(module_map_path)[0]
+    sys.path.append(folder)
+    custom_mod = SourceFileLoader('map_mod', module_map_path).load_module()
+    sys.modules[f'{LMDEPLOY_PYTORCH_MODEL_PATH}._custom_mod'] = custom_mod
+
+    new_mod_map = dict()
+    has_map = False
+    if hasattr(custom_mod, 'MODULE_MAP'):
+        has_map = True
+        mod_map = custom_mod.MODULE_MAP
+        assert isinstance(mod_map, Dict)
+        new_mod_map.update(mod_map)
+
+    if hasattr(custom_mod, 'CUSTOM_MODULE_MAP'):
+        has_map = True
+        mod_map = custom_mod.CUSTOM_MODULE_MAP
+        assert isinstance(mod_map, Dict)
+        new_mod_map.update(mod_map)
+
+    if not has_map:
+        raise RuntimeError(f'Found no map in "{module_map_path}".')
+
+    for k, v in new_mod_map.items():
+        if '.' not in v:
+            v = f'{LMDEPLOY_PYTORCH_MODEL_PATH}._custom_mod.{v}'
+            new_mod_map[k] = v
+
+    CUSTOM_MODULE_MAP.update(new_mod_map)

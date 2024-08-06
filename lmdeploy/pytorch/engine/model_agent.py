@@ -19,7 +19,7 @@ from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..model_inputs import ModelInputs
-from ..models.patch import patch, update_model
+from ..models.patch import patch, update_custom_module_map, update_model
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
@@ -257,22 +257,6 @@ class AutoModelAgent:
         """
         raise NotImplementedError('Not implemented.')
 
-    @classmethod
-    def from_pretrained(cls,
-                        pretrained_model_name_or_path: str,
-                        cache_config: CacheConfig,
-                        backend_config: BackendConfig,
-                        trust_remote_code: bool,
-                        adapters: Dict[str, str] = None,
-                        tp: int = 1):
-        """from pretrained."""
-        return build_model_agent(pretrained_model_name_or_path,
-                                 cache_config=cache_config,
-                                 backend_config=backend_config,
-                                 trust_remote_code=trust_remote_code,
-                                 adapters=adapters,
-                                 tp=tp)
-
 
 class BaseModelAgent(AutoModelAgent):
     """Base model agent.
@@ -341,6 +325,9 @@ class BaseModelAgent(AutoModelAgent):
         if adapters:
             _load_adapters(hf_model, adapters)
 
+        custom_module_map = self.model_config.custom_module_map
+        if custom_module_map is not None:
+            update_custom_module_map(custom_module_map)
         patched_model = update_model(hf_model)
 
         return patched_model
@@ -422,16 +409,6 @@ class BaseModelAgent(AutoModelAgent):
         return output
 
 
-def _get_model_memory_usage(model: torch.nn.Module) -> int:
-    """get model memory usage."""
-    size = 0
-    for _, param in model.named_parameters():
-        size += param.element_size() * param.numel()
-    for _, buf in model.named_buffers():
-        size += buf.element_size() * param.numel()
-    return size
-
-
 def _create_device_map(model: torch.nn.Module,
                        world_size: int,
                        device_map: dict = None):
@@ -460,7 +437,7 @@ def _tp_build_model(
     backend_config: BackendConfig,
     adapters: Dict[str, str],
     world_size: int,
-    trust_remote_code=True,
+    trust_remote_code: bool = True,
 ):
     """build tensor parallel model."""
     from accelerate import init_empty_weights
@@ -513,6 +490,9 @@ def _tp_build_model(
         model.eval()
         model.config.use_cache = True
 
+        custom_module_map = model_config.custom_module_map
+        if custom_module_map is not None:
+            update_custom_module_map(custom_module_map)
         patched_model = patch(model)
         load_model_weights(patched_model,
                            model_path,
@@ -615,7 +595,7 @@ def _tp_model_loop(
     backend_config: BackendConfig,
     adapters: Dict[str, str],
     world_size: int,
-    trust_remote_code=True,
+    trust_remote_code: bool = True,
 ):
     """Start model loops for tensor parallel model inference.
 
@@ -960,10 +940,12 @@ def build_model_agent(model_path: str,
                       backend_config: BackendConfig,
                       trust_remote_code: bool,
                       adapters: Dict[str, str] = None,
-                      tp: int = 1):
+                      tp: int = 1,
+                      custom_module_map: str = None):
     """create model agent."""
     model_config = ModelConfig.from_pretrained(
         model_path, trust_remote_code=trust_remote_code)
+    model_config.custom_module_map = custom_module_map
     if tp == 1:
         model_agent = BaseModelAgent(model_path,
                                      model_config=model_config,

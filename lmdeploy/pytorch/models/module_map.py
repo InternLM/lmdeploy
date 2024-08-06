@@ -383,3 +383,5 @@ ASCEND_MODULE_MAP.update({
     'modeling_internlm2.InternLM2FlashAttention2':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',
 })
+
+CUSTOM_MODULE_MAP = dict()

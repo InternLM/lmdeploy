@@ -20,7 +20,7 @@ from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
 from ..model_inputs import AdapterInfo, ModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
-from .model_agent import AutoModelAgent
+from .model_agent import AutoModelAgent, build_model_agent
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -147,13 +147,14 @@ class Engine:
         )
 
         with get_device_manager().context(self.device_context):
-            self.model_agent = AutoModelAgent.from_pretrained(
+            self.model_agent = build_model_agent(
                 model_path,
                 cache_config=cache_config,
                 backend_config=backend_config,
                 trust_remote_code=trust_remote_code,
                 adapters=adapters,
-                tp=tp)
+                tp=tp,
+                custom_module_map=engine_config.custom_module_map)
 
         cache_config = self.model_agent.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)

@@ -213,6 +213,7 @@ class PytorchEngineConfig:
     enable_prefix_caching: bool = False
     device_type: str = 'cuda'
     eager_mode: bool = False
+    custom_module_map: str = None
     download_dir: str = None
     revision: str = None
 
