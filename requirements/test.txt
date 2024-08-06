@@ -8,4 +8,3 @@ pytest-rerunfailures
 pytest-sugar
 pytest-xdist
 pyyaml
-timm
