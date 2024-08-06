@@ -1,9 +1,9 @@
 # Installation
 
-LMDeploy is a python library for compressing, deploying, and serving Large Language Models and Vision-Language Models.
+LMDeploy is a python library for compressing, deploying, and serving Large Language Models(LLMs) and Vision-Language Models(VLMs).
 Its core inference engines include TurboMind Engine and PyTorch Engine. The former is developed by C++ and CUDA, striving for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
-It supports deployment on both Linux and Windows platform, with minimum requirement of CUDA version 11.3. Furthermore, it is compatible with the following NVIDIA GPUs:
+It supports LLMs and VLMs deployment on both Linux and Windows platform, with minimum requirement of CUDA version 11.3. Furthermore, it is compatible with the following NVIDIA GPUs:
 
 - Volta(sm70): V100
 - Turing(sm75): 20 series, T4
@@ -21,7 +21,7 @@ pip install lmdeploy
 The default prebuilt package is compiled on **CUDA 12**. If CUDA 11+ (>=11.3) is required, you can install lmdeploy by:
 
 ```shell
-export LMDEPLOY_VERSION=0.5.1
+export LMDEPLOY_VERSION=0.5.3
 export PYTHON_VERSION=38
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
@@ -42,7 +42,7 @@ pip install -e .
 
 But if you are using the TurboMind Engine, you have to build the source as shown below. The `openmmlab/lmdeploy:{tag}` docker image is strongly recommended.
 
-**Step 1** - Get LMDeploy's docker image
+**Step 1** - Get the docker image of LMDeploy
 
 ```shell
 docker pull openmmlab/lmdeploy:latest
@@ -71,7 +71,8 @@ docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name l
 ```shell
 cd /opt/lmdeploy
 mkdir -p build && cd build
-../generate.sh make
+bash ../generate.sh make
 make -j$(nproc) && make install
 cd ..
+pip install -e .
 ```

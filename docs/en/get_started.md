@@ -47,7 +47,11 @@ pipe = pipeline('internlm/internlm2_5-7b-chat',
                 ))
 ```
 
-The parameters "max_batch_size", "cache_max_entry_count" and "session_len" significantly influence the GPU memory footprint, especially "cache_max_entry_count" playing a dominant role. If you encounter an Out of Memory(OOM) error, you should consider reducing their values.
+```{note}
+The parameter "cache_max_entry_count" significantly influences the GPU memory occupation. It means the proportion of FREE GPU memory occupied by the k/v cache after loading the model weight.
+The default value is 0.8. Once allocated, the K/V cache memory is reused repeatedly, which is why it is common to observe that the built pipeline consumes a substantial amount of GPU memory.
+If you encounter an Out-of-Memory(OOM) error, you may need to consider lowering the value of cache_max_entry_count“.
+```
 
 When use the callable `pipe()` to perform token generation with given prompts, you can set the sampling parameters via `GenerationConfig` as below:
 
@@ -116,7 +120,7 @@ As demonstrated in the previous [offline batch inference](#offline-batch-inferen
 lmdeploy serve api_server internlm/internlm2_5-7b-chat
 ```
 
-This command will launch an OpenAI-compatible server on the localhost at port 23333. You can specify a different server port by using the `--server-port` option.
+This command will launch an OpenAI-compatible server on the localhost at port `23333`. You can specify a different server port by using the `--server-port` option.
 For more options, consult the help documentation by running `lmdeploy serve api_server --help`. Most of these options align with the engine configuration.
 
 To access the service, you can utilize the official OpenAI Python package `pip install openai`. Below is an example demonstrating how to use the entrypoint `v1/chat/completions`

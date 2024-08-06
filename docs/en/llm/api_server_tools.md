@@ -1,4 +1,4 @@
-# Function Call
+# Tools Calling
 
 LMDeploy supports tools for InternLM2, InternLM2.5 and llama3.1 models.
 
