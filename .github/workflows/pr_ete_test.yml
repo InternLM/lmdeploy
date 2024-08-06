@@ -67,12 +67,14 @@ jobs:
           make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
           export PATH=$PATH:/usr/local/openmpi/bin
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
-          mkdir -p build && cd build &&\
-          sh ../generate.sh &&\
-          ninja -j$(nproc) && ninja install &&\ cd ..
           python3 -m pip install packaging transformers_stream_generator transformers datasets openai einops timm decord
           python3 -m pip install -r requirements.txt -r requirements/test.txt
-          python3 -m pip install .
+          mkdir -p build && cd build &&\
+          sh ../generate.sh &&\
+          ninja -j$(nproc) && ninja install &&\
+          cd .. &&\
+          python3 -m pip install -e . &&\
+          rm -rf build
       - name: Check env
         run: |
           python3 -m pip list
