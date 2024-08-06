@@ -28,7 +28,7 @@ ______________________________________________________________________
 
 - \[2024/08\] 🔥🔥 LMDeployは[modelscope/swift](https://github.com/modelscope/swift)に統合され、VLMs推論のデフォルトアクセラレータとなりました
 - \[2024/07\] 🎉🎉 Llama3.1 8B、70Bおよびそのツールコールをサポート
-- \[2024/07\] [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e)全シリーズモデル、[InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md)およびInternLM2.5の[ファンクションコール](docs/en/serving/api_server_tools.md)をサポート
+- \[2024/07\] [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e)全シリーズモデル、[InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md)およびInternLM2.5の[ファンクションコール](docs/en/llm/api_server_tools.md)をサポート
 - \[2024/06\] PyTorchエンジンはDeepSeek-V2およびいくつかのVLMs、例えばCogVLM2、Mini-InternVL、LlaVA-Nextをサポート
 - \[2024/05\] 複数のGPUでVLMsをデプロイする際にビジョンモデルをバランスさせる
 - \[2024/05\] InternVL v1.5、LLaVa、InternLMXComposer2などのVLMsで4ビットの重みのみの量子化と推論をサポート
@@ -39,8 +39,8 @@ ______________________________________________________________________
 - \[2024/03\] DeepSeek-VLのオフライン推論パイプラインとサービングをサポート
 - \[2024/03\] VLMのオフライン推論パイプラインとサービングをサポート
 - \[2024/02\] Qwen 1.5、Gemma、Mistral、Mixtral、Deepseek-MOEなどをサポート
-- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE)が[LMDeployサービングサービス](./docs/en/serving/api_server.md)とシームレスに統合されました
-- \[2024/01\] 複数モデル、複数マシン、複数カードの推論サービスをサポート。使用方法は[こちら](./docs/en/serving/proxy_server.md)を参照してください
+- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE)が[LMDeployサービングサービス](./docs/en/llm/api_server.md)とシームレスに統合されました
+- \[2024/01\] 複数モデル、複数マシン、複数カードの推論サービスをサポート。使用方法は[こちら](./docs/en/llm/proxy_server.md)を参照してください
 - \[2024/01\] [PyTorch推論エンジン](./docs/en/inference/pytorch.md)をサポートし、完全にPythonで開発されており、開発者の障壁を下げ、新機能や技術の迅速な実験を可能にします
 
 </details>
@@ -196,7 +196,7 @@ print(response)
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
 
-推論パイプラインに関する詳細情報は[こちら](./docs/en/inference/pipeline.md)を参照してください。
+推論パイプラインに関する詳細情報は[こちら](./docs/en/llm/pipeline.md)を参照してください。
 
 # チュートリアル
 
@@ -205,10 +205,10 @@ LMDeployの基本的な使用方法については、[getting_started](./docs/en
 詳細なユーザーガイドと高度なガイドについては、[チュートリアル](https://lmdeploy.readthedocs.io/en/latest/)を参照してください：
 
 - ユーザーガイド
-  - [LLM推論パイプライン](./docs/en/inference/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
-  - [VLM推論パイプライン](./docs/en/inference/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
-  - [LLMサービング](docs/en/serving/api_server.md)
-  - [VLMサービング](docs/en/serving/api_server_vl.md)
+  - [LLM推論パイプライン](./docs/en/llm/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
+  - [VLM推論パイプライン](./docs/en/multi_modal/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
+  - [LLMサービング](docs/en/llm/api_server.md)
+  - [VLMサービング](docs/en/llm/api_server_vl.md)
   - [量子化](docs/en/quantization)
 - 高度なガイド
   - [推論エンジン - TurboMind](docs/en/inference/turbomind.md)
@@ -217,7 +217,7 @@ LMDeployの基本的な使用方法については、[getting_started](./docs/en
   - [新しいモデルの追加](docs/en/advance/pytorch_new_model.md)
   - gemmチューニング
   - [長文推論](docs/en/advance/long_context.md)
-  - [マルチモデル推論サービス](docs/en/serving/proxy_server.md)
+  - [マルチモデル推論サービス](docs/en/llm/proxy_server.md)
 
 # サードパーティプロジェクト
 
