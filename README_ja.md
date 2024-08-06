@@ -1,4 +1,5 @@
-# LMDeploy
+<div align="center">
+  <img src="docs/en/_static/image/lmdeploy-logo.svg" width="450"/>
 
 [![PyPI](https://img.shields.io/pypi/v/lmdeploy)](https://pypi.org/project/lmdeploy)
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/lmdeploy)
@@ -11,6 +12,14 @@
 [🤔Reporting Issues](https://github.com/InternLM/lmdeploy/issues/new/choose)
 
 [English](README.md) | [简体中文](README_zh-CN.md) | 日本語
+
+👋 join us on [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=wechat&label=WeChat)](https://cdn.vansin.top/internlm/lmdeploy.jpg)
+[![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=twitter&label=Twitter)](https://twitter.com/intern_lm)
+[![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=discord&label=Discord)](https://discord.gg/xa29JuW87d)
+
+</div>
+
+______________________________________________________________________
 
 ## 最新ニュース 🎉
 
