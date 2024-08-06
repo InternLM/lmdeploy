@@ -10,6 +10,10 @@ on:
       - "benchmark/**"
       - "tests/**"
       - "**/*.md"
+      - "autotest/**"
+      - "builder/**"
+      - "k8s/**"
+
     branches:
       - main
     tags:
@@ -31,9 +35,13 @@ jobs:
   publish_docker_image:
     runs-on: ubuntu-latest
     environment: 'prod'
+    strategy:
+      matrix:
+        cuda_version: [cu12, cu11]
     env:
+      CUDA_VERSION: ${{ matrix.cuda_version }}
       TAG_PREFIX: "openmmlab/lmdeploy"
-      TAG: "openmmlab/lmdeploy:latest"
+      TAG: "openmmlab/lmdeploy:latest-${{matrix.cuda_version}}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -64,18 +72,25 @@ jobs:
       - name: Update docker TAG from workflow input
         if: github.event_name == 'workflow_dispatch'
         run: |
-          export TAG=$TAG_PREFIX:${{github.event.inputs.image_tag}}
+          export TAG=$TAG_PREFIX:${{github.event.inputs.image_tag}}-${CUDA_VERSION}
           echo $TAG
           echo "TAG=${TAG}" >> $GITHUB_ENV
       - name: Build and push Docker image
         run: |
           echo $TAG
-          docker build . -f docker/Dockerfile -t ${TAG} --no-cache
+          docker build . -f docker/Dockerfile -t ${TAG} --build-arg CUDA_VERSION=${CUDA_VERSION}
           docker push $TAG
+      - name: Push docker image latest-cu12 as latest
+        if: endsWith(env.TAG, 'latest-cu12') == true
+        run: |
+          export latest_TAG=${TAG_PREFIX}:latest
+          echo $latest_TAG
+          docker tag $TAG $latest_TAG
+          docker push $latest_TAG
       - name: Push docker image with released tag
         if: startsWith(github.ref, 'refs/tags/') == true
         run: |
-          export RELEASE_TAG=${TAG_PREFIX}:${{github.ref_name}}
+          export RELEASE_TAG=${TAG_PREFIX}:${{github.ref_name}}-${CUDA_VERSION}
           echo $RELEASE_TAG
           docker tag $TAG $RELEASE_TAG
           docker push $RELEASE_TAG
