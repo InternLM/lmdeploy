@@ -315,7 +315,6 @@ pt_internlm2_5_7b_chat = dict(
     run_cfg=run_cfg_tp1_template,
     end_str='<|im_end|>')
 
-
 # ===== Configs for internlm/internlm2_5_20b_chat =====
 tb_internlm2_5_20b_chat = dict(
     type=TurboMindModelwithChatTemplate,
