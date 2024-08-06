@@ -27,7 +27,7 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-有关 pipeline 的详细使用说明，请参考[这里](./inference/pipeline.md)
+有关 pipeline 的详细使用说明，请参考[这里](llm/pipeline.md)
 
 ## 推理服务
 

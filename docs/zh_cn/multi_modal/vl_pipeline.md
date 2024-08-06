@@ -1,6 +1,6 @@
 # VLM 离线推理 pipeline
 
-LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单好用的 pipeline。它的用法与大语言模型（LLM）推理 [pipeline](./pipeline.md) 类似。
+LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单好用的 pipeline。它的用法与大语言模型（LLM）推理 [pipeline](../llm/pipeline.md) 类似。
 
 目前，VLM pipeline 支持以下模型：
 

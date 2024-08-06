@@ -56,7 +56,6 @@ Documentation
    :maxdepth: 1
    :caption: Large Language Models(LLMs) Deployment
 
-   llm/introduction.md
    llm/pipeline.md
    llm/api_server.md
    llm/api_server_tools.md
@@ -68,7 +67,6 @@ Documentation
    :maxdepth: 1
    :caption: Vision-Language Models(VLMs) Deployment
 
-   multi_modal/introduction.md
    multi_modal/vl_pipeline.md
    multi_modal/api_server_vl.md
    multi_modal/index.rst
