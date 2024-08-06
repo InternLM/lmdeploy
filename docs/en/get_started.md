@@ -48,8 +48,8 @@ pipe = pipeline('internlm/internlm2_5-7b-chat',
 ```
 
 ```{note}
-The parameter "cache_max_entry_count" significantly influences the GPU memory occupation. It means the proportion of FREE GPU memory occupied by the k/v cache after loading the model weight.
-The default value is 0.8. Once allocated, the K/V cache memory is reused repeatedly, which is why it is common to observe that the built pipeline consumes a substantial amount of GPU memory.
+The parameter "cache_max_entry_count" significantly influences the GPU memory usage. It means the proportion of FREE GPU memory occupied by the K/V cache after the model weights are loaded.
+The default value is 0.8. Once allocated, the K/V cache memory is reused repeatedly, which is why it is common to observe that the built pipeline and the api_server mentioned later in the next consumes a substantial amount of GPU memory.
 If you encounter an Out-of-Memory(OOM) error, you may need to consider lowering the value of cache_max_entry_count“.
 ```
 
@@ -152,10 +152,13 @@ We encourage you to refer to the detailed guide for more comprehensive informati
 lmdeploy serve api_server OpenGVLab/InternVL2-8B
 ```
 
-LMDeploy reuses the vision component from upstream VLM repository. Consequently, Serving VLMs can vary, as the upstream VLM repo might introduce different dependencies and offer distinct functionalities.
-We invite users to explore the serving method of each supported VLM from [here](multi_modal)
+```{note}
+LMDeploy reuses the vision component from upstream VLM repositories. Each upstream VLM model may have different dependencies.
+Consequently, LMDeploy has decided not to include the dependencies of the upstream VLM repositories in its own dependency list.
+If you encounter an "ImportError" when using LMDeploy for inference with VLM models, please install the relevant dependencies yourself.
+```
 
-You can access the VLM service in a manner similar to how you would access the `gptv4` service by modifying the `api_key` and `base_url` parameters:
+After the service is launched successfully, you can access the VLM service in a manner similar to how you would access the `gptv4` service by modifying the `api_key` and `base_url` parameters:
 
 ```python
 from openai import OpenAI

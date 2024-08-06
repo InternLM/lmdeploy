@@ -12,9 +12,11 @@ It supports LLMs and VLMs deployment on both Linux and Windows platform, with mi
 
 ## Install with pip (Recommend)
 
-You can install lmdeploy using pip (python 3.8 - 3.12) as follows:
+It is recommended installing lmdeploy using pip in a conda environment (python 3.8 - 3.12):
 
 ```shell
+conda create -n lmdeploy python=3.8 -y
+conda activate lmdeploy
 pip install lmdeploy
 ```
 
