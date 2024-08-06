@@ -208,7 +208,7 @@ LMDeployの基本的な使用方法については、[getting_started](./docs/en
   - [LLM推論パイプライン](./docs/en/llm/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
   - [VLM推論パイプライン](./docs/en/multi_modal/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
   - [LLMサービング](docs/en/llm/api_server.md)
-  - [VLMサービング](docs/en/llm/api_server_vl.md)
+  - [VLMサービング](docs/en/multi_modal/api_server_vl.md)
   - [量子化](docs/en/quantization)
 - 高度なガイド
   - [推論エンジン - TurboMind](docs/en/inference/turbomind.md)
