@@ -156,7 +156,7 @@ class TurboMind:
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
         if engine_config is None:
-            logger.warning('input engine config is None, using the defult')
+            logger.warning('input engine config is None, using the default')
             engine_config = TurbomindEngineConfig()
         assert engine_config.model_format in SUPPORTED_FORMATS, \
             f'The model format should be in {SUPPORTED_FORMATS}'
