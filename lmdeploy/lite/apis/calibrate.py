@@ -23,7 +23,8 @@ LAYER_TYPE_MAP = {
     'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
-    'ChatGLMForConditionalGeneration': 'GLMBlock'
+    'ChatGLMForConditionalGeneration': 'GLMBlock',
+    'InternVisionModel': 'InternVisionEncoderLayer', # internvl2 vision
 }
 
 NORM_TYPE_MAP = {
@@ -37,7 +38,8 @@ NORM_TYPE_MAP = {
     'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
-    'ChatGLMForConditionalGeneration': 'RMSNorm'
+    'ChatGLMForConditionalGeneration': 'RMSNorm',
+    'InternVisionModel': 'LayerNorm', # internvl2 vision
 }
 
 HEAD_NAME_MAP = {
@@ -129,6 +131,19 @@ def _prepare_for_calibrate(model: nn.Module,
             print(f'Move {mod_name} to GPU.')
 
 
+def load_images(image_dir: str):
+    import os
+    assert os.path.exists(image_dir)
+    images = []
+    for file in os.listdir(image_dir):
+        for suffix in ['.jpg', '.png', '.jpeg', '.bmp']:
+            if file.endswith(suffix):
+                import PIL
+                images.append(PIL.Image.open(os.path.join(image_dir, file)))
+    assert len(images)
+    return images
+
+
 def calibrate(model: str,
               calib_dataset: str = 'ptb',
               calib_samples: int = 128,
@@ -172,6 +187,7 @@ def calibrate(model: str,
         'Support only `c4`, `ptb`, `wikitext2` or `pileval`.'
 
     model_type, _ = get_task(model)
+    vl_model, images = None, None
     if model_type == 'llm':
         # Load tokenizer and configuration
         tokenizer = AutoTokenizer.from_pretrained(model,
@@ -181,10 +197,11 @@ def calibrate(model: str,
         model = load_hf_from_pretrained(model,
                                         torch_dtype=torch.float16,
                                         trust_remote_code=True)
-        vl_model = None
+        
     elif model_type == 'vlm':
         from lmdeploy.vl.model.builder import vl_model_with_tokenizer
         vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model)
+        images = load_images('/home/dongchunyu/codes/lmdeploy/scripts')
 
     model.config.use_cache = False
     model_type = type(model).__name__
@@ -208,7 +225,13 @@ def calibrate(model: str,
 
     _prepare_for_calibrate(model, layer_type,
                            HEAD_NAME_MAP[type(model).__name__], device)
+    vl_model.vl_model.vision_model.to('cuda')
+    vl_model.vl_model.mlp1.to('cuda')
 
+    vision_layer_type = LAYER_TYPE_MAP[type(vl_model.vl_model.vision_model).__name__]
+    # norm_type = NORM_TYPE_MAP[type(vl_model.vl_model.vision_model).__name__]
+    # _prepare_for_calibrate(vl_model.vl_model or model, layer_type,
+    #                        '', device)
     print('Loading calibrate dataset ...')
     calib_loader, _ = get_calib_loaders(calib_dataset,
                                         tokenizer,
@@ -217,7 +240,7 @@ def calibrate(model: str,
 
     # Initialize calibration context
     if search_scale:
-        calib_ctx = CalibrationContextV2(model,
+        calib_ctx = CalibrationContextV2(vl_model or model,
                                          tokenizer,
                                          layer_type=layer_type,
                                          norm_type=norm_type,
@@ -227,9 +250,10 @@ def calibrate(model: str,
                                          batch_size=batch_size,
                                          search_scale=search_scale)
     else:
-        calib_ctx = CalibrationContext(model,
+        calib_ctx = CalibrationContext(vl_model,
                                        tokenizer,
                                        layer_type=layer_type,
+                                       vision_layer_type=vision_layer_type,
                                        norm_type=norm_type,
                                        batch_size=batch_size,
                                        device=device)
@@ -239,6 +263,7 @@ def calibrate(model: str,
             data if isinstance(data, torch.Tensor) else data[0]
             for data in calib_loader
         ]).to(device)
+        calib_ctx.calibrate_vision(images)
         calib_ctx.calibrate(all_data)
 
     # Create work directory if not exists
@@ -246,7 +271,7 @@ def calibrate(model: str,
     work_dir.mkdir(parents=True, exist_ok=True)
     calib_ctx.export(work_dir)
 
-    return vl_model, model, tokenizer, work_dir
+    return vl_model.vl_model, model, tokenizer, work_dir
 
 
 if __name__ == '__main__':

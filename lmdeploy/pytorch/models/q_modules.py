@@ -66,6 +66,46 @@ class QRMSNorm(nn.Module):
         return QTensor(hidden_states_quant, rms_scale)
 
 
+class QLayerNorm(nn.Module):
+    """It performs traditional RMS normalization and then quantizes the output
+    to 8-bit integers."""
+
+    def __init__(self, normalized_shape, bias: bool = True, eps=1e-6):
+        super().__init__()
+        self.normalized_shape = tuple(normalized_shape)
+        self.weight = nn.Parameter(torch.empty(self.normalized_shape))
+        self.variance_epsilon = eps
+        if bias:
+            self.bias = nn.Parameter(torch.empty(self.normalized_shape))
+
+    @classmethod
+    def from_float(cls, mod: nn.Module, initialization: bool = True):
+        """Class method to create a QRMSNorm instance from a floating-point
+        module.
+
+        `initialization = True` for real init.
+        `initialization = False` for dummy init.
+        """
+        normalized_shape = mod.normalized_shape
+        eps = mod.eps
+        bias = mod.bias is not None
+        q_mod = cls(normalized_shape, bias, eps)
+        if initialization:
+            q_mod.weight = nn.Parameter(mod.weight.detach())
+            if bias:
+                q_mod.bias = nn.Parameter(mod.bias.detach())
+        return q_mod
+
+    def forward(self, hidden_states):
+        import torch.nn.functional as F
+        out = F.layer_norm(hidden_states, self.normalized_shape, self.weight, self.bias, self.variance_epsilon)
+        scale = torch.amax(out.abs(), dim=-1)/127
+        out = out / scale.unsqueeze(-1)
+        out = torch.round(out / scale.unsqueeze(-1)).to(torch.int8)
+
+        return QTensor(out, scale)
+
+
 class QLinear(nn.Module):
     """A Linear layer that operates on quantized inputs and weights.
 

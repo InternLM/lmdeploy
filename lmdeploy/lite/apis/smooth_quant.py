@@ -12,24 +12,8 @@ from lmdeploy.lite.apis.calibrate import calibrate
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             awq_layers, smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
-from lmdeploy.pytorch.models import QLinear, QRMSNorm
-
-LAYER_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMDecoderLayer',
-    'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
-    'QWenLMHeadModel': 'QWenBlock',
-    'BaiChuanForCausalLM': 'DecoderLayer',
-    'LlamaForCausalLM': 'LlamaDecoderLayer',
-    'ChatGLMForConditionalGeneration': 'GLMBlock',
-}
-NORM_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMRMSNorm',
-    'InternLM2ForCausalLM': 'InternLM2RMSNorm',
-    'QWenLMHeadModel': 'RMSNorm',
-    'BaiChuanForCausalLM': 'RMSNorm',
-    'LlamaForCausalLM': 'LlamaRMSNorm',
-    'ChatGLMForConditionalGeneration': 'RMSNorm',
-}
+from lmdeploy.pytorch.models import QLinear, QRMSNorm, QLayerNorm
+from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP
 
 LMDEPLOY_ROOT = lmdeploy.__path__[0]
 
@@ -110,11 +94,16 @@ def smooth_quant(model: str,
                 'properly.')
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
+    vision_layer_type = LAYER_TYPE_MAP[type(vl_model.vision_model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
+    vision_norm_type = NORM_TYPE_MAP[type(vl_model.vision_model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]
+    fc2fcs.update(FC_FCS_MAP[vision_layer_type])
     norm2fcs = NORM_FCS_MAP[layer_type]
+    norm2fcs.update(NORM_FCS_MAP[vision_layer_type])
 
-    layers = collect_target_modules(model, layer_type)
+    layers = collect_target_modules(vl_model, layer_type)
+    layers.update(collect_target_modules(vl_model, vision_layer_type))
     fcs = {}
     for l_name, layer in layers.items():
         name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
@@ -128,13 +117,14 @@ def smooth_quant(model: str,
     else:
         smooth_layers(layers, fc2fcs, norm2fcs, act_scales, -1, device)
 
-    rmsnorms = collect_target_modules(model, norm_type)
+    rmsnorms = collect_target_modules(vl_model, norm_type)
+    layer_norms = collect_target_modules(vl_model, vision_norm_type)
 
     for name, linear in fcs.items():
         linear.to(device)
         q_linear = QLinear.from_float(linear)
         parent_name, _, child_name = name.rpartition('.')
-        parent = model.get_submodule(parent_name)
+        parent = vl_model.get_submodule(parent_name)
         setattr(parent, child_name, q_linear)
         linear.to('cpu')
 
@@ -142,7 +132,14 @@ def smooth_quant(model: str,
         norm.to(device)
         q_norm = QRMSNorm.from_float(norm)
         parent_name, _, child_name = name.rpartition('.')
-        parent = model.get_submodule(parent_name)
+        parent = vl_model.get_submodule(parent_name)
+        setattr(parent, child_name, q_norm)
+        norm.to('cpu')
+    for name, norm in layer_norms.items():
+        norm.to(device)
+        q_norm = QLayerNorm.from_float(norm)
+        parent_name, _, child_name = name.rpartition('.')
+        parent = vl_model.get_submodule(parent_name)
         setattr(parent, child_name, q_norm)
         norm.to('cpu')
 

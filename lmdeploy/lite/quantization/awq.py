@@ -35,6 +35,10 @@ NORM_FCS_MAP = {
     'GLMBlock': {
         'input_layernorm': ['self_attention.query_key_value'],
         'post_attention_layernorm': ['mlp.dense_h_to_4h']
+    },
+    'InternVisionEncoderLayer':{
+        'norm1':['attn.qkv'],
+        'norm2':['mlp.fc1']
     }
 }
 
@@ -65,6 +69,9 @@ FC_FCS_MAP = {
     'GLMBlock': {
         # 'self_attention.query_key_value': ['self_attention.dense']
         # 'mlp.dense_h_to_4h': ['mlp.dense_4h_to_h']
+    },
+    'InternVisionEncoderLayer':{
+        'mlp.fc1': ['mlp.fc2']
     }
 }
 
@@ -263,17 +270,19 @@ def smooth_layers(layers,
         for ln_name, fc_names in norm2fcs.items():
             a_name = [f'{l_name}.{n}' for n in fc_names][0]
 
-            ln = layer.get_submodule(ln_name)
-            fcs = [layer.get_submodule(n) for n in fc_names]
-            smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size)
+            if hasattr(layer, ln_name):
+                ln = layer.get_submodule(ln_name)
+                fcs = [layer.get_submodule(n) for n in fc_names]
+                smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size)
 
         for f_name, fc_names in fc2fcs.items():
             a_name = [f'{l_name}.{n}' for n in fc_names][0]
 
-            fc = layer.get_submodule(f_name)
-            fcs = [layer.get_submodule(n) for n in fc_names]
+            if hasattr(layer, f_name):
+                fc = layer.get_submodule(f_name)
+                fcs = [layer.get_submodule(n) for n in fc_names]
 
-            smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size)
+                smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size)
 
         layer.to('cpu')
         print(f'{l_name} smooth weight done.')

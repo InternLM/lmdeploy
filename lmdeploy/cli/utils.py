@@ -331,7 +331,8 @@ class ArgumentHelper:
 
         return parser.add_argument(
             '--search-scale',
-            type=bool,
+            action='store_true',
+            required=False,
             default=False,
             help=\
             'Whether search scale ratio. Default to False, which means only smooth quant with 0.5 ratio will be applied'  # noqa

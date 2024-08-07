@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from functools import partial
+from opcode import hasconst
 from typing import Union
 
 import torch
@@ -35,6 +36,7 @@ class CalibrationContext():
                  tokenizer: PreTrainedTokenizer,
                  layer_type: Union[str, type],
                  norm_type: Union[str, type],
+                 vision_layer_type: Union[str, type] = None,
                  batch_size: int = 1,
                  device: str = 'cuda',
                  **kwargs) -> None:
@@ -52,43 +54,39 @@ class CalibrationContext():
         self.layer_type = layer_type
         self.norm_type = norm_type
         self.batch_size = batch_size
-
-        num_kv_heads, num_attn_heads = self._guess_num_heads(model)
-        self.num_kv_heads = num_kv_heads
-        self.head_dim = model.config.hidden_size // num_attn_heads
         self.model = model
 
         self.tokenizer = tokenizer
+        if hasattr(self.model, 'vl_model'):
+            # Collect modules to observe
+            self.name2layer = collect_target_modules(self.model.vl_model, layer_type)
+            self.name2layer.update(collect_target_modules(self.model.vl_model, vision_layer_type))
+            self.name2fc = {}
+            for l_name, layer in self.name2layer.items():
+                name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
+                self.name2fc.update(name2fc)
+            self.name2norm = collect_target_modules(self.model.vl_model, norm_type)
 
-        # Collect modules to observe
-        self.name2layer = collect_target_modules(self.model, layer_type)
-        self.name2fc = {}
-        for l_name, layer in self.name2layer.items():
-            name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
-            self.name2fc.update(name2fc)
-        self.name2norm = collect_target_modules(self.model, norm_type)
+            maps = bimap_name_mod([self.name2layer, self.name2fc, self.name2norm])
+            self.name2mod, self.mod2name = maps
+        else:
+            # Collect modules to observe
+            self.name2layer = collect_target_modules(self.model, layer_type)
+            self.name2fc = {}
+            for l_name, layer in self.name2layer.items():
+                name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
+                self.name2fc.update(name2fc)
+            self.name2norm = collect_target_modules(self.model, norm_type)
 
-        maps = bimap_name_mod([self.name2layer, self.name2fc, self.name2norm])
-        self.name2mod, self.mod2name = maps
+            maps = bimap_name_mod([self.name2layer, self.name2fc, self.name2norm])
+            self.name2mod, self.mod2name = maps
 
         # Initialize observers
         self._init_input_observers(self.name2fc)
         self._init_output_observers(self.name2norm)
         self._init_output_observers(self.name2fc)
-        self._init_kv_observers(self.name2layer)
 
         self.device = device
-
-    def _guess_num_heads(self, model):
-
-        if hasattr(model.config, 'num_key_value_heads'):
-            num_kv_heads = model.config.num_key_value_heads
-        else:
-            num_kv_heads = model.config.num_attention_heads
-
-        num_attn_heads = model.config.num_attention_heads
-
-        return num_kv_heads, num_attn_heads
 
     def _init_input_observers(self, name2mod):
         """Initialize input observers for given modules."""
@@ -101,14 +99,6 @@ class CalibrationContext():
         for name, mod in name2mod.items():
             obs = ActivationObserver(mod.weight.size(0))
             obs.global_available(name, group=self.out_obs_group)
-
-    def _init_kv_observers(self, name2mod):
-        """Initialize KV observers for given modules."""
-        for name in name2mod.keys():
-            k_obs = KVCacheObserver(self.num_kv_heads, self.head_dim)
-            v_obs = KVCacheObserver(self.num_kv_heads, self.head_dim)
-            k_obs.global_available(name, group=self.key_obs_group)
-            v_obs.global_available(name, group=self.value_obs_group)
 
     def _insert_input_observers(self):
         """Insert input observers into the target modules.
@@ -221,27 +211,6 @@ class CalibrationContext():
             outputs_stats['absmean'][name] = obs.absmean_val
         return outputs_stats
 
-    def collect_kv_stats(self):
-        """Collect statistics (min, max, absmax values) of the observed keys
-        and values.
-
-        Returns a tuple of two dictionaries with these collected stats.
-        """
-        key_stats = {'max': {}, 'min': {}, 'absmax': {}}
-        obs_group = KVCacheObserver.find_group(self.key_obs_group)
-        for name, obs in obs_group.items():
-            key_stats['max'][name] = obs.max_val
-            key_stats['min'][name] = obs.min_val
-            key_stats['absmax'][name] = obs.absmax_val
-
-        value_stats = {'max': {}, 'min': {}, 'absmax': {}}
-        obs_group = KVCacheObserver.find_group(self.value_obs_group)
-        for name, obs in obs_group.items():
-            value_stats['max'][name] = obs.max_val
-            value_stats['min'][name] = obs.min_val
-            value_stats['absmax'][name] = obs.absmax_val
-        return key_stats, value_stats
-
     def export(self, out_dir):
         """Export the calibration statistics (inputs, outputs, keys and values)
         to specified directory.
@@ -259,14 +228,21 @@ class CalibrationContext():
 
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
-
-        if type(self.model).__name__ in ('QWenLMHeadModel',
+        self._wrap_decoder_layers()
+        if hasattr(self.model, 'vl_model'):
+            model = self.model.vl_model.language_model.model
+        elif type(self.model).__name__ in ('QWenLMHeadModel',
                                          'ChatGLMForConditionalGeneration'):
             model = self.model.transformer
         else:
             model = self.model.model
         with torch.inference_mode():
             _ = model(data.to(self.device))
+
+    def calibrate_vision(self, images):
+        """Forward pass through the model in inference mode with given images."""
+        with torch.inference_mode():
+            _ = self.model.forward(images)
 
     def __enter__(self):
         """Prepares the Calibration object for a 'with' statement by
@@ -280,7 +256,6 @@ class CalibrationContext():
 
         self._insert_input_observers()
         self._insert_output_observers()
-        self._wrap_decoder_layers()
 
     def __exit__(self, exc_type, exc_value, traceback):
         """Clean up after a 'with' statement by removing registered hooks,
