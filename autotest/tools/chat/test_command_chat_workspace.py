@@ -95,6 +95,7 @@ def test_workspace_base_tp2(config, cli_case_config, model, worker_id):
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.command_chat
+@pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize(
     'model',
