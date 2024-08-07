@@ -185,11 +185,14 @@ class PatchedVisionExpertAttention(nn.Module):
             kv_seq_length=kv_seq_length,
             max_q_seq_length=max_q_seq_length,
             block_offsets=block_offsets,
+            context=self.context.context
         )
 
         context_layer = query_states
         paged_attention_fwd(
             query_states,
+            key_states,
+            value_states,
             past_key_value[0],
             past_key_value[1],
             context_layer,
@@ -198,6 +201,7 @@ class PatchedVisionExpertAttention(nn.Module):
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
             max_seqlen=max_q_seq_length,
+            context=self.context.context
         )
         context_layer = context_layer.reshape(*hidden_states.shape[:-1], -1)
 
