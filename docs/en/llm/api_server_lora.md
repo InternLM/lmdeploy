@@ -1,4 +1,4 @@
-# Server S-LoRA
+# Serving LoRA
 
 ## Launch S-LoRA
 
