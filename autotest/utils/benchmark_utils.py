@@ -53,9 +53,11 @@ def generation_test(config,
     if is_smoke:
         run_config = ' -c 1 -ct 128 -pt 128'
 
-    cmd = ' '.join(
-        [command, run_config, '--tp', 
-         str(tp_num), get_max_cache_entry(model), '--csv', csv_path])
+    cmd = ' '.join([
+        command, run_config, '--tp',
+        str(tp_num),
+        get_max_cache_entry(model), '--csv', csv_path
+    ])
 
     with open(benchmark_log, 'w') as f:
         f.writelines('reproduce command: ' + cmd + '\n')
@@ -121,7 +123,8 @@ def throughput_test(config,
         cmd = ' '.join([
             command, '--concurrency',
             str(batch), run_config, '--tp',
-            str(tp_num), get_max_cache_entry(model), '--csv ', csv_path
+            str(tp_num),
+            get_max_cache_entry(model), '--csv ', csv_path
         ])
 
         with open(benchmark_log, 'w') as f:
@@ -218,8 +221,9 @@ def create_multi_level_directory(path):
     except FileExistsError:
         return
 
+
 def get_max_cache_entry(model):
-    if 'Llama-2' in model: 
+    if 'Llama-2' in model:
         return '--cache-max-entry-count 0.95'
     elif 'internlm2' in model:
         return '--cache-max-entry-count 0.9'

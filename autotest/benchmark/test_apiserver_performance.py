@@ -21,8 +21,9 @@ def prepare_environment(request, config, worker_id):
 def getModelList(tp_num):
     model_list = get_benchmark_model_list(tp_num, kvint_list=[4, 8])
     for model in model_list:
-        if 'Llama-2' in model: 
-            model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.95'
+        if 'Llama-2' in model:
+            model[
+                'extra'] = '--max-batch-size 256 --cache-max-entry-count 0.95'
         elif 'internlm2' in model:
             model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.9'
         else:

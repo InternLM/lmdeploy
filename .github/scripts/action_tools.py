@@ -223,7 +223,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         if not os.path.exists(output_csv):
             with open(output_csv, 'w') as f:
                 header = ','.join(['Model', 'Engine', 'Precision'] +
-                                  ['task_duration_ses'] + dataset_names)
+                                  ['task_duration_secs'] + dataset_names)
                 f.write(header + '\n')
                 if hf_res_row:
                     f.write(hf_res_row + '\n')
