@@ -47,7 +47,7 @@ jobs:
         run: |
           rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get install -y software-properties-common wget vim &&\
           add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
-          rapidjson-dev libgoogle-glog-dev gdb python3.10 python3.10-dev python3.10-venv \
+          ninja-build rapidjson-dev libgoogle-glog-dev gdb python3.10 python3.10-dev python3.10-venv \
           && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
           echo "PATH=/opt/py3/bin:$PATH" >> "$GITHUB_ENV"
       - name: Clone repository
@@ -55,20 +55,19 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
+          python3 -m pip install --upgrade pip setuptools==69.5.1
           python3 -m pip install torch==2.3.0 torchvision==0.18.0
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu123torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
       - name: Build lmdeploy
         run: |
-          python3 -m pip install cmake
-          python3 -m pip install -r requirements/build.txt
           cp /nvme/qa_test_models/offline_pkg/openmpi-4.1.5.tar.gz .
           tar xf openmpi-4.1.5.tar.gz && cd openmpi-4.1.5 && ./configure --prefix=/usr/local/openmpi
           make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
           export PATH=$PATH:/usr/local/openmpi/bin
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
-          python3 -m pip install packaging transformers_stream_generator transformers datasets openai einops timm decord
-          python3 -m pip install -r requirements.txt -r requirements/test.txt
+          python3 -m pip install cmake packaging wheel transformers_stream_generator transformers datasets openai einops timm decord
+          python3 -m pip install -r requirements.txt -r requirements/test.txt -r requirements/build.txt
           mkdir -p build && cd build &&\
           sh ../generate.sh &&\
           ninja -j$(nproc) && ninja install &&\
