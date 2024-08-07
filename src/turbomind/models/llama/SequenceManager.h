@@ -100,7 +100,7 @@ public:
         int swap_out;
     };
 
-    using AdjustInputCount = std::function<std::pair<int, int>(const Sequences&, const std::vector<int>&)>;
+    using AdjustInputCount = std::function<int(const Sequences&, const std::vector<int>&)>;
 
     [[nodiscard]] Outcome Materialize(Sequences                    sequences,
                                       std::vector<int>             context_lengths,

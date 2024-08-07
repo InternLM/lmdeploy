@@ -6,6 +6,7 @@
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include <cuda_runtime.h>
 
 namespace turbomind {
 
@@ -56,6 +57,8 @@ void UnifiedDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
                                       cublas_wrapper_,
                                       allocator_,
                                       is_free_buffer_after_forward_);
+
+    check_cuda_error(cudaEventCreateWithFlags(&ev_h_cu_x_, cudaEventDisableTiming));
 }
 
 template<typename T>
@@ -84,6 +87,7 @@ void UnifiedDecoder<T>::forwardSelfAttn(T*                             attn_io,
 template<typename T>
 UnifiedDecoder<T>::~UnifiedDecoder()
 {
+    check_cuda_error(cudaEventDestroy(ev_h_cu_x_));
     delete attn_layer_;
     delete ffn_layer_;
     freeBuffer();
@@ -124,6 +128,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     T* last_token_hidden_units = outputs->getPtr<T>("last_token_hidden_units");
 
     {  // compute cumulative lengths
+
         h_cu_k_len_ = h_cu_q_len_ + batch_size + 1;
         cu_k_len_   = cu_q_len_ + batch_size + 1;
 
@@ -136,6 +141,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
         check_cuda_error(
             cudaMemcpyAsync(cu_q_len_, h_cu_q_len_, 2 * sizeof(int) * (batch_size + 1), cudaMemcpyDefault, stream_));
+
+        check_cuda_error(cudaEventRecord(ev_h_cu_x_, stream_));
     }
 
     const int pf_offset = dc_batch_size;
@@ -241,6 +248,9 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     if (is_free_buffer_after_forward_) {
         freeBuffer();
     }
+
+    // Wait for `h_cu_q/k_len_` to be consumed
+    check_cuda_error(cudaEventSynchronize(ev_h_cu_x_));
 }
 
 #ifdef ENABLE_FP32

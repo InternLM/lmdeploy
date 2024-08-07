@@ -20,6 +20,7 @@ def test_convert(config, model, worker_id):
 
 @pytest.mark.order(5)
 @pytest.mark.convert
+@pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize(
     'model',

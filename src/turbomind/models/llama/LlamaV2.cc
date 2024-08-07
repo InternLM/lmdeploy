@@ -33,6 +33,7 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
@@ -64,6 +65,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     cudaStream_t                 stream,
                     cublasMMWrapper*             cublas_wrapper,
                     IAllocator*                  allocator,
+                    IAllocator*                  peer_alloctor,
                     bool                         is_free_buffer_after_forward,
                     cudaDeviceProp*              cuda_device_prop):
     head_num_(head_num),
@@ -84,6 +86,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     stream_(stream),
     cublas_wrapper_(cublas_wrapper),
     allocator_(allocator),
+    peer_allcator_(peer_alloctor),
     is_free_buffer_after_forward_(is_free_buffer_after_forward),
     cuda_device_prop_(cuda_device_prop),
     debug_(isDebug()),
@@ -357,6 +360,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                             tensor_para_.rank_,
                             tensor_para_,
                             stream_);
+            sync_check_cuda_error();
         }
         invokeTransposeAxis01(logits, local_logits, tensor_para_.world_size_, batch_size, local_vocab_size, stream_);
         sync_check_cuda_error();
