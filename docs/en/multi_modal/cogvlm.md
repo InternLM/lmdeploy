@@ -1,4 +1,4 @@
-# cogvlm
+# CogVLM
 
 ## Introduction
 

@@ -8,11 +8,7 @@ In this part, we are going to setup the environment for evaluation.
 
 ### Install lmdeploy
 
-Install lmdeploy through pip (python 3.8+). If you want to install from source, you can refer to [build.md](../build.md).
-
-```shell
-pip install lmdeploy
-```
+Please follow the [installation guide](../installation.md) to install lmdeploy.
 
 ### Install OpenCompass
 
