@@ -428,7 +428,8 @@ jobs:
         run: |
           pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --rerun 0 --alluredir=${{env.REPORT_DIR}} || true
           pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}}
       - name: Clear workfile
         if: always()
         run: |
@@ -501,6 +502,7 @@ jobs:
         if: always()
         run: |
           chmod -R 777 $REPORT_DIR
+          chmod -R 777 /nvme/qa_test_models/benchmark_reports/${{ github.run_id }}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
