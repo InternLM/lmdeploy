@@ -54,6 +54,7 @@ def test_hf_pytorch_chat_tp2(config, model, cli_case_config, worker_id):
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
+@pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
 def test_hf_pytorch_chat_pr(config, model, cli_case_config):
