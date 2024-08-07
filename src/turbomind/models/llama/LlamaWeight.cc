@@ -84,9 +84,10 @@ LlamaWeight<T>::~LlamaWeight()
 template<typename T>
 void LlamaWeight<T>::mallocWeights()
 {
-    deviceMalloc((T**)&pre_decoder_embedding_table, vocab_size_padded_ * hidden_units_);
+    FT_CHECK(vocab_size_padded_ % tensor_para_size_ == 0);
+    deviceMalloc((T**)&pre_decoder_embedding_table, vocab_size_padded_ * hidden_units_ / tensor_para_size_);
     deviceMalloc((T**)&output_norm_weight, hidden_units_);
-    deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_padded_);
+    deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_padded_ / tensor_para_size_);
 }
 
 template<typename T>
@@ -99,14 +100,14 @@ void LlamaWeight<T>::loadModel(std::string dir_path)
     dir_path += '/';
 
     loadWeightFromBin((T*)pre_decoder_embedding_table,
-                      {vocab_size_padded_ * hidden_units_},
+                      {vocab_size_padded_ * hidden_units_ / tensor_para_size_},
                       dir_path + "tok_embeddings.weight",
                       model_file_type);
 
     loadWeightFromBin((T*)output_norm_weight, {hidden_units_}, dir_path + "norm.weight", model_file_type);
 
     loadWeightFromBin((T*)post_decoder_embedding_kernel,
-                      {hidden_units_ * vocab_size_padded_},
+                      {hidden_units_ * vocab_size_padded_ / tensor_para_size_},
                       dir_path + "output.weight",
                       model_file_type);
 
