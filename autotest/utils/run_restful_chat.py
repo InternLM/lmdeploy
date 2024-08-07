@@ -5,6 +5,7 @@ import subprocess
 from time import sleep, time
 
 import allure
+import psutil
 from pytest import assume
 from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
@@ -92,7 +93,10 @@ def start_restful_api(config, param, model, model_path, backend_tpye,
 
 def stop_restful_api(pid, startRes, param):
     if pid > 0:
-        startRes.terminate()
+        parent = psutil.Process(pid)
+        for child in parent.children(recursive=True):
+            child.terminate()
+        parent.terminate()
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
         if modelscope:
@@ -110,8 +114,7 @@ def run_all_step(config,
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
-        if ('deepseek-coder' in model
-                or 'codellama' in model) and 'code' not in case:
+        if ('coder' in model or 'codellama' in model) and 'code' not in case:
             continue
 
         case_info = cases_info.get(case)
@@ -167,7 +170,8 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
 
         for output in api_client.chat_completions_v1(model=model_name,
                                                      messages=messages,
-                                                     top_k=1):
+                                                     top_k=1,
+                                                     max_tokens=256):
             output_message = output.get('choices')[0].get('message')
             messages.append(output_message)
 
@@ -215,7 +219,8 @@ def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
         for output in api_client.chat_interactive_v1(prompt=prompt,
                                                      interactive_mode=True,
                                                      session_id=random_chars,
-                                                     top_k=1):
+                                                     top_k=1,
+                                                     request_output_len=256):
             output_content = output.get('text')
             file.writelines('output:' + output_content + '\n')
 

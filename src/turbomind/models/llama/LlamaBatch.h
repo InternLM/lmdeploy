@@ -56,9 +56,7 @@ struct GenerationState {
 
     bool skip_init_sampling;
 
-    int max_input_count1;
-    int max_input_count2;
-
+    // min tokens per iter for satisfying `max_prefill_iters` constraint
     std::deque<int> min_input_count;
 
     int finished_count;
@@ -80,15 +78,15 @@ public:
 
     void ProcessInferRequests(const Requests& requests);
 
-    void AdjustMaxInputCount(GenerationState&                    g,
-                             const std::vector<const Sequence*>& sequences,
-                             const std::vector<int>&             context_length);
+    int AdjustMaxInputCount(GenerationState&                    g,
+                            const std::vector<const Sequence*>& sequences,
+                            const std::vector<int>&             context_length);
 
     void Initialize(GenerationState& g);
 
     void InitializeSampling(const GenerationState& g);
 
-    [[nodiscard]] bool Forward(GenerationState& g, int iter);
+    [[nodiscard]] bool Forward(GenerationState& g);
 
     [[nodiscard]] auto Finish(GenerationState& g) -> std::vector<Signal>;
 
@@ -189,6 +187,7 @@ private:
 
 private:
     const int  max_batch_size_;
+    const int  max_forward_token_num_;
     const int  max_context_token_num_;
     int        session_len_;
     const int  rank_;
@@ -289,6 +288,7 @@ private:
     cudaStream_t     stream_{};
     cublasMMWrapper* cublas_wrapper_{};
     IAllocator*      allocator_{};
+    IAllocator*      peer_allocator_{};
 
     std::thread internal_thread_;
 
@@ -302,7 +302,6 @@ private:
     int* h_output_ids_{};
 
     const int num_tokens_per_iter_;
-    const int extra_tokens_per_iter_;
     const int max_prefill_iters_;
 };
 

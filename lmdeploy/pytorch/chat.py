@@ -4,9 +4,11 @@ import os
 import random
 from typing import List, Optional
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
+from lmdeploy.utils import _get_and_verify_max_len
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -93,6 +95,9 @@ def run_chat(model_path: str,
         model = MODELS.get(model_name)()
     stop_words = _stop_words(model.stop_words, tokenizer)
 
+    _, model_config = get_model_arch(model_path)
+    session_len = _get_and_verify_max_len(model_config, None)
+
     while True:
         prompt = input_prompt(model_name)
         if prompt == 'exit':
@@ -105,9 +110,6 @@ def run_chat(model_path: str,
         else:
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt, nth_round == 1)
-            session_len = model.session_len
-            if session_len is None:
-                session_len = tm_model.session_len
             if step >= session_len:
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
@@ -143,7 +145,6 @@ def main(model_path: str,
          temperature: float = 0.8,
          repetition_penalty: float = 1.0,
          tp: int = 1,
-         stream_output: bool = True,
          adapter: str = None,
          trust_remote_code: bool = True,
          chat_template: str = None):
@@ -159,7 +160,6 @@ def main(model_path: str,
         temperature (float): sampling temperature.
         repetition_penalty (float): parameter to penalize repetition
         tp (int): GPU number used in tensor parallelism
-        stream_output (bool): indicator for streaming output or not
         adapter (str): path to lora adapter.
         trust_remote_code (bool): Trust remote code.
         chat_template (str): A JSON file or string that specifies the

@@ -128,7 +128,7 @@ __global__ void length_criterion(bool*           finished,
     }
     __syncthreads();
 
-    if (threadIdx.x == 0) {
+    if (threadIdx.x == 0 && should_stop) {
         finished_sum[0] = block_finished_count;
     }
 }
@@ -145,16 +145,17 @@ void invokeLengthCriterion(bool*           finished,
     // Check if we have attained the sequence length limit. If so, stop the sequence.
     // In addition, check if all sequences are stopped and return the result in should_stop
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-    dim3 block{min(512, uint32_t(batch_size * beam_width))};
+    dim3 block(std::min(512, batch_size * beam_width));
     dim3 grid{1};
     h_pinned_finished_sum_[0] = -1;
 
     length_criterion<<<grid, block, 0, stream>>>(
         finished, should_stop, h_pinned_finished_sum_, sequence_limit_length, batch_size, beam_width, step);
-    cudaStreamSynchronize(stream);
-    sync_check_cuda_error();
 
-    *should_stop = h_pinned_finished_sum_[0] == batch_size * beam_width;
+    if (should_stop) {
+        check_cuda_error(cudaStreamSynchronize(stream));
+        *should_stop = h_pinned_finished_sum_[0] == batch_size * beam_width;
+    }
 }
 
 }  // namespace turbomind

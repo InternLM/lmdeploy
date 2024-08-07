@@ -41,7 +41,7 @@ $$
 lmdeploy serve api_server internlm/internlm-7b
 ```
 
-如果你想改变 server 的端口，或者诸如推理引擎、最大批处理值等参数，请运行 `lmdeploy serve api_server -h` 或者阅读[这篇文档](../serving/api_server.md)，查看详细的参数说明。
+如果你想改变 server 的端口，或者诸如推理引擎、最大批处理值等参数，请运行 `lmdeploy serve api_server -h` 或者阅读[这篇文档](../llm/api_server.md)，查看详细的参数说明。
 
 ### 测速
 

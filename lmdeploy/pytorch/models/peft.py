@@ -60,7 +60,10 @@ class LoRALinear(torch.nn.Module):
 
         lora_input = self._make_packed_lora_input(x)
 
-        out_size = self.base_layer.weight.size(0)
+        if hasattr(self.base_layer, 'weight'):
+            out_size = self.base_layer.weight.size(0)
+        else:
+            out_size = self.base_layer.scales.size(1)
         if not lora_input.is_decoding:
             xa = mbgmm_a(lora_input.x,
                          lora_input.a_cache,
@@ -110,7 +113,11 @@ class LoRALinear(torch.nn.Module):
         lora_input = self._make_packed_lora_input(x)
         rank = dist.get_rank()
         world_size = dist.get_world_size()
-        out_size = self.base_layer.weight.size(0) // world_size
+        if hasattr(self.base_layer, 'weight'):
+            out_size = self.base_layer.weight.size(0)
+        else:
+            out_size = self.base_layer.scales.size(1)
+        out_size = out_size // world_size
         if not lora_input.is_decoding:
             xa = mbgmm_a(lora_input.x,
                          lora_input.a_cache,
@@ -172,7 +179,10 @@ class LoRALinear(torch.nn.Module):
 
         lora_input = self._make_packed_lora_input(x)
         world_size = dist.get_world_size()
-        out_size = self.base_layer.weight.size(0)
+        if hasattr(self.base_layer, 'weight'):
+            out_size = self.base_layer.weight.size(0)
+        else:
+            out_size = self.base_layer.scales.size(1)
         if not lora_input.is_decoding:
             xa = mbgmm_a(lora_input.x,
                          lora_input.a_cache,

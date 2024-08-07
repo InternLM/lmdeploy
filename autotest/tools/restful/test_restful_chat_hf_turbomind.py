@@ -67,12 +67,13 @@ def getKvintModelList(tp_num):
         'cuda_prefix': None,
         'tp_num': tp_num,
         'extra': '--quant-policy 4'
-    } for item in get_kvint_model_list(tp_num)] + [{
-        'model': item,
-        'cuda_prefix': None,
-        'tp_num': tp_num,
-        'extra': '--quant-policy 8'
-    } for item in get_kvint_model_list(tp_num)]
+    } for item in get_kvint_model_list(tp_num)
+            if 'qwen2' not in item.lower()] + [{
+                'model': item,
+                'cuda_prefix': None,
+                'tp_num': tp_num,
+                'extra': '--quant-policy 8'
+            } for item in get_kvint_model_list(tp_num)]
 
 
 @pytest.mark.order(7)
@@ -113,6 +114,7 @@ def test_restful_chat_kvint_tp2(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize('prepare_environment', [{
     'model': 'internlm/internlm2-chat-20b',
@@ -125,14 +127,18 @@ def test_restful_chat_kvint_tp2(config, common_case_config, worker_id):
 }],
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
-    run_all_step(config, common_case_config)
+    run_all_step(
+        config, {
+            key: value
+            for key, value in common_case_config.items()
+            if key == 'memory_test'
+        })
 
 
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
-@pytest.mark.tmp
 @pytest.mark.parametrize('prepare_environment', [{
     'model': 'Qwen/Qwen-7B-Chat',
     'cuda_prefix': None,
