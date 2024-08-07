@@ -177,7 +177,7 @@ pip install lmdeploy
 v0.3.0以降、デフォルトのプリビルドパッケージは**CUDA 12**でコンパイルされています。ただし、CUDA 11+が必要な場合は、次のコマンドでlmdeployをインストールできます：
 
 ```shell
-export LMDEPLOY_VERSION=0.5.2
+export LMDEPLOY_VERSION=0.5.3
 export PYTHON_VERSION=38
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
