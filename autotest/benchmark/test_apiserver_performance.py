@@ -21,7 +21,12 @@ def prepare_environment(request, config, worker_id):
 def getModelList(tp_num):
     model_list = get_benchmark_model_list(tp_num, kvint_list=[4, 8])
     for model in model_list:
-        model['extra'] = '--max-batch-size 256'
+        if 'Llama-2' in model: 
+            model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.95'
+        elif 'internlm2' in model:
+            model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.9'
+        else:
+            model['extra'] = '--max-batch-size 256'
         model['cuda_prefix'] = None
     return model_list
 
@@ -83,14 +88,14 @@ def test_restful_tp4(config, run_id, prepare_environment, worker_id):
     'model': 'internlm/internlm2-chat-20b',
     'backend': 'pytorch',
     'tp_num': 2,
-    'extra': '--max-batch-size 256',
+    'extra': '--max-batch-size 256 --cache-max-entry-count 0.9',
     'cuda_prefix': None
 }, {
     'model': 'internlm/internlm2-chat-20b-inner-4bits',
     'backend': 'turbomind',
     'quant_policy': 0,
     'tp_num': 2,
-    'extra': '--max-batch-size 256',
+    'extra': '--max-batch-size 256 --cache-max-entry-count 0.9',
     'cuda_prefix': None
 }],
                          indirect=True)

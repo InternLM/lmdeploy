@@ -218,14 +218,13 @@ longtext_model:
     - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Meta-Llama-3-1-70B-Instruct
-    - internlm/internlm2-chat-20b
     - internlm/internlm2_5-7b-chat-1m
-    - Qwen/Qwen2-7B-Instruct
+    - internlm/internlm2-chat-20b
 
 benchmark_model:
+    - meta-llama/Llama-2-7b-chat-hf
     - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Meta-Llama-3-1-70B-Instruct
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
-    - Qwen/Qwen2-7B-Instruct
