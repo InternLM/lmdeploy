@@ -195,7 +195,7 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
           f'token_latency percentiles(50%,75%,95%,99%)(s): {percentiles}\n'
           f'throughput(output): {out_token_throughput} token/s\n'
           f'throughput(total): {total_token_throughput} token/s\n{"-" * 50}')
-    return tm_model.model_name, \
+    return model_path, \
         [first_token_latency_min, first_token_latency_max,
          first_token_latency_ave], \
         percentiles, out_token_throughput, total_token_throughput, \
