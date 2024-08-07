@@ -102,6 +102,7 @@ private:
     int                             quant_policy_;
     int                             group_size_;
     turbomind::LoraParams           lora_params_;
+    bool                            tie_word_embeddings_;
 
     // shared weights for each device
     std::vector<std::shared_ptr<ft::LlamaWeight<T>>> shared_weights_;

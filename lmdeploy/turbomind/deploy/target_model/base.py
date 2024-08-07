@@ -79,6 +79,7 @@ class TurbomindModelConfig:
     lora_max_wo_r: int = 0
     lora_rank_pattern: str = ''
     lora_scale_pattern: str = ''
+    tie_word_embeddings: bool = False
 
     @classmethod
     def from_dict(cls, env, allow_none=False):

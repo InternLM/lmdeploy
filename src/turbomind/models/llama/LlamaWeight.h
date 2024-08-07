@@ -39,6 +39,7 @@ struct LlamaWeight {
                 WeightType weight_type,
                 int        group_size,
                 LoraParams lora_params,
+                bool       tie_word_embeddings,
                 size_t     tensor_para_size,
                 size_t     tensor_para_rank);
 
@@ -59,6 +60,7 @@ struct LlamaWeight {
 private:
     void mallocWeights();
 
+    bool       tie_word_embeddings_{false};
     size_t     hidden_units_;
     size_t     inter_size_;
     size_t     vocab_size_;
