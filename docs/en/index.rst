@@ -41,14 +41,44 @@ Documentation
    :maxdepth: 2
    :caption: Get Started
 
+   installation.md
    get_started.md
 
-.. _build:
+.. _supported_models:
 .. toctree::
    :maxdepth: 1
-   :caption: Build
+   :caption: Models
 
-   build.md
+   supported_models/supported_models.md
+
+.. _llm_deployment:
+.. toctree::
+   :maxdepth: 1
+   :caption: Large Language Models(LLMs) Deployment
+
+   llm/pipeline.md
+   llm/api_server.md
+   llm/api_server_tools.md
+   llm/gradio.md
+   llm/proxy_server.md
+
+.. _vlm_deployment:
+.. toctree::
+   :maxdepth: 1
+   :caption: Vision-Language Models(VLMs) Deployment
+
+   multi_modal/vl_pipeline.md
+   multi_modal/api_server_vl.md
+   multi_modal/index.rst
+
+.. _quantization:
+.. toctree::
+   :maxdepth: 1
+   :caption: Quantization
+
+   quantization/w4a16.md
+   quantization/w8a8.md
+   quantization/kv_quant.md
 
 .. _benchmark:
 .. toctree::
@@ -60,41 +90,6 @@ Documentation
    benchmark/profile_api_server.md
    benchmark/evaluate_with_opencompass.md
 
-.. _supported_models:
-.. toctree::
-   :maxdepth: 1
-   :caption: Supported Models
-
-   supported_models/supported_models.md
-
-.. _inference:
-.. toctree::
-   :maxdepth: 1
-   :caption: Inference
-
-   inference/pipeline.md
-   inference/vl_pipeline.md
-
-.. _serving:
-.. toctree::
-   :maxdepth: 1
-   :caption: Serving
-
-   serving/api_server.md
-   serving/api_server_vl.md
-   serving/api_server_tools.md
-   serving/gradio.md
-   serving/proxy_server.md
-
-.. _quantization:
-.. toctree::
-   :maxdepth: 1
-   :caption: Quantization
-
-   quantization/w4a16.md
-   quantization/kv_quant.md
-   quantization/w8a8.md
-
 .. toctree::
    :maxdepth: 1
    :caption: Advanced Guide
@@ -105,7 +100,6 @@ Documentation
    advance/long_context.md
    advance/chat_template.md
    advance/debug_turbomind.md
-   serving/qos.md
 
 .. toctree::
    :maxdepth: 1

@@ -183,6 +183,8 @@ class LlamaModel(BaseInputModel):
         n_words = tk_model.vocab_size
         bos_id = tk_model.bos_token_id
         eos_id = tk_model.eos_token_id
+        # bos_id may be None
+        bos_id = bos_id or 0
         return n_words, bos_id, eos_id
 
     def model_info(self):
