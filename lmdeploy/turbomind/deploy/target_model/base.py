@@ -315,7 +315,7 @@ class BaseOutputModel(ABC):
 
         if emb is not None:
             emb = pad_weight(emb)
-            self.export_weight(emb, 'tok_embeddings.weight')
+            self.save_split(emb, 'tok_embeddings.weight', 0)
         if norm_weight is not None:
             self.export_weight(norm_weight, 'norm.weight')
         if output_weight is not None:

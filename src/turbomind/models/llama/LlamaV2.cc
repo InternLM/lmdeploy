@@ -252,18 +252,27 @@ void LlamaV2<T>::forwardUnified(T*               out,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
+    int table_length = vocab_size_padded_ / tensor_para_.world_size_;
+    int table_offset = table_length * tensor_para_.rank_;
     invokeInputIdsEmbeddingLookupPosEncoding(decoder_input,
                                              nullptr,  // processed somewhere else
                                              weights_->pre_decoder_embedding_table,
                                              static_cast<T*>(nullptr),
                                              pPromptTuningParam<T>{},
                                              input_ids,
+                                             table_offset,
+                                             table_length,
                                              0,  // only used for position encoding
                                              token_num,
                                              token_num,
                                              1,
                                              hidden_units_,
                                              stream_);
+    if (tensor_para_.world_size_ > 1) {
+        NcclGuard nccl_guard(tensor_para_, stream_);
+        ftNcclAllReduceSum(decoder_input, decoder_input, token_num * hidden_units_, tensor_para_, stream_);
+        sync_check_cuda_error();
+    }
 
     count_and_fix(decoder_input, token_num * hidden_units_, "embedding", 1);
 
