@@ -32,7 +32,7 @@ pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_V
 
 The release frequency of LMDeploy is approximately once or twice monthly. If your desired feature has been merged to LMDeploy main branch but hasn't been published yet, you can experiment with the nightly-built package available [here](https://github.com/zhyncs/lmdeploy-build) according to your CUDA and Python versions
 
-## Install from the source
+## Install from source
 
 If you are using the PyTorch Engine for inference, the installation from the source is quite simple:
 

@@ -168,19 +168,16 @@ LMDeployは、[TurboMind](./docs/en/inference/turbomind.md)および[PyTorch](./
 
 ## インストール
 
-pip（python 3.8+）を使用してlmdeployをインストールするか、[ソースからインストール](./docs/en/build.md)します
+クリーンなconda環境（Python 3.8 - 3.12）でlmdeployをインストールすることをお勧めします。
 
 ```shell
+conda create -n lmdeploy python=3.8 -y
+conda activate lmdeploy
 pip install lmdeploy
 ```
 
-v0.3.0以降、デフォルトのプリビルドパッケージは**CUDA 12**でコンパイルされています。ただし、CUDA 11+が必要な場合は、次のコマンドでlmdeployをインストールできます：
-
-```shell
-export LMDEPLOY_VERSION=0.5.3
-export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
-```
+v0.3.0から、デフォルトの事前構築済みパッケージはCUDA 12でコンパイルされています。
+CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/installation.md)参照してください。
 
 ## オフラインバッチ推論
 

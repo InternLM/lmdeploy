@@ -167,19 +167,16 @@ They differ in the types of supported models and the inference data type. Please
 
 ## Installation
 
-Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
+It is recommended installing lmdeploy using pip in a conda environment (python 3.8 - 3.12):
 
 ```shell
+conda create -n lmdeploy python=3.8 -y
+conda activate lmdeploy
 pip install lmdeploy
 ```
 
-Since v0.3.0, The default prebuilt package is compiled on **CUDA 12**. However, if CUDA 11+ is required, you can install lmdeploy by:
-
-```shell
-export LMDEPLOY_VERSION=0.5.3
-export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
-```
+The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
+For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](./docs/en/installation.md).
 
 ## Offline Batch Inference
 
