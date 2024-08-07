@@ -57,7 +57,7 @@ void gemm_bench(nvbench::state& state)
     else {
         state.add_global_memory_reads(sizeof(half) * (bs * k + n * k));
         state.exec([&](nvbench::launch&) {  //
-            // g_testbed->RunCublas();
+            get_test().RunCublas();
         });
     }
 }

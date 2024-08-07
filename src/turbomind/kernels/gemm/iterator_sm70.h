@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/gemm/cp_async.h"
 #include "src/turbomind/kernels/gemm/predicate.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
@@ -13,6 +14,25 @@
 #include <type_traits>
 
 namespace turbomind::gemm {
+
+template<typename T, int N>
+inline __device__ void _Ld(Array<T, N>& dst, const T* src)
+{
+    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
+
+    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
+        (uint4&)dst = __ldcs((const uint4*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
+        (uint2&)dst = __ldcs((const uint2*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
+        (uint&)dst = __ldcs((const uint*)src);
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>);
+    }
+}
 
 template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS, class Policy_>
 struct GmemIteratorSm70 {
@@ -174,7 +194,11 @@ struct GmemIteratorSm70 {
     {
         if (mask) {
             AccessType frag;
-            Ldg(frag, (const T*)src);
+            if constexpr (Policy_::kEvictPolicy != EvictPolicy::kEvictNormal) {
+                _Ld(frag, (const T*)src);
+            } else {
+                Ldg(frag, (const T*)src);
+            }
             Store(dst, frag);
         }
     }

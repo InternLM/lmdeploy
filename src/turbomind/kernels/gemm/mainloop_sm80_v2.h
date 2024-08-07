@@ -62,6 +62,15 @@ struct SmemIter {
     }
 };
 
+template<class A, class B, class U, class V>
+struct Binding {
+    A&         a;
+    B&         b;
+    U&         u;
+    V&         v;
+    __device__ Binding(A& a, B& b, U& u, V& v): a{a}, b{b}, u{u}, v{v} {}  // CTAD
+};
+
 template<class MMA,
          class OperandA_,
          class IteratorA_,
@@ -155,15 +164,6 @@ struct MainloopSm80_v2 {
         gmem_iter.smem_data_ = smem_iter.pointer;
         smem_iter.Advance();
     }
-
-    template<class A, class B, class U, class V>
-    struct Binding {
-        A&         a;
-        B&         b;
-        U&         u;
-        V&         v;
-        __device__ Binding(A& a, B& b, U& u, V& v): a{a}, b{b}, u{u}, v{v} {}  // CTAD
-    };
 
     // zip with
     template<class BindingG, class BindingS>
