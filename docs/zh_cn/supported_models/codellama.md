@@ -22,60 +22,103 @@
 
 ## 推理
 
-根据上述的模型和能力关系表，下载感兴趣的模型。执行如下的命令，把模型权重转成 turbomind 要求的格式：
-
-```shell
-# 安装 lmdeploy
-python3 -m pip install lmdeploy[all]
-
-# 转模型格式
-lmdeploy convert codellama /path/of/codellama/model
-```
-
-接下来，可参考如下章节，在控制台与 codellama 进行交互式对话。
-
-**注意**:
-
-- **transformers最低要求 v4.33.0**
-- `lmdeploy.turbomind.chat` 支持把代码块拷贝到控制台，**结束输出的方式为回车，再输入"!!"，再回车**。其他非 codellama 模型，仍然是两次回车结束输入。
+根据前文模型的能力表，在本小节中，我们讲通过具体的示例展示使用 CodeLlama 各能力的方法
 
 ### 代码续写
 
-```shell
-lmdeploy chat ./workspace --cap completion
+```python
+from lmdeploy import pipeline, GenerationConfig, ChatTemplateConfig
+
+pipe = pipeline('meta-llama/CodeLlama-7b-hf',
+                chat_template_config=ChatTemplateConfig(
+                    model_name='codellama',
+                    capability='completion'
+                ))
+
+response = pipe(
+    'import socket\n\ndef ping_exponential_backoff(host: str):',
+    gen_config=GenerationConfig(
+        top_k=10,
+        temperature=0.1,
+        top_p=0.95
+    )
+)
+print(response.text)
 ```
 
 ### 代码填空
 
-```shell
-lmdeploy chat ./workspace --cap infilling
-```
+```python
+from lmdeploy import pipeline, GenerationConfig, ChatTemplateConfig
 
-输入的代码块中要包含 `<FILL>`，比如：
+pipe = pipeline('meta-llama/CodeLlama-7b-hf',
+                chat_template_config=ChatTemplateConfig(
+                    model_name='codellama',
+                    capability='infilling'
+                ))
 
-```
+prompt = """
 def remove_non_ascii(s: str) -> str:
-    """ <FILL>
+    \"\"\"
+    <FILL>
+    \"\"\"
     return result
+"""
+response = pipe(
+    prompt,
+    gen_config=GenerationConfig(
+        top_k=10,
+        temperature=0.1,
+        top_p=0.95,
+        max_new_tokens=500
+    )
+)
+print(response.text)
 ```
-
-`turbomind.chat` 输出的代码即是要填到 `<FILL>` 中的内容
 
 ### 对话
 
-```
-lmdeploy chat ./workspace --cap chat --meta-instruction "Provide answers in Python"
-```
+```python
+from lmdeploy import pipeline, GenerationConfig, ChatTemplateConfig
 
-可以把 `--meta-instruct` 的指令换成 codellama 支持的其他变成语言。
+pipe = pipeline('meta-llama/CodeLlama-7b-Instruct-hf',
+                chat_template_config=ChatTemplateConfig(
+                    model_name='codellama',
+                    capability='chat'
+                ))
+
+response = pipe(
+    'implement quick sort in C++',
+    gen_config=GenerationConfig(
+        top_k=10,
+        temperature=0.1,
+        top_p=0.95
+    )
+)
+print(response.text)
+```
 
 ### Python 专项
 
-```
-lmdeploy chat ./workspace --cap python
-```
+```python
+from lmdeploy import pipeline, GenerationConfig, ChatTemplateConfig
 
-建议这里部署 Python 微调模型
+pipe = pipeline('meta-llama/CodeLlama-7b-Python-hf',
+                chat_template_config=ChatTemplateConfig(
+                    model_name='codellama',
+                    capability='python'
+                ))
+
+response = pipe(
+    'implement quick sort',
+    gen_config=GenerationConfig(
+        top_k=10,
+        temperature=0.1,
+        top_p=0.95
+    )
+)
+print(response.text)
+```
 
 ## 量化
 
@@ -83,31 +126,40 @@ TBD
 
 ## 服务
 
-**目前，server 支持的是对话功能**，其余功能后续再加上。
+准备好对话模板文件，比如说“codellama.json”，参考如下示例，填写 CodeLlama 的能力：
 
-启动 sever 的方式是：
-
-```shell
-# --tp: 在 tensor parallel时，使用的GPU数量
-lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
+```json
+{
+    "model_name": "codellama",
+    "capability": "completion"
+}
 ```
 
-打开 `http://{server_ip}:{server_port}`，即可访问 swagger，查阅 RESTful API 的详细信息。
-
-你可以用命令行，在控制台与 server 通信：
+然后，启动推理服务：
 
 ```shell
-# api_server_url 就是 api_server 产生的，比如 http://localhost:23333
-lmdeploy serve api_client api_server_url
+lmdeploy serve api_server meta-llama/CodeLlama-7b-Instruct-hf --chat-template codellama.json
 ```
 
-或者，启动 gradio，在 webui 的聊天对话框中，与 codellama 交流：
+在服务启动成功后，可以通过`openai`客户端接口，访问服务：
 
-```shell
-# api_server_url 就是 api_server 产生的，比如 http://localhost:23333
-# server_ip 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
-lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
+```python
+from openai import OpenAI
+client = OpenAI(
+    api_key='YOUR_API_KEY',
+    base_url="http://0.0.0.0:23333/v1"
+)
+model_name = client.models.list().data[0].id
+response = client.chat.completions.create(
+  model=model_name,
+  messages=[
+    {"role": "user", "content": "import socket\n\ndef ping_exponential_backoff(host: str):"},
+  ],
+    temperature=0.1,
+    top_p=0.95,
+    max_tokens=500
+)
+print(response)
 ```
 
-关于 RESTful API的详细介绍，请参考[这份](../llm/api_server.md)文档。
+关于 api_server 的详细介绍，请参考[这份](../llm/api_server.md)文档。

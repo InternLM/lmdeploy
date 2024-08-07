@@ -22,60 +22,103 @@ The correspondence between the model and capabilities is:
 
 ## Inference
 
-Based on the above table, download the model that meets your requirements. Execute the following command to interact with the model in the console:
-
-```shell
-# install lmdeploy
-python3 -m pip install lmdeploy[all]
-
-# convert weight layout
-lmdeploy convert codellama /the/path/of/codellama/model
-```
-
-Then, you can communicate with codellama in consolo by following instructions in next sections
-
-**Note**:
-
-- minimum requirement of `transformers` is **v4.33.0**
-- lmdeploy supports copying code blocks to the console. But you have to press enter, input "!!" and press enter again to end the prompt. The way to input prompt for other supported models keeps unchanged, i.e., double pressing enter.
+Based on the above table, this section shows how to utilize CodeLlama's capabilities by examples
 
 ### Completion
 
-```shell
-lmdeploy chat ./workspace --cap completion
+```python
+from lmdeploy import pipeline, GenerationConfig, ChatTemplateConfig
+
+pipe = pipeline('meta-llama/CodeLlama-7b-hf',
+                chat_template_config=ChatTemplateConfig(
+                    model_name='codellama',
+                    capability='completion'
+                ))
+
+response = pipe(
+    'import socket\n\ndef ping_exponential_backoff(host: str):',
+    gen_config=GenerationConfig(
+        top_k=10,
+        temperature=0.1,
+        top_p=0.95
+    )
+)
+print(response.text)
 ```
 
 ### Infilling
 
-```shell
-lmdeploy chat ./workspace --cap infilling
-```
+```python
+from lmdeploy import pipeline, GenerationConfig, ChatTemplateConfig
 
-The input code is supposed to have a special placeholder `<FILL>`. For example,
+pipe = pipeline('meta-llama/CodeLlama-7b-hf',
+                chat_template_config=ChatTemplateConfig(
+                    model_name='codellama',
+                    capability='infilling'
+                ))
 
-```
+prompt = """
 def remove_non_ascii(s: str) -> str:
-    """ <FILL>
+    \"\"\"
+    <FILL>
+    \"\"\"
     return result
+"""
+response = pipe(
+    prompt,
+    gen_config=GenerationConfig(
+        top_k=10,
+        temperature=0.1,
+        top_p=0.95,
+        max_new_tokens=500
+    )
+)
+print(response.text)
 ```
-
-And the generated code piece by `turbomind.chat` is the one to be filled in `<FILL>`
 
 ### Chat
 
-```
-lmdeploy chat ./workspace --cap chat --meta-instruct "Provide answers in Python"
-```
+```python
+from lmdeploy import pipeline, GenerationConfig, ChatTemplateConfig
 
-`--meta-instruct` instruction can be changed to other coding languages as long as codellama supports it
+pipe = pipeline('meta-llama/CodeLlama-7b-Instruct-hf',
+                chat_template_config=ChatTemplateConfig(
+                    model_name='codellama',
+                    capability='chat'
+                ))
+
+response = pipe(
+    'implement quick sort in C++',
+    gen_config=GenerationConfig(
+        top_k=10,
+        temperature=0.1,
+        top_p=0.95
+    )
+)
+print(response.text)
+```
 
 ### Python specialist
 
-```
-lmdeploy chat ./workspace --cap python
-```
+```python
+from lmdeploy import pipeline, GenerationConfig, ChatTemplateConfig
 
-Python fine-tuned model is highly recommended when 'python specialist' capability is required.
+pipe = pipeline('meta-llama/CodeLlama-7b-Python-hf',
+                chat_template_config=ChatTemplateConfig(
+                    model_name='codellama',
+                    capability='python'
+                ))
+
+response = pipe(
+    'implement quick sort',
+    gen_config=GenerationConfig(
+        top_k=10,
+        temperature=0.1,
+        top_p=0.95
+    )
+)
+print(response.text)
+```
 
 ## Quantization
 
@@ -83,29 +126,40 @@ TBD
 
 ## Serving
 
-**LMDeploy server only supports `chat` capabllity**. The res ones are going to be supported soon.
+Prepare a chat template json file, for instance "codellama.json", with the following content:
 
-Launch inference server by:
-
-```shell
-# --tp: the number of GPUs used in tensor parallelism
-lmdeploy serve api_server ./workspace --server-name ${server_ip} --server-port ${server_port} --tp 1
+```json
+{
+    "model_name": "codellama",
+    "capability": "completion"
+}
 ```
 
-Then, you can communicate with it by command line,
+Then launch the service as follows:
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-lmdeploy serve api_client api_server_url
+lmdeploy serve api_server meta-llama/CodeLlama-7b-Instruct-hf --chat-template codellama.json
 ```
 
-or through webui after launching gradio,
+After the service is launched successfully, you can access the service with `openai` package:
 
-```shell
-# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
-# server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
-lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
+```python
+from openai import OpenAI
+client = OpenAI(
+    api_key='YOUR_API_KEY',
+    base_url="http://0.0.0.0:23333/v1"
+)
+model_name = client.models.list().data[0].id
+response = client.chat.completions.create(
+  model=model_name,
+  messages=[
+    {"role": "user", "content": "import socket\n\ndef ping_exponential_backoff(host: str):"},
+  ],
+    temperature=0.1,
+    top_p=0.95,
+    max_tokens=500
+)
+print(response)
 ```
 
-Regarding the detailed information of RESTful API, you can refer to the [guide](../llm/api_server.md).
+Regarding the detailed information of the api_server, you can refer to the [guide](../llm/api_server.md).
