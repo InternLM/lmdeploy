@@ -4,7 +4,7 @@ import os
 
 from ..version import __version__
 from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
-                    convert_args, get_lora_adapters)
+                    convert_args, get_chat_template, get_lora_adapters)
 
 
 class CLI(object):
@@ -34,9 +34,10 @@ class CLI(object):
         parser.add_argument(
             'model_name',
             type=str,
-            help='The name of the to-be-deployed model, such as llama-7b, '
-            'llama-13b, vicuna-7b and etc. You can run `lmdeploy list` to '
-            'get the supported model names')
+            help='deprecated and unused, '
+            'it will be removed on 2024.12.31. It was originally used to '
+            'specify the name of the built-in chat template, but now it '
+            'is substituted with a clearer parameter `--chat-template`')
         parser.add_argument('model_path',
                             type=str,
                             help='The directory path of the model')
@@ -54,20 +55,17 @@ class CLI(object):
                             default='workspace',
                             help='The destination path that saves outputs')
         parser.add_argument(
-            '--quant-path',
-            type=str,
-            default=None,
-            help='Path of the quantized model, which can be none')
-        parser.add_argument(
             '--group-size',
             type=int,
             default=0,
             help='A parameter used in awq to quantize fp16 weights '
             'to 4 bits')
-        parser.add_argument('--trust-remote-code',
-                            action='store_true',
-                            help='trust remote code from huggingface')
-
+        parser.add_argument(
+            '--chat-template',
+            type=str,
+            default=None,
+            help='the name of the built-in chat template, which can be '
+            'overviewed by `lmdeploy list`')
         parser.set_defaults(run=CLI.convert)
 
     @staticmethod
@@ -104,10 +102,7 @@ class CLI(object):
             ', "baichuan-inc/baichuan2-7b-chat" and so on')
         # common args
         ArgumentHelper.backend(parser)
-        ArgumentHelper.trust_remote_code(parser)
         # # chat template args
-        ArgumentHelper.meta_instruction(parser)
-        ArgumentHelper.cap(parser)
         ArgumentHelper.chat_template(parser)
         # model args
         ArgumentHelper.revision(parser)
@@ -119,7 +114,6 @@ class CLI(object):
 
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
-        model_name_act = ArgumentHelper.model_name(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
@@ -128,7 +122,6 @@ class CLI(object):
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
         tb_group._group_actions.append(tp_act)
-        tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(prefix_caching_act)
@@ -164,24 +157,8 @@ class CLI(object):
         """List the supported model names."""
         from lmdeploy.model import MODELS
         model_names = list(MODELS.module_dict.keys())
-        deprecate_names = [
-            'baichuan-7b', 'baichuan2-7b', 'chatglm2-6b', 'internlm-chat-20b',
-            'internlm-chat-7b', 'internlm-chat-7b-8k', 'internlm2-1_8b',
-            'internlm-20b', 'internlm2-20b', 'internlm2-7b', 'internlm2-chat',
-            'internlm2-chat-1_8b', 'internlm2-chat-20b', 'internlm2-chat-7b',
-            'llama-2-chat', 'llama-2', 'qwen-14b', 'qwen-7b', 'solar-70b',
-            'yi-200k', 'yi-34b', 'yi-chat', 'Mistral-7B-Instruct',
-            'Mixtral-8x7B-Instruct', 'baichuan-base', 'deepseek-chat',
-            'internlm-chat'
-        ]
-        model_names = [
-            n for n in model_names if n not in deprecate_names + ['base']
-        ]
-        deprecate_names.sort()
         model_names.sort()
-        print('The older chat template name like "internlm2-7b", "qwen-7b"'
-              ' and so on are deprecated and will be removed in the future.'
-              ' The supported chat template names are:')
+        print('The supported chat template names are:')
         print('\n'.join(model_names))
 
     @staticmethod
@@ -254,19 +231,13 @@ class CLI(object):
     def chat(args):
         """Chat with pytorch or turbomind engine."""
         from lmdeploy.archs import autoget_backend
-        from lmdeploy.model import ChatTemplateConfig
+
+        chat_template_config = get_chat_template(args.chat_template)
+
         backend = args.backend
         if backend != 'pytorch':
             # set auto backend mode
             backend = autoget_backend(args.model_path)
-
-        chat_template_config = ChatTemplateConfig(
-            model_name=args.model_name,
-            meta_instruction=args.meta_instruction,
-            capability=args.cap)
-        if args.chat_template:
-            chat_template_config = ChatTemplateConfig.from_json(
-                args.chat_template)
 
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
@@ -274,7 +245,6 @@ class CLI(object):
 
             adapters = get_lora_adapters(args.adapters)
             engine_config = PytorchEngineConfig(
-                model_name=args.model_name,
                 tp=args.tp,
                 session_len=args.session_len,
                 cache_max_entry_count=args.cache_max_entry_count,
@@ -283,14 +253,11 @@ class CLI(object):
             )
             run_chat(args.model_path,
                      engine_config,
-                     trust_remote_code=args.trust_remote_code,
                      chat_template_config=chat_template_config)
         else:
             from lmdeploy.turbomind.chat import main as run_chat
             kwargs = convert_args(args)
             kwargs.pop('chat_template')
-            kwargs.pop('meta_instruction')
-            kwargs.pop('trust_remote_code')
             kwargs.pop('backend')
             kwargs['chat_template_config'] = chat_template_config
             run_chat(**kwargs)

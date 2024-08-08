@@ -6,15 +6,11 @@
 
 ## Quick Start
 
-Install LMDeploy with pip (Python 3.8+). Refer to [Installation](https://lmdeploy.readthedocs.io/en/latest/get_started.html#installation) for more.
-
-```shell
-pip install lmdeploy
-```
+Please install LMDeploy by following the [installation guide](../installation.md)
 
 ### Offline inference pipeline
 
-The following sample code shows the basic usage of VLM pipeline. For more examples, please refer to [VLM Offline Inference Pipeline](https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#vlm-offline-inference-pipeline)
+The following sample code shows the basic usage of VLM pipeline. For more examples, please refer to [VLM Offline Inference Pipeline](./vl_pipeline.md)
 
 ```python
 from lmdeploy import pipeline

@@ -4,8 +4,6 @@ from typing import Literal, Optional, Union
 
 from transformers import AutoConfig
 
-from lmdeploy.utils import get_hf_config_content
-
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .utils import get_logger
 
@@ -142,8 +140,8 @@ def get_task(model_path: str):
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # workspace model
         return 'llm', AsyncEngine
-    config = get_hf_config_content(model_path)
-    if check_vl_llm(config):
+    _, config = get_model_arch(model_path)
+    if check_vl_llm(config.to_dict()):
         from lmdeploy.serve.vl_async_engine import VLAsyncEngine
         return 'vlm', VLAsyncEngine
 
@@ -165,7 +163,10 @@ def get_model_arch(model_path: str):
         config = configparser.ConfigParser()
         config.read(config_file)
         model_arch = config['llama']['model_arch']
-        return model_arch, None
+        tm_config = TurbomindEngineConfig()
+        for key in config['llama']:
+            setattr(tm_config, key, config['llama'][key])
+        return model_arch, tm_config
     else:
         # transformers model
         try:
