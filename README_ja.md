@@ -53,7 +53,7 @@ ______________________________________________________________________
 - \[2023/11\] TurboMindの主要なアップグレード、包括的なPaged Attention、シーケンス長制限のない高速なアテンションカーネル、2倍速いKV8カーネル、Split-Kデコーディング（Flash Decoding）、およびsm_75のW4A16推論
 - \[2023/09\] TurboMindはQwen-14Bをサポート
 - \[2023/09\] TurboMindはInternLM-20Bをサポート
-- \[2023/09\] TurboMindはCode Llamaのすべての機能をサポート：コード補完、インフィリング、チャット/インストラクト、Pythonスペシャリスト。デプロイメントガイドは[こちら](./docs/en/supported_models/codellama.md)をクリックしてください
+- \[2023/09\] TurboMindはCode Llamaのすべての機能をサポート：コード補完、インフィリング、チャット/インストラクト、Pythonスペシャリスト。デプロイメントガイドは[こちら](./docs/en/llm/codellama.md)をクリックしてください
 - \[2023/09\] TurboMindはBaichuan2-7Bをサポート
 - \[2023/08\] TurboMindはflash-attention2をサポート
 - \[2023/08\] TurboMindはQwen-7B、動的NTK-RoPEスケーリング、動的logNスケーリングをサポート
