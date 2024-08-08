@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from mmengine.config import DictAction
-
 from .cli import CLI
 from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
 
@@ -96,42 +94,6 @@ class SubCliLite(object):
         ArgumentHelper.device(parser)
 
     @staticmethod
-    def add_parser_kv_qparams():
-        """Add parser for kv_qparams command."""
-        parser = SubCliLite.subparsers.add_parser(
-            'kv_qparams',
-            formatter_class=DefaultsAndTypesHelpFormatter,
-            description=SubCliLite.kv_qparams.__doc__,
-            help=SubCliLite.kv_qparams.__doc__)
-        parser.set_defaults(run=SubCliLite.kv_qparams)
-
-        parser.add_argument('work_dir',
-                            type=str,
-                            help='Directory path where the stats are saved')
-        parser.add_argument('turbomind_dir',
-                            type=str,
-                            help='Directory path where to save the results')
-        parser.add_argument('--kv-bits',
-                            type=int,
-                            default=8,
-                            help='Number of bits for quantization')
-        parser.add_argument('--kv-sym',
-                            action='store_true',
-                            help='Whether to use symmetric quantizaiton')
-        parser.add_argument(
-            '--num-tp',
-            type=int,
-            default=None,
-            help='GPU number used in tensor parallelism. Should be 2^n')
-        parser.add_argument('--tm-params',
-                            nargs='*',
-                            default=None,
-                            action=DictAction,
-                            help='Used key-values pairs in xxx=yyy format'
-                            ' to update the turbomind model weights'
-                            ' config')
-
-    @staticmethod
     def auto_awq(args):
         """Perform weight quantization using AWQ algorithm."""
         from lmdeploy.lite.apis.auto_awq import auto_awq
@@ -146,13 +108,6 @@ class SubCliLite(object):
         calibrate(**kwargs)
 
     @staticmethod
-    def kv_qparams(args):
-        """Export key and value stats."""
-        from lmdeploy.lite.apis.kv_qparams import main as run_kv_qparams
-        kwargs = convert_args(args)
-        run_kv_qparams(**kwargs)
-
-    @staticmethod
     def smooth_quant(args):
         """Perform w8a8 quantization using SmoothQuant."""
         from lmdeploy.lite.apis.smooth_quant import smooth_quant
@@ -164,5 +119,4 @@ class SubCliLite(object):
         """Add all parsers."""
         SubCliLite.add_parser_auto_awq()
         SubCliLite.add_parser_calibrate()
-        SubCliLite.add_parser_kv_qparams()
         SubCliLite.add_parser_smooth_quant()

@@ -141,8 +141,8 @@ models = [internlm_chat_20b]
 
 **Note**
 
-- If you want to pass more arguments for `engine_config`和`gen_config` in the evaluation config file, please refer to [TurbomindEngineConfig](https://lmdeploy.readthedocs.io/en/latest/inference/pipeline.html#turbomindengineconfig)
-  and [EngineGenerationConfig](https://lmdeploy.readthedocs.io/en/latest/inference/pipeline.html#generationconfig)
+- If you want to pass more arguments for `engine_config`和`gen_config` in the evaluation config file, please refer to [TurbomindEngineConfig](https://github.com/InternLM/lmdeploy/blob/061f99736544c8bf574309d47baf574b69ab7eaf/lmdeploy/messages.py#L114)
+  and [EngineGenerationConfig](https://github.com/InternLM/lmdeploy/blob/061f99736544c8bf574309d47baf574b69ab7eaf/lmdeploy/messages.py#L56)
 
 ## Execute Evaluation Task
 
