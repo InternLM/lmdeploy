@@ -53,7 +53,7 @@ ______________________________________________________________________
 - \[2023/11\] TurboMind major upgrades, including: Paged Attention, faster attention kernels without sequence length limitation, 2x faster KV8 kernels, Split-K decoding (Flash Decoding), and W4A16 inference for sm_75
 - \[2023/09\] TurboMind supports Qwen-14B
 - \[2023/09\] TurboMind supports InternLM-20B
-- \[2023/09\] TurboMind supports all features of Code Llama: code completion, infilling, chat / instruct, and python specialist. Click [here](./docs/en/supported_models/codellama.md) for deployment guide
+- \[2023/09\] TurboMind supports all features of Code Llama: code completion, infilling, chat / instruct, and python specialist. Click [here](./docs/en/llm/codellama.md) for deployment guide
 - \[2023/09\] TurboMind supports Baichuan2-7B
 - \[2023/08\] TurboMind supports flash-attention2.
 - \[2023/08\] TurboMind supports Qwen-7B, dynamic NTK-RoPE scaling and dynamic logN scaling
