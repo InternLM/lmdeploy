@@ -196,7 +196,8 @@ struct GmemIteratorSm70 {
             AccessType frag;
             if constexpr (Policy_::kEvictPolicy != EvictPolicy::kEvictNormal) {
                 _Ld(frag, (const T*)src);
-            } else {
+            }
+            else {
                 Ldg(frag, (const T*)src);
             }
             Store(dst, frag);

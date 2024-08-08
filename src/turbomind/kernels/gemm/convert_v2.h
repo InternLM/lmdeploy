@@ -86,20 +86,11 @@ struct ConvertOperand {
         const int cta_idx_m = blockIdx.x;
 
         const int cta_offset_m = cta_idx_m * M;
+        const int residue_m    = min(M, param.m - cta_offset_m);
 
         const int warp_id = threadIdx.x / WARP_SIZE;
 
         const int warp_offset_m = 0;
-
-        const int extent_m = min(M, param.m);
-        const int extent_k = min(K, param.k);
-
-        GmemIter gmem{(Ts*)param.src, param.lds, {cta_offset_m, 0}, {extent_m, extent_k}};
-
-        gmem.smem_data_ = smem;
-
-        gmem.ClearSmem();
-        __syncthreads();
 
         Converter converter{};
 
@@ -120,15 +111,29 @@ struct ConvertOperand {
             // printf("frag_size=%d, frag_num=%d, pack_size=%d\n", kFragSize, kFragNum, kPackSize);
         }
 
+        const int cta_offset_k = (cta_cnt_k - 1) * K;
+        const int residue_k    = min(K, param.k - cta_offset_k);
+
+        // Handle residue k first
+        GmemIter gmem{(Ts*)param.src, param.lds, {cta_offset_m, cta_offset_k}, {residue_m, residue_k}};
+
+        gmem.smem_data_ = smem;
+        gmem.ClearSmem();
+
+        __syncthreads();
+
+        gmem.Prefetch(true);
+
+        // Rest full k tiles
+        gmem            = GmemIter{(Ts*)param.src, param.lds, {cta_offset_m, 0}, {residue_m, K}};
+        gmem.smem_data_ = smem;
+
         SmemCopy smem_copy({warp_offset_m, 0});
 
-        for (int cta_idx_k = 0; cta_idx_k < cta_cnt_k; ++cta_idx_k) {
+        // last, 0, 1, 2, 3, ..., last - 1
+        int cta_idx_k = cta_cnt_k - 1;
 
-            gmem.Prefetch(true);
-            gmem.Advance();
-            __pipeline_commit();
-
-            __pipeline_wait_prior(0);
+        for (int k_stage = 0; k_stage < cta_cnt_k; ++k_stage) {
             __syncthreads();
 
             PRAGMA_UNROLL
@@ -163,6 +168,15 @@ struct ConvertOperand {
             }
 
             __syncthreads();
+
+            if (k_stage == cta_cnt_k - 1) {
+                break;
+            }
+
+            gmem.Prefetch(true);
+            gmem.Advance();
+
+            cta_idx_k = k_stage;
         }
     }
 

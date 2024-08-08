@@ -44,7 +44,7 @@ struct Operand_B {
     static constexpr Pack  kPack  = 0;
     static constexpr Order kOrder = kRowMajor;  // (n,k)
 
-    using SmemCopyAtom = SmemCopy_MMA_884_B_COL<T>;
+    using SmemCopyAtom = SmemCopy_MMA_884_B<T>;
 
     using GetSmemLayout = GetSmemLayout<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -111,7 +111,7 @@ struct Operand_B_Pack {
     static constexpr Pack  kPack  = HMMA_884 | OPERAND_B | Pack_M;
     static constexpr Order kOrder = kRowMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, SmemCopy_MMA_884_B_COL<T>, kOrder, Pack_M>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, SmemCopy_MMA_884_B<T>, kOrder, Pack_M>;
 
     using GetSmemLayout = GetSmemLayout<kOrder>;
     using GetGmemIter   = GetGmemIter;
@@ -126,7 +126,7 @@ struct Operand_V_Pack {
     static constexpr Pack  kPack  = HMMA_884 | OPERAND_V | Pack_M;
     static constexpr Order kOrder = kColMajor;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, SmemCopy_MMA_884_V<T, 4>, kColMajor, Pack_M>;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, SmemCopy_MMA_884_V<T, 8>, kColMajor, Pack_M>;
 
     struct GetSmemLayout {  // m-major
         template<int M, int K>

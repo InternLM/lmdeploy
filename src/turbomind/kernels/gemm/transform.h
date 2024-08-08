@@ -98,9 +98,6 @@ struct Transform_HMMA_SIMT_B {
 
         PRAGMA_UNROLL
         for (int m = 0; m < Md; ++m) {
-            // if (threadIdx.x == 0) {
-            //     printf("m = %d\n", m);
-            // }
             auto tmp = ConvertKvCache<D, F>::convert(data_k[m]);
             PRAGMA_UNROLL
             for (int i = 0; i < Nd; i += 2) {
@@ -114,8 +111,6 @@ struct Transform_HMMA_SIMT_B {
     __device__ static void dequant(Array<F, 2>& x, Array<uint32_t, 1> s)
     {
         Array<F, 2>& _s = (Array<F, 2>&)s;
-        // printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)_s[0], (float)_s[1]);
-        // printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)x[0], (float)x[1]);
         x[0] = __hfma(x[0], _s[0], _s[1]);
         x[1] = __hfma(x[1], _s[0], _s[1]);
     }

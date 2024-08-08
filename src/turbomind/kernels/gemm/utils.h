@@ -78,6 +78,9 @@ template<Pack pack, Order order>
 struct Packing_v2: PackingImpl<get_mma_tag(pack), get_operand_tag(pack), get_pack_num(pack), order> {
 };
 
+
+/// TODO: move packing utility to arch/smem_copy_xxx
+
 template<int num>
 struct PackingImpl<HMMA_16816, OPERAND_A, num, kRowMajor> {
     __host__ __device__ static constexpr int2 apply(int2 mk)
@@ -114,11 +117,12 @@ struct PackingImpl<HMMA_SIMT, OPERAND_B, num, kRowMajor> {
     }
 };
 
-template<Op_Tag Op, int num>
-struct PackingImpl<HMMA_884, Op, num, kRowMajor> {
+template<int num>
+struct PackingImpl<HMMA_884, OPERAND_B, num, kRowMajor> {
     __host__ __device__ static constexpr int2 apply(int2 mk)
     {
         return {mk.x / (16 * num), mk.y * 16 * num};
+        // return {mk.x / (32 * num), mk.y * 32 * num};
     }
 };
 
