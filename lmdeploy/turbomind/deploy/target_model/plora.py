@@ -21,9 +21,8 @@ class TurbomindPloraModel(BaseOutputModel):
     def __init__(self,
                  input_model: BaseInputModel,
                  cfg: TurbomindModelConfig,
-                 to_file: bool = True,
                  out_dir: str = ''):
-        super().__init__(input_model, cfg, to_file, out_dir)
+        super().__init__(input_model, cfg, out_dir)
 
     def get_config(self, cfg: TurbomindModelConfig):
         """Get turbomind config."""
