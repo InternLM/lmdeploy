@@ -82,12 +82,18 @@ class VLChatTemplateWrapper:
                 # 'image_data': means PIL.Image.Image object.
                 if item['type'] == 'image_url':
                     item_copy = item['image_url'].copy()
-                    url = item_copy.pop('url')
-                    images_with_kwargs.append([url, item_copy])
+                    try:
+                        url = item_copy.pop('url')
+                        images_with_kwargs.append([url, item_copy])
+                    except KeyError:
+                        logger.error(f'invalid format {message}')
                 elif item['type'] == 'image_data':
                     item_copy = item['image_data'].copy()
-                    data = item_copy.pop('data')
-                    images_with_kwargs.append([data, item_copy])
+                    try:
+                        data = item_copy.pop('data')
+                        images_with_kwargs.append([data, item_copy])
+                    except KeyError:
+                        logger.error(f'invalid format {message}')
 
         def _inner_call(i, images):
             url_or_data = images[i][0]
