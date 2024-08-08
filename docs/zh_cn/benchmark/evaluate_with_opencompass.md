@@ -139,7 +139,7 @@ models = [internlm_chat_20b]
 
 **注**
 
-- 如果想在测评配置文件中`engine_config`和`gen_config`字段传递更多参数，请参考[TurbomindEngineConfig](https://lmdeploy.readthedocs.io/zh-cn/latest/inference/pipeline.html#turbomindengineconfig) 和 [EngineGenerationConfig](https://lmdeploy.readthedocs.io/zh-cn/latest/inference/pipeline.html#generationconfig)
+- 如果想在测评配置文件中`engine_config`和`gen_config`字段传递更多参数，请参考[TurbomindEngineConfig](https://github.com/InternLM/lmdeploy/blob/061f99736544c8bf574309d47baf574b69ab7eaf/lmdeploy/messages.py#L114) 和 [EngineGenerationConfig](https://github.com/InternLM/lmdeploy/blob/061f99736544c8bf574309d47baf574b69ab7eaf/lmdeploy/messages.py#L56)
 
 ## 执行测评任务
 

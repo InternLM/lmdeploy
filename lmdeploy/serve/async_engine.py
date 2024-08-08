@@ -21,43 +21,22 @@ from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
 logger = get_logger('lmdeploy')
 
 
-def get_model_name_from_workspace_model(model_dir: str):
-    """Get model name from workspace model."""
+def get_names_from_model(model_path: str, model_name: str = None):
+    """Get model name and chat template name from workspace model."""
     from configparser import ConfigParser
-    triton_model_path = os.path.join(model_dir, 'triton_models', 'weights')
+    triton_model_path = os.path.join(model_path, 'triton_models', 'weights')
     if not os.path.exists(triton_model_path):
-        return None
-    ini_path = os.path.join(triton_model_path, 'config.ini')
-    # load cfg
-    with open(ini_path, 'r') as f:
-        parser = ConfigParser()
-        parser.read_file(f)
-    return parser['llama']['model_name']
-
-
-def deduce_a_name(
-        model_path: str,
-        model_name: Optional[str] = None,
-        backend_config: Optional[Union[TurbomindEngineConfig,
-                                       PytorchEngineConfig]] = None,
-        chat_template_config: Optional[ChatTemplateConfig] = None) -> str:
-    """Deduce a model name from all the possible arguments."""
-
-    def _config_model_name(config):
-        if config and config.model_name:
-            return config.model_name
-        return None
-
-    backend_config_model_name = _config_model_name(backend_config)
-    chat_template_config_model_name = _config_model_name(chat_template_config)
-    model_name = model_name or backend_config_model_name or chat_template_config_model_name  # noqa
-    if model_name is None:
-        # model maybe from workspace for turbomind
-        model_name = get_model_name_from_workspace_model(model_path)
-    # may get a model name from model_path
-    if model_name is None:
-        model_name = model_path
-    return model_name
+        chat_template_name = best_match_model(model_path)
+    else:
+        # `model_path` refers to a turbomind model, reading
+        # chat_template_name from the config
+        ini_path = os.path.join(triton_model_path, 'config.ini')
+        with open(ini_path, 'r') as f:
+            parser = ConfigParser()
+            parser.read_file(f)
+        chat_template_name = parser['llama']['chat_template']
+    model_name = model_name if model_name else model_path
+    return model_name, chat_template_name
 
 
 @dataclasses.dataclass
@@ -147,7 +126,6 @@ class AsyncEngine(LogitsMixin):
             config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
-        tp (int): tensor parallel
     """
 
     def __init__(self,
@@ -157,39 +135,25 @@ class AsyncEngine(LogitsMixin):
                  backend_config: Optional[Union[TurbomindEngineConfig,
                                                 PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
-                 tp: int = 1,
                  **kwargs) -> None:
         logger.info(
             f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'input chat_template_config={chat_template_config}')
 
-        self.model_name = deduce_a_name(model_path, model_name, backend_config,
-                                        chat_template_config)
-        # build chat template config
-        if self.model_name in MODELS.module_dict.keys():
-            chat_template_name = self.model_name
-        else:
-            chat_template_name = best_match_model(model_path)
+        self.model_name, chat_template_name = get_names_from_model(
+            model_path, model_name)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(chat_template_name)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
 
-        # prevent bc
-        for k in list(kwargs.keys()):
-            if hasattr(chat_template_config, k):
-                logger.warning(f'{k} was deprecated. Please use '
-                               'chat_template_config instead')
-                v = kwargs.pop(k)
-                setattr(chat_template_config, k, v)
         logger.info(f'updated chat_template_onfig={chat_template_config}')
 
         # build backend engine
         if backend == 'turbomind':
             self._build_turbomind(model_path=model_path,
                                   backend_config=backend_config,
-                                  tp=tp,
                                   **kwargs)
         elif backend == 'pytorch':
             self._build_pytorch(model_path=model_path,
@@ -222,12 +186,10 @@ class AsyncEngine(LogitsMixin):
             model_path: str,
             backend_config: Optional[Union[TurbomindEngineConfig,
                                            PytorchEngineConfig]] = None,
-            tp: int = 1,
             **kwargs):
         """Innter build method for turbomind backend."""
         if backend_config is None:
-            backend_config = TurbomindEngineConfig(model_name=self.model_name,
-                                                   tp=tp)
+            backend_config = TurbomindEngineConfig()
         assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
             ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
             'turbomind backend'
@@ -246,7 +208,7 @@ class AsyncEngine(LogitsMixin):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
         if backend_config is None:
-            backend_config = PytorchEngineConfig(self.model_name)
+            backend_config = PytorchEngineConfig()
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
             'use PytorchEngineConfig imported from lmdeploy.messages for ' \
             'pytorch backend'
@@ -258,12 +220,6 @@ class AsyncEngine(LogitsMixin):
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
                  gen_config: Optional[GenerationConfig] = None,
-                 request_output_len=512,
-                 top_k: int = 40,
-                 top_p: float = 0.8,
-                 temperature: float = 0.8,
-                 repetition_penalty: float = 1.0,
-                 ignore_eos: bool = False,
                  do_preprocess: bool = True,
                  adapter_name: Optional[str] = None,
                  use_tqdm: bool = False,
@@ -276,18 +232,6 @@ class AsyncEngine(LogitsMixin):
                 a chat history in OpenAI format or a list of chat history.
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
-            chat_template_config (ChatTemplateConfig | None):a instance of
-                ChatTemplateConfig. Default to None.
-            request_output_len (int): output token nums
-            top_k (int): The number of the highest probability vocabulary
-              tokens to keep for top-k-filtering
-            top_p (float): If set to float < 1, only the smallest set of most
-              probable tokens with probabilities that add up to top_p or higher
-            are kept for generation.
-            temperature (float): to modulate the next token probability
-            repetition_penalty (float): The parameter for repetition penalty.
-              1.0 means no penalty
-            ignore_eos (bool): indicator for ignoring eos
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
             adapter_name (str): the adapter name of slora for pytorch backend.
@@ -295,13 +239,7 @@ class AsyncEngine(LogitsMixin):
             use_tqdm (bool): Whether use the progress bar. Default to False
         """
         if gen_config is None:
-            gen_config = GenerationConfig(
-                max_new_tokens=request_output_len,
-                top_k=top_k,
-                top_p=top_p,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                ignore_eos=ignore_eos)
+            gen_config = GenerationConfig()
         return self.batch_infer(prompts,
                                 gen_config=gen_config,
                                 do_preprocess=do_preprocess,
