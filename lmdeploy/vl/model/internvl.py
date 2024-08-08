@@ -93,7 +93,8 @@ class InternVLVisionModel(VisonModel):
             else:
                 self.vl_model = model
             model.half()
-        from lmdeploy.pytorch.modeling.convert_to_qmodules import convert_to_qmodules
+        from lmdeploy.pytorch.modeling.convert_to_qmodules import \
+            convert_to_qmodules
         convert_to_qmodules(model)
 
         from accelerate import load_checkpoint_and_dispatch

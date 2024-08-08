@@ -12,7 +12,8 @@ from lmdeploy.lite.apis.calibrate import calibrate
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             awq_layers, smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
-from lmdeploy.pytorch.models import QLinear, QRMSNorm, QLayerNorm
+from lmdeploy.pytorch.models import QLayerNorm, QLinear, QRMSNorm
+
 from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP
 
 LMDEPLOY_ROOT = lmdeploy.__path__[0]

@@ -4,7 +4,8 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from ..kernels.w8a8_triton_kernels import (matmul_kernel_dynamic_quant,
+from ..kernels.w8a8_triton_kernels import (layer_norm_dynamic_quant,
+                                           matmul_kernel_dynamic_quant,
                                            per_channel_quant,
                                            per_token_quant_int8,
                                            rms_norm_dynamic_quant)
@@ -97,12 +98,8 @@ class QLayerNorm(nn.Module):
         return q_mod
 
     def forward(self, hidden_states):
-        import torch.nn.functional as F
-        out = F.layer_norm(hidden_states, self.normalized_shape, self.weight, self.bias, self.variance_epsilon)
-        scale = torch.amax(out.abs(), dim=-1)/127
-        out = out / scale.unsqueeze(-1)
-        out = torch.round(out / scale.unsqueeze(-1)).to(torch.int8)
-
+        out, scale = layer_norm_dynamic_quant(hidden_states, self.weight,
+                                              self.bias, self.variance_epsilon)
         return QTensor(out, scale)
 
 

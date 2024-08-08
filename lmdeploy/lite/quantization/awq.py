@@ -36,9 +36,9 @@ NORM_FCS_MAP = {
         'input_layernorm': ['self_attention.query_key_value'],
         'post_attention_layernorm': ['mlp.dense_h_to_4h']
     },
-    'InternVisionEncoderLayer':{
-        'norm1':['attn.qkv'],
-        'norm2':['mlp.fc1']
+    'InternVisionEncoderLayer': {
+        'norm1': ['attn.qkv'],
+        'norm2': ['mlp.fc1']
     }
 }
 
@@ -70,7 +70,7 @@ FC_FCS_MAP = {
         # 'self_attention.query_key_value': ['self_attention.dense']
         # 'mlp.dense_h_to_4h': ['mlp.dense_4h_to_h']
     },
-    'InternVisionEncoderLayer':{
+    'InternVisionEncoderLayer': {
         'mlp.fc1': ['mlp.fc2']
     }
 }

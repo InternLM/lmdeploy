@@ -1,14 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from functools import partial
-from opcode import hasconst
 from typing import Union
 
 import torch
 from torch import nn
 from transformers import PreTrainedTokenizer
 
-from lmdeploy.lite.quantization.activation import (ActivationObserver,
-                                                   KVCacheObserver)
+from lmdeploy.lite.quantization.activation import ActivationObserver
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP
 from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules,
                                  concat_decoder_layer_outputs,
@@ -59,26 +57,35 @@ class CalibrationContext():
         self.tokenizer = tokenizer
         if hasattr(self.model, 'vl_model'):
             # Collect modules to observe
-            self.name2layer = collect_target_modules(self.model.vl_model, layer_type)
-            self.name2layer.update(collect_target_modules(self.model.vl_model, vision_layer_type))
+            self.name2layer = collect_target_modules(self.model.vl_model,
+                                                     layer_type)
+            self.name2layer.update(
+                collect_target_modules(self.model.vl_model, vision_layer_type))
             self.name2fc = {}
             for l_name, layer in self.name2layer.items():
-                name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
+                name2fc = collect_target_modules(layer,
+                                                 nn.Linear,
+                                                 prefix=l_name)
                 self.name2fc.update(name2fc)
-            self.name2norm = collect_target_modules(self.model.vl_model, norm_type)
+            self.name2norm = collect_target_modules(self.model.vl_model,
+                                                    norm_type)
 
-            maps = bimap_name_mod([self.name2layer, self.name2fc, self.name2norm])
+            maps = bimap_name_mod(
+                [self.name2layer, self.name2fc, self.name2norm])
             self.name2mod, self.mod2name = maps
         else:
             # Collect modules to observe
             self.name2layer = collect_target_modules(self.model, layer_type)
             self.name2fc = {}
             for l_name, layer in self.name2layer.items():
-                name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
+                name2fc = collect_target_modules(layer,
+                                                 nn.Linear,
+                                                 prefix=l_name)
                 self.name2fc.update(name2fc)
             self.name2norm = collect_target_modules(self.model, norm_type)
 
-            maps = bimap_name_mod([self.name2layer, self.name2fc, self.name2norm])
+            maps = bimap_name_mod(
+                [self.name2layer, self.name2fc, self.name2norm])
             self.name2mod, self.mod2name = maps
 
         # Initialize observers
@@ -232,7 +239,7 @@ class CalibrationContext():
         if hasattr(self.model, 'vl_model'):
             model = self.model.vl_model.language_model.model
         elif type(self.model).__name__ in ('QWenLMHeadModel',
-                                         'ChatGLMForConditionalGeneration'):
+                                           'ChatGLMForConditionalGeneration'):
             model = self.model.transformer
         else:
             model = self.model.model
@@ -240,7 +247,8 @@ class CalibrationContext():
             _ = model(data.to(self.device))
 
     def calibrate_vision(self, images):
-        """Forward pass through the model in inference mode with given images."""
+        """Forward pass through the model in inference mode with given
+        images."""
         with torch.inference_mode():
             _ = self.model.forward(images)
 

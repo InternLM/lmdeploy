@@ -24,7 +24,7 @@ LAYER_TYPE_MAP = {
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
     'ChatGLMForConditionalGeneration': 'GLMBlock',
-    'InternVisionModel': 'InternVisionEncoderLayer', # internvl2 vision
+    'InternVisionModel': 'InternVisionEncoderLayer',  # internvl2 vision
 }
 
 NORM_TYPE_MAP = {
@@ -39,7 +39,7 @@ NORM_TYPE_MAP = {
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
     'ChatGLMForConditionalGeneration': 'RMSNorm',
-    'InternVisionModel': 'LayerNorm', # internvl2 vision
+    'InternVisionModel': 'LayerNorm',  # internvl2 vision
 }
 
 HEAD_NAME_MAP = {
@@ -197,7 +197,7 @@ def calibrate(model: str,
         model = load_hf_from_pretrained(model,
                                         torch_dtype=torch.float16,
                                         trust_remote_code=True)
-        
+
     elif model_type == 'vlm':
         from lmdeploy.vl.model.builder import vl_model_with_tokenizer
         vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model)
@@ -228,7 +228,8 @@ def calibrate(model: str,
     vl_model.vl_model.vision_model.to('cuda')
     vl_model.vl_model.mlp1.to('cuda')
 
-    vision_layer_type = LAYER_TYPE_MAP[type(vl_model.vl_model.vision_model).__name__]
+    vision_layer_type = LAYER_TYPE_MAP[type(
+        vl_model.vl_model.vision_model).__name__]
     # norm_type = NORM_TYPE_MAP[type(vl_model.vl_model.vision_model).__name__]
     # _prepare_for_calibrate(vl_model.vl_model or model, layer_type,
     #                        '', device)
