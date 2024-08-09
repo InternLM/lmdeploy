@@ -22,7 +22,7 @@ struct Sm75: Arch<750, 800> {
     static constexpr int value = 750;
 };
 
-struct Sm80: Arch<800, 890> {
+struct Sm80: Arch<800, 900> {
     static constexpr int value = 800;
 };
 

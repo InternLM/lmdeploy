@@ -13,6 +13,7 @@ std::vector<std::pair<int64_t, int64_t>> config{
     {16384 * 2, 6144}, {6144, 16384}, {8192, 6144},  {6144, 6144},  // internlm2-20b
     {13696 * 2, 4096}, {4096, 13696}, {4608, 4096},  {4096, 4096},  // glm4-9b
     {18944 * 2, 3584}, {3584, 18944}, {4608, 3584},  {3584, 3584},  // qwen2-7b
+    {20480 * 2, 7168}, {7168, 20480}, {9216, 7168},  {7168,7168},   // yi-34b
     {28672 * 2, 8192}, {8192, 28672}, {10240, 8192}, {8192, 8192},  // llama2-70b / llama3-70b
     {29696 * 2, 8192}, {8192, 29696}, {10240, 8192}, {8192, 8192}   // qwen2-72b-instruct-awq
 };
@@ -60,20 +61,21 @@ void gemm_bench(nvbench::state& state)
     if constexpr (1) {
         // state.add_global_memory_reads(m * k / 2 + sizeof(half) * n * k);
         state.add_global_memory_reads(bs * k * 2 + n * k / 2);
+        get_test().Run(); // measure
         state.exec(nvbench::exec_tag::sync, [&](nvbench::launch&) {  //
             get_test().Run();
         });
     }
     else {
         state.add_global_memory_reads(sizeof(half) * (bs * k + n * k));
-        state.exec([&](nvbench::launch&) {  //
+        state.exec(nvbench::exec_tag::sync, [&](nvbench::launch&) {  //
             get_test().RunCublas();
         });
     }
 }
 
 NVBENCH_BENCH(gemm_bench)
-    .add_int64_axis("idx", nvbench::range(0, 27))
+    .add_int64_axis("idx", nvbench::range(0, (int)config.size() - 1))
     .add_int64_power_of_two_axis("bs", nvbench::range(0, 10))
     .add_int64_axis("tp", {1, 2, 4});
 

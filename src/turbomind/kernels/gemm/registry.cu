@@ -23,7 +23,7 @@ bool Registry::Add(std::unique_ptr<Kernel> kernel)
     if ((int)device_prop_->sharedMemPerBlockOptin < kernel->smem_size()) {
         return false;
     }
-    // std::cout << "register: " << kernel->name() << "\n";
+    // std::cout << "register: " << kernel->name() << ", smem_size: " << (kernel->smem_size() >> 10) << " KB, max_active_ctas: " << kernel->desc().max_active_ctas << " \n";
     kernels_.push_back(std::move(kernel));
     return true;
 }
