@@ -249,8 +249,7 @@ class Response:
         generate_token_len (int): the response token length.
         input_token_len (int): the input prompt token length. Note that it may
             contains chat template part.
-        session_id (int): the id for running the session. Basically, it refers
-            to the position index of the input request batch.
+        session_id (int): the id for running the session.
         finish_reason ('stop' | 'length' | None): the reason the model stopped
             generating tokens. This will be 'stop' if the model hit a natural
             stop point or a provided stop sequence, 'length' if the maximum
@@ -258,6 +257,8 @@ class Response:
         token_ids: (List[int]): the output token ids.
         logprobs: (List[Dict[int, float]]): the top logprobs for each output
             position.
+        index (int): it refers to the position index of the input request
+            batch
     """
     text: str
     generate_token_len: int
@@ -266,6 +267,7 @@ class Response:
     finish_reason: Optional[Literal['stop', 'length']] = None
     token_ids: List[int] = field(default_factory=list)
     logprobs: List[Dict[int, float]] = None
+    index: int = 0
 
 
 @dataclass
