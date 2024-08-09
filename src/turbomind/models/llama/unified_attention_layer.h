@@ -53,6 +53,7 @@ public:
     UnifiedAttentionLayer(size_t               head_num,
                           size_t               kv_head_num,
                           size_t               size_per_head,
+                          size_t               hidden_units,
                           LlamaAttentionParams attn_params,
                           NcclParam            tensor_para,
                           LoraParams           lora_params,
@@ -64,7 +65,7 @@ public:
                           int                  quant_policy):
         head_num_(head_num),
         size_per_head_(size_per_head),
-        hidden_units_(head_num * size_per_head),
+        hidden_units_(hidden_units),
         local_head_num_(head_num / tensor_para.world_size_),
         local_kv_head_num_(kv_head_num / tensor_para.world_size_),
         head_n_rep_(head_num / kv_head_num),
