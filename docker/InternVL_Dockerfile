@@ -1,0 +1,7 @@
+ARG CUDA_VERSION=cu12
+
+FROM openmmlab/lmdeploy:latest-cu12 AS cu12
+
+FROM openmmlab/lmdeploy:latest-cu11 AS cu11
+
+RUN python3 -m pip install timm flash-attn
