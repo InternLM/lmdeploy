@@ -18,7 +18,13 @@ class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
     def build(cls, hf_config, model_path: str = None):
         """build llava hf."""
         arch = hf_config.architectures[0]
-        if arch == 'LlavaForConditionalGeneration':
+        has_remote_code = hasattr(hf_config, 'auto_map')
+        if has_remote_code:
+            # HACK: hardcode for XTuner Llava
+            # The native HF Llava does not support the part of LLM which is
+            # remote code.
+            from transformers import AutoModel as _LlavaModel
+        elif arch == 'LlavaForConditionalGeneration':
             from transformers import \
                 LlavaForConditionalGeneration as _LlavaModel
         elif arch == 'LlavaNextForConditionalGeneration':
