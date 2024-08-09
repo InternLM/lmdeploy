@@ -13,9 +13,9 @@ services:
       #- ~/.cache/huggingface:/root/.cache/huggingface
       - ./root:/root
     stdin_open: true
-    tty: true        
+    tty: true
     ipc: host #for nccl,it is necessary
-    command: lmdeploy serve api_server OpenGVLab/InternVL2-40B  --server-name 0.0.0.0 --server-port 23333  --tp 4 --model-name internvl2-internlm2 --cache-max-entry-count 0.5 
+    command: lmdeploy serve api_server OpenGVLab/InternVL2-40B  --server-name 0.0.0.0 --server-port 23333  --tp 4 --model-name internvl2-internlm2 --cache-max-entry-count 0.5
     deploy:
       resources:
         reservations:
