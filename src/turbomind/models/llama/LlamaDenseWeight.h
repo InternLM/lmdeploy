@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -82,8 +83,13 @@ struct LlamaDenseWeight {
     LoraWeight lora;
     WeightType type;
     T*         bias;
-    T*         scales_and_zeros;
+    T*         scales;
+    T*         zeros;
+    T*         scales_zeros;
     int        group_size;
+
+    gemm::MatrixLayout k_desc;
+    gemm::MatrixLayout q_desc;
 };
 
 template<typename T>
@@ -98,6 +104,7 @@ struct LlamaFfnWeight {
     LlamaDenseWeight<T> intermediate;
     LlamaDenseWeight<T> output;
     LlamaDenseWeight<T> fused_gating_intermediate;
+    bool                is_fused_silu;
 };
 
 }  // namespace turbomind

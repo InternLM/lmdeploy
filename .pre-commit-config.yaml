@@ -44,7 +44,7 @@ repos:
     rev: v2.1.0
     hooks:
       - id: codespell
-        args: ["--skip=third_party/*,*.ipynb,*.proto"]
+        args: ["--skip=third_party/*,*.ipynb,*.proto,src/turbomind/kernels/gemm/transform.h"]
 
   - repo: https://github.com/myint/docformatter
     rev: v1.4

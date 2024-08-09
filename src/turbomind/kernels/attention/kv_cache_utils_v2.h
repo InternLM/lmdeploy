@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "attention_params.h"
+#include "src/turbomind/kernels/attention/attention_params.h"
 #include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {

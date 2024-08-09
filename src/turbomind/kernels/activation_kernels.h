@@ -76,6 +76,10 @@ void invokeGenericActivation(T*           out,
                                                stream);
 }
 
+template<template<typename T> class Activation, typename T>
+void invokeGenericActivation_v2(
+    T* inter_buf, const T* __restrict__ gate_buf, int64_t stride, int token_num, int dims, cudaStream_t stream);
+
 template<typename T>
 void invokeAddBiasGeluV2(T*           out,
                          const T*     bias,

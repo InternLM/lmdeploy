@@ -483,5 +483,7 @@ void compareTwoTensor(
     delete[] h_ref;
 }
 
+bool is_16xx_series(const char* name);
+
 /* ************************** end of common utils ************************** */
 }  // namespace turbomind

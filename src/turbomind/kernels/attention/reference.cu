@@ -1,7 +1,8 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "array_ops.h"
 #include "reference.h"
+#include "src/turbomind/kernels/attention/rotary_embedding.h"
+#include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 
 namespace turbomind {

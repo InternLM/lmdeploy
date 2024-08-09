@@ -74,6 +74,15 @@ class BaseReader(ABC):
                 self.params.pop(key, None)
         torch.cuda.empty_cache()
 
+    def transform(self, x: Union[torch.Tensor, None],
+                  kind: str) -> Union[torch.Tensor, None]:
+        return None if x is None else self._transform(x, kind)
+
+    @abstractmethod
+    def _transform(self, x: torch.Tensor, kind: str):
+        """Transform x."""
+        pass
+
     @abstractmethod
     def tok_embeddings(self) -> Union[torch.Tensor, None]:
         """Get embeddings."""

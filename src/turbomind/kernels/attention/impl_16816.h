@@ -2,13 +2,12 @@
 
 #pragma once
 
-#include "array_ops.h"
-#include "impl.h"
-#include "impl_m16n8.h"
-#include "iterator.h"
-#include "src/turbomind/kernels/attention/thread_map.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
-#include <cuda_pipeline_primitives.h>
+#include "src/turbomind/kernels/attention/impl.h"
+#include "src/turbomind/kernels/attention/impl_m16n8.h"
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/smem.h"
+#include "src/turbomind/kernels/core/thread_map.h"
 
 namespace turbomind::attention {
 

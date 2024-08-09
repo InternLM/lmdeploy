@@ -25,6 +25,7 @@
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <mutex>
 
 namespace ft = turbomind;
@@ -72,6 +73,7 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
         ft::FT_CHECK(false);
 #endif
     }
+    return nullptr;
 }
 
 template<typename T>
@@ -372,31 +374,21 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
 
 template<typename T>
 std::unique_ptr<AbstractTransformerModelInstance>
-LlamaTritonModel<T>::createModelInstance(int                                                               device_id,
-                                         int                                                               rank,
-                                         cudaStream_t                                                      stream,
-                                         std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
-                                         std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm)
+LlamaTritonModel<T>::createModelInstance(int          device_id,
+                                         int          rank,
+                                         cudaStream_t stream,
+                                         std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>,
+                                         std::shared_ptr<ft::AbstractCustomComm>)
 {
     ft::check_cuda_error(cudaSetDevice(device_id));
-    // const int comms_rank = device_id % (tensor_para_size_ * pipeline_para_size_);
 
-    std::shared_ptr<LlamaTritonSharedModelInstance<T>> instance;
-    {
-        std::lock_guard<std::mutex> lock(shared_mutexes_[device_id]);
-        instance = shared_instances_[device_id];
-        if (!instance) {
-            instance = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
-            instance->llm->setFfiLock(ffi_lock_);
-            shared_instances_[device_id] = instance;
-        }
-    }
+    ft::FT_CHECK((bool)shared_instances_[device_id]);
 
     auto allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, false);
 
     allocator->setStream(stream);
 
-    return std::make_unique<LlamaTritonModelInstance<T>>(instance, std::move(allocator), device_id);
+    return std::make_unique<LlamaTritonModelInstance<T>>(shared_instances_[device_id], std::move(allocator), device_id);
 }
 
 template<typename T>
@@ -437,6 +429,36 @@ TensorMap LlamaTritonModel<T>::getParams(int deviceId, int rank)
         result.emplace(name, triton::Tensor{tensor.where, tensor.type, tensor.shape, tensor.data});
     }
     return result;
+}
+
+template<typename T>
+void LlamaTritonModel<T>::processWeights(int device_id, int rank)
+{
+    ft::check_cuda_error(cudaSetDevice(device_id));
+    ft::FT_CHECK(shared_weights_[device_id] != nullptr);
+
+    cudaDeviceProp props{};
+    ft::check_cuda_error(cudaGetDeviceProperties(&props, device_id));
+
+    shared_weights_[device_id]->prepare(props);
+    ft::sync_check_cuda_error();
+}
+
+template<typename T>
+void LlamaTritonModel<T>::createEngine(int                                                               device_id,
+                                       int                                                               rank,
+                                       std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
+                                       std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm)
+{
+
+    auto instance = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
+    instance->llm->setFfiLock(ffi_lock_);
+
+    if (weight_type_ == ft::WeightType::kINT4) {
+        instance->llm->tune();
+    }
+
+    shared_instances_[device_id] = std::move(instance);
 }
 
 template<typename T>

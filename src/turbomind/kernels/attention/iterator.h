@@ -2,10 +2,10 @@
 
 #pragma once
 
-#include "../gemm_s_f16/common.h"
-#include "array_ops.h"
-#include "smem_layout.h"
-#include "src/turbomind/kernels/attention/data_type.h"
+#include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/data_type.h"
+#include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/pipe_iter.h"
 #include <type_traits>
 
 namespace turbomind {
@@ -121,24 +121,6 @@ struct CombinedIterator {
     {
         iterator0_.SetSmem(p0);
         iterator1_.SetSmem(p1);
-    }
-};
-
-template<int Stages, int Step = 1>
-struct PipeIter {
-    static constexpr int kMaxStep = Stages * Step;
-
-    int r = 0;
-    int w = kMaxStep - Step;
-
-    __inline__ __device__ PipeIter& operator++()
-    {
-        w = r;
-        r += Step;
-        if (r == kMaxStep) {
-            r -= kMaxStep;
-        }
-        return *this;
     }
 };
 

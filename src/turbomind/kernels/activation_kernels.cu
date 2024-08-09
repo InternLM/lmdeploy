@@ -15,6 +15,9 @@
  */
 
 #include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -317,6 +320,63 @@ INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, float, float);
 #endif
 #ifdef ENABLE_BF16
 INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
+#endif
+
+// `output` may be an alias of `inter_buf`
+template<int VecSize, template<typename T> class Activation, typename T>
+__global__ void activation_kernel(T* inter_buf, const T* __restrict__ gate_buf, int64_t stride, int token_num, int dims)
+{
+    const int di = threadIdx.x + blockIdx.x * blockDim.x;
+    const int ti = blockIdx.y;
+
+    dims /= VecSize;
+
+    if (di >= dims) {
+        return;
+    }
+
+    using Vec = Array<T, VecSize>;
+
+    auto p_inter = reinterpret_cast<Vec*>(inter_buf + ti * stride);
+    auto p_gate  = reinterpret_cast<const Vec*>(gate_buf + ti * stride);
+
+    Vec inter;
+    Load(inter, (T*)&p_inter[di]);
+
+    Vec gate;
+    Ldg(gate, (const T*)&p_gate[di]);
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < VecSize; ++i) {
+        inter[i] = Activation<T>::apply(inter[i]) * gate[i];
+    }
+
+    Store((T*)&p_inter[di], inter);
+}
+
+template<template<typename T> class Activation, typename T>
+void invokeGenericActivation_v2(
+    T* inter_buf, const T* __restrict__ gate_buf, int64_t stride, int token_num, int dims, cudaStream_t stream)
+{
+    constexpr int kVecSize = 4;
+
+    constexpr int block = 256;
+    const dim3    grid(ceil_div(dims, block * kVecSize), token_num);
+
+    activation_kernel<kVecSize, Activation, T>
+        <<<grid, block, 0, stream>>>(inter_buf, gate_buf, stride, token_num, dims);
+}
+
+#define INSTANTIATE_ACTIVATION(Activation, T)                                                                          \
+    template void invokeGenericActivation_v2<SiluActivation>(                                                          \
+        T * inter_buf, const T* __restrict__ gate_buf, int64_t stride, int token_num, int dims, cudaStream_t stream)
+
+INSTANTIATE_ACTIVATION(SiluActivation, half);
+#ifdef ENABLE_FP32
+INSTANTIATE_ACTIVATION(SiluActivation, float);
+#endif
+#ifdef ENABLE_BF16
+INSTANTIATE_ACTIVATION(SiluActivation, __nv_bfloat16);
 #endif
 
 }  // namespace turbomind
