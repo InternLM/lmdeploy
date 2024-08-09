@@ -62,7 +62,7 @@ class VLAsyncEngine(AsyncEngine):
         input_ids = []
         if len(segs) > 1:
             # yapf: disable
-            images_with_kwargs = await self.vl_prompt_template.async_collect_pil_images(prompt) # noqa E:501
+            images_with_kwargs = await self.vl_prompt_template.async_collect_pil_images(prompt)  # noqa: E501
             # yapf: enable
             features = []
             if len(images_with_kwargs) > 0:
