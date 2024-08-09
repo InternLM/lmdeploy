@@ -5,6 +5,7 @@ import subprocess
 from time import sleep, time
 
 import allure
+import psutil
 from pytest import assume
 from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
@@ -92,7 +93,10 @@ def start_restful_api(config, param, model, model_path, backend_tpye,
 
 def stop_restful_api(pid, startRes, param):
     if pid > 0:
-        startRes.terminate()
+        parent = psutil.Process(pid)
+        for child in parent.children(recursive=True):
+            child.terminate()
+        parent.terminate()
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
         if modelscope:

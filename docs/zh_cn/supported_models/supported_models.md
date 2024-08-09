@@ -48,7 +48,7 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |    InternLM    |  7B - 20B   | LLM  |    Yes    |   No    | Yes  |   -   |
 |   InternLM2    |  7B - 20B   | LLM  |    Yes    |   No    | Yes  |  Yes  |
 |  InternLM2.5   |     7B      | LLM  |    Yes    |   No    | Yes  |  Yes  |
-|   Baichuan2    |     7B      | LLM  |    Yes    |   No    | Yes  |  Yes  |
+|   Baichuan2    |     7B      | LLM  |    Yes    |   No    | Yes  |  No   |
 |   Baichuan2    |     13B     | LLM  |    Yes    |   No    |  No  |  No   |
 |    ChatGLM2    |     6B      | LLM  |    Yes    |   No    |  No  |  No   |
 |     Falcon     |  7B - 180B  | LLM  |    Yes    |   No    |  No  |  No   |

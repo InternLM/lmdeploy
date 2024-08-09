@@ -5,8 +5,9 @@ from typing import Dict, List, Tuple, Union
 import PIL
 import PIL.Image
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.model import BaseModel
-from lmdeploy.utils import get_hf_config_content, get_logger
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64, load_image
 
@@ -305,11 +306,12 @@ class GLM4VChatTemplateWrapper(VLChatTemplateWrapper):
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
+    assert type(chat_template) != type(BaseModel()), 'failed to match ' \
+        'chat template, please explicit set chat_template_config' # noqa E721
     if model_name == 'yi-vl':
         return YiVLChatTemplateWrapper(chat_template)
 
-    config = get_hf_config_content(model_path)
-    arch = config['architectures'][0]
+    arch, _ = get_model_arch(model_path)
     if arch == 'QWenLMHeadModel':
         return QwenVLChatTemplateWrapper(chat_template)
     elif arch in [

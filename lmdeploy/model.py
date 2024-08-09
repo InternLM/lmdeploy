@@ -1713,4 +1713,5 @@ def best_match_model(query: str) -> Optional[str]:
     for name, model in MODELS.module_dict.items():
         if model.match(query):
             return model.match(query)
+    logger.warn(f'Did not find a chat template matching {query}.')
     return 'base'

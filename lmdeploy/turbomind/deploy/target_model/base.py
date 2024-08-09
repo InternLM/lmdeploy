@@ -36,6 +36,7 @@ class TurbomindModelConfig:
     """Config for turbomind model."""
 
     model_name: str = ''
+    chat_template: str = ''
     model_arch: str = None
     tensor_para_size: int = None
     head_num: int = None
@@ -164,7 +165,6 @@ class BaseOutputModel(ABC):
                  input_model: BaseInputModel,
                  cfg: TurbomindModelConfig,
                  exporter_factory,
-                 to_file: bool = True,
                  out_dir: str = ''):
         super().__init__()
         self.input_model = input_model
@@ -173,8 +173,8 @@ class BaseOutputModel(ABC):
             self.cfg = self.get_config(cfg)
         assert self.cfg.valid
         assert self.cfg.kv_head_num % self.cfg.tensor_para_size == 0
-        self.to_file = to_file
         self.out_dir = out_dir
+        self.to_file = True if out_dir else False
         self.tm_params = {}
         model_info = self.input_model.model_info()
         self.permute_qk = model_info.get('permute_qk', True)

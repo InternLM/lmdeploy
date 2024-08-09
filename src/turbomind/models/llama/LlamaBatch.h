@@ -288,6 +288,7 @@ private:
     cudaStream_t     stream_{};
     cublasMMWrapper* cublas_wrapper_{};
     IAllocator*      allocator_{};
+    IAllocator*      peer_allocator_{};
 
     std::thread internal_thread_;
 

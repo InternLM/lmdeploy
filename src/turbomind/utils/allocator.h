@@ -69,7 +69,7 @@ public:
     virtual ~IAllocator(){};
 
     virtual void*        malloc(size_t size, const bool is_set_zero = true, bool is_host = false) = 0;
-    virtual void         free(void** ptr, bool is_host = false) const                             = 0;
+    virtual void         free(void** ptr, bool is_host = false)                                   = 0;
     virtual void         setStream(cudaStream_t stream)                                           = 0;
     virtual cudaStream_t returnStream()                                                           = 0;
     virtual void         memSet(void* ptr, const int val, const size_t size)                      = 0;
@@ -131,21 +131,23 @@ private:
         DEVICE
     };
 
-    const int                                                 device_id_;
-    cudaStream_t                                              stream_ = 0;  // initialize as default stream
-    std::unordered_map<void*, std::pair<size_t, MemoryType>>* pointer_mapping_;
+    const int                                                device_id_;
+    bool                                                     enable_peer_access_{false};
+    cudaStream_t                                             stream_ = 0;  // initialize as default stream
+    cudaMemPool_t                                            mempool_{};
+    std::unordered_map<void*, std::pair<size_t, MemoryType>> pointer_mapping_;
 
     bool isExist(void* address) const
     {
-        return pointer_mapping_->count(address) > 0;
+        return pointer_mapping_.count(address) > 0;
     }
     ReallocType isReMalloc(void* address, size_t size) const
     {
         FT_CHECK(isExist(address));
-        if (pointer_mapping_->at(address).first < size) {
+        if (pointer_mapping_.at(address).first < size) {
             return ReallocType::INCREASE;
         }
-        else if (pointer_mapping_->at(address).first == size) {
+        else if (pointer_mapping_.at(address).first == size) {
             return ReallocType::REUSE;
         }
         else {
@@ -154,53 +156,64 @@ private:
     }
 
 public:
-    Allocator(int device_id): device_id_(device_id)
+    Allocator(int device_id, bool enable_peer_access = false):
+        device_id_(device_id), enable_peer_access_(enable_peer_access)
     {
         TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-        pointer_mapping_ = new std::unordered_map<void*, std::pair<size_t, MemoryType>>();
 #if defined(CUDA_MEMORY_POOL_DISABLED)
         TM_LOG_WARNING(
             "Async cudaMalloc/Free is not supported before CUDA 11.2. Using Sync cudaMalloc/Free."
             "Note this may lead to hang with NCCL kernels launched in parallel; if so, try NCCL_LAUNCH_MODE=GROUP");
 #else
-        int device_count = 1;
-        check_cuda_error(cudaGetDeviceCount(&device_count));
-        cudaMemPool_t mempool;
-        check_cuda_error(cudaDeviceGetDefaultMemPool(&mempool, device_id));
-#if TM_ENABLE_CUSTOM_ALL_REDUCE
-        cudaMemAccessDesc desc                  = {};
-        int               peer_access_available = 0;
-        for (int i = 0; i < device_count; i++) {
-            if (i == device_id) {
-                continue;
+
+        if (enable_peer_access) {
+            cudaMemPoolProps props{};
+            props.allocType     = cudaMemAllocationTypePinned;
+            props.handleTypes   = cudaMemHandleTypeNone;
+            props.location.type = cudaMemLocationTypeDevice;
+            props.location.id   = device_id;
+            check_cuda_error(cudaMemPoolCreate(&mempool_, &props));
+            cudaMemAccessDesc desc                  = {};
+            int               peer_access_available = 0;
+            int               device_count          = 1;
+            check_cuda_error(cudaGetDeviceCount(&device_count));
+            for (int i = 0; i < device_count; i++) {
+                if (i == device_id) {
+                    continue;
+                }
+                check_cuda_error(cudaDeviceCanAccessPeer(&peer_access_available, device_id, i));
+                if (!peer_access_available) {
+                    TM_LOG_WARNING("Devicle " + std::to_string(device_id) + " peer access Device " + std::to_string(i)
+                                   + " is not available.");
+                    continue;
+                }
+                desc.location.type = cudaMemLocationTypeDevice;
+                desc.location.id   = i;
+                desc.flags         = cudaMemAccessFlagsProtReadWrite;
+                check_cuda_error(cudaMemPoolSetAccess(mempool_, &desc, 1));
             }
-            check_cuda_error(cudaDeviceCanAccessPeer(&peer_access_available, device_id, i));
-            if (!peer_access_available) {
-                TM_LOG_WARNING("Device " + std::to_string(device_id) + " peer access Device " + std::to_string(i)
-                               + " is not available.");
-                continue;
-            }
-            desc.location.type = cudaMemLocationTypeDevice;
-            desc.location.id   = i;
-            desc.flags         = cudaMemAccessFlagsProtReadWrite;
-            check_cuda_error(cudaMemPoolSetAccess(mempool, &desc, 1));
         }
-#endif
+        else {
+            check_cuda_error(cudaDeviceGetDefaultMemPool(&mempool_, device_id));
+        }
         // set memory pool threshold to avoid shrinking the pool
         uint64_t setVal = UINT64_MAX;
-        check_cuda_error(cudaMemPoolSetAttribute(mempool, cudaMemPoolAttrReleaseThreshold, &setVal));
+        check_cuda_error(cudaMemPoolSetAttribute(mempool_, cudaMemPoolAttrReleaseThreshold, &setVal));
 #endif
     }
 
     virtual ~Allocator()
     {
         TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-        while (!pointer_mapping_->empty()) {
-            auto ptr           = pointer_mapping_->begin()->first;
-            auto size_and_type = pointer_mapping_->begin()->second;
+        while (!pointer_mapping_.empty()) {
+            auto ptr           = pointer_mapping_.begin()->first;
+            auto size_and_type = pointer_mapping_.begin()->second;
             free(&ptr, size_and_type.second == MemoryType::HOST);
         }
-        delete pointer_mapping_;
+        if (enable_peer_access_) {  // We own the pool in this case
+            check_cuda_error(cudaMemPoolDestroy(mempool_));
+            mempool_ = {};
+        }
     }
 
     void setStream(cudaStream_t stream)
@@ -230,7 +243,7 @@ public:
 #if defined(CUDA_MEMORY_POOL_DISABLED)
             check_cuda_error(cudaMalloc(&ptr, (size_t)(ceil(size / 32.)) * 32));
 #else
-            check_cuda_error(cudaMallocAsync(&ptr, (size_t)(ceil(size / 32.)) * 32, stream_));
+            check_cuda_error(cudaMallocFromPoolAsync(&ptr, (size_t)(ceil(size / 32.)) * 32, mempool_, stream_));
 #endif
         }
         if (is_set_zero) {
@@ -239,19 +252,19 @@ public:
         check_cuda_error(getSetDevice(o_device));
         TM_LOG_DEBUG("malloc buffer %p with size %ld", ptr, size);
 
-        pointer_mapping_->insert({getAddress(ptr), {size, is_host ? MemoryType::HOST : MemoryType::DEVICE}});
+        pointer_mapping_.insert({getAddress(ptr), {size, is_host ? MemoryType::HOST : MemoryType::DEVICE}});
 
         return ptr;
     }
 
-    void free(void** ptr, bool _ = false) const
+    void free(void** ptr, bool _ = false)
     {
         TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         void* address = getAddress(*ptr);
         if (*ptr != nullptr) {
             int o_device = 0;
-            if (pointer_mapping_->count(address)) {
-                const auto is_host = pointer_mapping_->at(address).second == MemoryType::HOST;
+            if (pointer_mapping_.count(address)) {
+                const auto is_host = pointer_mapping_.at(address).second == MemoryType::HOST;
                 TM_LOG_DEBUG("Free buffer %p", address);
                 check_cuda_error(getSetDevice(device_id_, &o_device));
                 if (is_host) {
@@ -265,7 +278,7 @@ public:
 #endif
                 }
                 check_cuda_error(getSetDevice(o_device));
-                pointer_mapping_->erase(address);
+                pointer_mapping_.erase(address);
             }
             else {
                 TM_LOG_WARNING("pointer_mapping_ does not have information of ptr at %p.", address);
