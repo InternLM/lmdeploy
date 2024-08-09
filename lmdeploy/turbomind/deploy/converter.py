@@ -166,9 +166,8 @@ def pack_model_repository(workspace_path: str):
 def get_tm_model(model_path,
                  model_name,
                  chat_template_name,
-                 model_format,
                  group_size,
-                 tp,
+                 engine_config,
                  out_dir: str = None):
     # TODO: open the following condition check in another PR,
     # CLI needs to be updated
@@ -176,18 +175,19 @@ def get_tm_model(model_path,
     #     raise RuntimeError(
     #         'group_size should be specified when the model is awq')
 
-    input_model_name = get_input_model_registered_name(model_path,
-                                                       model_format)
+    input_model_name = get_input_model_registered_name(
+        model_path, engine_config.model_format)
     input_model = INPUT_MODELS.get(input_model_name)(model_path=model_path,
                                                      tokenizer_path=model_path)
 
     output_model_name, cfg = get_output_model_registered_name_and_config(
         model_path=model_path,
-        model_format=model_format,
+        model_format=engine_config.model_format,
         group_size=group_size)
 
     cfg.chat_template = chat_template_name
-    cfg.tensor_para_size = tp
+    cfg.model_name = model_name
+    cfg.update_from_engine_config(engine_config)
 
     output_model = OUTPUT_MODELS.get(output_model_name)(
         input_model=input_model, cfg=cfg, out_dir=out_dir)

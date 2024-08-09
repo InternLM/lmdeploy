@@ -179,9 +179,8 @@ class TurboMind:
 
         # convert transformers model into turbomind model format
         tm_model = get_tm_model(model_path, self.model_name,
-                                self.chat_template_name,
-                                engine_config.model_format, group_size,
-                                engine_config.tp)
+                                self.chat_template_name, group_size,
+                                engine_config)
 
         self.config = tm_model.cfg
         logger.info(f'model_config:\n\n{self.config.toini()}')
