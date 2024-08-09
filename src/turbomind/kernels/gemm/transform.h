@@ -111,6 +111,7 @@ struct Transform_HMMA_SIMT_B {
     __device__ static void dequant(Array<F, 2>& x, Array<uint32_t, 1> s)
     {
         Array<F, 2>& _s = (Array<F, 2>&)s;
+
         x[0] = __hfma(x[0], _s[0], _s[1]);
         x[1] = __hfma(x[1], _s[0], _s[1]);
     }

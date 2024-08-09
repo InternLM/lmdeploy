@@ -78,7 +78,6 @@ template<Pack pack, Order order>
 struct Packing_v2: PackingImpl<get_mma_tag(pack), get_operand_tag(pack), get_pack_num(pack), order> {
 };
 
-
 /// TODO: move packing utility to arch/smem_copy_xxx
 
 template<int num>

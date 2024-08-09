@@ -11,7 +11,7 @@ namespace turbomind::gemm {
 
 struct VoidGmemIter {
     static constexpr int ITER_S = 0;
-    using Fragments = int;
+    using Fragments             = int;
     template<class P>
     __device__ VoidGmemIter(P, int, int2, int2)
     {
@@ -29,7 +29,7 @@ struct VoidGmemIter {
 struct GetGmemIter {
     template<class Operand, class Iterator, class SmemLayout, int M, int K, int WARPS>
     static constexpr auto
-    apply(basic_type<Operand>, basic_type<Iterator>, basic_type<SmemLayout>, pair<M, K>, constant<WARPS>)
+        apply(basic_type<Operand>, basic_type<Iterator>, basic_type<SmemLayout>, pair<M, K>, constant<WARPS>)
     {
         using Dtype = typename Operand::Dtype;
 
