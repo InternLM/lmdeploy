@@ -1,12 +1,56 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Tuple
+
 import torch
 
-from .dipu import DIPUDeviceUtils
+from ..base import LayerType
+from ..default import DefaultLayersBackend
 
 
-class ASCENDDeviceUtils(DIPUDeviceUtils):
+class AscendLayersBackend(DefaultLayersBackend):
 
-    device = 'ascend'
+    @staticmethod
+    def get_name() -> str:
+        raise 'ascend'
+
+    @classmethod
+    def get_layer_impl_builder(cls, layer_type: LayerType):
+        if layer_type == LayerType.Attention:
+            from .attention import AscendAttentionImpl
+            return AscendAttentionImpl
+        else:
+            return super().get_layer_impl_builder(layer_type)
+
+    @staticmethod
+    def get_attention_metadata_cls():
+        from .attention import AscendAttentionMetadata
+        return AscendAttentionMetadata
+
+    @staticmethod
+    def get_k_block_shape(
+        block_size: int,
+        num_heads: int,
+        head_size: int,
+        dtype: torch.dtype,
+    ) -> Tuple[int, ...]:
+        return (
+            block_size,
+            num_heads,
+            head_size,
+        )
+
+    @staticmethod
+    def get_v_block_shape(
+        block_size: int,
+        num_heads: int,
+        head_size: int,
+        dtype: torch.dtype,
+    ) -> Tuple[int, ...]:
+        return (
+            block_size,
+            num_heads,
+            head_size,
+        )
 
     @classmethod
     def update_step_context(cls, step_context):

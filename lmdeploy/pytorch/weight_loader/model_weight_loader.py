@@ -192,7 +192,7 @@ class ModelWeightLoader:
                 mod.register_buffer(name, param)
 
         if not load_only and hasattr(model, '_load_weights'):
-            model._load_weights(loader, rank, world_size, device=device)
+            model._load_weights(model, loader, rank, world_size, device=device)
         else:
             __load_no_recursive(model)
             for name, child in model.named_children():

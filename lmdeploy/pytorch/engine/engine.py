@@ -13,14 +13,14 @@ from lmdeploy.utils import get_logger, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager, SchedulerAdapter
 from ..check_env import check_adapters, check_env, check_model
-from ..config import CacheConfig, SchedulerConfig
+from ..config import BackendConfig, CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
 from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
+from ..model_inputs import AdapterInfo, ModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
-from .model_agent import (AdapterInfo, AutoModelAgent, ModelInputs,
-                          VisionModelInputs)
+from .model_agent import AutoModelAgent, build_model_agent
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -63,6 +63,9 @@ def _paging_adapters(adapters: dict, model_agent: AutoModelAgent,
                      scheduler: Scheduler):
     adapters = adapters or dict()
     weight_maps = []
+    adapter_manager = scheduler.adapter_manager
+    non_adapter = adapter_manager.get_adapter(None)
+    weight_maps.append(non_adapter.build_weight_map())
     for name in adapters:
         weight_map = scheduler.add_adapter(name)
         weight_map.rank_offset = torch.tensor(weight_map.rank_offset)
@@ -80,8 +83,7 @@ def _tensorlize_block_offsets(block_offsets):
 
 def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
     """get adapter ids."""
-    adapter_names_map = dict(
-        (ada.name, idx) for idx, ada in enumerate(adapters))
+    adapter_names_map = dict((ada.name, ada.adapter_id) for ada in adapters)
     adapter_ids = [adapter_names_map[seq.adapter_name] for seq in seqs]
     return adapter_ids
 
@@ -123,6 +125,7 @@ class Engine:
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
         cache_config = CacheConfig(
+            max_batches=engine_config.max_batch_size,
             block_size=engine_config.block_size,
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
@@ -136,13 +139,20 @@ class Engine:
                                    engine_config.revision)
         self.model_path = model_path
 
+        backend_config = BackendConfig(
+            eager_mode=engine_config.eager_mode,
+            device_type=engine_config.device_type,
+        )
+
         with get_device_manager().context(self.device_context):
-            self.model_agent = AutoModelAgent.from_pretrained(
+            self.model_agent = build_model_agent(
                 model_path,
                 cache_config=cache_config,
+                backend_config=backend_config,
                 trust_remote_code=trust_remote_code,
                 adapters=adapters,
-                tp=tp)
+                tp=tp,
+                custom_module_map=engine_config.custom_module_map)
 
         cache_config = self.model_agent.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
@@ -156,6 +166,7 @@ class Engine:
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
+        self.backend_config = backend_config
         self.stream = torch.cuda.Stream()
 
         self.req_manager = self._bind_request_manager()
@@ -357,8 +368,6 @@ class Engine:
 
         token_ids = [msg.token_ids for msg in messages]
 
-        meta = messages[0].meta
-
         if isinstance(token_ids[0], int):
             token_ids = [token_ids]
 
@@ -372,7 +381,6 @@ class Engine:
         else:
             seq_length = self._seq_length_buf[:batch_size]
         max_q_seq_length = seq_length.max().item()
-        max_history_length = history_lengths.max().item()
 
         # TODO: get block offsets is slow when block_size = 1
         block_offsets = self.scheduler.get_block_tables(messages)
@@ -450,18 +458,17 @@ class Engine:
                 input_embedding_indexing=input_embedding_indexing,
                 input_embedding_ranges=input_embedding_ranges)
 
-        return ModelInputs(input_ids=input_ids,
-                           seq_length=seq_length,
-                           history_lengths=history_lengths,
-                           block_offsets=block_offsets,
-                           max_q_seq_length=max_q_seq_length,
-                           max_history_length=max_history_length,
-                           is_decoding=is_decoding,
-                           num_ignored_history=num_ignored_history,
-                           local_adapter_ids=local_adapter_ids,
-                           adapter_info=adapter_info,
-                           vision_inputs=vision_embedding_inputs,
-                           meta=meta)
+        return ModelInputs(
+            input_ids=input_ids,
+            seq_length=seq_length,
+            history_lengths=history_lengths,
+            block_offsets=block_offsets,
+            is_decoding=is_decoding,
+            num_ignored_history=num_ignored_history,
+            local_adapter_ids=local_adapter_ids,
+            adapter_info=adapter_info,
+            vision_inputs=vision_embedding_inputs,
+        )
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,
                                  stop_words: torch.Tensor,

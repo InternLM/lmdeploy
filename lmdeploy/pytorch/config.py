@@ -38,6 +38,13 @@ def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
 
 
 @dataclass
+class BackendConfig:
+    """backend config."""
+    eager_mode: bool = True
+    device_type: str = 'cuda'
+
+
+@dataclass
 class SchedulerConfig:
     """Config of scheduler."""
 
@@ -53,6 +60,7 @@ class SchedulerConfig:
 class CacheConfig:
     """Config of key value cache."""
 
+    max_batches: int
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
@@ -94,6 +102,7 @@ class ModelConfig:
     unused_modules: List[str] = None
     auto_model_cls: Any = AutoModelForCausalLM
     cogvlm_style: bool = False
+    custom_module_map: str = None
 
     def get_head_size(self):
         """get head size."""

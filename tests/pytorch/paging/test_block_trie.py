@@ -23,7 +23,8 @@ class TestBlockTire:
 
     @pytest.fixture
     def cache_config(self, block_size, num_cpu_blocks, num_gpu_blocks):
-        yield CacheConfig(block_size=block_size,
+        yield CacheConfig(max_batches=256,
+                          block_size=block_size,
                           num_cpu_blocks=num_cpu_blocks,
                           num_gpu_blocks=num_gpu_blocks,
                           enable_prefix_caching=True)

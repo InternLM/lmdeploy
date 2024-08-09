@@ -10,18 +10,15 @@ MODULE_MAP = {
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaAttention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
-    'transformers.models.llama.modeling_llama.LlamaModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
-    'transformers.models.llama.modeling_llama.LlamaRMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
     # support modeling rewritten in lmdeploy
     'modeling_llama.LlamaAttention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
-    'modeling_llama.LlamaModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
-    'modeling_llama.LlamaMLP': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'modeling_llama.LlamaMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'modeling_llama.LlamaForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
 }
 
 # Falcon Models in transformer / on hub
@@ -228,21 +225,17 @@ MODULE_MAP.update({
 # mixtral
 MODULE_MAP.update({
     'transformers.models.mixtral.modeling_mixtral.MixtralAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralAttention',
     'transformers.models.mixtral.modeling_mixtral.MixtralFlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralAttention',
     'transformers.models.mixtral.modeling_mixtral.MixtralSdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
-    'transformers.models.mixtral.modeling_mixtral.MixtralModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralModel',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralAttention',
     'transformers.models.mixtral.modeling_mixtral.MixtralBLockSparseTop2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralBLockSparseTop2MLP',
     'transformers.models.mixtral.modeling_mixtral.MixtralBlockSparseTop2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
-    'transformers.models.mixtral.modeling_mixtral.MixtralRMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
-    'transformers.models.mixtral.modeling_mixtral.MixtralSparseMoeBlock':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralSparseMoeBlock',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralBLockSparseTop2MLP',
+    'transformers.models.mixtral.modeling_mixtral.MixtralForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralForCausalLM',
 })
 
 # dbrx
@@ -324,7 +317,7 @@ MODULE_MAP.update({
 # llava
 MODULE_MAP.update({
     'llava.model.language_model.llava_llama.LlavaLlamaForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaLlamaForCausalLM',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
     'llava.model.language_model.llava_llama.LlavaLlamaModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'llava.model.language_model.llava_mistral.LlavaMistralForCausalLM':
@@ -390,3 +383,5 @@ ASCEND_MODULE_MAP.update({
     'modeling_internlm2.InternLM2FlashAttention2':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',
 })
+
+CUSTOM_MODULE_MAP = dict()
