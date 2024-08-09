@@ -219,7 +219,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
                 hf_metrics = [
                     hf_res[d] if d in hf_res else '-' for d in dataset_names
                 ]
-                hf_res_row = ','.join([model, 'hf', '-'] + hf_metrics)
+                hf_res_row = ','.join([model, 'hf', '-', '-'] + hf_metrics)
         if not os.path.exists(output_csv):
             with open(output_csv, 'w') as f:
                 header = ','.join(['Model', 'Engine', 'Precision'] +
