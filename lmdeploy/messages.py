@@ -279,6 +279,7 @@ class EngineOutput:
         token_ids (List[int]): the output token ids.
         num_token (int): the length of output token, for turbomind, num_token
             may not equal to the length of token_ids
+        num_prefix_cached_token (int): the length of prefix cached tokens
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
     """
@@ -286,6 +287,7 @@ class EngineOutput:
     token_ids: List[int]
     num_token: int
     logprobs: List[Dict[int, float]] = None
+    num_prefix_cached_token: int = None
 
 
 @dataclass

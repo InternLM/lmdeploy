@@ -49,6 +49,7 @@ class GenOut:
     finish_reason: Optional[Literal['stop', 'length']] = None
     token_ids: List[int] = None
     logprobs: List[Dict[int, float]] = None
+    prefix_cached_token_len: int = None
 
 
 class Session:
@@ -566,6 +567,7 @@ class AsyncEngine(LogitsMixin):
                 state = DetokenizeState(len(input_ids))
                 start_ids_offset = state.ids_offset
                 response = ''
+                prefix_cached_token_len = None
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
                         **prompt_input,
@@ -577,6 +579,7 @@ class AsyncEngine(LogitsMixin):
                         step=self.id2step[str(session_id)]):
                     # decode res
                     res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
+                    prefix_cached_token_len = outputs.num_prefix_cached_token
                     if len(res) <= state.ids_offset:
                         continue
 
@@ -604,8 +607,12 @@ class AsyncEngine(LogitsMixin):
                 # byte sequence
                 if not response.endswith('�'):
                     response = ''  # avaid returning the last response twice
-                yield GenOut(response, self.id2step[str(session_id)],
-                             len(input_ids), tokens, finish_reason)
+                yield GenOut(response,
+                             self.id2step[str(session_id)],
+                             len(input_ids),
+                             tokens,
+                             finish_reason,
+                             prefix_cached_token_len=prefix_cached_token_len)
                 # update step
                 self.id2step[str(session_id)] += len(input_ids) + tokens
                 if sequence_end:

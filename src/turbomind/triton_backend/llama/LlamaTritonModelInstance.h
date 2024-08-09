@@ -87,11 +87,12 @@ private:
     float* d_top_p_min_                = nullptr;
     int*   d_top_p_reset_ids_          = nullptr;
 
-    int*   d_output_ids_       = nullptr;
-    int*   d_sequence_lengths_ = nullptr;
-    float* d_output_log_probs_ = nullptr;
-    float* d_cum_log_probs_    = nullptr;
-    float* d_output_logits_    = nullptr;
+    int*   d_output_ids_           = nullptr;
+    int*   d_sequence_lengths_     = nullptr;
+    int*   d_prefix_cache_lengths_ = nullptr;
+    float* d_output_log_probs_     = nullptr;
+    float* d_cum_log_probs_        = nullptr;
+    float* d_output_logits_        = nullptr;
 
     float*    h_logprob_vals_    = nullptr;
     uint32_t* h_logprob_indexes_ = nullptr;

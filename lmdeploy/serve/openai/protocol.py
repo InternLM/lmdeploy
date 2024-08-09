@@ -53,6 +53,7 @@ class UsageInfo(BaseModel):
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: Optional[int] = 0
+    prefix_cached_tokens: Optional[int] = None
 
 
 class ChatCompletionRequestQos(BaseModel):
@@ -300,6 +301,7 @@ class CompletionStreamResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[CompletionResponseStreamChoice]
+    usage: Optional[UsageInfo] = None
 
 
 class EmbeddingsRequest(BaseModel):
