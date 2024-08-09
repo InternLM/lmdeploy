@@ -35,6 +35,8 @@ __global__ void start_id_embedding_position_lookups_kernel(T*                   
                                                            const T*              pos_table,
                                                            pPromptTuningParam<T> prompt_param,
                                                            const int*            input_ids,
+                                                           const int             table_offset,
+                                                           const int             table_length,
                                                            const int             start_step,
                                                            const int             length,
                                                            const int             max_length,
@@ -96,7 +98,9 @@ __global__ void start_id_embedding_position_lookups_kernel(T*                   
             }
         }
         else {
-            embedding = embedding_table[input_id * hidden_units + col_index];
+            if (input_id - table_offset >= 0 && input_id - table_offset < table_length) {
+                embedding = embedding_table[(input_id - table_offset) * hidden_units + col_index];
+            }
         }
         T pos_embed        = pos_table == nullptr ? (T)0.f : pos_table[(step - 1) * hidden_units + col_index];
         from_tensor[index] = embedding + pos_embed;
@@ -110,6 +114,8 @@ __global__ void start_id_embedding_position_lookups_kernel(T*                   
                                                                                                      pos_table,        \
                                                                                                      prompt_param,     \
                                                                                                      input_ids,        \
+                                                                                                     table_offset,     \
+                                                                                                     table_length,     \
                                                                                                      start_step,       \
                                                                                                      length,           \
                                                                                                      max_length,       \
@@ -123,6 +129,8 @@ void invokeInputIdsEmbeddingLookupPosEncoding(T*                    from_tensor,
                                               const T*              pos_table,
                                               pPromptTuningParam<T> prompt_param,
                                               const int*            input_ids,
+                                              const int             table_offset,
+                                              const int             table_length,
                                               const int             start_step,
                                               const int             length,
                                               const int             max_length,
@@ -180,6 +188,8 @@ template void invokeInputIdsEmbeddingLookupPosEncoding(half*                    
                                                        const half*              pos_table,
                                                        pPromptTuningParam<half> prompt_param,
                                                        const int*               input_ids,
+                                                       const int                table_offset,
+                                                       const int                table_length,
                                                        const int                start_step,
                                                        const int                length,
                                                        const int                max_length,
@@ -194,6 +204,8 @@ template void invokeInputIdsEmbeddingLookupPosEncoding(__nv_bfloat16*           
                                                        const __nv_bfloat16*              pos_table,
                                                        pPromptTuningParam<__nv_bfloat16> prompt_param,
                                                        const int*                        input_ids,
+                                                       const int                         table_offset,
+                                                       const int                         table_length,
                                                        const int                         start_step,
                                                        const int                         length,
                                                        const int                         max_length,

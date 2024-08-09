@@ -33,6 +33,7 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
                             WeightType weight_type,
                             int        group_size,
                             LoraParams lora_params,
+                            bool       tie_word_embeddings,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank):
     hidden_units_(head_num * size_per_head),
@@ -41,6 +42,7 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
     vocab_size_padded_(vocab_size),
     num_layer_(num_layer),
     weight_type_(weight_type),
+    tie_word_embeddings_(tie_word_embeddings),
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank)
 {
@@ -71,7 +73,9 @@ LlamaWeight<T>::~LlamaWeight()
 {
     cudaFree((void*)pre_decoder_embedding_table);
     cudaFree((void*)output_norm_weight);
-    cudaFree((void*)post_decoder_embedding_kernel);
+    if (pre_decoder_embedding_table != post_decoder_embedding_kernel) {
+        cudaFree((void*)post_decoder_embedding_kernel);
+    }
 
     pre_decoder_embedding_table   = nullptr;
     post_decoder_embedding_kernel = nullptr;
@@ -84,9 +88,15 @@ LlamaWeight<T>::~LlamaWeight()
 template<typename T>
 void LlamaWeight<T>::mallocWeights()
 {
-    deviceMalloc((T**)&pre_decoder_embedding_table, vocab_size_padded_ * hidden_units_);
+    FT_CHECK(vocab_size_padded_ % tensor_para_size_ == 0);
+    deviceMalloc((T**)&pre_decoder_embedding_table, vocab_size_padded_ * hidden_units_ / tensor_para_size_);
     deviceMalloc((T**)&output_norm_weight, hidden_units_);
-    deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_padded_);
+    if (!tie_word_embeddings_) {
+        deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_padded_ / tensor_para_size_);
+    }
+    else {
+        post_decoder_embedding_kernel = pre_decoder_embedding_table;
+    }
 }
 
 template<typename T>
@@ -99,14 +109,14 @@ void LlamaWeight<T>::loadModel(std::string dir_path)
     dir_path += '/';
 
     loadWeightFromBin((T*)pre_decoder_embedding_table,
-                      {vocab_size_padded_ * hidden_units_},
+                      {vocab_size_padded_ * hidden_units_ / tensor_para_size_},
                       dir_path + "tok_embeddings.weight",
                       model_file_type);
 
     loadWeightFromBin((T*)output_norm_weight, {hidden_units_}, dir_path + "norm.weight", model_file_type);
 
     loadWeightFromBin((T*)post_decoder_embedding_kernel,
-                      {hidden_units_ * vocab_size_padded_},
+                      {hidden_units_ * vocab_size_padded_ / tensor_para_size_},
                       dir_path + "output.weight",
                       model_file_type);
 
@@ -119,20 +129,21 @@ template<typename T>
 TensorMap LlamaWeight<T>::getParams()
 {
     TensorMap output;
+    FT_CHECK(vocab_size_padded_ % tensor_para_size_ == 0);
 
-    output.insert("tok_embeddings.weight",
+    output.insert("tok_embeddings." + std::to_string(tensor_para_rank_) + ".weight",
                   Tensor{MEMORY_GPU,
                          getTensorType<T>(),
-                         {vocab_size_padded_ * hidden_units_ * sizeof(T)},
+                         {vocab_size_padded_ * hidden_units_ * sizeof(T) / tensor_para_size_},
                          pre_decoder_embedding_table});
 
     output.insert("norm.weight",
                   Tensor{MEMORY_GPU, getTensorType<T>(), {hidden_units_ * sizeof(T)}, output_norm_weight});
 
-    output.insert("output.weight",
+    output.insert("output." + std::to_string(tensor_para_rank_) + ".weight",
                   Tensor{MEMORY_GPU,
                          getTensorType<T>(),
-                         {hidden_units_ * vocab_size_padded_ * sizeof(T)},
+                         {hidden_units_ * vocab_size_padded_ * sizeof(T) / tensor_para_size_},
                          post_decoder_embedding_kernel});
 
     // transformer layers

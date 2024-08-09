@@ -80,6 +80,7 @@ class TurbomindModelConfig:
     lora_max_wo_r: int = 0
     lora_rank_pattern: str = ''
     lora_scale_pattern: str = ''
+    tie_word_embeddings: bool = False
 
     @classmethod
     def from_dict(cls, env, allow_none=False):
@@ -315,12 +316,12 @@ class BaseOutputModel(ABC):
 
         if emb is not None:
             emb = pad_weight(emb)
-            self.export_weight(emb, 'tok_embeddings.weight')
+            self.save_split(emb, 'tok_embeddings.weight', 0)
         if norm_weight is not None:
             self.export_weight(norm_weight, 'norm.weight')
         if output_weight is not None:
             output_weight = pad_weight(output_weight)
-            self.export_weight(output_weight, 'output.weight')
+            self.save_split(output_weight, 'output.weight', 0)
 
     @abstractmethod
     def export_transformer_block(self, bin: BaseReader, i: int) -> None:

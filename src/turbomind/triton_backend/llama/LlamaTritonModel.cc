@@ -206,6 +206,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     end_id_              = reader.GetInteger("llama", "end_id");
     use_context_fmha_    = reader.GetInteger("llama", "use_context_fmha", 1);
     cache_block_seq_len_ = reader.GetInteger("llama", "cache_block_seq_len", 0);
+    tie_word_embeddings_ = reader.GetBoolean("llama", "tie_word_embeddings", false);
 
     attn_bias_    = reader.GetInteger("llama", "attn_bias", 0);
     quant_policy_ = reader.GetInteger("llama", "quant_policy", 0);
@@ -416,6 +417,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                       weight_type_,
                                                                       group_size_,
                                                                       lora_params_,
+                                                                      tie_word_embeddings_,
                                                                       tensor_para_size_,
                                                                       tensor_para_rank);
     // model inited with model_dir

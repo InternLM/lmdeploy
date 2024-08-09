@@ -199,6 +199,7 @@ class LlamaModel(BaseInputModel):
                 kv_head_num = model_arg['num_key_value_heads']
             else:
                 kv_head_num = model_arg['num_attention_heads']
+            tie_word_embeddings = model_arg.get('tie_word_embeddings', False)
             rope_theta = float(model_arg.get('rope_theta', 10000.0))
             max_position_embeddings = int(
                 model_arg.get('max_position_embeddings', 0))
@@ -233,6 +234,7 @@ class LlamaModel(BaseInputModel):
             norm_eps=norm_eps,
             attn_head_num=attn_head_num,
             kv_head_num=kv_head_num,
+            tie_word_embeddings=tie_word_embeddings,
             rope_theta=rope_theta,
             max_position_embeddings=max_position_embeddings,
             original_max_position_embeddings=original_max_position_embeddings,
