@@ -309,6 +309,16 @@ __device__ inline half2 cuda_cast<half2, half>(half val)
 {
     return __half2half2(val);
 }
+template<>
+__device__ inline half cuda_cast<half, float>(float val)
+{
+    return __float2half(val);
+}
+template<>
+__device__ inline float cuda_cast<float, half>(half val)
+{
+    return __half2float(val);
+}
 
 template<>
 __device__ inline int8_t cuda_cast<int8_t, half>(half val)

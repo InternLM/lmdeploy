@@ -719,6 +719,13 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
             context_decoder_output_buf_, sizeof(T) * max_forward_token_num_ * hidden_units, false);
     }
 
+    if (model_->quantization_ == QuantMethod::QQQ) {
+        context_decoder_quant_output_buf_ = (int8_t*)allocator_->reMalloc(
+            context_decoder_quant_output_buf_, sizeof(int8_t) * max_context_token_num_ * hidden_units, false);
+        context_decoder_quant_scale_buf_ = (float*)allocator_->reMalloc(
+            context_decoder_quant_scale_buf_, sizeof(float) * max_context_token_num_, false);
+    }
+
     context_decoder_input_buf_ =
         (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_forward_token_num_ * hidden_units, false);
     context_decoder_ids_buf_ =
@@ -857,6 +864,8 @@ void LlamaBatch<T>::FreeBuffer()
 
         allocator_->free((void**)&decoder_input_buf_);
         allocator_->free((void**)&decoder_output_buf_);
+        allocator_->free((void**)&context_decoder_quant_output_buf_);
+        allocator_->free((void**)&context_decoder_quant_scale_buf_);
 
         allocator_->free((void**)&input_ids_buf_);
         allocator_->free((void**)&input_length_buf_);
@@ -1644,8 +1653,10 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
         }
 
         model_->forwardUnified(decoder_output_buf_ + first * model_->hidden_units_,
-                               context_decoder_output_buf_,  // temp
-                               context_decoder_input_buf_,   // temp
+                               context_decoder_output_buf_,        // temp
+                               context_decoder_input_buf_,         // temp
+                               context_decoder_quant_output_buf_,  // temp
+                               context_decoder_quant_scale_buf_,   // temp
                                (void**)block_ptrs_,
                                cu_block_counts_ + first,
                                context_decoder_ids_buf_,  // temp

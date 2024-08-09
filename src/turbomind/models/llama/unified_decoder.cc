@@ -34,7 +34,8 @@ template<typename T>
 void UnifiedDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
                                    size_t                      kv_head_num,
                                    int                         cache_block_seq_len,
-                                   int                         quant_policy)
+                                   int                         quant_policy,
+                                   QuantMethod                 quantization)
 {
     attn_layer_ = new UnifiedAttentionLayer<T>(head_num_,
                                                kv_head_num,
@@ -47,7 +48,8 @@ void UnifiedDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
                                                allocator_,
                                                is_free_buffer_after_forward_,
                                                cache_block_seq_len,
-                                               quant_policy);
+                                               quant_policy,
+                                               quantization);
 
     ffn_layer_ = new LlamaFfnLayer<T>(head_num_,
                                       size_per_head_,
@@ -56,13 +58,16 @@ void UnifiedDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
                                       stream_,
                                       cublas_wrapper_,
                                       allocator_,
-                                      is_free_buffer_after_forward_);
+                                      is_free_buffer_after_forward_,
+                                      quantization);
 
     check_cuda_error(cudaEventCreateWithFlags(&ev_h_cu_x_, cudaEventDisableTiming));
 }
 
 template<typename T>
 void UnifiedDecoder<T>::forwardSelfAttn(T*                             attn_io,
+                                        int8_t*                        attn_qi,
+                                        float*                         attn_qs,
                                         TensorMap*                     _outputs,
                                         const TensorMap*               _inputs,
                                         size_t                         token_num,
@@ -72,6 +77,8 @@ void UnifiedDecoder<T>::forwardSelfAttn(T*                             attn_io,
 {
     TensorMap inputs(*_inputs);
     inputs.insert("input_query", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, attn_io});
+    inputs.insert({"input_quant_query", {MEMORY_GPU, TYPE_INT8, {token_num, hidden_units_}, attn_qi}});
+    inputs.insert({"input_quant_scale", {MEMORY_GPU, TYPE_FP32, {token_num}, attn_qs}});
     inputs.insert("layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id});
     inputs.insert("cu_q_len", {MEMORY_GPU, TYPE_INT32, {batch_size + 1}, cu_q_len_});
     inputs.insert("cu_k_len", {MEMORY_GPU, TYPE_INT32, {batch_size + 1}, cu_k_len_});
@@ -110,6 +117,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
      *
      * output tensors:
      *   \param decoder_output [num_token, hidden_units],
+     *   \param decoder_quant_output [num_token, hidden_units] or empty, int8
+     *   \param decoder_quant_scale [num_token] or empty, float
      *   \param last_token_hidden_units [batch_size, hidden_units]
      *   \param block_ptrs [total_block_counts], void*
      */
@@ -123,9 +132,11 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     const int* h_q_len = inputs->getPtr<int>("h_q_len");
     const int* h_k_len = inputs->getPtr<int>("h_k_len");
 
-    T* decoder_input_output    = inputs->getPtr<T>("decoder_input");
-    T* decoder_output          = outputs->getPtr<T>("decoder_output");
-    T* last_token_hidden_units = outputs->getPtr<T>("last_token_hidden_units");
+    T*      decoder_input_output    = inputs->getPtr<T>("decoder_input");
+    T*      decoder_output          = outputs->getPtr<T>("decoder_output");
+    int8_t* decoder_quant_output    = outputs->getPtr<int8_t>("decoder_quant_output");
+    float*  decoder_quant_scale     = outputs->getPtr<float>("decoder_quant_scale");
+    T*      last_token_hidden_units = outputs->getPtr<T>("last_token_hidden_units");
 
     {  // compute cumulative lengths
 
@@ -156,6 +167,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     invokeRootMeanSquareNorm(decoder_output,
                              decoder_input_output,
                              weights->at(0)->self_attn_norm_weights,
+                             decoder_quant_output,
+                             decoder_quant_scale,
                              rmsnorm_eps_,
                              token_num,
                              hidden_units_,
@@ -171,6 +184,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
         /////////////////////////////////////////////
         /// self-attention
         forwardSelfAttn(decoder_output,  //
+                        decoder_quant_output,
+                        decoder_quant_scale,
                         outputs,
                         inputs,
                         token_num,
@@ -184,6 +199,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                                           decoder_output,
                                           weights->at(layer)->self_attn_weights.output.bias,
                                           weights->at(layer)->ffn_norm_weights,
+                                          decoder_quant_output,
+                                          decoder_quant_scale,
                                           rmsnorm_eps_,
                                           token_num,
                                           hidden_units_,
@@ -198,6 +215,9 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
         int       layer_id = layer;  // int is needed
         TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}},
                              {"layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id}}};
+        ffn_inputs.insert(
+            {"ffn_quant_input", {MEMORY_GPU, TYPE_INT8, {token_num, hidden_units_}, decoder_quant_output}});
+        ffn_inputs.insert({"ffn_quant_scale", {MEMORY_GPU, TYPE_INT8, {token_num}, decoder_quant_scale}});
         TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
         if (inputs->isExist("lora_mask")) {
             ffn_inputs.insert({"lora_mask", inputs->at("lora_mask")});
@@ -215,6 +235,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                                           decoder_output,
                                           weights->at(layer)->ffn_weights.output.bias,
                                           scale_weight,
+                                          decoder_quant_output,
+                                          decoder_quant_scale,
                                           rmsnorm_eps_,
                                           token_num,
                                           hidden_units_,

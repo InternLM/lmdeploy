@@ -58,7 +58,12 @@ add_library(custom_ar_kernels STATIC custom_ar_kernels.cu)
 set_property(TARGET custom_ar_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET custom_ar_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
+add_library(quant_kernels STATIC quant_kernels.cu)
+set_property(TARGET quant_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET quant_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
 add_subdirectory(gemm_s_f16)
+add_subdirectory(marlin_qqq_gemm)
 if (BUILD_TEST)
     add_subdirectory(flash_attention)
 endif ()

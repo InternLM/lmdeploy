@@ -66,6 +66,7 @@ class TurbomindModelConfig:
     max_prefill_iters: int = 1
     use_context_fmha: int = 1
     quant_policy: int = 0
+    quantization: str = ''
     max_position_embeddings: int = 0
     original_max_position_embeddings: int = 0
     rope_scaling_type: str = ''

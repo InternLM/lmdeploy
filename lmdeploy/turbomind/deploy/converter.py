@@ -15,7 +15,7 @@ from ..supported_models import SUPPORTED_ARCHS, is_supported
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 
-SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', None]
+SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', 'qqq', None]
 logger = get_logger('lmdeploy')
 
 
@@ -26,12 +26,14 @@ def get_input_model_registered_name(model_path: str, model_format: str):
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['meta_llama',  'hf', 'awq']
+            ['meta_llama', 'hf', 'awq', 'qqq']
     """
     arch = get_model_arch(model_path)[0]
     register_name = SUPPORTED_ARCHS[arch]
     if model_format == 'awq':
         register_name = register_name + '-awq'
+    elif model_format == 'qqq':
+        register_name = register_name + '-qqq'
     return register_name
 
 
@@ -92,8 +94,9 @@ def get_output_model_registered_name_and_config(model_path: str,
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['meta_llama',  'hf', 'awq']
-        group_size (int): the size of group used by awq model
+            ['meta_llama', 'hf', 'awq', 'qqq']
+        group_size (int): the size of group used by quantization methods,
+        including `awq` and `qqq`
     """
     register_name = 'fp16'
     turbomind_model_arch = 'llama'
@@ -113,6 +116,15 @@ def get_output_model_registered_name_and_config(model_path: str,
             register_name = 'plora-w4' \
                 if turbomind_model_arch == 'xcomposer2' else 'w4'
             group_size = 128 if group_size == 0 else group_size
+            config.quantization = 'awq'
+        elif model_format == 'qqq':
+            weight_type = 'int4'
+            register_name = 'qqq-w4'
+            from transformers import AutoConfig
+            quant_config = AutoConfig.from_pretrained(
+                model_path).quantization_config
+            group_size = quant_config['group_size']
+            config.quantization = 'qqq'
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
             TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16', torch.float16: 'fp16'}
@@ -212,17 +224,19 @@ def main(model_name: str,
         model_name (str): unused any longer
         model_path (str): the directory path of the model
         model_format (str): the format of the model, should choose from
-            ['meta_llama', 'hf', 'awq', None]. 'meta_llama' stands for META's
-            llama format, 'hf' means huggingface llama format, and 'awq' means
-            llama(hf) model quantized by lmdeploy/lite/quantization/awq.py.
-            The default value is None
-        chat_template (str): the name of the built-in chat template.
+            ['meta_llama', 'hf', 'awq', 'qqq', None]. 'meta_llama' stands for
+            META's llama format, 'hf' means huggingface llama format,
+            'awq' means llama(hf) model quantized by
+            lmdeploy/lite/quantization/awq.py,
+            and 'qqq' means llama(hf) model quantized by the repo
+            https://github.com/HandH1998/QQQ,
+            the default value is None
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism, should be 2^n
         quant_path (str): Path of the quantized model, which can be None.
-        group_size (int): a parameter used in AWQ to quantize fp16 weights
-            to 4 bits
+        group_size (int): a parameter used in AWQ or QQQ to quantize fp16
+        weights to 4 bits
         revision (str): The specific model version to use. It can be a branch
             name, a tag name, or a commit id. If unspecified, will use
             the default version.

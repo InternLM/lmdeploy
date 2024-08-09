@@ -61,7 +61,8 @@ public:
                           IAllocator*          allocator,
                           bool                 is_free_buffer_after_forward,
                           int                  cache_block_seq_len,
-                          int                  quant_policy):
+                          int                  quant_policy,
+                          QuantMethod          quantization):
         head_num_(head_num),
         size_per_head_(size_per_head),
         hidden_units_(head_num * size_per_head),
@@ -73,11 +74,12 @@ public:
         lora_params_(lora_params),
         stream_(stream),
         cublas_wrapper_(cublas_wrapper),
-        linear_(cublas_wrapper, stream),
+        linear_(cublas_wrapper, stream, allocator),
         allocator_(allocator),
         kv_cache_block_len_(cache_block_seq_len),
         is_free_buffer_after_forward_(is_free_buffer_after_forward),
-        quant_policy_(quant_policy)
+        quant_policy_(quant_policy),
+        quantization_(quantization)
     {
         FT_CHECK(head_num % kv_head_num == 0);
         arch_ = getSMVersion();
@@ -141,7 +143,8 @@ private:
 
     const LlamaAttentionParams params_;
 
-    const int quant_policy_;
+    const int   quant_policy_;
+    QuantMethod quantization_;
 
     NcclParam tensor_para_;
 
@@ -178,6 +181,9 @@ private:
     int*   barriers_{};  // always zero
 
     T* tmp_kv_buf_{};
+    // online act quant
+    int8_t* quant_buf_{};
+    float*  act_scale_buf_{};
 
     bool is_allocate_buffer_    = false;
     bool is_allocate_workspace_ = false;

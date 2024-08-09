@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -76,14 +77,16 @@ struct LoraWeight {
 
 template<typename T>
 struct LlamaDenseWeight {
-    size_t     input_dims;
-    size_t     output_dims;
-    void*      kernel;
-    LoraWeight lora;
-    WeightType type;
-    T*         bias;
-    T*         scales_and_zeros;
-    int        group_size;
+    size_t      input_dims;
+    size_t      output_dims;
+    void*       kernel;
+    LoraWeight  lora;
+    WeightType  type;
+    T*          bias;
+    T*          scales_and_zeros;
+    float*      scales_channel;
+    int         group_size;
+    QuantMethod quantization;
 };
 
 template<typename T>

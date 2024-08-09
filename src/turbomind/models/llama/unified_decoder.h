@@ -15,8 +15,11 @@ class UnifiedDecoder {
 protected:
     void freeBuffer();
 
-    void
-    initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, int cache_block_seq_len, int quant_policy);
+    void initialize(const LlamaAttentionParams& attn_params,
+                    size_t                      kv_head_num,
+                    int                         cache_block_seq_len,
+                    int                         quant_policy,
+                    QuantMethod                 quantization);
 
     cudaStream_t     stream_;
     cublasMMWrapper* cublas_wrapper_;
@@ -52,6 +55,8 @@ protected:
     using WeightType = LlamaDecoderLayerWeight<T>;
 
     void forwardSelfAttn(T*                             attn_io,
+                         int8_t*                        attn_qi,
+                         float*                         attn_qs,
                          TensorMap*                     _outputs,
                          const TensorMap*               _inputs,
                          size_t                         token_num,
@@ -75,7 +80,8 @@ public:
                    bool                        is_free_buffer_after_forward,
                    bool                        use_fmha,
                    int                         cache_block_seq_len,
-                   int                         quant_policy):
+                   int                         quant_policy,
+                   QuantMethod                 quantization):
         stream_(stream),
         cublas_wrapper_(cublas_wrapper),
         allocator_(allocator),
@@ -90,7 +96,7 @@ public:
         tensor_para_(tensor_para),
         dtype_(getTensorType<T>())
     {
-        initialize(attn_params, kv_head_num, cache_block_seq_len, quant_policy);
+        initialize(attn_params, kv_head_num, cache_block_seq_len, quant_policy, quantization);
     }
 
     void allocateBuffer(size_t max_batch_size);

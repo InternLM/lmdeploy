@@ -23,6 +23,8 @@
 #include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/attention/decoding.h"
 #include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
+#include "src/turbomind/kernels/marlin_qqq_gemm/marlin_qqq_gemm_kernel.h"
+#include "src/turbomind/kernels/quant_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -57,6 +59,12 @@ void UnifiedAttentionLayer<T>::allocateBuffer(size_t            q_count,
             (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
     }
 
+    if (quantization_ == QuantMethod::QQQ) {
+        quant_buf_ = (int8_t*)allocator_->reMalloc(
+            quant_buf_, sizeof(int8_t) * q_count * local_head_num_ * size_per_head_, false);
+        act_scale_buf_ = (float*)allocator_->reMalloc(act_scale_buf_, sizeof(float) * q_count, false);
+    }
+
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * q_count * local_head_num_ * size_per_head_, false);
 
     // Pad the tmp buffer for linear KV cache by `MAX_CTA_S` to avoid illegal accesses
@@ -76,6 +84,16 @@ void UnifiedAttentionLayer<T>::allocateWorkspace()
     partial_O_ = (float*)allocator_->malloc(sizeof(float) * kMaxWorkspaceTokens * local_head_num_ * size_per_head_);
     split_cnt_ = (int*)allocator_->malloc(sizeof(int) * kMaxWorkspaceTokens);
     barriers_  = (int*)allocator_->malloc(sizeof(int) * kMaxWorkspaceTokens * local_head_num_, true, false);
+    if (quantization_ == QuantMethod::QQQ) {
+        const size_t local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
+        size_t       max_dims            = std::max(local_q_kv_head_num * size_per_head_, hidden_units_);
+        size_t       sz_reduction        = sizeof(int) * marlin_qqq::max_par * 64 * max_dims;
+        size_t       sz_workspace        = sizeof(int) * marlin_qqq::max_par * (max_dims / marlin_qqq::min_thread_n);
+        auto [reduce_buf, workspace_buf] = linear_.getQQQBuffer();
+        reduce_buf                       = (int*)allocator_->malloc(sz_reduction, false);
+        workspace_buf                    = (int*)allocator_->malloc(sz_workspace, true);
+        linear_.setQQQBuffer(reduce_buf, workspace_buf);
+    }
     is_allocate_workspace_ = true;
 }
 
@@ -90,6 +108,10 @@ void UnifiedAttentionLayer<T>::freeWorkspace()
         allocator_->free((void**)&partial_O_);
         allocator_->free((void**)&split_cnt_);
         allocator_->free((void**)&barriers_);
+        // free qqq workspace
+        auto [reduce_buf, workspace_buf] = linear_.getQQQBuffer();
+        allocator_->free((void**)&reduce_buf);
+        allocator_->free((void**)&workspace_buf);
 
         is_allocate_workspace_ = false;
     }
@@ -103,6 +125,8 @@ void UnifiedAttentionLayer<T>::freeBuffer()
 
         allocator_->free((void**)&qkv_buf_);
         allocator_->free((void**)&qkv_buf_3_);
+        allocator_->free((void**)&quant_buf_);
+        allocator_->free((void**)&act_scale_buf_);
         allocator_->free((void**)&tmp_kv_buf_);
 
         is_allocate_buffer_ = false;
@@ -117,6 +141,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     /**
      * input_tensors:
      *   \param input_query [token_num, hidden_dim]
+     *   \param input_quant_query [token_num, hidden_dim] or empty, int8
+     *   \param input_quant_scale [token_num] or empty, float
      *   \param cu_q_len [batch_size+1], int
      *   \param cu_k_len [batch_size+1], int
      *   \param cu_block_counts [batch_size+1], int
@@ -157,8 +183,10 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     void** block_ptrs     = outputs->getPtr<void*>("block_ptrs");
     int*   cu_block_count = inputs->getPtr<int>("cu_block_counts");
 
-    T* attention_input = inputs->getPtr<T>("input_query");
-    T* attention_out   = outputs->getPtr<T>("hidden_features");
+    T*      attention_input       = inputs->getPtr<T>("input_query");
+    int8_t* attention_quant_input = inputs->getPtr<int8_t>("input_quant_query");
+    float*  attention_quant_scale = inputs->getPtr<float>("input_quant_scale");
+    T*      attention_out         = outputs->getPtr<T>("hidden_features");
 
     /////////////////////////////////////////////
     /// allocate buffers
@@ -177,10 +205,14 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     // }
 
     int* lora_mask = inputs->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
-    //////////////////////////////////////////////
-    /// qkv gemm
-    // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
-    linear_.forward(qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
+    linear_.forward(qkv_buf_,
+                    attention_input,
+                    attention_quant_input,
+                    attention_quant_scale,
+                    token_num,
+                    weights->qkv,
+                    LlamaLinear<T>::kGemm,
+                    lora_mask);
 
     count_and_fix(qkv_buf_, token_num * weights->qkv.output_dims, Concat("qkv", layer_id), 3);
 
@@ -317,12 +349,19 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     // }
 
     count_and_fix(qkv_buf_3_, token_num * weights->output.input_dims, Concat("attn", layer_id), 3);
-
+    if (quantization_ == QuantMethod::QQQ) {
+        invokeI8Quant(qkv_buf_3_, quant_buf_, act_scale_buf_, token_num, local_head_num_ * size_per_head_, stream_);
+    }
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    linear_.forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
-
-    // ++count;
+    linear_.forward(attention_out,
+                    qkv_buf_3_,
+                    quant_buf_,
+                    act_scale_buf_,
+                    token_num,
+                    weights->output,
+                    LlamaLinear<T>::kGemm,
+                    lora_mask);
 
     count_and_fix(attention_out, token_num * weights->output.output_dims, Concat("wo", layer_id), 3);
 

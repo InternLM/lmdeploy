@@ -274,6 +274,16 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
         std::cout << "[ERROR] Unsupported weight type: '" << weight_type_str << "'\n";
         ft::FT_CHECK(0);
     }
+    const std::string quantization_str = reader.Get("llama", "quantization");
+    if (quantization_str == "awq") {
+        quantization_ = turbomind::QuantMethod::AWQ;
+    }
+    else if (quantization_str == "qqq") {
+        quantization_ = turbomind::QuantMethod::QQQ;
+    }
+    else {
+        quantization_ = turbomind::QuantMethod::QNone;
+    }
 
     TM_LOG_INFO("%s", toString().c_str());
 }
@@ -344,6 +354,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   start_id_,
                                                   end_id_,
                                                   cache_block_seq_len_,
+                                                  quantization_,
                                                   quant_policy_,
                                                   use_context_fmha_,
                                                   engine_params_,
@@ -415,6 +426,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                       attn_bias_,
                                                                       weight_type_,
                                                                       group_size_,
+                                                                      quantization_,
                                                                       lora_params_,
                                                                       tensor_para_size_,
                                                                       tensor_para_rank);
