@@ -9,7 +9,7 @@
 #include "src/turbomind/kernels/gemm/epilogue.h"
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
 #include "src/turbomind/kernels/gemm/iterator_sm70.h"
-#include "src/turbomind/kernels/gemm/mainloop_sm80_v2.h"
+#include "src/turbomind/kernels/gemm/mainloop_sm70.h"
 #include "src/turbomind/kernels/gemm/thread_group_map.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -49,19 +49,19 @@ struct Sm70_s884 {
 
         using MMA = Tiled_MMA_v2<MMA_Atom, MMA_Map>;
 
-        using Mainloop = MainloopSm80_v2<MMA,
-                                         A,
-                                         IteratorSm70<PolicyA>,
-                                         TransformA,
-                                         U,
-                                         GroupSizeU,
-                                         B,
-                                         IteratorSm70<PolicyB>,
-                                         TransformB,
-                                         V,
-                                         GroupSizeV,
-                                         Stages,
-                                         true>;  // FusePrefetch_
+        using Mainloop = MainloopSm70<MMA,
+                                      A,
+                                      IteratorSm70<PolicyA>,
+                                      TransformA,
+                                      U,
+                                      GroupSizeU,
+                                      B,
+                                      IteratorSm70<PolicyB>,
+                                      TransformB,
+                                      V,
+                                      GroupSizeV,
+                                      Stages,
+                                      true>;  // FusePrefetch_
 
         static constexpr int TILE_C_M = TILE_C_M_ == -1 ? CTA_M : TILE_C_M_;
         static constexpr int TILE_C_N = TILE_C_N_ == -1 ? CTA_N : TILE_C_N_;

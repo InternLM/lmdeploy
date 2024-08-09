@@ -121,8 +121,8 @@ template<int num>
 struct PackingImpl<HMMA_884, OPERAND_B, num, kRowMajor> {
     __host__ __device__ static constexpr int2 apply(int2 mk)
     {
-        return {mk.x / (16 * num), mk.y * 16 * num};
-        // return {mk.x / (32 * num), mk.y * 32 * num};
+        // return {mk.x / (16 * num), mk.y * 16 * num};
+        return {mk.x / (32 * num), mk.y * 32 * num};
     }
 };
 

@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/layout.h"
@@ -71,6 +71,8 @@ struct GmemIteratorSm70 {
     static constexpr int  kPeriodS = ceil_div(SmemLayout::S0, Map::kDeltaS);
 
     int phases_[kPeriodS][kPeriodC];
+
+    using Fragments = AccessType[Map::kIterS][Map::kIterC];
 
     __device__ static constexpr int2 pack(int2 mk)
     {
@@ -148,7 +150,7 @@ struct GmemIteratorSm70 {
                 const int pred_c = offset_c_ + c * Map::kDeltaC < Map::kDimC;
                 auto      ptr    = &smem_data_(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
                 if ((Map::kAlignedC && Map::kAlignedS) || (pred_s && pred_c)) {
-                    Store(ptr, Array<T, Map::kAccessC>{});
+                    turbomind::Store(ptr, Array<T, Map::kAccessC>{});
                 }
             }
         }
@@ -200,7 +202,54 @@ struct GmemIteratorSm70 {
             else {
                 Ldg(frag, (const T*)src);
             }
-            Store(dst, frag);
+            turbomind::Store(dst, frag);
+        }
+    }
+
+    __device__ void Fetch(Fragments& frags, bool tile_mask)
+    {
+        PRAGMA_UNROLL
+        for (int s = 0; s < Map::kIterS; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < Map::kIterC; ++c) {
+                Copy2(frags[s][c], src_data_ + src_step_c_ * c, tile_mask && g_mask && pred_(s, c));
+            }
+            src_data_ += src_step_s_;
+            if (s == Map::kIterS - 1) {
+                src_data_ -= src_step_s_ * Map::kIterS;
+                src_data_ += _src_step_k();
+            }
+        }
+    }
+
+    __device__ void Store(Fragments& frags)
+    {
+        PRAGMA_UNROLL
+        for (int s = 0; s < Map::kIterS; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < Map::kIterC; ++c) {
+                // auto dst = &smem_data_(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
+
+                const int i0  = SmemLayout::apply(  //
+                    s / kPeriodS * kPeriodS * Map::kDeltaS,
+                    c / kPeriodC * kPeriodC * Map::kDeltaC);
+                const int i1  = phases_[s % kPeriodS][c % kPeriodC];
+                auto      dst = &smem_data_.ptr_[i0 + i1];
+
+                turbomind::Store(dst, frags[s][c]);
+            }
+        }
+    }
+
+    __device__ void Copy2(AccessType& frag, const char* __restrict__ src, bool mask)
+    {
+        if (mask) {
+            if constexpr (Policy_::kEvictPolicy != EvictPolicy::kEvictNormal) {
+                _Ld(frag, (const T*)src);
+            }
+            else {
+                Ldg(frag, (const T*)src);
+            }
         }
     }
 };

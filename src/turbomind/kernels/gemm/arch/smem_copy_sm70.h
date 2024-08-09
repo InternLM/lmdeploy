@@ -9,10 +9,10 @@ namespace turbomind::gemm {
 
 template<class T>
 struct SmemCopy_MMA_884_A {
-    static constexpr int M = 16;
-    static constexpr int K = 8;
-    // static constexpr int M = 8;
+    // static constexpr int M = 16;
     // static constexpr int K = 8;
+    static constexpr int M = 8;
+    static constexpr int K = 8;
 
     static constexpr int kFragNum = 1;
 
@@ -22,12 +22,12 @@ struct SmemCopy_MMA_884_A {
     {
         const int lane_id = thread_idx % WARP_SIZE;
         //                   4                3               01
-        const int m = lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4;
-        return {pack_idx * M + m, (lane_id & 4) >> 2};
+        // const int m = lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4;
+        // return {pack_idx * M + m, (lane_id & 4) >> 2};
 
         //                   4                01
-        // const int m = lane_id / 16 * 4 + lane_id % 4;
-        // return {pack_idx * M + m, (lane_id & 12) >> 2};
+        const int m = lane_id / 16 * 4 + lane_id % 4;
+        return {pack_idx * M + m, (lane_id & 12) >> 2};
     }
 
     __device__ static int2 get_offset(int thread_idx)
@@ -44,10 +44,10 @@ struct SmemCopy_MMA_884_A {
 
 template<class T>
 struct SmemCopy_MMA_884_B {
-    static constexpr int M = 16;
-    static constexpr int K = 8;
-    // static constexpr int M = 32;
+    // static constexpr int M = 16;
     // static constexpr int K = 8;
+    static constexpr int M = 32;
+    static constexpr int K = 8;
 
     static constexpr int kFragNum = 1;
 
@@ -57,12 +57,12 @@ struct SmemCopy_MMA_884_B {
     {
         const int lane_id = thread_idx % WARP_SIZE;
         //                4                     2                 01
-        const int m = lane_id / 16 * 4 + (lane_id & 4) * 2 + lane_id % 4;
-        return {pack_idx * M + m, (lane_id & 8) >> 3};
+        // const int m = lane_id / 16 * 4 + (lane_id & 4) * 2 + lane_id % 4;
+        // return {pack_idx * M + m, (lane_id & 8) >> 3};
 
         //                  4                  23                  01
-        // const int m = lane_id / 16 * 4 + (lane_id & 12) * 2 + lane_id % 4;
-        // return {pack_idx * M + m, 0};
+        const int m = lane_id / 16 * 4 + (lane_id & 12) * 2 + lane_id % 4;
+        return {pack_idx * M + m, 0};
     }
 
     __device__ static int2 get_offset(int thread_idx)
@@ -79,8 +79,8 @@ struct SmemCopy_MMA_884_B {
 
 template<class T, int K_>
 struct SmemCopy_MMA_884_V {
-    static constexpr int M = 16;
-    // static constexpr int M = 32;
+    // static constexpr int M = 16;
+    static constexpr int M = 32;
     static constexpr int K = K_;
 
     static constexpr int kFragNum = 1;
@@ -91,11 +91,11 @@ struct SmemCopy_MMA_884_V {
     {
         const int lane_id = thread_idx % WARP_SIZE;
         //                4                     2                 01
-        const int m = lane_id / 16 * 4 + (lane_id & 4) * 2 + lane_id % 4;
-        return {pack_idx * 16 + m, (lane_id & 8) >> 3};
+        // const int m = lane_id / 16 * 4 + (lane_id & 4) * 2 + lane_id % 4;
+        // return {pack_idx * 16 + m, (lane_id & 8) >> 3};
 
-        // const int m = lane_id / 16 * 4 + (lane_id & 12) * 2 + lane_id % 4;
-        // return {pack_idx * M + m, 0};
+        const int m = lane_id / 16 * 4 + (lane_id & 12) * 2 + lane_id % 4;
+        return {pack_idx * M + m, 0};
     }
 
     __device__ static int2 get_offset(int thread_idx)

@@ -10,10 +10,10 @@
 namespace turbomind::gemm {
 
 struct SM70_MMA_884 {
-    static constexpr int M = 16;
-    static constexpr int N = 16;
-    // static constexpr int M = 8;
-    // static constexpr int N = 32;
+    // static constexpr int M = 16;
+    // static constexpr int N = 16;
+    static constexpr int M = 8;
+    static constexpr int N = 32;
     static constexpr int K = 8;
 
     static constexpr int kThreadCount = 32;
@@ -51,12 +51,12 @@ struct SM70_MMA_884 {
     __device__ static int2 thread_offset_C()  // -> (m,n)
     {
         const int lane_id = threadIdx.x % WARP_SIZE;
-        return {
-            (lane_id & 8) * 1 + (lane_id & 1) + lane_id / 16 * 4,
-            (lane_id & 4) * 2 + (lane_id & 2),
-        };
-        // return {(lane_id & 1) + (lane_id / 16) * 4,  //
-        //         (lane_id & 2) + (lane_id & 12) * 2};
+        // return {
+        //     (lane_id & 8) * 1 + (lane_id & 1) + lane_id / 16 * 4,
+        //     (lane_id & 4) * 2 + (lane_id & 2),
+        // };
+        return {(lane_id & 1) + (lane_id / 16) * 4,  //
+                (lane_id & 2) + (lane_id & 12) * 2};
     }
 
     __device__ static void ReshapeC(const FragC& c, FragC_& c_)

@@ -229,7 +229,7 @@ std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(int sm, bool f
         return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
     }
     else if (sm == 70) {
-        return {kColMajor, HMMA_884 | OPERAND_B | 2, kRowMajor, HMMA_884 | OPERAND_V | 2};
+        return {kColMajor, HMMA_884 | OPERAND_B | 1, kRowMajor, HMMA_884 | OPERAND_V | 1};
     }
     else {
         std::cerr << "not implemented: sm_" << sm << std::endl;

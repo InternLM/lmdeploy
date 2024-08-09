@@ -11,6 +11,7 @@ namespace turbomind::gemm {
 
 struct VoidGmemIter {
     static constexpr int ITER_S = 0;
+    using Fragments = int;
     template<class P>
     __device__ VoidGmemIter(P, int, int2, int2)
     {
@@ -18,6 +19,8 @@ struct VoidGmemIter {
     __device__ void ClearSmem() {}
     __device__ void Prefetch(int, int, bool) {}
     __device__ void Prefetch(bool) {}
+    __device__ void Fetch(Fragments&, bool) {}
+    __device__ void Store(const Fragments&) {}
     __device__ void Advance() {}
     int*            smem_data_;
     bool            g_mask{false};

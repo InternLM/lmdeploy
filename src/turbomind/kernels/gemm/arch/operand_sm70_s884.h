@@ -106,7 +106,7 @@ template<class T>
 struct Operand_B_Pack {
     using Dtype = T;
 
-    static constexpr int Pack_M = 2;
+    static constexpr int Pack_M = 1;
 
     static constexpr Pack  kPack  = HMMA_884 | OPERAND_B | Pack_M;
     static constexpr Order kOrder = kRowMajor;
@@ -121,7 +121,7 @@ template<class T>
 struct Operand_V_Pack {
     using Dtype = T;
 
-    static constexpr int Pack_M = 2;
+    static constexpr int Pack_M = 1;
 
     static constexpr Pack  kPack  = HMMA_884 | OPERAND_V | Pack_M;
     static constexpr Order kOrder = kColMajor;

@@ -32,10 +32,20 @@ void gemm_bench(nvbench::state& state)
     // const auto [m, k] = config[index];
 
     if (idx % 4 == 0 || idx % 4 == 2) {
+        if (n % tp) {
+            return;
+        }
         n /= tp;
     }
     else {
+        if (k % tp) {
+            return;
+        }
         k /= tp;
+    }
+
+    if (k % 128) {
+        return;
     }
 
     using turbomind::gemm::get_test;

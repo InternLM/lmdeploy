@@ -92,7 +92,7 @@ std::vector<int> GenerateTuningSequence(const std::vector<std::array<int, 3>>& g
 std::vector<std::array<int, 3>> GetDefaultTuningGenerators()
 {
     /// TODO: set generators based on device
-    return {{16, 16, 64}, {8192 + 1}};
+    return {{8, 8, 16}, {16, 16, 64}, {8192 + 1}};
 }
 
 }  // namespace turbomind::gemm
