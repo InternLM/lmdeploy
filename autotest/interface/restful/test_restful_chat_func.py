@@ -976,6 +976,7 @@ class TestRestfulInterfaceChatInteractive:
                     interactive_mode=True,
                     session_id=session_id):
                 outputList.append(output)
+            print(outputList)
             assert_chat_interactive_stream_return(outputList[-1],
                                                   True,
                                                   index=len(outputList) - 2)

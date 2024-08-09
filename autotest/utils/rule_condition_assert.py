@@ -20,7 +20,7 @@ def assert_result(input, rule_condition, model_name):
                     for word in value:
                         if word.lower() in input_lower:
                             tmpResult = True
-                    if tmpResult is False:
+                    if not tmpResult:
                         return False, ','.join(
                             value) + " doesn't exist in " + input
                 else:

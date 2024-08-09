@@ -81,6 +81,8 @@ def get_model_name(model):
         return model_name
     if ('llama-2' in model_name):
         return 'llama2'
+    if ('llama-3-1' in model_name):
+        return 'llama3_1'
     if ('llama-3' in model_name):
         return 'llama3'
     if ('llava' in model_name):

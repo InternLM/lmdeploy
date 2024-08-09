@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from collections import OrderedDict
 from typing import List
 
@@ -166,7 +167,11 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
             f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
+        start_time = time.time()
         ret = run_cmd(cmd_eval, log_path=eval_log, cwd=lmdeploy_dir)
+        end_time = time.time()
+        task_duration_seconds = round(end_time - start_time, 2)
+        logging.info(f'task_duration_seconds: {task_duration_seconds}\n')
         if ret != 0:
             continue
         csv_files = glob.glob(f'{work_dir}/*/summary/summary_*.csv')
@@ -204,6 +209,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
         prec = precision if do_lite else '-'
 
         row = ','.join([model, engine_type, prec] +
+                       [str(task_duration_seconds)] +
                        [model_results[_] for _ in dataset_names])
         hf_res_row = None
         if hf_model_path not in test_model_names:
@@ -213,11 +219,11 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
                 hf_metrics = [
                     hf_res[d] if d in hf_res else '-' for d in dataset_names
                 ]
-                hf_res_row = ','.join([model, 'hf', '-'] + hf_metrics)
+                hf_res_row = ','.join([model, 'hf', '-', '-'] + hf_metrics)
         if not os.path.exists(output_csv):
             with open(output_csv, 'w') as f:
                 header = ','.join(['Model', 'Engine', 'Precision'] +
-                                  dataset_names)
+                                  ['task_duration_secs'] + dataset_names)
                 f.write(header + '\n')
                 if hf_res_row:
                     f.write(hf_res_row + '\n')
@@ -264,53 +270,45 @@ def generate_benchmark_report(report_path: str):
             benchmark_subfolders = [
                 f.path for f in os.scandir(sec_dir_path) if f.is_dir()
             ]
-            for benchmark_subfolder in benchmark_subfolders:
-                backend_subfolders = [
-                    f.path for f in os.scandir(benchmark_subfolder)
-                    if f.is_dir()
-                ]
-                for backend_subfolder in backend_subfolders:
-                    benchmark_type = backend_subfolder.replace(
-                        sec_dir_path + '/', '')
-                    print('*' * 10, benchmark_type, '*' * 10)
-                    _append_summary('-' * 10 + benchmark_type + '-' * 10 +
-                                    '\n')
-                    merged_csv_path = os.path.join(backend_subfolder,
-                                                   'summary.csv')
-                    csv_files = glob.glob(
-                        os.path.join(backend_subfolder, '*.csv'))
-                    average_csv_path = os.path.join(backend_subfolder,
-                                                    'average.csv')
-                    if merged_csv_path in csv_files:
-                        csv_files.remove(merged_csv_path)
-                    if average_csv_path in csv_files:
-                        csv_files.remove(average_csv_path)
-                    merged_df = pd.DataFrame()
+            for backend_subfolder in benchmark_subfolders:
+                benchmark_type = backend_subfolder.replace(
+                    sec_dir_path + '/', '')
+                print('*' * 10, benchmark_type, '*' * 10)
+                _append_summary('-' * 10 + benchmark_type + '-' * 10 + '\n')
+                merged_csv_path = os.path.join(backend_subfolder,
+                                               'summary.csv')
+                csv_files = glob.glob(os.path.join(backend_subfolder, '*.csv'))
+                average_csv_path = os.path.join(backend_subfolder,
+                                                'average.csv')
+                if merged_csv_path in csv_files:
+                    csv_files.remove(merged_csv_path)
+                if average_csv_path in csv_files:
+                    csv_files.remove(average_csv_path)
+                merged_df = pd.DataFrame()
 
-                    if len(csv_files) > 0:
-                        for f in csv_files:
-                            df = pd.read_csv(f)
-                            merged_df = pd.concat([merged_df, df],
-                                                  ignore_index=True)
+                if len(csv_files) > 0:
+                    for f in csv_files:
+                        df = pd.read_csv(f)
+                        merged_df = pd.concat([merged_df, df],
+                                              ignore_index=True)
 
-                        merged_df = merged_df.sort_values(
-                            by=merged_df.columns[0])
+                    merged_df = merged_df.sort_values(by=merged_df.columns[0])
 
-                        grouped_df = merged_df.groupby(merged_df.columns[0])
-                        if 'generation' not in benchmark_subfolder:
-                            average_values = grouped_df.pipe(
-                                (lambda group: {
-                                    'mean': group.mean().round(decimals=3)
-                                }))['mean']
-                            average_values.to_csv(average_csv_path, index=True)
-                            avg_df = pd.read_csv(average_csv_path)
-                            merged_df = pd.concat([merged_df, avg_df],
-                                                  ignore_index=True)
-                            add_summary(average_csv_path)
-                        merged_df.to_csv(merged_csv_path, index=False)
-                        if 'generation' in benchmark_subfolder:
-                            add_summary(merged_csv_path)
-                        print(merged_df)
+                    grouped_df = merged_df.groupby(merged_df.columns[0])
+                    if 'generation' not in backend_subfolder:
+                        average_values = grouped_df.pipe(
+                            (lambda group: {
+                                'mean': group.mean().round(decimals=3)
+                            }))['mean']
+                        average_values.to_csv(average_csv_path, index=True)
+                        avg_df = pd.read_csv(average_csv_path)
+                        merged_df = pd.concat([merged_df, avg_df],
+                                              ignore_index=True)
+                        add_summary(average_csv_path)
+                    merged_df.to_csv(merged_csv_path, index=False)
+                    if 'generation' in backend_subfolder:
+                        add_summary(merged_csv_path)
+
     _append_summary('## Benchmark Results End')
 
 
