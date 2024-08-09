@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import inspect
 import queue
 import time
 from threading import Thread
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import torch
 from PIL.Image import Image
@@ -33,15 +34,17 @@ class Record:
         self.thread_safe = thread_safe
         self.number = []
         self.waiting = []
+        self.kwargs = []
         self.done = []
         self.res_que = []
         self.total = 0
 
-    def enqueue(self, images: List[Image], que: Union[queue.Queue,
-                                                      asyncio.Queue]):
+    def enqueue(self, images: List[Image], kwargs: List[Dict],
+                que: Union[queue.Queue, asyncio.Queue]):
         """add ith request to manager."""
         self.number.append(len(images))
         self.waiting.extend(images)
+        self.kwargs.extend(kwargs)
         self.res_que.append(que)
         self.total += len(images)
         self.log('received', len(images))
@@ -49,10 +52,12 @@ class Record:
     def dequeue(self, max_batch_size):
         """try to dequeue max batch size images."""
         inputs = self.waiting[:max_batch_size]
+        kwargs = self.kwargs[:max_batch_size]
         self.waiting = self.waiting[max_batch_size:]
+        self.kwargs = self.kwargs[max_batch_size:]
         self.total -= len(inputs)
         self.log('process', len(inputs))
-        return inputs
+        return inputs, kwargs
 
     def notify(self):
         """set result if request i is finished."""
@@ -135,20 +140,33 @@ class ImageEncoder:
                 while self._que.qsize() == 0:
                     await asyncio.sleep(0)
                 item = await self._que.get()
-                record.enqueue(item[0], item[1])
-            inputs = record.dequeue(self.max_batch_size)
+                record.enqueue(item[0], item[1], item[2])
+            inputs, kwargs = record.dequeue(self.max_batch_size)
             future = asyncio.get_event_loop().run_in_executor(
-                None, self.forward, inputs)
+                None, self.forward, inputs, kwargs)
             future.add_done_callback(_raise_exception_on_finish)
             outputs = await future
             record.done.extend(outputs)
             while record.notify():
                 pass
 
-    def forward(self, inputs: List[Image]):
+    def _init_input_params(self,
+                           inputs: List[Image],
+                           params: List[Dict] = None):
+        """Check and init inputs params."""
+        if params is None:
+            params = [{}] * len(inputs)
+        assert len(params) == len(inputs), \
+            'different length of inputs and kwargs'
+        return params
+
+    def forward(self, inputs: List[Image], params: List[Dict] = None):
         """Model forward."""
+        params = self._init_input_params(inputs, params)
         time_start = time.perf_counter()
-        outputs = self.model.forward(inputs)
+        func_params = inspect.signature(self.model.forward).parameters
+        func_inputs = [inputs, params] if len(func_params) > 1 else [inputs]
+        outputs = self.model.forward(*func_inputs)
         if isinstance(outputs[0], torch.Tensor):
             outputs = [x.cpu() for x in outputs]
         time_end = time.perf_counter()
@@ -156,15 +174,19 @@ class ImageEncoder:
                     f'cost {time_end - time_start:.3f}s')
         return outputs
 
-    def infer(self, inputs: List[Image]):
+    def infer(self, inputs: List[Image], params: List[Dict] = None):
         """infer."""
-        results = self.forward(inputs)
+        params = self._init_input_params(inputs, params)
+        results = self.forward(inputs, params)
         return results
 
-    async def async_infer(self, inputs: List[Image]):
+    async def async_infer(self,
+                          inputs: List[Image],
+                          params: List[Dict] = None):
         """async infer."""
+        params = self._init_input_params(inputs, params)
         outputs = asyncio.Queue()
-        item = (inputs, outputs)
+        item = (inputs, params, outputs)
         if self.vision_config.thread_safe:
             self._loop.call_soon_threadsafe(self._que.put_nowait, item)
         else:

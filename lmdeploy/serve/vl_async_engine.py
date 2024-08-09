@@ -61,15 +61,20 @@ class VLAsyncEngine(AsyncEngine):
         results = {}
         input_ids = []
         if len(segs) > 1:
-            images = await self.vl_prompt_template.async_collect_pil_images(
-                prompt)
-            features = await self.vl_encoder.async_infer(images)
+            # yapf: disable
+            images_with_kwargs = await self.vl_prompt_template.async_collect_pil_images(prompt)  # noqa: E501
+            # yapf: enable
+            features = []
+            if len(images_with_kwargs) > 0:
+                images, image_kwargs = list(zip(*images_with_kwargs))
+                features = await self.vl_encoder.async_infer(
+                    images, image_kwargs)
 
-            from lmdeploy.vl.templates import MiniCPMVTempateWrapper
-            if isinstance(self.vl_prompt_template, MiniCPMVTempateWrapper):
-                decorated, features = self.vl_prompt_template.update_image_token(  # noqa: E501
-                    decorated, features)
-                segs = decorated.split(IMAGE_TOKEN)
+                from lmdeploy.vl.templates import MiniCPMVTempateWrapper
+                if isinstance(self.vl_prompt_template, MiniCPMVTempateWrapper):
+                    decorated, features = self.vl_prompt_template.update_image_token(  # noqa: E501
+                        decorated, features)
+                    segs = decorated.split(IMAGE_TOKEN)
 
             features = [x.cpu().numpy() for x in features]
             input_ids = []
@@ -91,8 +96,8 @@ class VLAsyncEngine(AsyncEngine):
                                                          and sequence_start))
                 input_ids.extend(seg_ids)
             ranges = np.stack([begins, ends], axis=1).tolist()
-            results['input_embeddings'] = features
-            results['input_embedding_ranges'] = ranges
+            results['input_embeddings'] = features or None
+            results['input_embedding_ranges'] = ranges or None
         else:
             input_ids = self.tokenizer.encode(decorated,
                                               add_bos=sequence_start)
