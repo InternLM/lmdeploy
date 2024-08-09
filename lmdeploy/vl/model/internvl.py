@@ -130,26 +130,19 @@ class InternVLVisionModel(VisonModel):
                 self.model_path)
             self._forward_func = self._forward
 
-    def _preprocess_v1_5(self,
-                         images: List[Image],
-                         image_kwargs: List[Dict] = None):
-        if image_kwargs is not None:
+    def _preprocess_v1_5(self, images: List[Image], params: List[Dict] = None):
+        if params is not None:
             assert len(images) == len(
-                image_kwargs), 'different length of images and image_kwargs'
+                params), 'different length of images and params'
         else:
-            image_kwargs = [{}] * len(images)
+            params = [{}] * len(images)
 
-        image_res = {
-            'low': 6,
-            'medium': 12,
-            'high': 24,
-            'default': self.config.max_dynamic_patch,
-        }
+        image_res = {'low': 6, 'medium': 12, 'high': 24}
 
         outputs = []
-        for image, kwargs in zip(images, image_kwargs):
-            res_key = kwargs.get('detail', 'default')
-            max_num = image_res[res_key]
+        for image, param in zip(images, params):
+            res_key = param.get('detail', 'default')
+            max_num = image_res.get(res_key, self.config.max_dynamic_patch)
             out = dynamic_preprocess(
                 image,
                 min_num=self.config.min_dynamic_patch,
@@ -161,11 +154,9 @@ class InternVLVisionModel(VisonModel):
             outputs.append(out)
         return outputs
 
-    def _forward_v1_5(self,
-                      images: List[Image],
-                      image_kwargs: List[Dict] = None):
+    def _forward_v1_5(self, images: List[Image], params: List[Dict] = None):
         """forward for internvl-chat-v1-5."""
-        outputs = self._preprocess_v1_5(images, image_kwargs)
+        outputs = self._preprocess_v1_5(images, params)
         split = [x.shape[0] for x in outputs]
         outputs = torch.cat(outputs, dim=0)
         outputs = outputs.to(self.model.device, dtype=torch.float16)
@@ -174,7 +165,7 @@ class InternVLVisionModel(VisonModel):
         outputs = [x.reshape(-1, x.shape[-1]) for x in outputs]
         return outputs
 
-    def _forward(self, images: List[Image], image_kwargs: List[Dict] = None):
+    def _forward(self, images: List[Image], params: List[Dict] = None):
         """forward for internvl-chat-v1-1, internvl-chat-v1-2."""
         pixel_values = self.image_processor(images=images,
                                             return_tensors='pt').pixel_values
@@ -187,7 +178,7 @@ class InternVLVisionModel(VisonModel):
     @torch.no_grad()
     def forward(self,
                 images: List[Image],
-                image_kwargs: List[Dict] = None) -> List[torch.Tensor]:
+                params: List[Dict] = None) -> List[torch.Tensor]:
         """forward."""
         images = [x.convert('RGB') for x in images]
-        return self._forward_func(images, image_kwargs)
+        return self._forward_func(images, params)

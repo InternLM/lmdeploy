@@ -150,22 +150,22 @@ class ImageEncoder:
             while record.notify():
                 pass
 
-    def _init_input_kwargs(self,
+    def _init_input_params(self,
                            inputs: List[Image],
-                           kwargs: List[Dict] = None):
-        """Check and init inputs kwargs."""
-        if kwargs is None:
-            kwargs = [{}] * len(inputs)
-        assert len(kwargs) == len(inputs), \
+                           params: List[Dict] = None):
+        """Check and init inputs params."""
+        if params is None:
+            params = [{}] * len(inputs)
+        assert len(params) == len(inputs), \
             'different length of inputs and kwargs'
-        return kwargs
+        return params
 
-    def forward(self, inputs: List[Image], kwargs: List[Dict] = None):
+    def forward(self, inputs: List[Image], params: List[Dict] = None):
         """Model forward."""
-        kwargs = self._init_input_kwargs(inputs, kwargs)
+        params = self._init_input_params(inputs, params)
         time_start = time.perf_counter()
         func_params = inspect.signature(self.model.forward).parameters
-        func_inputs = [inputs, kwargs] if len(func_params) > 1 else [inputs]
+        func_inputs = [inputs, params] if len(func_params) > 1 else [inputs]
         outputs = self.model.forward(*func_inputs)
         if isinstance(outputs[0], torch.Tensor):
             outputs = [x.cpu() for x in outputs]
@@ -174,19 +174,19 @@ class ImageEncoder:
                     f'cost {time_end - time_start:.3f}s')
         return outputs
 
-    def infer(self, inputs: List[Image], kwargs: List[Dict] = None):
+    def infer(self, inputs: List[Image], params: List[Dict] = None):
         """infer."""
-        kwargs = self._init_input_kwargs(inputs, kwargs)
-        results = self.forward(inputs, kwargs)
+        params = self._init_input_params(inputs, params)
+        results = self.forward(inputs, params)
         return results
 
     async def async_infer(self,
                           inputs: List[Image],
-                          kwargs: List[Dict] = None):
+                          params: List[Dict] = None):
         """async infer."""
-        kwargs = self._init_input_kwargs(inputs, kwargs)
+        params = self._init_input_params(inputs, params)
         outputs = asyncio.Queue()
-        item = (inputs, kwargs, outputs)
+        item = (inputs, params, outputs)
         if self.vision_config.thread_safe:
             self._loop.call_soon_threadsafe(self._que.put_nowait, item)
         else:
