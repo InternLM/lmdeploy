@@ -22,6 +22,7 @@
 
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -100,6 +101,7 @@ private:
     ft::WeightType                  weight_type_;
     bool                            attn_bias_;
     int                             quant_policy_;
+    turbomind::QuantMethod          quantization_;
     int                             group_size_;
     turbomind::LoraParams           lora_params_;
 

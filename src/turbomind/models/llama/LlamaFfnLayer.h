@@ -38,22 +38,26 @@ public:
                   cudaStream_t     stream,
                   cublasMMWrapper* cublas_wrapper,
                   IAllocator*      allocator,
-                  bool             is_free_buffer_after_forward):
+                  bool             is_free_buffer_after_forward,
+                  QuantMethod      quantization):
         head_num_(head_num),
         size_per_head_(size_per_head),
         inter_size_(inter_size / tensor_para.world_size_),
         hidden_units_(head_num * size_per_head),
         stream_(stream),
-        linear_(cublas_wrapper, stream),
+        linear_(cublas_wrapper, stream, allocator),
         allocator_(allocator),
         tensor_para_(tensor_para),
-        is_free_buffer_after_forward_(is_free_buffer_after_forward)
+        is_free_buffer_after_forward_(is_free_buffer_after_forward),
+        quantization_(quantization)
     {
+        allocateWorkspace();
     }
 
     ~LlamaFfnLayer()
     {
         freeBuffer();
+        freeWorkspace();
     }
 
     void forward(TensorMap* output_tensors, const TensorMap* input_tensors, const LlamaFfnWeight<T>* weights);
@@ -62,6 +66,10 @@ private:
     void allocateBuffer(size_t token_num, const LlamaDenseWeight<T>*, const LlamaDenseWeight<T>*);
 
     void freeBuffer();
+
+    void allocateWorkspace();
+
+    void freeWorkspace();
 
     void activation(int num_token);
 
@@ -73,13 +81,17 @@ private:
     LlamaLinear<T> linear_;
     IAllocator*    allocator_;
     bool           is_free_buffer_after_forward_;
+    QuantMethod    quantization_;
 
-    T* gating_buf_{};
-    T* inter_buf_{};
+    T*      gating_buf_{};
+    T*      inter_buf_{};
+    int8_t* quant_buf_{};
+    float*  act_scale_buf_{};
 
     NcclParam tensor_para_;
 
     bool is_allocate_buffer_{};
+    bool is_allocate_workspace_{};
 };
 
 }  // namespace turbomind

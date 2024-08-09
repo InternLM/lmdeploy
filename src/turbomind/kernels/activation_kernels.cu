@@ -15,6 +15,7 @@
  */
 
 #include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -169,13 +170,15 @@ struct IdentityActivation {
 };
 
 // clang-format off
-template<template<typename T> class Activation, typename T, typename BT>
+template<template<typename T> class Activation, typename T, typename BT, typename QT, bool enable_quant>
 __global__ void generic_activation(T*                      out,
                                    const BT*  __restrict   bias,
                                    const T*   __restrict   gated_weights,
                                    const BT*  __restrict   gated_bias,
                                    const int* __restrict   ia3_tasks,
                                    const T*   __restrict   ia3_weights,
+                                   QT*       __restrict   quant_out,
+                                   float*     __restrict   quant_scale,
                                    const int               int8_mode,
                                    const float* __restrict activation_in,
                                    const float* __restrict activation_out,
@@ -188,57 +191,49 @@ __global__ void generic_activation(T*                      out,
 
     const bool with_bias = bias != nullptr;
     const bool with_gate = gated_weights != nullptr;
-    // const bool with_ia3  = ia3_tasks != nullptr;
 
     using Act_T         = typename Activation<T>::return_type;
-    using Float_T       = typename packed_as<float, packed_elems>::type;
-    using Packed_Int8_t = typename packed_as<int8_t, packed_elems>::type;
+    using Single_T      = typename packed_as<T, 1>::type;
+    using Packed_Float  = typename packed_as<float, packed_elems>::type;
 
-    for (int64_t id = blockIdx.x * blockDim.x + threadIdx.x; id < 1LL * m * n; id += blockDim.x * gridDim.x) {
-        T val;
-        if (int8_mode == 2) {
-            // val = cuda_cast<T>(cuda_cast<Float_T>(reinterpret_cast<Packed_Int8_t*>(out)[id]) * activation_in[0]);
+    if constexpr (enable_quant) {
+        __shared__ float s_amax;
+        float amax_val = 0.0f;
+        for (int64_t id = threadIdx.x; id < n; id += blockDim.x) {
+            T val = out[blockIdx.x * n + id];
+            T gated_val;
+            if (with_gate) {
+                gated_val = gated_weights[blockIdx.x * n + id];
+                val = cuda_cast<T>(Activation<T>::apply(val) * cuda_cast<Act_T>(gated_val));
+            }
+            if (int8_mode != 2) {
+                out[blockIdx.x * n + id] = val;
+            }
+            amax_val = cuda_max(amax_val, cuda_cast<float>(cuda_max<Single_T>(cuda_abs(val))));
         }
-        else {
-            val = out[id];
+        amax_val = blockReduceMax<float>(amax_val);
+        if (threadIdx.x == 0) {
+            s_amax = amax_val;
+            quant_scale[blockIdx.x] = amax_val / 127.0f;
         }
-
-        T gated_val;
-        if (with_gate) {
-            gated_val = gated_weights[id];
+        __syncthreads();
+        const float tmp_scale = 127.0f / s_amax;
+        for (int64_t id = threadIdx.x; id < n; id += blockDim.x) {
+            T val = out[blockIdx.x * n + id];
+            Packed_Float tmp = cuda_cast<Packed_Float>(val) * tmp_scale;
+            quant_out[blockIdx.x * n + id] = cuda_cast<QT>(tmp);
         }
-
-        // if (with_bias) {
-        //     const T reg_bias = static_cast<T>(bias[id % n]);
-        //     val              = val + reg_bias;
-
-        //     if (with_gate) {
-        //         const T reg_gated_bias = static_cast<T>(gated_bias[id % n]);
-        //         gated_val              = gated_val + reg_gated_bias;
-        //     }
-        // }
-
-        if (with_gate) {
-            val = cuda_cast<T>(Activation<T>::apply(val) * cuda_cast<Act_T>(gated_val));
-        }
-        else {
-            // val = cuda_cast<T>(Activation<T>::apply(val));
-        }
-
-        // if (with_ia3) {
-        //     const int word_id = id / n;
-        //     const int offset = padding_offset == nullptr ? 0 : padding_offset[word_id];
-        //     const int batch_id = (word_id + offset) / seq_len;
-        //     const int task = ia3_tasks[batch_id];
-        //     val            = val * ia3_weights[task * n + (id % n)];
-        // }
-
-        if (int8_mode != 2) {
-            out[id] = val;
-        }
-        else {
-            // reinterpret_cast<Packed_Int8_t*>(out)[id] =
-            //     cuda_cast<Packed_Int8_t>(cuda_cast<Float_T>(val) * activation_out[0]);
+    } else {
+        for (int64_t id = threadIdx.x; id < n; id += blockDim.x) {
+            T val = out[blockIdx.x * n + id];
+            T gated_val;
+            if (with_gate) {
+                gated_val = gated_weights[blockIdx.x * n + id];
+                val = cuda_cast<T>(Activation<T>::apply(val) * cuda_cast<Act_T>(gated_val));
+            }
+            if (int8_mode != 2) {
+                out[blockIdx.x * n + id] = val;
+            }
         }
     }
 }
@@ -251,6 +246,8 @@ void invokeGenericActivation(T*           out,
                              const BT*    gated_bias,
                              const int*   ia3_tasks,
                              const T*     ia3_weights,
+                             int8_t*      quant_out,
+                             float*       quant_scale,
                              const int    m,
                              const int    n,
                              const int    int8_mode,
@@ -265,33 +262,53 @@ void invokeGenericActivation(T*           out,
     using PT                   = typename packed_type<T>::type;
     constexpr int packed_elems = num_elems<PT>::value;
     using PBT                  = typename packed_as<BT, packed_elems>::type;
+    using PQT                  = typename packed_as<int8_t, packed_elems>::type;
 
-    const int n_threads = 512;
+    if (packed_elems > 1) {
+        FT_CHECK(n % packed_elems == 0);
+    }
 
-    dim3 block, grid;
-    if (n / 4 / packed_elems <= n_threads) {
-        block.x = n / 4 / packed_elems;
-        grid.x  = m;
-    }
-    else {
-        block.x = n_threads;
-        grid.x  = ceil(1LL * m * n / double(n_threads));
-    }
+    dim3 grid(m);
+    dim3 block(std::min(n, 1024));
+
     TM_LOG_DEBUG("%d %d", grid.x, block.x);
     sync_check_cuda_error();
-    generic_activation<Activation><<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out),
-                                                               reinterpret_cast<const PBT*>(bias),
-                                                               reinterpret_cast<const PT*>(gated_weights),
-                                                               reinterpret_cast<const PBT*>(gated_bias),
-                                                               ia3_tasks,
-                                                               reinterpret_cast<const PT*>(ia3_weights),
-                                                               int8_mode,
-                                                               activation_in,
-                                                               activation_out,
-                                                               padding_offset,
-                                                               seq_len,
-                                                               m,
-                                                               n / packed_elems);
+    if (quant_out == nullptr) {
+        generic_activation<Activation, PT, PBT, PQT, false>
+            <<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out),
+                                         reinterpret_cast<const PBT*>(bias),
+                                         reinterpret_cast<const PT*>(gated_weights),
+                                         reinterpret_cast<const PBT*>(gated_bias),
+                                         ia3_tasks,
+                                         reinterpret_cast<const PT*>(ia3_weights),
+                                         reinterpret_cast<PQT*>(quant_out),
+                                         quant_scale,
+                                         int8_mode,
+                                         activation_in,
+                                         activation_out,
+                                         padding_offset,
+                                         seq_len,
+                                         m,
+                                         n / packed_elems);
+    }
+    else {
+        generic_activation<Activation, PT, PBT, PQT, true>
+            <<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out),
+                                         reinterpret_cast<const PBT*>(bias),
+                                         reinterpret_cast<const PT*>(gated_weights),
+                                         reinterpret_cast<const PBT*>(gated_bias),
+                                         ia3_tasks,
+                                         reinterpret_cast<const PT*>(ia3_weights),
+                                         reinterpret_cast<PQT*>(quant_out),
+                                         quant_scale,
+                                         int8_mode,
+                                         activation_in,
+                                         activation_out,
+                                         padding_offset,
+                                         seq_len,
+                                         m,
+                                         n / packed_elems);
+    }
     sync_check_cuda_error();
 }
 
@@ -302,6 +319,8 @@ void invokeGenericActivation(T*           out,
                                                              const BT*    gated_bias,                                  \
                                                              const int*   ia3_tasks,                                   \
                                                              const T*     ia3_weights,                                 \
+                                                             int8_t*      quant_out,                                   \
+                                                             float*       quant_scale,                                 \
                                                              const int    m,                                           \
                                                              const int    n,                                           \
                                                              const int    int8_mode,                                   \

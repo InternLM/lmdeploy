@@ -205,10 +205,12 @@ private:
 
     ////////////////////////////////////////////////////////////////////
     // context decoding temp buffers
-    T*   context_decoder_input_buf_{};
-    T*   context_decoder_output_buf_{};
-    int* context_decoder_ids_buf_{};
-    int* input_ids_buf_{};
+    T*      context_decoder_input_buf_{};
+    T*      context_decoder_output_buf_{};
+    int8_t* context_decoder_quant_output_buf_{};
+    float*  context_decoder_quant_scale_buf_{};
+    int*    context_decoder_ids_buf_{};
+    int*    input_ids_buf_{};
     // lengths
     int* input_length_buf_{};    // input + cache missed length
     int* context_length_buf_{};  // history length + input_length
