@@ -627,7 +627,8 @@ class AsyncEngine(LogitsMixin):
             action = action.split('<|action_end|>'.strip())[0]
             action = action[action.find('{'):]
             action = json.loads(action)
-            name, parameters = action['name'], json.dumps(action['parameters'])
+            name, parameters = action['name'], json.dumps(
+                action.get('parameters', action.get('arguments', {})))
         elif '<function=' in text:  # llama3.1
             action, _ = text.split('</function>')
             parameters = action[action.find('{'):]
