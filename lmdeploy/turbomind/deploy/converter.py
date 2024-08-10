@@ -7,6 +7,7 @@ import fire
 import torch
 
 from lmdeploy.archs import get_model_arch
+from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_logger, get_model
 
@@ -263,8 +264,9 @@ def main(model_name: str,
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
 
-    tm_model = get_tm_model(model_path, model_name, chat_template,
-                            model_format, group_size, tp, tm_weight_path)
+    engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format)
+    tm_model = get_tm_model(model_path, model_name, chat_template, group_size,
+                            engine_config, tm_weight_path)
     tm_model.export()
 
 
