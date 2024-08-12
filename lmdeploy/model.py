@@ -510,7 +510,8 @@ class InternLM2Chat7B(InternLMChat7B):
         for message in messages:
             role = message['role']
             content = message['content']
-            if role == 'assistant' and len(message.get('tool_calls', [])):
+            if role == 'assistant' and message.get('tool_calls',
+                                                   None) is not None:
                 for tool_call in message['tool_calls']:
                     function = tool_call.get('function', {})
                     function['arguments'] = function.pop('parameters', {})
