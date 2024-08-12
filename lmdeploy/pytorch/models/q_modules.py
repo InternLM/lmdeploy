@@ -22,6 +22,15 @@ class QTensor:
     scale: torch.Tensor
     zero_point: torch.Tensor = None
 
+    def to(self, *args, **kwargs):
+        """Move the tensor to target dtype or device."""
+        tensor = self.tensor.to(*args, **kwargs)
+        scale = self.scale.to(*args, **kwargs)
+        zero_point = None
+        if self.zero_point is not None:
+            zero_point = self.zero_point.to(*args, **kwargs)
+        return QTensor(tensor, scale, zero_point)
+
     def __getattr__(self, name: str):
         """Allows attribute access to be forwarded to the wrapped tensor when
         the attribute doesn't exist in QTensor."""
