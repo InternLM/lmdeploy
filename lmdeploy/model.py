@@ -262,6 +262,11 @@ class CogVLM(BaseChatTemplate):
         if 'cogvlm' in path and 'cogvlm2' not in path:
             return 'cogvlm'
 
+    def meta(self):
+        """Return (model_repo_id, model_type, architecture) of a model who uses
+        this chat template."""
+        return 'THUDM/cogvlm-chat-hf', 'MLLM', 'CogVLMForCausalLM'
+
 
 @MODELS.register_module(name='cogvlm2')
 class CogVLM2(CogVLM):
@@ -283,6 +288,11 @@ class CogVLM2(CogVLM):
         path = model_path.lower()
         if 'cogvlm2' in path:
             return 'cogvlm2'
+
+    def meta(self):
+        """Return typical (model_path, model_type, model_architecture) of a
+        model who uses this chat template."""
+        return 'TTHUDM/cogvlm2-llama3-chat-19B', 'MLLM', 'CogVLMForCausalLM'
 
 
 @MODELS.register_module(name='wizardlm')

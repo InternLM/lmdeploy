@@ -12,6 +12,7 @@ pynvml
 safetensors
 sentencepiece
 shortuuid
+texttable
 tiktoken
 torch<=2.3.1,>=2.0.0
 torchvision<=0.18.1,>=0.15.0

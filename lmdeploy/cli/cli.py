@@ -156,10 +156,22 @@ class CLI(object):
     def list(args):
         """List the supported model names."""
         from lmdeploy.model import MODELS
-        model_names = list(MODELS.module_dict.keys())
-        model_names.sort()
-        print('The supported chat template names are:')
-        print('\n'.join(model_names))
+        builtin_templates = list(MODELS.module_dict.keys())
+        builtin_templates.sort()
+        builtin_templates.remove('base')
+        builtin_templates.remove('llama')
+        print('The built-in chat templates are:')
+        from texttable import Texttable
+        table = Texttable()
+        # model path, model type, model arch, chat_template
+        table.add_row(
+            ['chat_template', 'representative', 'model_type', 'architecture'])
+        for name in builtin_templates:
+            chat_template = MODELS.get(name)()
+            if hasattr(chat_template, 'meta'):
+                model_path, model_type, architecture = chat_template.meta()
+                table.add_row([name, model_path, model_type, architecture])
+        print(table.draw())
 
     @staticmethod
     def check_env(args):
