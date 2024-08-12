@@ -117,7 +117,6 @@ class Engine:
         scheduler_config = SchedulerConfig(
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
-            eviction_type=engine_config.eviction_type,
             prefill_interval=engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
