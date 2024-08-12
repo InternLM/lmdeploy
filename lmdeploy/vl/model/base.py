@@ -36,11 +36,14 @@ class VisonModel(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def forward(self, images: List[PIL.Image.Image]) -> List[torch.Tensor]:
+    def forward(self,
+                images: List[PIL.Image.Image],
+                image_kwargs: List[Dict] = None) -> List[torch.Tensor]:
         """extract image feature.
 
         Args:
             images (List[PIL.Image.Image]): input images
+            image_kwargs (List[Dict]): input kwargs for each images
 
         Return:
             List[torch.Tensor]: extract image feature for each input image
