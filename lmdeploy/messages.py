@@ -174,8 +174,6 @@ class PytorchEngineConfig:
             by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
             it defaults to 0.8, signifying the percentage of FREE GPU memory
             to be reserved for the k/v cache
-        eviction_type (str): What action to perform when kv cache
-            is full, ['recompute', 'copy'], Deprecated.
         prefill_interval (int): Interval to perform prefill,
             Default 16.
         block_size (int): paging cache block size, default 64.
@@ -198,7 +196,6 @@ class PytorchEngineConfig:
     session_len: int = None
     max_batch_size: int = 128
     cache_max_entry_count: float = 0.8
-    eviction_type: str = 'recompute'
     prefill_interval: int = 16
     block_size: int = 64
     num_cpu_blocks: int = 0
@@ -216,8 +213,6 @@ class PytorchEngineConfig:
         assert self.tp >= 1, 'invalid tp'
         assert self.max_batch_size >= 1, 'invalid max_batch_size'
         assert self.cache_max_entry_count > 0 and self.cache_max_entry_count < 1, 'invalid cache_max_entry_count'  # noqa
-        assert self.eviction_type in ('recompute',
-                                      'copy'), 'invalid eviction_type'
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
         assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
