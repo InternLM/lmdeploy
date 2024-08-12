@@ -550,9 +550,15 @@ class InternVL2InternLM2(InternLM2Chat7B):
     def __init__(
             self,
             meta_instruction='你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。',
+            eosys='<|im_end|>',
+            eoh='<|im_end|>',
+            separator='',
             stop_words=['<|im_start|>', '<|im_end|>'],
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         separator=separator,
+                         eoh=eoh,
                          stop_words=stop_words,
                          **kwargs)
 
