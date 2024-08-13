@@ -84,7 +84,13 @@ class RegexLogitsProcessor:
         Llama's tokenizer to be able to compile FSMs for this model.
         """
         from outlines.integrations.utils import adapt_tokenizer
-        return adapt_tokenizer(tokenizer)
+        tokenizer = adapt_tokenizer(tokenizer)
+        if hasattr(
+                tokenizer, '_tokenizer'
+        ):  # vocab size greater than logits shape because of  '[UNUSED_TOKEN_142]'...
+            tokenizer.vocabulary = tokenizer._tokenizer.get_vocab(
+                with_added_tokens=False)
+        return tokenizer
 
 
 class JSONLogitsProcessor(RegexLogitsProcessor):
