@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/kernels/gemm/desc.h"
+#include "src/turbomind/kernels/gemm/dispatch_cache.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/registry.h"
@@ -8,7 +9,7 @@
 #include "src/turbomind/kernels/gemm/tune/sampler.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <algorithm>
-#include <map>
+#include <iterator>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -24,37 +25,6 @@ void ImportDispatchCache(std::istream&                                 is,
 
 namespace {
 
-inline decltype(auto) as_tuple(const GemmDesc& d)
-{
-    return std::tie(d.arch,
-                    d.type_a,
-                    d.type_b,
-                    d.type_c,
-                    d.order_a,
-                    d.order_b,
-                    d.order_c,
-                    d.pack_a,
-                    d.pack_b,
-                    d.pack_u,
-                    d.pack_v,
-                    d.quant_a.type,
-                    d.quant_a.group_size,
-                    d.quant_b.type,
-                    d.quant_b.group_size,
-                    // d.epilogue,
-                    d.n,
-                    d.k,
-                    d.m);
-}
-
-inline bool is_compatible(GemmDesc a, GemmDesc b)
-{
-    // skip batch dim & epilogue flags
-    a.m = b.m  = 0;
-    a.epilogue = b.epilogue = Epilogue::kNone;
-    return as_tuple(a) == as_tuple(b);
-}
-
 template<class Cmp>
 std::vector<int> ArgSort(size_t size, const Cmp& cmp)
 {
@@ -66,14 +36,13 @@ std::vector<int> ArgSort(size_t size, const Cmp& cmp)
 
 }  // namespace
 
-inline bool operator<(const GemmDesc& a, const GemmDesc& b)
-{
-    return as_tuple(a) < as_tuple(b);
-}
-
 struct Gemm::Impl {
 
-    Impl(): props_{GetCudaDeviceProps()}, arch_{props_->major * 100 + props_->minor * 10}, registry_{props_}
+    Impl():
+        props_{GetCudaDeviceProps()},
+        arch_{props_->major * 100 + props_->minor * 10},
+        registry_{props_},
+        cache_{registry_.kernels()}
     {
         if (auto str = std::getenv("TM_GEMM_TUNE_ARGS")) {
             try {
@@ -91,23 +60,19 @@ struct Gemm::Impl {
     LaunchSpec Dispatch(DispatchPolicy policy, GemmDesc desc, size_t barriers_size, size_t partials_size)
     {
         if (policy & DispatchPolicy::kReuse) {
-            auto it = dispatch_cache_.lower_bound(desc);
-            if (it != dispatch_cache_.end() && is_compatible(it->first, desc) && it->second.kernel->is_feasible(desc)) {
-                return it->second;
+            if (auto spec = cache_.LowerBound(desc)) {
+                return *spec;
             }
-            // if (it != dispatch_cache_.end()) {
-            //     std::cout << is_compatible(it->first, desc) << " " << it->second.kernel->is_feasible(desc) << "\n";
-            // }
             std::cerr << "Failed to find a feasible kernel in the cache, will dispatch by heuristic.\n";
         }
 
-        if (auto it = dispatch_cache_.find(desc); it != dispatch_cache_.end()) {
-            return it->second;
+        if (auto spec = cache_.Find(desc)) {
+            return *spec;
         }
 
         auto specs = Find(desc, barriers_size, partials_size, 1);
         if (!specs.empty()) {
-            dispatch_cache_.emplace(desc, specs.front());
+            cache_.Insert(desc, specs.front());
             return specs.front();
         }
         return {};
@@ -115,21 +80,19 @@ struct Gemm::Impl {
 
     std::vector<LaunchSpec> Find(const GemmDesc& desc, size_t barrier_size, size_t partials_size, int top_k)
     {
-        std::vector<Kernel*> kernels;
-        for (const auto& k : registry_.kernels()) {
-            if (k->is_feasible(desc)) {
-                kernels.push_back(k.get());
-            }
-        }
-        if (kernels.empty()) {
+        std::vector<Kernel*> feasible;
+        std::copy_if(registry_.kernels().begin(), registry_.kernels().end(), std::back_inserter(feasible), [&](auto p) {
+            return p->is_feasible(desc);
+        });
+        if (feasible.empty()) {
             return {};
         }
 
         std::vector<std::vector<LaunchSpec>> clusters;
         {
             std::vector<LaunchSpec> tmp;
-            tmp.reserve(kernels.size());
-            for (const auto& k : kernels) {
+            tmp.reserve(feasible.size());
+            for (const auto& k : feasible) {
                 LaunchSpec spec{k};
                 tmp.push_back(spec);
             }
@@ -186,9 +149,10 @@ struct Gemm::Impl {
         });
 
         // for (const auto& i : idxs) {
-        //     auto [k, s, m] = metrics[i];
-        //     std::cout << k->name() << " s" << s << " " << avg_ratio[i] << " " << mio_ratio[i] << " " << mma_ratio[i]
-        //               << " " << m.mio_cost << " " << m.mma_cost << "\n";
+        //     auto [cid, s, m] = metrics[i];
+        //     std::cout << clusters[cid].front().kernel->name() << " s" << s << " " << avg_ratio[i] << " " <<
+        //     mio_ratio[i]
+        //               << " " << mma_ratio[i] << " " << m.mio_cost << " " << m.mma_cost << "\n";
         // }
 
         top_k = top_k > 0 ? std::min<int>(idxs.size(), top_k) : (int)idxs.size();
@@ -214,10 +178,10 @@ struct Gemm::Impl {
                 cudaStream_t    st)
     {
         // Early exit on exact match
-        if (dispatch_cache_.find(desc) != dispatch_cache_.end()) {
+        if (cache_.Find(desc)) {
             return 0;
         }
-        // std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
+        std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
 
         const auto tmp = Find(desc, barriers_size, partials_size, tuning_.top_k);
 
@@ -233,15 +197,15 @@ struct Gemm::Impl {
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
-        // for (const auto& s : specs) {
-        //     std::cout << s.kernel->name()          //
-        //               << " swizzle=" << s.swizzle  //
-        //               << ", splits=" << s.splits   //
-        //               << ", measured=" << s.measured << "ms\n";
-        // }
+        for (const auto& s : specs) {
+            std::cout << s.kernel->name()          //
+                      << " swizzle=" << s.swizzle  //
+                      << ", splits=" << s.splits   //
+                      << ", measured=" << s.measured << "ms\n";
+        }
 
         if (!specs.empty()) {
-            dispatch_cache_[desc] = specs.front();
+            cache_.Insert(desc, specs.front());
         }
         else {
             std::cerr << "No valid kernel found for the problem\n";
@@ -275,51 +239,6 @@ struct Gemm::Impl {
         return swizzles;
     }
 
-    int Export(std::ostream& os)
-    {
-        std::vector<std::pair<GemmDesc, LaunchSpec>> entries;
-        for (const auto& entry : dispatch_cache_) {
-            entries.push_back(entry);
-        }
-        ExportDispatchCache(os, entries);
-        Summary(entries);
-        return dispatch_cache_.size();
-    }
-
-    int Import(std::istream& is)
-    {
-        std::vector<std::pair<GemmDesc, LaunchSpec>> entries;
-        ImportDispatchCache(is, entries, registry_.kernels());
-        for (const auto& entry : entries) {
-            dispatch_cache_.insert(entry);
-        }
-        return dispatch_cache_.size();
-    }
-
-    // Print a summary of how many cases a kernel is used
-    void Summary(const std::vector<std::pair<GemmDesc, LaunchSpec>>& entries)
-    {
-        std::vector<Kernel*> uses{nullptr};
-        for (const auto& k : registry_.kernels()) {
-            uses.push_back(k.get());
-        }
-        for (const auto& [_, s] : entries) {
-            uses.push_back(s.kernel);
-        }
-        std::sort(uses.begin(), uses.end());
-        std::vector<std::pair<int, Kernel*>> count;
-        for (size_t i = 1; i < uses.size(); ++i) {
-            if (uses[i] != uses[i - 1]) {
-                count.emplace_back(-1, uses[i]);
-            }
-            ++count.back().first;
-        }
-        std::sort(count.begin(), count.end(), std::greater<>{});
-        for (const auto& [n, k] : count) {
-            std::cout << k->name() << ": " << n << "\n";
-        }
-    }
-
     /// TODO: move to cuda utils
     static std::unique_ptr<cudaDeviceProp> GetCudaDeviceProps()
     {
@@ -340,7 +259,7 @@ struct Gemm::Impl {
 
     std::optional<Measurer> measurer_;
 
-    std::map<GemmDesc, LaunchSpec> dispatch_cache_;
+    DispatchCache cache_;
 };
 
 // implementation of GEMM interfaces
@@ -441,12 +360,12 @@ int Gemm::Run(const Operation&    operation,
 
 int Gemm::Export(std::ostream& os)
 {
-    return impl_->Export(os);
+    return impl_->cache_.Export(os);
 }
 
 int Gemm::Import(std::istream& is)
 {
-    return impl_->Import(is);
+    return impl_->cache_.Import(is);
 }
 
 }  // namespace turbomind::gemm

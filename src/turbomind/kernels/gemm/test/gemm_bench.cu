@@ -13,7 +13,7 @@ std::vector<std::pair<int64_t, int64_t>> config{
     {16384 * 2, 6144}, {6144, 16384}, {8192, 6144},  {6144, 6144},  // internlm2-20b
     {13696 * 2, 4096}, {4096, 13696}, {4608, 4096},  {4096, 4096},  // glm4-9b
     {18944 * 2, 3584}, {3584, 18944}, {4608, 3584},  {3584, 3584},  // qwen2-7b
-    {20480 * 2, 7168}, {7168, 20480}, {9216, 7168},  {7168,7168},   // yi-34b
+    {20480 * 2, 7168}, {7168, 20480}, {9216, 7168},  {7168, 7168},  // yi-34b
     {28672 * 2, 8192}, {8192, 28672}, {10240, 8192}, {8192, 8192},  // llama2-70b / llama3-70b
     {29696 * 2, 8192}, {8192, 29696}, {10240, 8192}, {8192, 8192}   // qwen2-72b-instruct-awq
 };
@@ -27,47 +27,51 @@ void gemm_bench(nvbench::state& state)
     const auto bs = state.get_int64("bs");
     const auto tp = state.get_int64("tp");
 
-    auto [n, k] = config[idx];
+    auto [output_dims, input_dims] = config[idx];
 
-    // const auto n      = state.get_int64("batch size");
-    // const auto [m, k] = config[index];
+    constexpr int group_size = 128;
 
     if (idx % 4 == 0 || idx % 4 == 2) {
-        if (n % tp) {
+        if (output_dims % tp)
             return;
-        }
-        n /= tp;
+        output_dims /= tp;
     }
     else {
-        if (k % tp) {
+        if (input_dims % tp)
             return;
-        }
-        k /= tp;
+        input_dims /= tp;
     }
 
-    if (k % 128) {
+    if (input_dims % group_size)
         return;
-    }
 
     using turbomind::gemm::get_test;
 
-    get_test().Initialize(bs, n, k, 128, state.get_cuda_stream());
+    {
+        int m = bs;
+        int n = output_dims;
+        int k = input_dims;
+        if (get_test().kBatchDim == 1) {
+            std::swap(m, n);
+        }
+        std::cerr << "m" << m << "n" << n << "k" << k << "\n";
+        get_test().Initialize(m, n, k, group_size, state.get_cuda_stream());
+    }
 
-    state.add_element_count((size_t)bs * n * k * 2);  // mul + add
+    state.add_element_count((size_t)bs * output_dims * input_dims * 2);  // mul + add
 
     // state.collect_dram_throughput();
     // state.collect_l2_hit_rates();
 
     if constexpr (1) {
-        // state.add_global_memory_reads(m * k / 2 + sizeof(half) * n * k);
-        state.add_global_memory_reads(bs * k * 2 + n * k / 2);
-        get_test().Run(); // measure
+        state.add_global_memory_reads(get_test().global_memory_reads());
+        get_test().Run();
         state.exec(nvbench::exec_tag::sync, [&](nvbench::launch&) {  //
             get_test().Run();
         });
     }
     else {
-        state.add_global_memory_reads(sizeof(half) * (bs * k + n * k));
+        state.add_global_memory_reads(sizeof(half) * (bs * input_dims + output_dims * input_dims));
         state.exec(nvbench::exec_tag::sync, [&](nvbench::launch&) {  //
             get_test().RunCublas();
         });

@@ -1,11 +1,16 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/kernels/gemm/desc.h"
+#include "src/turbomind/kernels/gemm/dispatch_cache.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include <algorithm>
 #include <iostream>
+#include <map>
 #include <memory>
+#include <ostream>
 #include <sstream>
+#include <vector>
 
 static inline bool operator==(const int3& a, const int3& b)
 {
@@ -98,7 +103,8 @@ void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc,
                     g.epilogue,
                     g.m,
                     g.n,
-                    g.k);
+                    g.k,
+                    g.batch_dim);
         // Kernel desc
         auto& k = spec.kernel->desc();
         export_impl(os,
@@ -127,7 +133,7 @@ void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc,
 
 void ImportDispatchCache(std::istream&                                 is,
                          std::vector<std::pair<GemmDesc, LaunchSpec>>& entries,
-                         const std::vector<std::unique_ptr<Kernel>>&   kernels)
+                         const std::vector<Kernel*>&                   kernels)
 {
     std::string line;
     while (std::getline(is, line)) {
@@ -153,7 +159,8 @@ void ImportDispatchCache(std::istream&                                 is,
                     g.epilogue,
                     g.m,
                     g.n,
-                    g.k);
+                    g.k,
+                    g.batch_dim);
         KernelDesc k{};
         k.type_a  = g.type_a;
         k.type_b  = g.type_b;
@@ -189,7 +196,7 @@ void ImportDispatchCache(std::istream&                                 is,
         import_impl(ss, spec.swizzle, spec.splits);
         for (const auto& p : kernels) {
             if (p->desc() == k) {
-                spec.kernel = p.get();
+                spec.kernel = p;
                 break;
             }
         }
@@ -200,6 +207,208 @@ void ImportDispatchCache(std::istream&                                 is,
             std::cerr << "No kernel found for entry: " << line << "\n";
         }
     }
+}
+
+namespace {
+
+inline decltype(auto) as_tuple(const GemmDesc& d)
+{
+    return std::tie(d.arch,
+                    d.type_a,
+                    d.type_b,
+                    d.type_c,
+                    d.order_a,
+                    d.order_b,
+                    d.order_c,
+                    d.pack_a,
+                    d.pack_b,
+                    d.pack_u,
+                    d.pack_v,
+                    d.quant_a.type,
+                    d.quant_a.group_size,
+                    d.quant_b.type,
+                    d.quant_b.group_size,
+                    d.m,
+                    d.n,
+                    d.k,
+                    d.batch_dim);
+    // d.epilogue
+}
+
+}  // namespace
+
+inline bool operator<(const GemmDesc& a, const GemmDesc& b)
+{
+    return as_tuple(a) < as_tuple(b);
+}
+
+int extract_batch_size(GemmDesc& desc)
+{
+    return std::exchange(desc.batch_dim == 0 ? desc.m : desc.n, 0);
+}
+
+void set_batch_size(GemmDesc& desc, int batch_size)
+{
+    (desc.batch_dim == 0 ? desc.m : desc.n) = batch_size;
+}
+
+struct DispatchCache::Impl {
+
+    struct Flat {
+        std::vector<std::pair<int, int>> idxs;
+        std::vector<LaunchSpec>          specs;
+    };
+
+    const std::vector<Kernel*> kernels_;
+    std::map<GemmDesc, Flat>   cache_;
+
+    Impl(std::vector<Kernel*> kernels): kernels_(std::move(kernels)) {}
+
+    std::optional<LaunchSpec> Find(GemmDesc desc, bool exact) const
+    {
+        const int batch_size = extract_batch_size(desc);
+        // std::cerr << batch_size << " " << desc.m << " " << desc.n << " " << desc.k << "\n";
+        const auto it = cache_.find(desc);
+        if (it != cache_.end()) {
+            const auto& [idxs, specs] = it->second;
+            // Find index via key
+            const auto p =
+                std::lower_bound(idxs.begin(), idxs.end(), std::make_pair(batch_size, 0), [](auto& a, auto& b) {  //
+                    return a.first < b.first;
+                });
+            // std::cerr << p->first << " " << p->second << "\n";
+            if (p != idxs.end() && (!exact || p->first == batch_size)) {
+                return specs[p->second];
+            }
+        }
+        return {};
+    }
+
+    bool Insert(GemmDesc desc, const LaunchSpec& spec)
+    {
+        const int batch_size = extract_batch_size(desc);
+
+        auto it = cache_.find(desc);
+        if (it == cache_.end()) {
+            it = cache_.emplace_hint(it, desc, Flat{});
+        }
+        auto& [idxs, specs] = it->second;
+        // Find index via key
+        const auto p =
+            std::lower_bound(idxs.begin(), idxs.end(), std::make_pair(batch_size, 0), [](auto& a, auto& b) {  //
+                return a.first < b.first;
+            });
+        // Exact match, skip
+        if (p != idxs.end() && p->first == batch_size) {
+            return false;
+        }
+        // Insert
+        idxs.insert(p, {batch_size, (int)specs.size()});
+        specs.push_back(spec);
+        return true;
+    }
+
+    int Export(std::ostream& os) const
+    {
+        std::vector<std::pair<GemmDesc, LaunchSpec>> entries;
+        for (const auto& [desc, flat] : cache_) {
+            auto tmp = desc;
+            for (const auto& [batch_size, index] : flat.idxs) {
+                set_batch_size(tmp, batch_size);
+                entries.emplace_back(tmp, flat.specs[index]);
+            }
+        }
+        Summary(entries);
+        ExportDispatchCache(os, entries);
+        return entries.size();
+    }
+
+    int Import(std::istream& is)
+    {
+        std::vector<std::pair<GemmDesc, LaunchSpec>> entries;
+        ImportDispatchCache(is, entries, kernels_);
+        Summary(entries);
+        for (auto [desc, spec] : entries) {
+            const int batch_size = extract_batch_size(desc);
+            auto      it         = cache_.find(desc);
+            if (it == cache_.end()) {
+                it = cache_.emplace_hint(it, desc, Flat{});
+            }
+            auto& [idxs, specs] = it->second;
+            // Order is not maintained at this point
+            idxs.emplace_back(batch_size, (int)specs.size());
+            specs.push_back(spec);
+        }
+        // Sort indices and deduplicate
+        for (auto& [desc, flat] : cache_) {
+            auto& [idxs, specs] = flat;
+            const auto cmp      = [](auto& a, auto& b) {  //
+                return a.first < b.first;
+            };
+            std::stable_sort(idxs.begin(), idxs.end(), cmp);
+            idxs.erase(std::unique(idxs.begin(), idxs.end(), cmp), idxs.end());
+            // Remove unreferenced specs and update spec indices
+            std::vector<LaunchSpec> tmp;
+            for (auto& [key, val] : idxs) {
+                int old = std::exchange(val, tmp.size());
+                tmp.push_back(specs[old]);
+            }
+            specs = std::move(tmp);
+        }
+        return entries.size();
+    }
+
+    // Print a summary of how many cases a kernel is used
+    void Summary(const std::vector<std::pair<GemmDesc, LaunchSpec>>& entries) const
+    {
+        std::vector<Kernel*> uses{nullptr};
+        std::copy(kernels_.begin(), kernels_.end(), std::back_inserter(uses));
+
+        for (const auto& [_, s] : entries) {
+            uses.push_back(s.kernel);
+        }
+        std::sort(uses.begin(), uses.end());
+        std::vector<std::pair<int, Kernel*>> count;
+        for (size_t i = 1; i < uses.size(); ++i) {
+            if (uses[i] != uses[i - 1]) {
+                count.emplace_back(-1, uses[i]);
+            }
+            ++count.back().first;
+        }
+        std::sort(count.begin(), count.end(), std::greater<>{});
+        for (const auto& [n, k] : count) {
+            std::cout << k->name() << ": " << n << "\n";
+        }
+    }
+};
+
+DispatchCache::DispatchCache(std::vector<Kernel*> kernels): impl_(std::make_unique<Impl>(std::move(kernels))) {}
+
+DispatchCache::~DispatchCache() = default;
+
+std::optional<LaunchSpec> DispatchCache::Find(const GemmDesc& desc) const
+{
+    return impl_->Find(desc, true);
+}
+
+std::optional<LaunchSpec> DispatchCache::LowerBound(const GemmDesc& desc) const
+{
+    return impl_->Find(desc, false);
+}
+
+bool DispatchCache::Insert(const GemmDesc& desc, const LaunchSpec& spec)
+{
+    return impl_->Insert(desc, spec);
+}
+
+int DispatchCache::Export(std::ostream& os) const
+{
+    return impl_->Export(os);
+}
+
+int DispatchCache::Import(std::istream& is)
+{
+    return impl_->Import(is);
 }
 
 }  // namespace turbomind::gemm

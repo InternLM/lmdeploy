@@ -16,7 +16,16 @@
 
 namespace turbomind::gemm::sm80_s16816 {
 
-template<class Arch, class A, class TransformA, class U, class B, class TransformB, class V, Order order_c, class Tc>
+template<class Arch,
+         class A,
+         class TransformA,
+         class U,
+         class B,
+         class TransformB,
+         class V,
+         Order order_c,
+         class Tc,
+         class CtaMap_ = CtaMap>
 struct Sm80_s16816 {
 
     static_assert(A::SmemCopyAtom::K == B::SmemCopyAtom::K);
@@ -75,7 +84,7 @@ struct Sm80_s16816 {
                                          Operand_C<float, order_c>,
                                          SplitK>;
 
-        using Kernel = GemmUniversal<Arch, Mainloop, Epilogue, CtaMap>;
+        using Kernel = GemmUniversal<Arch, Mainloop, Epilogue, CtaMap_>;
     };
 };
 

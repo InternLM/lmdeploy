@@ -137,8 +137,8 @@ struct MainloopSm80_v2 {
 
     static constexpr int kFusePrefetch = FusePrefetch_;
 
-    static constexpr int kMaxPrefetchIter =
-        std::min(ceil_div(std::max(GmemIterA::ITER_S, GmemIterB::ITER_S), 4), MMA::kTileIterK);
+    static constexpr int kMaxPrefetchIter = 1;
+    // std::min(ceil_div(std::max(GmemIterA::ITER_S, GmemIterB::ITER_S), 4), MMA::kTileIterK);
 
     static constexpr int kBatchA = ceil_div(GmemIterA::ITER_S, kMaxPrefetchIter);
     static constexpr int kBatchB = ceil_div(GmemIterB::ITER_S, kMaxPrefetchIter);
@@ -347,11 +347,21 @@ struct MainloopSm80_v2 {
             for (int k = 0; k < ITER_K; ++k) {
                 // preload for next iter
                 preload((k + 1) % ITER_K);
+                // PRAGMA_UNROLL
+                // for (int n = 0; n < MMA::kMmaIterN; ++n) {
+                //     PRAGMA_UNROLL
+                //     for (int m = 0; m < MMA::kMmaIterM; ++m) {
+                //         int mm = n % 2 ? (MMA::kMmaIterM - m - 1) : m;
+                //         MMA_Atom::fma(frag_C[mm][n], frag_A[k][mm], frag_B[k][n], frag_C[mm][n]);
+                //     }
+                // }
                 PRAGMA_UNROLL
-                for (int n = 0; n < MMA::kMmaIterN; ++n) {
+                for (int m = 0; m < MMA::kMmaIterM; ++m) {
                     PRAGMA_UNROLL
-                    for (int m = 0; m < MMA::kMmaIterM; ++m) {
-                        MMA_Atom::fma(frag_C[m][n], frag_A[k][m], frag_B[k][n], frag_C[m][n]);
+                    for (int n = 0; n < MMA::kMmaIterN; ++n) {
+                        int nn = n;
+                        int mm = m;
+                        MMA_Atom::fma(frag_C[mm][nn], frag_A[k][mm], frag_B[k][nn], frag_C[mm][nn]);
                     }
                 }
                 if constexpr (kFusePrefetch) {

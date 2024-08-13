@@ -26,6 +26,7 @@ struct GemmDesc {
     int       m;
     int       n;
     int       k;
+    int       batch_dim;
 };
 
 enum class OpClass
@@ -73,7 +74,10 @@ struct KernelDesc {
     int2      c_tile;
     int       stages;
     bool      split_k;
-    int       max_active_ctas;  // set by `KernelImpl`
+
+    // set by `KernelImpl`
+    int                max_active_ctas;
+    cudaFuncAttributes attr;
 };
 
 class Kernel;

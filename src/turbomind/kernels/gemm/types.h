@@ -105,6 +105,33 @@ inline const char* to_string(DataType data_type)
     }
 }
 
+inline int64_t get_size(DataType type, int64_t size)
+{
+    if (!size) {
+        return 0;
+    }
+    switch (type) {
+        case DataType::U64:
+            return size * 8;
+        case DataType::F32:
+        case DataType::U32:
+            return size * 4;
+        case DataType::BF16:
+        case DataType::F16:
+        case DataType::U16:
+            return size * 2;
+        case DataType::U8:
+        case DataType::F8_E4M3:
+        case DataType::F8_E5M2:
+            return size;
+        case DataType::U4:
+            return size / 2;
+        default:
+            // std::cerr << to_string(type) << "\n";
+            return -1;
+    }
+}
+
 template<class T>
 struct get_data_type {
 };
@@ -186,6 +213,7 @@ struct Operation {
     Epilogue       epilogue;
     QuantDesc      quant_a;
     QuantDesc      quant_b;
+    int            batch_dim;
 };
 
 struct MatrixLayout {
@@ -196,6 +224,11 @@ struct MatrixLayout {
     int      ld;
     Pack     pack;
 };
+
+inline int64_t get_size(const MatrixLayout& m)
+{
+    return get_size(m.type, (int64_t)m.rows * m.cols);
+}
 
 struct Workspace {
     void*  barriers;

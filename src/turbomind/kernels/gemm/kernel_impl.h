@@ -79,14 +79,17 @@ public:
 
         using Params = typename Gemm::Param;
         using CtaMap = typename Gemm::CtaMap;
-        if (smem_size_ > (48 << 10)) {
 
-            cudaFuncSetAttribute(
-                gemm_kernel<Gemm, Params, CtaMap>, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_);
+        auto func = gemm_kernel<Gemm, Params, CtaMap>;
+
+        if (smem_size_ > (48 << 10)) {
+            cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_);
         }
 
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(
             &desc_.max_active_ctas, gemm_kernel<Gemm, Params, CtaMap>, Impl::WARPS * WARP_SIZE, smem_size_);
+
+        cudaFuncGetAttributes(&desc_.attr, func);
 
         name_ = GetName();
     }

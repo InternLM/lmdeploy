@@ -31,6 +31,7 @@ using thrust::universal_vector;
 template<class Ta,
          class Tb,
          class Tc,
+         int   batch_dim,
          Order order_a,
          Order order_b,
          Order order_c,
@@ -40,6 +41,8 @@ template<class Ta,
          Pack  pack_v = 0>
 class Testbed {
 public:
+    static constexpr int kBatchDim = batch_dim;
+
     Testbed(): dispatch_policy_{DispatchPolicy::kDefault} {}
 
     Testbed(DispatchPolicy dispatch_policy, std::string cache_path):
@@ -124,6 +127,8 @@ public:
 
         a_pack_desc_ = a_desc_;
         b_pack_desc_ = b_desc_;
+        u_pack_desc_ = {};
+        v_pack_desc_ = {};
 
         constexpr bool is_quant_a = !std::is_same_v<Ta, Tc>;
         constexpr bool is_quant_b = !std::is_same_v<Tb, Tc>;
@@ -209,6 +214,7 @@ public:
             Epilogue::kNone,
             quant_a_,
             quant_b_,
+            kBatchDim,
         };
 
         const Workspace workspace{barriers_.data().get(), barriers_.size(), partials_.data().get(), partials_.size()};
@@ -233,6 +239,7 @@ public:
 
         if (status) {
             std::cerr << "Run failed, code =" << status << "\n";
+            std::abort();
         }
     }
 
@@ -279,6 +286,16 @@ public:
         else {
             Compare(c_.data().get(), c_ref_.data().get(), m_, m_, n_, 0);
         }
+    }
+
+    int64_t global_memory_reads()
+    {
+        return get_size(a_pack_desc_) + get_size(b_pack_desc_) + get_size(u_pack_desc_) + get_size(v_pack_desc_);
+    }
+
+    int64_t ref_global_memory_reads()
+    {
+        return get_size(a_desc_) + get_size(b_desc_);
     }
 
 private:
@@ -374,31 +391,31 @@ inline decltype(auto) get_test()
 {
     if constexpr (0) {
         // native
-        return gTestbed<gemm::Testbed<half, half, half, kRowMajor, kColMajor, kRowMajor, 0, 0, 0, 0>>();
-    }
-    else if constexpr (0) {
-        // sm80 / sm75
-        constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 2;
-        constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
-        return gTestbed<gemm::Testbed<uint4_t, half, half, kRowMajor, kColMajor, kColMajor, kPackA, 0, kPackU, 0>>();
+        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, 0, 0, 0>>();
     }
     else if constexpr (1) {
         // sm80 / sm75
+        constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 2;
+        constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
+        return gTestbed<gemm::Testbed<uint4_t, half, half, 1, kColMajor, kColMajor, kColMajor, kPackA, 0, kPackU, 0>>();
+    }
+    else if constexpr (0) {
+        // sm80 / sm75
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
         constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
-        return gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // sm70
         constexpr Pack kPackB = HMMA_884 | OPERAND_B | 1;
         constexpr Pack kPackV = HMMA_884 | OPERAND_V | 1;
-        return gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // simt
         constexpr Pack kPackB = HMMA_SIMT | OPERAND_B | 1;
         constexpr Pack kPackV = HMMA_SIMT | OPERAND_V | 1;
-        return gTestbed<gemm::Testbed<half, uint4_t, half, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
 }
 

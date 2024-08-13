@@ -14,7 +14,7 @@ namespace turbomind::gemm {
 
 bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
 {
-    constexpr bool debug = false;
+    constexpr bool debug = 0;
 
     if constexpr (debug)
         printf("S\n");
@@ -76,31 +76,10 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
         return false;
     }
 
-    return true;
-}
+    if constexpr (debug)
+        printf("success\n");
 
-static int64_t get_size(DataType type, int64_t size)
-{
-    switch (type) {
-        case DataType::U64:
-            return size * 8;
-        case DataType::F32:
-        case DataType::U32:
-            return size * 4;
-        case DataType::BF16:
-        case DataType::F16:
-        case DataType::U16:
-            return size * 2;
-        case DataType::U8:
-        case DataType::F8_E4M3:
-        case DataType::F8_E5M2:
-            return size;
-        case DataType::U4:
-            return size / 2;
-        default:
-            std::cerr << to_string(type) << "\n";
-            return -1;
-    }
+    return true;
 }
 
 std::vector<std::pair<int, KernelMetric>>
@@ -153,7 +132,8 @@ Kernel::Estimate_v2(std::array<int, 3> size, int max_splits, int max_waves, int 
         const int64_t mio_cost_c = get_size(DataType::F32, (int64_t)m * n) * (splits - 1) * 2;
         const int64_t mio_cost   = mio_cost_a + mio_cost_b + mio_cost_c;
 
-        // std::cout << name() << " " << splits << " " << (float)mio_cost << " " << (float)mma_cost << "\n";
+        // std::cout << name() << " " << splits << " " << waves << " " << (float)mio_cost << " " << (float)mma_cost
+        //           << "\n";
 
         metrics.emplace_back(splits, KernelMetric{mio_cost, mma_cost});
     }
