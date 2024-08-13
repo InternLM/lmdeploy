@@ -6,6 +6,7 @@ from .base import INPUT_MODELS
 from .internlm2 import InternLM2AwqReader, InternLM2Reader
 from .llama import LlamaModel, LlamaReader
 from .llama_awq import LlamaAwqReader
+from .qwen import Qwen2Reader
 
 
 class InternVLReader(LlamaReader):
@@ -16,6 +17,11 @@ class InternVLReader(LlamaReader):
     tok_embeddings_key = 'language_model.model.embed_tokens.weight'
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        model_cfg = model_cfg.get('llm_config')
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
 
 
 class InternVL2Reader(InternLM2Reader):
@@ -33,6 +39,21 @@ class InternVL2Reader(InternLM2Reader):
         super().__init__(new_params, unused_params, last_bin, model_cfg)
 
 
+class InternVL2ProReader(Qwen2Reader):
+    """InternVL2 pro reader."""
+
+    attn_layer_prefix = 'language_model.model.layers'
+    attn_layer_patten = r'language_model.model.layers.([0-9]+).'
+    tok_embeddings_key = 'language_model.model.embed_tokens.weight'
+    norm_weight_key = 'language_model.model.norm.weight'
+    output_weight_key = 'language_model.lm_head.weight'
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        model_cfg = model_cfg.get('llm_config')
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
+
+
 @INPUT_MODELS.register_module(name='internvl')
 class InternVLModel(LlamaModel):
     """InternVL model in hf format."""
@@ -43,7 +64,8 @@ class InternVLModel(LlamaModel):
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         arch = config.llm_config.architectures[0]
         _readers = dict(InternLM2ForCausalLM=InternVL2Reader,
-                        LlamaForCausalLM=InternVLReader)
+                        LlamaForCausalLM=InternVLReader,
+                        Qwen2ForCausalLM=InternVL2ProReader)
         self.Reader = _readers[arch]
 
     def model_info(self):
@@ -88,6 +110,11 @@ class InternVLAwqReader(LlamaAwqReader):
     tok_embeddings_key = 'language_model.model.embed_tokens.weight'
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        model_cfg = model_cfg.get('llm_config')
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
 
 
 class InternVL2AwqReader(InternLM2AwqReader):

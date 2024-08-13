@@ -1,14 +1,36 @@
-FROM nvcr.io/nvidia/tritonserver:22.12-py3
+ARG CUDA_VERSION=cu12
 
-RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update && apt-get install -y --no-install-recommends \
-    rapidjson-dev libgoogle-glog-dev gdb python3.8-venv \
-    && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py38
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS cu12
+ENV CUDA_VERSION_SHORT=cu121
 
-ENV PATH=/opt/py38/bin:$PATH
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 AS cu11
+ENV CUDA_VERSION_SHORT=cu118
+
+FROM ${CUDA_VERSION} AS final
+
+ARG PYTHON_VERSION=3.10
+
+ARG TORCH_VERSION=2.3.0
+ARG TORCHVISION_VERSION=0.18.0
+
+RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get install -y software-properties-common wget vim &&\
+    add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
+    ninja-build rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
+    && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
+
+ENV PATH=/opt/py3/bin:$PATH
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools==69.5.1 &&\
-    python3 -m pip install --no-cache-dir torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118 &&\
+    python3 -m pip install --no-cache-dir torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} --index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT} &&\
     python3 -m pip install --no-cache-dir cmake packaging wheel
+
+# install openmpi
+RUN wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz &&\
+    tar xf openmpi-4.1.5.tar.gz && cd openmpi-4.1.5 && ./configure --prefix=/usr/local/openmpi &&\
+    make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
+
+ENV PATH=$PATH:/usr/local/openmpi/bin
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
@@ -20,21 +42,14 @@ WORKDIR /opt/lmdeploy
 RUN cd /opt/lmdeploy &&\
     python3 -m pip install --no-cache-dir -r requirements.txt &&\
     mkdir -p build && cd build &&\
-    cmake .. \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-        -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
-        -DBUILD_PY_FFI=ON \
-        -DBUILD_MULTI_GPU=ON \
-        -DBUILD_CUTLASS_MOE=OFF \
-        -DBUILD_CUTLASS_MIXED_GEMM=OFF \
-        -DCMAKE_CUDA_FLAGS="-lineinfo" \
-        -DUSE_NVTX=ON &&\
-    make -j$(nproc) && make install &&\
+    sh ../generate.sh &&\
+    ninja -j$(nproc) && ninja install &&\
     cd .. &&\
     python3 -m pip install -e . &&\
     rm -rf build
 
-ENV LD_LIBRARY_PATH=/opt/tritonserver/lib:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/opt/lmdeploy/install/lib:$LD_LIBRARY_PATH
+ENV PATH=/opt/lmdeploy/install/bin:$PATH
+
 # explicitly set ptxas path for triton
 ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas

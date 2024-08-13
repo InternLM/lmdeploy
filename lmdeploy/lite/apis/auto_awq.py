@@ -10,34 +10,11 @@ from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
 
-from .calibrate import calibrate
+from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
 
 # from lmdeploy.lite.utils.export_turbomind import export_turbomind_config
 
-LAYER_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMDecoderLayer',
-    'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
-    'QWenLMHeadModel': 'QWenBlock',
-    'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
-    'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
-    'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
-    'LlamaForCausalLM': 'LlamaDecoderLayer',
-    'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
-    'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
-    'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
-}
-NORM_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMRMSNorm',
-    'InternLM2ForCausalLM': 'InternLM2RMSNorm',
-    'QWenLMHeadModel': 'RMSNorm',
-    'Qwen2ForCausalLM': 'Qwen2RMSNorm',
-    'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
-    'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
-    'LlamaForCausalLM': 'LlamaRMSNorm',
-    'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
-    'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
-    'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
-}
+NORM_TYPE_MAP = NORM_TYPE_MAP  # legacy
 
 
 def save_vl_model(vl_model, model_path, dst_path):
@@ -136,7 +113,7 @@ def auto_awq(model: str,
                   w_sym,
                   w_group_size,
                   device,
-                  skip_if_contains='Plora')  # TODO quant lora weight
+                  skip_if_contains='lora')  # TODO quant lora weight
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,

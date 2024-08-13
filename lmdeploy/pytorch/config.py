@@ -16,6 +16,15 @@ def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
     from lmdeploy.utils import get_logger
     logger = get_logger('lmdeploy')
 
+    quantization_config = getattr(config.hf_config, 'quantization_config',
+                                  dict())
+    quant_method = quantization_config.get('quant_method', None)
+    if quant_method == 'awq':
+        logger.debug('set torch_dtype to float16 for awq.')
+        config.hf_config.torch_dtype = 'float16'
+        config.dtype = torch.float16
+        return config
+
     torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
     if torch_dtype is None:
         logger.warning('Model config does not have `torch_dtype`,'
@@ -84,6 +93,7 @@ class ModelConfig:
     model_arch: str = None
     unused_modules: List[str] = None
     auto_model_cls: Any = AutoModelForCausalLM
+    cogvlm_style: bool = False
 
     def get_head_size(self):
         """get head size."""

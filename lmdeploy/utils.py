@@ -1,16 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import functools
-import json
 import logging
-import os
 import sys
 import time
 from contextlib import contextmanager
 from logging import Logger, LogRecord
 from typing import List, Optional, TypeVar, Union
 
-from huggingface_hub import hf_hub_download
 from transformers import PretrainedConfig
 
 logger_initialized = {}
@@ -183,20 +180,6 @@ def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
     return stop_words
 
 
-def get_hf_config_content(pretrained_model_name_or_path: str,
-                          **kwargs) -> dict:
-    """Get config content of a hf model."""
-    if os.path.exists(pretrained_model_name_or_path):
-        config_path = os.path.join(pretrained_model_name_or_path,
-                                   'config.json')
-    else:
-        config_path = hf_hub_download(pretrained_model_name_or_path,
-                                      'config.json')
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-    return config
-
-
 def get_model(pretrained_model_name_or_path: str,
               download_dir: str = None,
               revision: str = None,
@@ -318,15 +301,6 @@ def _get_and_verify_max_len(
             f"{possible_keys}. Assuming the model's maximum length is "
             f'{default_max_len}.')
         derived_max_model_len = default_max_len
-
-    rope_scaling = getattr(hf_tm_config, 'rope_scaling', None)
-    if rope_scaling is not None and rope_scaling['type'] != 'su':
-        assert 'factor' in rope_scaling
-        scaling_factor = rope_scaling['factor']
-        if rope_scaling['type'] == 'yarn':
-            derived_max_model_len = rope_scaling[
-                'original_max_position_embeddings']
-        derived_max_model_len *= scaling_factor
 
     if max_model_len is None:
         max_model_len = int(derived_max_model_len)

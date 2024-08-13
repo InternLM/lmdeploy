@@ -107,11 +107,9 @@ class Engine:
             check_adapters(list(engine_config.adapters.values()))
 
         self.engine_config = engine_config
-        model_name = engine_config.model_name
         tp = engine_config.tp
 
         self.tp = tp
-        self.model_name = model_name
 
         self.device_context = DeviceContext(
             device_type=engine_config.device_type)
@@ -119,7 +117,6 @@ class Engine:
         scheduler_config = SchedulerConfig(
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
-            eviction_type=engine_config.eviction_type,
             prefill_interval=engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
@@ -429,7 +426,7 @@ class Engine:
         history_image_nums = None
         history_image_token_lengths = None
         # only for cogvlm
-        if self.model_config.model_arch == 'CogVLMForCausalLM':
+        if self.model_config.cogvlm_style:
             (history_image_nums,
              history_image_token_lengths) = __get_cogvlm_image_info()
 

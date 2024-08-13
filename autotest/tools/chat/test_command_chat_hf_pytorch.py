@@ -14,7 +14,7 @@ from utils.run_client_chat import hf_command_line_test
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=1))
 def test_hf_pytorch_chat_tp1(config, model, cli_case_config, worker_id):
     usercase = 'chat_testcase'
-    if 'deepseek-coder' in model:
+    if 'coder' in model:
         usercase = 'code_testcase'
     result, chat_log, msg = hf_command_line_test(
         config,
@@ -54,6 +54,7 @@ def test_hf_pytorch_chat_tp2(config, model, cli_case_config, worker_id):
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
+@pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
 def test_hf_pytorch_chat_pr(config, model, cli_case_config):

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .cli import CLI
 from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
-                    convert_args, get_lora_adapters)
+                    convert_args, get_chat_template, get_lora_adapters)
 
 
 class SubCliServe:
@@ -51,16 +51,13 @@ class SubCliServe:
         ArgumentHelper.download_dir(parser)
 
         # chat template args
-        ArgumentHelper.meta_instruction(parser)  # TODO remove
         ArgumentHelper.chat_template(parser)
-        ArgumentHelper.cap(parser)
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
 
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
-        model_name_act = ArgumentHelper.model_name(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -71,7 +68,6 @@ class SubCliServe:
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
         tb_group._group_actions.append(tp_act)
-        tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
@@ -138,11 +134,10 @@ class SubCliServe:
         ArgumentHelper.log_level(parser)
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
+        ArgumentHelper.model_name(parser)
 
         # chat template args
-        ArgumentHelper.meta_instruction(parser)  # TODO remove
         ArgumentHelper.chat_template(parser)
-        ArgumentHelper.cap(parser)
 
         # model args
         ArgumentHelper.revision(parser)
@@ -154,7 +149,6 @@ class SubCliServe:
         ArgumentHelper.adapters(pt_group)
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
-        model_name_act = ArgumentHelper.model_name(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -165,7 +159,6 @@ class SubCliServe:
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
         tb_group._group_actions.append(tp_act)
-        tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
@@ -201,29 +194,11 @@ class SubCliServe:
         ArgumentHelper.session_id(parser)
 
     @staticmethod
-    def add_parser_triton_client():
-        """Add parser for triton_client command."""
-        parser = SubCliServe.subparsers.add_parser(
-            'triton_client',
-            formatter_class=DefaultsAndTypesHelpFormatter,
-            description=SubCliServe.triton_client.__doc__,
-            help=SubCliServe.triton_client.__doc__)
-        parser.set_defaults(run=SubCliServe.triton_client)
-        parser.add_argument(
-            'tritonserver_addr',
-            type=str,
-            help='The address in format "ip:port" of triton inference server')
-        ArgumentHelper.session_id(parser)
-        ArgumentHelper.cap(parser)
-        ArgumentHelper.stream_output(parser)
-
-    @staticmethod
     def gradio(args):
         """Serve LLMs with web UI using gradio."""
         from lmdeploy.archs import autoget_backend
         from lmdeploy.messages import (PytorchEngineConfig,
                                        TurbomindEngineConfig)
-        from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.gradio.app import run
         backend = args.backend
 
@@ -233,7 +208,6 @@ class SubCliServe:
         if backend == 'pytorch':
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
-                model_name=args.model_name,
                 max_batch_size=args.max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
@@ -242,7 +216,6 @@ class SubCliServe:
             )
         else:
             backend_config = TurbomindEngineConfig(
-                model_name=args.model_name,
                 tp=args.tp,
                 max_batch_size=args.max_batch_size,
                 session_len=args.session_len,
@@ -253,13 +226,7 @@ class SubCliServe:
                 cache_block_seq_len=args.cache_block_seq_len,
                 enable_prefix_caching=args.enable_prefix_caching,
             )
-        chat_template_config = ChatTemplateConfig(
-            model_name=args.model_name,
-            meta_instruction=args.meta_instruction,
-            capability=args.cap)
-        if args.chat_template:
-            chat_template_config = ChatTemplateConfig.from_json(
-                args.chat_template)
+        chat_template_config = get_chat_template(args.chat_template)
         run(args.model_path_or_server,
             server_name=args.server_name,
             server_port=args.server_port,
@@ -272,7 +239,6 @@ class SubCliServe:
     def api_server(args):
         """Serve LLMs with restful api using fastapi."""
         from lmdeploy.archs import autoget_backend
-        from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.openai.api_server import serve as run_api_server
         backend = args.backend
         if backend != 'pytorch':
@@ -284,7 +250,6 @@ class SubCliServe:
             adapters = get_lora_adapters(args.adapters)
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
-                model_name=args.model_name,
                 max_batch_size=args.max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
@@ -295,7 +260,6 @@ class SubCliServe:
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(
-                model_name=args.model_name,
                 tp=args.tp,
                 max_batch_size=args.max_batch_size,
                 session_len=args.session_len,
@@ -306,10 +270,8 @@ class SubCliServe:
                 cache_block_seq_len=args.cache_block_seq_len,
                 enable_prefix_caching=args.enable_prefix_caching,
             )
-        chat_template_config = None
-        if args.chat_template:
-            chat_template_config = ChatTemplateConfig.from_json(
-                args.chat_template)
+        chat_template_config = get_chat_template(args.chat_template)
+
         from lmdeploy.messages import VisionConfig
         vision_config = VisionConfig(args.vision_max_batch_size)
         run_api_server(args.model_path,
@@ -337,15 +299,7 @@ class SubCliServe:
         run_api_client(**kwargs)
 
     @staticmethod
-    def triton_client(args):
-        """Interact with Triton Server using gRPC protocol."""
-        from lmdeploy.serve.client import main as run_triton_client
-        kwargs = convert_args(args)
-        run_triton_client(**kwargs)
-
-    @staticmethod
     def add_parsers():
         SubCliServe.add_parser_gradio()
         SubCliServe.add_parser_api_server()
         SubCliServe.add_parser_api_client()
-        SubCliServe.add_parser_triton_client()

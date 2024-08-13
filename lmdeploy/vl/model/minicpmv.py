@@ -54,6 +54,20 @@ class MiniCPMVModel(VisonModel):
         else:
             self._forward_func = self._forward_v2
 
+        # adapt new code commit 287e3f85
+        if not hasattr(model, 'slice_image'):
+            from transformers import AutoProcessor
+            processor = AutoProcessor.from_pretrained(self.model_path,
+                                                      trust_remote_code=True)
+            model.slice_image = processor.image_processor.slice_image
+
+            def _reshape_by_patch(x):
+                out = x.cpu().numpy()
+                out = processor.image_processor.reshape_by_patch(out)
+                return torch.from_numpy(out).to(device=x.device)
+
+            model.reshape_by_patch = _reshape_by_patch
+
     def _get_slice_image(self, image: Image):
         slice_images = []
         source_image, patches, best_grid = self.model.slice_image(image)

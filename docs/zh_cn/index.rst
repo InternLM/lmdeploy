@@ -31,6 +31,7 @@ LMDeploy 工具箱提供以下核心功能：
 
 - **有状态推理：** 通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。显著提升长文本多轮对话场景中的效率。
 
+- **卓越的兼容性:**  LMDeploy 支持 `KV Cache 量化 <https://lmdeploy.readthedocs.io/zh-cn/latest/quantization/kv_quant.html>`_, `AWQ <https://lmdeploy.readthedocs.io/zh-cn/latest/quantization/w4a16.html>`_ 和 `Automatic Prefix Caching <https://lmdeploy.readthedocs.io/zh-cn/latest/inference/turbomind_config.html>`_ 同时使用。
 
 中文文档
 --------
@@ -40,14 +41,46 @@ LMDeploy 工具箱提供以下核心功能：
    :maxdepth: 2
    :caption: 快速上手
 
+   installation.md
    get_started.md
 
-.. _编译和安装:
+.. _支持的模型:
 .. toctree::
    :maxdepth: 1
-   :caption: 编译和安装
+   :caption: 模型列表
 
-   build.md
+   supported_models/supported_models.md
+
+.. _llm_部署:
+.. toctree::
+   :maxdepth: 1
+   :caption: 大语言模型(LLMs)部署
+
+   llm/pipeline.md
+   llm/api_server.md
+   llm/api_server_tools.md
+   llm/api_server_lora.md
+   llm/gradio.md
+   llm/proxy_server.md
+
+.. _vlm_部署:
+.. toctree::
+   :maxdepth: 1
+   :caption: 视觉-语言模型(VLMs)部署
+
+   multi_modal/vl_pipeline.md
+   multi_modal/api_server_vl.md
+   multi_modal/index.rst
+
+
+.. _量化:
+.. toctree::
+   :maxdepth: 1
+   :caption: 量化
+
+   quantization/w4a16.md
+   quantization/w8a8.md
+   quantization/kv_quant.md
 
 .. _测试基准:
 .. toctree::
@@ -57,45 +90,7 @@ LMDeploy 工具箱提供以下核心功能：
    benchmark/profile_generation.md
    benchmark/profile_throughput.md
    benchmark/profile_api_server.md
-   benchmark/profile_triton_server.md
    benchmark/evaluate_with_opencompass.md
-
-.. _支持的模型:
-.. toctree::
-   :maxdepth: 1
-   :caption: 模型列表
-
-   supported_models/supported_models.md
-
-.. _推理:
-.. toctree::
-   :maxdepth: 1
-   :caption: 推理
-
-   inference/pipeline.md
-   inference/vl_pipeline.md
-
-
-.. _服务:
-.. toctree::
-   :maxdepth: 1
-   :caption: 服务
-
-   serving/api_server.md
-   serving/api_server_vl.md
-   serving/api_server_tools.md
-   serving/gradio.md
-   serving/proxy_server.md
-
-
-.. _量化:
-.. toctree::
-   :maxdepth: 1
-   :caption: 量化
-
-   quantization/w4a16.md
-   quantization/kv_quant.md
-   quantization/w8a8.md
 
 .. toctree::
    :maxdepth: 1
@@ -108,7 +103,6 @@ LMDeploy 工具箱提供以下核心功能：
    advance/chat_template.md
    advance/debug_turbomind.md
    advance/structed_output.md
-   serving/qos.md
 
 .. toctree::
    :maxdepth: 1

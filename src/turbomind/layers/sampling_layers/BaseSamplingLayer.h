@@ -50,6 +50,7 @@ protected:
     bool*  skip_decode_        = nullptr;
     bool   skip_any_           = false;
     int*   context_length_     = nullptr;
+    bool   skip_all_           = false;
 
     RepetitionPenaltyType repetition_penalty_type_ = RepetitionPenaltyType::None;
 

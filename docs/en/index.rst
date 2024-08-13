@@ -31,6 +31,7 @@ LMDeploy has the following core features:
 
 * **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, the engine remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
+* **Excellent Compatibility**: LMDeploy supports `KV Cache Quant <https://lmdeploy.readthedocs.io/en/latest/quantization/kv_quant.html>`_, `AWQ <https://lmdeploy.readthedocs.io/en/latest/quantization/w4a16.html>`_ and `Automatic Prefix Caching <https://lmdeploy.readthedocs.io/en/latest/inference/turbomind_config.html>`_ to be used simultaneously.
 
 Documentation
 -------------
@@ -40,14 +41,45 @@ Documentation
    :maxdepth: 2
    :caption: Get Started
 
+   installation.md
    get_started.md
 
-.. _build:
+.. _supported_models:
 .. toctree::
    :maxdepth: 1
-   :caption: Build
+   :caption: Models
 
-   build.md
+   supported_models/supported_models.md
+
+.. _llm_deployment:
+.. toctree::
+   :maxdepth: 1
+   :caption: Large Language Models(LLMs) Deployment
+
+   llm/pipeline.md
+   llm/api_server.md
+   llm/api_server_tools.md
+   llm/api_server_lora.md
+   llm/gradio.md
+   llm/proxy_server.md
+
+.. _vlm_deployment:
+.. toctree::
+   :maxdepth: 1
+   :caption: Vision-Language Models(VLMs) Deployment
+
+   multi_modal/vl_pipeline.md
+   multi_modal/api_server_vl.md
+   multi_modal/index.rst
+
+.. _quantization:
+.. toctree::
+   :maxdepth: 1
+   :caption: Quantization
+
+   quantization/w4a16.md
+   quantization/w8a8.md
+   quantization/kv_quant.md
 
 .. _benchmark:
 .. toctree::
@@ -57,43 +89,7 @@ Documentation
    benchmark/profile_generation.md
    benchmark/profile_throughput.md
    benchmark/profile_api_server.md
-   benchmark/profile_triton_server.md
    benchmark/evaluate_with_opencompass.md
-
-.. _supported_models:
-.. toctree::
-   :maxdepth: 1
-   :caption: Supported Models
-
-   supported_models/supported_models.md
-
-.. _inference:
-.. toctree::
-   :maxdepth: 1
-   :caption: Inference
-
-   inference/pipeline.md
-   inference/vl_pipeline.md
-
-.. _serving:
-.. toctree::
-   :maxdepth: 1
-   :caption: Serving
-
-   serving/api_server.md
-   serving/api_server_vl.md
-   serving/api_server_tools.md
-   serving/gradio.md
-   serving/proxy_server.md
-
-.. _quantization:
-.. toctree::
-   :maxdepth: 1
-   :caption: Quantization
-
-   quantization/w4a16.md
-   quantization/kv_quant.md
-   quantization/w8a8.md
 
 .. toctree::
    :maxdepth: 1
@@ -106,7 +102,6 @@ Documentation
    advance/chat_template.md
    advance/debug_turbomind.md
    advance/structed_output.md
-   serving/qos.md
 
 .. toctree::
    :maxdepth: 1
