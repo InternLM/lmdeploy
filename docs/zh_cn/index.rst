@@ -107,7 +107,6 @@ LMDeploy 工具箱提供以下核心功能：
    advance/long_context.md
    advance/chat_template.md
    advance/debug_turbomind.md
-   serving/qos.md
 
 .. toctree::
    :maxdepth: 1

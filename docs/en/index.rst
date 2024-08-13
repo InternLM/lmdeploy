@@ -105,7 +105,6 @@ Documentation
    advance/long_context.md
    advance/chat_template.md
    advance/debug_turbomind.md
-   serving/qos.md
 
 .. toctree::
    :maxdepth: 1
