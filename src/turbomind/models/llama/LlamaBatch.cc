@@ -1277,12 +1277,14 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
         int* output_ptr = h_output_ids_;
         for (int i = 0; i < batch_size - g.partial; ++i) {
             if (state_->requests[i] && (state_->requests[i]->stream_cb || state_->h_finished[i])) {
-                auto      output_ids = state_->requests[i]->outputs[rank_].getPtr<int>("output_ids");
-                auto      output_len = state_->requests[i]->outputs[rank_].getPtr<int>("sequence_length");
-                const int count      = state_->h_context_length[i];
+                auto      output_ids       = state_->requests[i]->outputs[rank_].getPtr<int>("output_ids");
+                auto      output_len       = state_->requests[i]->outputs[rank_].getPtr<int>("sequence_length");
+                auto      prefix_cache_len = state_->requests[i]->outputs[rank_].getPtr<int>("prefix_cache_length");
+                const int count            = state_->h_context_length[i];
                 // TODO: sync history output tokens at when receiving the request and copy the last token here
                 std::copy(output_ptr, output_ptr + count, output_ids);
-                *output_len = count;
+                *output_len       = count;
+                *prefix_cache_len = state_->sequences[i]->prefix_cache_len;
             }
             output_ptr += session_len_;
         }

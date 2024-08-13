@@ -297,6 +297,7 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
         index: int,
         text: str,
         finish_reason: Optional[str] = None,
+        usage: Optional[UsageInfo] = None,
     ) -> str:
         choice_data = ChatCompletionResponseStreamChoice(
             index=index,
@@ -308,16 +309,31 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=usage,
         )
-        response_json = response.model_dump_json()
+        response_json = response.model_dump_json(exclude_none=True)
 
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         async for res in result_generator:
+            usage = None
+            if res.finish_reason is not None:
+                final_res = res
+                total_tokens = sum([
+                    final_res.history_token_len, final_res.input_token_len,
+                    final_res.generate_token_len
+                ])
+                usage = UsageInfo(
+                    prompt_tokens=final_res.input_token_len,
+                    completion_tokens=final_res.generate_token_len,
+                    total_tokens=total_tokens,
+                    prefix_cached_tokens=final_res.prefix_cached_token_len,
+                )
             response_json = create_stream_response_json(
                 index=0,
                 text=res.response,
+                usage=usage,
             )
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
@@ -352,11 +368,10 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
         final_res.history_token_len, final_res.input_token_len,
         final_res.generate_token_len
     ])
-    usage = UsageInfo(
-        prompt_tokens=final_res.input_token_len,
-        completion_tokens=final_res.generate_token_len,
-        total_tokens=total_tokens,
-    )
+    usage = UsageInfo(prompt_tokens=final_res.input_token_len,
+                      completion_tokens=final_res.generate_token_len,
+                      total_tokens=total_tokens,
+                      prefix_cached_tokens=final_res.prefix_cached_token_len)
     response = ChatCompletionResponse(
         id=request_id,
         created=created_time,
@@ -480,10 +495,12 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     )
 
     def create_stream_response_json(
-            index: int,
-            text: str,
-            finish_reason: Optional[str] = None,
-            logprobs: Optional[LogProbs] = None) -> str:
+        index: int,
+        text: str,
+        finish_reason: Optional[str] = None,
+        logprobs: Optional[LogProbs] = None,
+        usage: Optional[UsageInfo] = None,
+    ) -> str:
         choice_data = ChatCompletionResponseStreamChoice(
             index=index,
             delta=DeltaMessage(role='assistant', content=text),
@@ -494,8 +511,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=usage,
         )
-        response_json = response.model_dump_json()
+        response_json = response.model_dump_json(exclude_none=True)
 
         return response_json
 
@@ -506,12 +524,26 @@ async def chat_completions_v1(request: ChatCompletionRequest,
                 logprobs = _create_chat_completion_logprobs(
                     VariableInterface.async_engine.tokenizer, res.token_ids,
                     res.logprobs)
-
+            usage = None
+            if res.finish_reason is not None:
+                final_res = res
+                total_tokens = sum([
+                    final_res.history_token_len, final_res.input_token_len,
+                    final_res.generate_token_len
+                ])
+                usage = UsageInfo(
+                    prompt_tokens=final_res.input_token_len,
+                    completion_tokens=final_res.generate_token_len,
+                    total_tokens=total_tokens,
+                    prefix_cached_tokens=final_res.prefix_cached_token_len,
+                )
             response_json = create_stream_response_json(
                 index=0,
                 text=res.response,
                 finish_reason=res.finish_reason,
-                logprobs=logprobs)
+                logprobs=logprobs,
+                usage=usage,
+            )
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -584,6 +616,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         prompt_tokens=final_res.input_token_len,
         completion_tokens=final_res.generate_token_len,
         total_tokens=total_tokens,
+        prefix_cached_tokens=final_res.prefix_cached_token_len,
     )
     response = ChatCompletionResponse(
         id=request_id,
@@ -668,7 +701,7 @@ async def completions_v1_qos(request: CompletionRequestQos,
             choices=[choice_data],
             usage=usage,
         )
-        response_json = response.model_dump_json()
+        response_json = response.model_dump_json(exclude_none=True)
 
         return response_json
 
@@ -687,6 +720,7 @@ async def completions_v1_qos(request: CompletionRequestQos,
                         prompt_tokens=final_res.input_token_len,
                         completion_tokens=final_res.generate_token_len,
                         total_tokens=total_tokens,
+                        prefix_cached_tokens=final_res.prefix_cached_token_len,
                     )
                 response_json = create_stream_response_json(
                     index=0,
@@ -732,6 +766,7 @@ async def completions_v1_qos(request: CompletionRequestQos,
         usage.prompt_tokens += final_res.input_token_len
         usage.completion_tokens += final_res.generate_token_len
         usage.total_tokens += total_tokens
+        usage.prefix_cached_tokens = final_res.prefix_cached_token_len
 
     await asyncio.gather(
         *[_inner_call(i, generators[i]) for i in range(len(generators))])
@@ -847,7 +882,7 @@ async def completions_v1(request: CompletionRequest,
             choices=[choice_data],
             usage=usage,
         )
-        response_json = response.model_dump_json()
+        response_json = response.model_dump_json(exclude_none=True)
 
         return response_json
 
@@ -876,6 +911,7 @@ async def completions_v1(request: CompletionRequest,
                         prompt_tokens=final_res.input_token_len,
                         completion_tokens=final_res.generate_token_len,
                         total_tokens=total_tokens,
+                        prefix_cached_tokens=final_res.prefix_cached_token_len,
                     )
                 response_json = create_stream_response_json(
                     index=0,
@@ -936,6 +972,7 @@ async def completions_v1(request: CompletionRequest,
         usage.prompt_tokens += final_res.input_token_len
         usage.completion_tokens += final_res.generate_token_len
         usage.total_tokens += total_tokens
+        usage.prefix_cached_tokens = final_res.prefix_cached_token_len
 
     await asyncio.gather(
         *[_inner_call(i, generators[i]) for i in range(len(generators))])

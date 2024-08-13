@@ -648,6 +648,8 @@ class TurboMindInstance:
 
             output_ids = outputs['output_ids'][:, 0, :]
             sequence_length = outputs['sequence_length'].long()[:, 0]
+            prefix_cache_length = outputs['prefix_cache_length'].long(
+            )[:, 0].item()
             output_ids = [
                 output_id[s:l] for output_id, s, l in zip(
                     output_ids, seq_start, sequence_length)
@@ -687,6 +689,9 @@ class TurboMindInstance:
             if out_logprobs:
                 output_token_len = len(outputs.token_ids)
                 outputs.logprobs = out_logprobs[:output_token_len]
+
+            if self.tm_model.config.enable_prefix_caching:
+                outputs.num_prefix_cached_token = prefix_cache_length
 
             yield outputs
 
@@ -762,6 +767,8 @@ class TurboMindInstance:
 
             output_ids = outputs['output_ids'][:, 0, :]
             sequence_length = outputs['sequence_length'].long()[:, 0]
+            prefix_cache_length = outputs['prefix_cache_length'].long(
+            )[:, 0].item()
             output_ids = [
                 output_id[s:l] for output_id, s, l in zip(
                     output_ids, seq_start, sequence_length)
@@ -799,6 +806,9 @@ class TurboMindInstance:
             if out_logprobs:
                 output_token_len = len(outputs.token_ids)
                 outputs.logprobs = out_logprobs[:output_token_len]
+
+            if self.tm_model.config.enable_prefix_caching:
+                outputs.num_prefix_cached_token = prefix_cache_length
 
             yield outputs
 
