@@ -97,7 +97,10 @@ def _multinomial_sampling(scores: torch.Tensor,
 
 
 def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor,
-                     guided_input_ids: torch.Tensor, tokenizer: object):
+                     guided_input_ids: Optional[torch.Tensor],
+                     tokenizer: object):
+    if guided_input_ids is None:
+        return scores
     for i in range(len(response_formats)):
         _format = response_formats[i]
         if isinstance(_format, Dict) and _format.get(
