@@ -85,9 +85,8 @@ class RegexLogitsProcessor:
         """
         from outlines.integrations.utils import adapt_tokenizer
         tokenizer = adapt_tokenizer(tokenizer)
-        if hasattr(
-                tokenizer, '_tokenizer'
-        ):  # vocab size greater than logits shape because of  '[UNUSED_TOKEN_142]'...
+        # vocab size greater than logits shape because of '[UNUSED_TOKEN_...]'
+        if hasattr(tokenizer, '_tokenizer'):
             tokenizer.vocabulary = tokenizer._tokenizer.get_vocab(
                 with_added_tokens=False)
         return tokenizer
