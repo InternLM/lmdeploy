@@ -3,7 +3,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/gemm/desc.h"
-#include "src/turbomind/kernels/gemm/tune/measurer.h"
+#include "src/turbomind/kernels/gemm/tuner/measurer.h"
 
 #include <vector>
 

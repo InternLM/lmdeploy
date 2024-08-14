@@ -203,6 +203,12 @@ int LlamaLinear<T>::Import(std::istream& is)
     return n_records;
 }
 
+template<class T>
+std::vector<int> LlamaLinear<T>::GetTuningSeq() const
+{
+    return impl_->gemm_.GetTuningSeq();
+}
+
 #ifdef ENABLE_FP32
 template class LlamaLinear<float>;
 #endif

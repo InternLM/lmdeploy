@@ -5,11 +5,15 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include <cuda_runtime.h>
 #include <memory>
+#include <vector>
 
 namespace turbomind::gemm {
 
 class Gemm {
 public:
+    static constexpr size_t kBarriersSize = 1 << 20;
+    static constexpr size_t kPartialsSize = 32 << 20;
+
     Gemm();
 
     ~Gemm();
@@ -36,8 +40,7 @@ public:
 
     [[maybe_unused]] int Import(std::istream& is);
 
-    static constexpr size_t kBarriersSize = 1 << 20;
-    static constexpr size_t kPartialsSize = 32 << 20;
+    [[nodiscard]] std::vector<int> GetTuningSeq() const;
 
 private:
     struct Impl;

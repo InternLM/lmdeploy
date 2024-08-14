@@ -1,4 +1,6 @@
-#include "src/turbomind/kernels/gemm/tune/stopping_criterion.h"
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#include "src/turbomind/kernels/gemm/tuner/stopping_criterion.h"
 #include <memory>
 
 namespace turbomind::gemm {

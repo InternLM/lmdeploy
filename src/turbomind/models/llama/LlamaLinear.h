@@ -40,6 +40,8 @@ public:
 
     [[maybe_unused]] int Import(std::istream& is);
 
+    std::vector<int> GetTuningSeq() const;
+
 private:
     struct Impl;
     std::shared_ptr<Impl> impl_;

@@ -1,6 +1,8 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #include "src/turbomind/kernels/gemm/kernel.h"
-#include "src/turbomind/kernels/gemm/tune/cache_utils.h"
-#include "src/turbomind/kernels/gemm/tune/measurer.h"
+#include "src/turbomind/kernels/gemm/tuner/cache_utils.h"
+#include "src/turbomind/kernels/gemm/tuner/measurer.h"
 #include <iostream>
 
 namespace turbomind::gemm {

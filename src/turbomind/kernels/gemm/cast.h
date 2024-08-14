@@ -1,3 +1,4 @@
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/kernels/core/data_type.h"
 #include <cuda_runtime.h>

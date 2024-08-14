@@ -22,7 +22,7 @@
 
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
-#include "src/turbomind/kernels/gemm/tune/args.h"
+#include "src/turbomind/kernels/gemm/tuner/params.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
@@ -586,18 +586,7 @@ void LlamaV2<T>::tune()
         return;
     }
 
-    std::vector<int> bss;
-
-    if (auto str = std::getenv("TM_GEMM_TUNE_SEQS")) {
-        try {
-            bss = gemm::ParseTuningSequence(str);
-        }
-        catch (...) {
-            TM_LOG_ERROR("[Gemm2] Failed to parse `TM_GEMM_TUNE_SEQS`, default value will be used.");
-            bss = {};
-        }
-    }
-
+    std::vector<int> bss = linear_.GetTuningSeq();
     if (bss.empty()) {
         bss = gemm::GenerateTuningSequence(gemm::GetDefaultTuningGenerators());
     }

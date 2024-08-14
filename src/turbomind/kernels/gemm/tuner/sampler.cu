@@ -2,7 +2,7 @@
 
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
-#include "src/turbomind/kernels/gemm/tune/sampler.h"
+#include "src/turbomind/kernels/gemm/tuner/sampler.h"
 #include <algorithm>
 #include <iostream>
 #include <numeric>

@@ -8,10 +8,9 @@
 
 namespace turbomind::gemm {
 
-struct TuningArgs {
+struct TuningParams {
     // Split-k params
     int max_splits = 8;
-    int top_splits = 5;
     int max_waves  = 10;
 
     // Swizzling params
@@ -23,14 +22,16 @@ struct TuningArgs {
     int   min_iter = 1;
     int   max_iter = 10;
     float max_time = 1.f;
+
+    std::vector<int> seq;
 };
 
 // example
 //   max_splits=8,top_splits=5,max_waves=16,top_k=10,swizzle=[2,3,4],clusters=5,max_iter=10,min_iter=1,max_time=10.0
-void ParseTuningArgs(TuningArgs& args, const std::string& str);
+void ParseTuningParams(TuningParams& params, const std::string& str);
 
 // example
-//   16-16-128,256-128-1024,8192;
+//   16-16-128,256-128-1024,8192
 std::vector<int> ParseTuningSequence(const std::string& str);
 
 std::vector<int> GenerateTuningSequence(const std::vector<std::array<int, 3>>& generators);

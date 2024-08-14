@@ -9,11 +9,11 @@ add_library(gemm2
         convert_v2.cu
         cast.cu
         unpack.cu
-        tune/cache_utils.cu
-        tune/measurer.cu
-        tune/sampler.cu
-        tune/stopping_criterion.cc
-        tune/args.cc
+        tuner/cache_utils.cu
+        tuner/measurer.cu
+        tuner/sampler.cu
+        tuner/stopping_criterion.cc
+        tuner/params.cc
         kernel/f16_u4g128_f16_tnt_sm90_s16816.cu
         kernel/f16_u4g128_f16_tnt_sm80_s16816.cu
         kernel/f16_u4g128_f16_tnt_sm75_s16816.cu

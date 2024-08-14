@@ -1,7 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/kernels/gemm/desc.h"
-#include "src/turbomind/kernels/gemm/tune/stopping_criterion.h"
+#include "src/turbomind/kernels/gemm/tuner/stopping_criterion.h"
 #include <climits>
 #include <functional>
 #include <memory>

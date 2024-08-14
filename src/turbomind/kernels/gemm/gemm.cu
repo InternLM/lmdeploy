@@ -5,8 +5,8 @@
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/registry.h"
-#include "src/turbomind/kernels/gemm/tune/args.h"
-#include "src/turbomind/kernels/gemm/tune/sampler.h"
+#include "src/turbomind/kernels/gemm/tuner/params.h"
+#include "src/turbomind/kernels/gemm/tuner/sampler.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <algorithm>
 #include <iterator>
@@ -34,6 +34,16 @@ std::vector<int> ArgSort(size_t size, const Cmp& cmp)
     return idxs;
 }
 
+inline int get_batch_dim(const GemmDesc& desc)
+{
+    return desc.batch_dim == 0 ? desc.m : desc.n;
+}
+
+inline int get_batch_dim(const KernelDesc& desc, int batch_dim)
+{
+    return batch_dim == 0 ? desc.cta_tile.x : desc.cta_tile.y;
+}
+
 }  // namespace
 
 struct Gemm::Impl {
@@ -44,12 +54,12 @@ struct Gemm::Impl {
         registry_{props_},
         cache_{registry_.kernels()}
     {
-        if (auto str = std::getenv("TM_GEMM_TUNE_ARGS")) {
+        if (auto str = std::getenv("TM_GEMM_TUNE")) {
             try {
-                ParseTuningArgs(tuning_, str);
+                ParseTuningParams(tuning_, str);
             }
             catch (...) {
-                std::cerr << "[Gemm2] Failed to parse `TM_GEMM_TUNE_ARGS`, default value will be used.\n";
+                std::cerr << "[Gemm2] Failed to parse `TM_GEMM_TUNE`, default value will be used.\n";
                 tuning_ = {};
             }
         }
@@ -86,6 +96,22 @@ struct Gemm::Impl {
         });
         if (feasible.empty()) {
             return {};
+        }
+
+        if (1) {
+            int max_batch_size = 0;
+            for (const auto& k : feasible) {
+                max_batch_size = std::max(get_batch_dim(k->desc(), desc.batch_dim), max_batch_size);
+            }
+            const int batch_size = get_batch_dim(desc);
+            for (const auto& k : feasible) {
+                const auto x = get_batch_dim(k->desc(), desc.batch_dim);
+                if (x >= batch_size) {
+                    max_batch_size = std::min(max_batch_size, x);
+                }
+            }
+            auto pred = [&](auto k) { return get_batch_dim(k->desc(), desc.batch_dim) > max_batch_size; };
+            feasible.erase(std::remove_if(feasible.begin(), feasible.end(), pred), feasible.end());
         }
 
         std::vector<std::vector<LaunchSpec>> clusters;
@@ -255,7 +281,7 @@ struct Gemm::Impl {
 
     Registry registry_;
 
-    TuningArgs tuning_;
+    TuningParams tuning_;
 
     std::optional<Measurer> measurer_;
 
@@ -366,6 +392,11 @@ int Gemm::Export(std::ostream& os)
 int Gemm::Import(std::istream& is)
 {
     return impl_->cache_.Import(is);
+}
+
+std::vector<int> Gemm::GetTuningSeq() const
+{
+    return impl_->tuning_.seq;
 }
 
 }  // namespace turbomind::gemm

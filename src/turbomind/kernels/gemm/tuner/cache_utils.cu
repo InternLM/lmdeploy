@@ -1,7 +1,6 @@
+// Copyright (c) OpenMMLab. All rights reserved.
 
-
-#include "src/turbomind/kernels/gemm/tune/cache_utils.h"
-#include <iostream>
+#include "src/turbomind/kernels/gemm/tuner/cache_utils.h"
 
 namespace turbomind::gemm {
 
@@ -11,8 +10,6 @@ CacheFlushing::CacheFlushing()
     cudaGetDeviceProperties(&props, 0);
 
     size_ = props.l2CacheSize;
-
-    // std::cout << "L2 flushing size: " << (size_ >> 20) << " MB\n";
 
     cudaMalloc(&buffer_, size_);
 }
