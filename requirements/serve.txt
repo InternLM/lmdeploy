@@ -1,4 +1,3 @@
 gradio
 protobuf
-tritonclient[grpc]
 openai
