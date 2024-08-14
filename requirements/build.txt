@@ -1,2 +1,2 @@
-pybind11
+pybind11<=2.13.1
 setuptools
