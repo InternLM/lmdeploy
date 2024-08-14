@@ -20,6 +20,7 @@ def prepare_environment(request, config, worker_id):
 
 def getModelList(tp_num):
     model_list = get_benchmark_model_list(tp_num, kvint_list=[4, 8])
+    new_model_list = []
     for model in model_list:
         if 'Llama-2' in model:
             model[
@@ -29,7 +30,8 @@ def getModelList(tp_num):
         else:
             model['extra'] = '--max-batch-size 256'
         model['cuda_prefix'] = None
-    return model_list
+        new_model_list.append(model)
+    return new_model_list
 
 
 @pytest.mark.gpu_num_1
