@@ -37,7 +37,7 @@ print(response)
   </summary>
 
 ```python
-from lmdeploy import pipeline
+from lmdeploy import pipeline, GenerationConfig
 from lmdeploy.vl import load_image
 from lmdeploy.vl.utils import encode_image_base64
 from lmdeploy.vl.constants import IMAGE_TOKEN
@@ -50,11 +50,11 @@ messages = [
         dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image2.jpg'))
     ])
 ]
-out = pipe(messages, top_k=1)
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 
 messages.append(dict(role='assistant', content=out.text))
 messages.append(dict(role='user', content='What are the similarities and differences between these two images.'))
-out = pipe(messages, top_k=1)
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 ```
 
 </details>
@@ -65,7 +65,7 @@ out = pipe(messages, top_k=1)
   </summary>
 
 ```python
-from lmdeploy import pipeline
+from lmdeploy import pipeline, GenerationConfig
 from lmdeploy.vl import load_image
 from lmdeploy.vl.utils import encode_image_base64
 from lmdeploy.vl.constants import IMAGE_TOKEN
@@ -78,11 +78,11 @@ messages = [
         dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image2.jpg'))
     ])
 ]
-out = pipe(messages, top_k=1)
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 
 messages.append(dict(role='assistant', content=out.text))
 messages.append(dict(role='user', content='What are the similarities and differences between these two images.'))
-out = pipe(messages, top_k=1)
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 ```
 
 </details>
@@ -94,7 +94,7 @@ out = pipe(messages, top_k=1)
 
 ```python
 import numpy as np
-from lmdeploy import pipeline
+from lmdeploy import pipeline, GenerationConfig
 from decord import VideoReader, cpu
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64
@@ -144,11 +144,11 @@ for img in imgs:
     content.append({'type': 'image_url', 'image_url': {'max_dynamic_patch': 1, 'url': f'data:image/jpeg;base64,{encode_image_base64(img)}'}})
 
 messages = [dict(role='user', content=content)]
-out = pipe(messages, top_k=1)
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 
 messages.append(dict(role='assistant', content=out.text))
 messages.append(dict(role='user', content='Describe this video in detail. Don\'t repeat.'))
-out = pipe(messages, top_k=1)
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 ```
 
 </details>
