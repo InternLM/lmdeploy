@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os.path as osp
 import shutil
+from typing import Optional
 
 import torch
 from torch import nn
@@ -72,7 +73,8 @@ def auto_awq(model: str,
              search_scale: bool = False,
              device: str = 'cuda',
              revision: str = None,
-             download_dir: str = None):
+             download_dir: str = None,
+             calib_image: Optional[str] = None):
     """Perform weight quantization using AWQ algorithm.
 
     Args:
@@ -111,7 +113,17 @@ def auto_awq(model: str,
                                                      w_bits=w_bits,
                                                      w_group_size=w_group_size,
                                                      search_scale=search_scale,
-                                                     batch_size=batch_size)
+                                                     batch_size=batch_size,
+                                                     calib_image=calib_image)
+    if calib_image is not None and vl_model is not None:
+        # TODO models other than InternVL
+        vl_model = vl_model.vl_model
+        act_scales = torch.load(work_dir / 'vision_inputs_stats.pth')['absmax']
+        from .smooth_quant import _smooth_quant
+        _smooth_quant(vl_model.vision_model, act_scales, device)
+        vl_model.vision_model.config.update(
+            dict(quantization_config=dict(quant_method='smooth_quant',
+                                          bits=w_bits)))
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]

@@ -295,6 +295,16 @@ class ArgumentHelper:
                                    help='The calibration dataset name')
 
     @staticmethod
+    def calib_image(parser):
+        """Add argument calib_image to parser."""
+
+        return parser.add_argument(
+            '--calib-image',
+            type=str,
+            default='ptb',
+            help='The calibration image for vision model.')
+
+    @staticmethod
     def calib_samples(parser):
         """Add argument calib_samples to parser."""
 
