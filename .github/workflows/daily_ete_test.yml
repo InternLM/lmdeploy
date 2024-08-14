@@ -143,7 +143,7 @@ jobs:
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install /root/packages/autoawq_kernels-0.0.6+cu118-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install -U 'xformers' --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install -U 'xformers' --index-url https://download.pytorch.org/whl/cu118 --no-deps
           python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
