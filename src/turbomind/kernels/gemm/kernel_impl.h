@@ -233,8 +233,8 @@ public:
         // gemm_k_size = offset_k + (chunk_per_split + int(z > chunk_offset)) * kChunkSizeK
         // gemm_k_size = std::min(gemm_k_size, k) - offset_k
 
-        // std::cout << k << " " << Gemm::kChunkSizeK << " " << splits << " " << chunk_per_split << " " << chunk_remianing
-        //           << " " << chunk_offset << "\n";
+        // std::cout << k << " " << Gemm::kChunkSizeK << " " << splits << " " << chunk_per_split << " " <<
+        // chunk_remianing << " " << chunk_offset << "\n";
 
         typename Gemm::Param param{m,
                                    n,
