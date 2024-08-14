@@ -187,6 +187,13 @@ class TurboMind:
                 if quant_method == 'awq' and group_size == 128 and \
                         version == 'gemm':
                     engine_config.model_format = 'awq'
+                elif all((quant_method == 'gptq', group_size == 128,
+                          not quant_config.get('desc_act', False),
+                          quant_config.get('sym', True))):
+                    engine_config.model_format = 'gptq'
+                else:
+                    raise AssertionError(
+                        f'unsupported quant config: {quant_config}')
 
         assert is_supported(model_path), (
             f'turbomind does not support {model_path}. '
