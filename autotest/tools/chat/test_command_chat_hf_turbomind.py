@@ -104,6 +104,7 @@ def test_hf_turbomind_base_tp2(config, model, cli_case_config, worker_id):
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
+@pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize(
     'model',

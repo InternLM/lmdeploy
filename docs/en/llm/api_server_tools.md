@@ -1,4 +1,4 @@
-# Tools
+# Tools Calling
 
 LMDeploy supports tools for InternLM2, InternLM2.5 and llama3.1 models.
 
@@ -155,7 +155,7 @@ ChatCompletion(id='2', choices=[Choice(finish_reason='tool_calls', index=0, logp
 
 Meta announces in [Llama3's official user guide](https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_1) that,
 
-```{text}
+```{note}
 There are three built-in tools (brave_search, wolfram_alpha, and code interpreter) can be turned on using the system prompt:
 
 1. Brave Search: Tool call to perform web searches.

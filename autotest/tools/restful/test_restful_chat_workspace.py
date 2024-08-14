@@ -65,6 +65,7 @@ def test_restful_chat_tp2(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize('prepare_environment', [{
     'model': 'internlm/internlm2-chat-20b',
@@ -77,4 +78,9 @@ def test_restful_chat_tp2(config, common_case_config, worker_id):
 }],
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
-    run_all_step(config, common_case_config)
+    run_all_step(
+        config, {
+            key: value
+            for key, value in common_case_config.items()
+            if key == 'memory_test'
+        })

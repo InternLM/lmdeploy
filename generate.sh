@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 WORKSPACE_PATH=$(dirname "$(readlink -f "$0")")
 
 builder="-G Ninja"
