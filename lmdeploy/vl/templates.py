@@ -5,8 +5,9 @@ from typing import Dict, List, Tuple, Union
 import PIL
 import PIL.Image
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.model import BaseModel
-from lmdeploy.utils import get_hf_config_content, get_logger
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64, load_image
 
@@ -69,9 +70,9 @@ class VLChatTemplateWrapper:
         return [messages]
 
     async def async_collect_pil_images(
-            self, messages: Dict) -> List[PIL.Image.Image]:
+            self, messages: Dict) -> List[Tuple[PIL.Image.Image, Dict]]:
         """collect image from messages."""
-        images = []
+        images_with_kwargs = []
         for message in messages:
             role = message['role']
             content = message['content']
@@ -81,22 +82,31 @@ class VLChatTemplateWrapper:
                 # 'image_url': means url or local path to image.
                 # 'image_data': means PIL.Image.Image object.
                 if item['type'] == 'image_url':
-                    url = item['image_url']['url']
-                    images.append(url)
+                    item_copy = item['image_url'].copy()
+                    try:
+                        url = item_copy.pop('url')
+                        images_with_kwargs.append([url, item_copy])
+                    except KeyError:
+                        logger.error(f'invalid format {message}')
                 elif item['type'] == 'image_data':
-                    data = item['image_data']['data']
-                    images.append(data)
+                    item_copy = item['image_data'].copy()
+                    try:
+                        data = item_copy.pop('data')
+                        images_with_kwargs.append([data, item_copy])
+                    except KeyError:
+                        logger.error(f'invalid format {message}')
 
         def _inner_call(i, images):
-            url_or_data = images[i]
-            images[i] = load_image(url_or_data)
+            url_or_data = images[i][0]
+            images[i][0] = load_image(url_or_data)
 
         await asyncio.gather(*[
-            asyncio.get_event_loop().run_in_executor(
-                None, _inner_call, i, images) for i in range(len(images))
+            asyncio.get_event_loop().run_in_executor(None, _inner_call, i,
+                                                     images_with_kwargs)
+            for i in range(len(images_with_kwargs))
         ])
 
-        return images
+        return images_with_kwargs
 
     def append_image_token(self, prompt, num_images: int):
         """append image token to user prompt."""
@@ -305,11 +315,12 @@ class GLM4VChatTemplateWrapper(VLChatTemplateWrapper):
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
+    assert type(chat_template) != type(BaseModel()), 'failed to match ' \
+        'chat template, please explicit set chat_template_config' # noqa E721
     if model_name == 'yi-vl':
         return YiVLChatTemplateWrapper(chat_template)
 
-    config = get_hf_config_content(model_path)
-    arch = config['architectures'][0]
+    arch, _ = get_model_arch(model_path)
     if arch == 'QWenLMHeadModel':
         return QwenVLChatTemplateWrapper(chat_template)
     elif arch in [

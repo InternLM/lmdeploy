@@ -114,6 +114,12 @@ void LlamaTritonModel<T>::handleMissingParams()
         TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)engine_params_.session_len);
     }
 
+    if (!engine_params_.max_prefill_token_num) {
+        engine_params_.max_prefill_token_num = 8192;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_prefill_token_num` is not set, default to %d.",
+                       (int)engine_params_.max_prefill_token_num);
+    }
+
     if (!engine_params_.max_context_token_num) {
         engine_params_.max_context_token_num = engine_params_.session_len;
         TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` is not set, default to %d.",
@@ -219,6 +225,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     attn_params_.original_max_position_embeddings = reader.GetInteger("llama", "original_max_position_embeddings", 0);
 
     engine_params_.max_batch_size        = reader.GetInteger("llama", "max_batch_size", 0);
+    engine_params_.max_prefill_token_num = reader.GetInteger("llama", "max_prefill_token_num", 0);
     engine_params_.max_context_token_num = reader.GetInteger("llama", "max_context_token_num", 0);
     engine_params_.session_len           = reader.GetInteger("llama", "session_len", 0);
     engine_params_.step_length           = reader.GetInteger("llama", "step_length", 0);
@@ -227,9 +234,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_params_.cache_chunk_size      = reader.GetInteger("llama", "cache_chunk_size", 0);
     engine_params_.enable_prefix_caching = reader.GetBoolean("llama", "enable_prefix_caching", false);
 
-    engine_params_.num_tokens_per_iter   = reader.GetInteger("llama", "num_tokens_per_iter", 0);
-    engine_params_.extra_tokens_per_iter = reader.GetInteger("llama", "extra_tokens_per_iter", 0);
-    engine_params_.max_prefill_iters     = reader.GetInteger("llama", "max_prefill_iters", 1);
+    engine_params_.num_tokens_per_iter = reader.GetInteger("llama", "num_tokens_per_iter", 0);
+    engine_params_.max_prefill_iters   = reader.GetInteger("llama", "max_prefill_iters", 1);
 
     lora_params_.policy        = ft::getLoraPolicy(reader.Get("llama", "lora_policy", ""));
     lora_params_.r             = reader.GetInteger("llama", "lora_r", 0);
@@ -268,6 +274,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
         std::cout << "[ERROR] Unsupported weight type: '" << weight_type_str << "'\n";
         ft::FT_CHECK(0);
     }
+
+    TM_LOG_INFO("%s", toString().c_str());
 }
 
 template<typename T>
@@ -280,14 +288,15 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     ft::check_cuda_error(cudaSetDevice(device_id));
     const int comms_rank = device_id % (tensor_para_size_ * pipeline_para_size_);
 
-    std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator(
-        new ft::Allocator<ft::AllocatorType::CUDA>(device_id));
-
     /// TODO: this stream handle is leaked
     cudaStream_t stream{};
     ft::check_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
+    auto allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, false);
     allocator->setStream(stream);
+
+    auto peer_allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, true);
+    peer_allocator->setStream(stream);
 
     cublasHandle_t   cublas_handle;
     cublasLtHandle_t cublaslt_handle;
@@ -345,11 +354,13 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   stream,
                                                   cublas_wrapper.get(),
                                                   allocator.get(),
+                                                  peer_allocator.get(),
                                                   false,  // is_free_buffer_after_forward,
                                                   cuda_device_prop_ptr.get());
 
     return std::make_unique<LlamaTritonSharedModelInstance<T>>(
         LlamaTritonSharedModelInstance<T>{std::move(allocator),
+                                          std::move(peer_allocator),
                                           std::move(cublas_algo_map),
                                           std::move(cublas_wrapper_mutex),
                                           std::move(cublas_wrapper),
@@ -381,8 +392,7 @@ LlamaTritonModel<T>::createModelInstance(int                                    
         }
     }
 
-    std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator(
-        new ft::Allocator<ft::AllocatorType::CUDA>(device_id));
+    auto allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, false);
 
     allocator->setStream(stream);
 
@@ -437,6 +447,7 @@ std::string LlamaTritonModel<T>::toString()
        << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_ << "\nsize_per_head: " << size_per_head_
        << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_
        << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_params_.max_batch_size
+       << "\nmax_prefill_token_num: " << engine_params_.max_prefill_token_num
        << "\nmax_context_token_num: " << engine_params_.max_context_token_num
        << "\nsession_len: " << engine_params_.session_len << "\nstep_length: " << engine_params_.step_length
        << "\ncache_max_entry_count: " << engine_params_.cache_max_block_count

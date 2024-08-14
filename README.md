@@ -11,7 +11,7 @@
 [🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started.html) |
 [🤔Reporting Issues](https://github.com/InternLM/lmdeploy/issues/new/choose)
 
-English | [简体中文](README_zh-CN.md)
+English | [简体中文](README_zh-CN.md) | [日本語](README_ja.md)
 
 👋 join us on [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=wechat&label=WeChat)](https://cdn.vansin.top/internlm/lmdeploy.jpg)
 [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=twitter&label=Twitter)](https://twitter.com/intern_lm)
@@ -26,8 +26,9 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/08\] 🔥🔥 LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
 - \[2024/07\] 🎉🎉 Support Llama3.1 8B, 70B and its TOOLS CALLING
-- \[2024/07\] Support [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/serving/api_server_tools.md) of InternLM2.5
+- \[2024/07\] Support [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
 - \[2024/05\] Support 4-bits weight-only quantization and inference on VLMs, such as InternVL v1.5, LLaVa, InternLMXComposer2
@@ -38,8 +39,8 @@ ______________________________________________________________________
 - \[2024/03\] Support DeepSeek-VL offline inference pipeline and serving.
 - \[2024/03\] Support VLM offline inference pipeline and serving.
 - \[2024/02\] Support Qwen 1.5, Gemma, Mistral, Mixtral, Deepseek-MOE and so on.
-- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](./docs/en/serving/api_server.md).
-- \[2024/01\] Support for multi-model, multi-machine, multi-card inference services. For usage instructions, please refer to [here](./docs/en/serving/proxy_server.md)
+- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](docs/en/llm/api_server.md).
+- \[2024/01\] Support for multi-model, multi-machine, multi-card inference services. For usage instructions, please refer to [here](docs/en/llm/proxy_server.md)
 - \[2024/01\] Support [PyTorch inference engine](./docs/en/inference/pytorch.md), developed entirely in Python, helping to lower the barriers for developers and enable  rapid experimentation with new features and technologies.
 
 </details>
@@ -52,7 +53,7 @@ ______________________________________________________________________
 - \[2023/11\] TurboMind major upgrades, including: Paged Attention, faster attention kernels without sequence length limitation, 2x faster KV8 kernels, Split-K decoding (Flash Decoding), and W4A16 inference for sm_75
 - \[2023/09\] TurboMind supports Qwen-14B
 - \[2023/09\] TurboMind supports InternLM-20B
-- \[2023/09\] TurboMind supports all features of Code Llama: code completion, infilling, chat / instruct, and python specialist. Click [here](./docs/en/supported_models/codellama.md) for deployment guide
+- \[2023/09\] TurboMind supports all features of Code Llama: code completion, infilling, chat / instruct, and python specialist. Click [here](./docs/en/llm/codellama.md) for deployment guide
 - \[2023/09\] TurboMind supports Baichuan2-7B
 - \[2023/08\] TurboMind supports flash-attention2.
 - \[2023/08\] TurboMind supports Qwen-7B, dynamic NTK-RoPE scaling and dynamic logN scaling
@@ -166,19 +167,16 @@ They differ in the types of supported models and the inference data type. Please
 
 ## Installation
 
-Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
+It is recommended installing lmdeploy using pip in a conda environment (python 3.8 - 3.12):
 
 ```shell
+conda create -n lmdeploy python=3.8 -y
+conda activate lmdeploy
 pip install lmdeploy
 ```
 
-Since v0.3.0, The default prebuilt package is compiled on **CUDA 12**. However, if CUDA 11+ is required, you can install lmdeploy by:
-
-```shell
-export LMDEPLOY_VERSION=0.5.2
-export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
-```
+The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
+For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](./docs/en/installation.md).
 
 ## Offline Batch Inference
 
@@ -194,7 +192,7 @@ print(response)
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
 
-For more information about inference pipeline, please refer to [here](./docs/en/inference/pipeline.md).
+For more information about inference pipeline, please refer to [here](docs/en/llm/pipeline.md).
 
 # Tutorials
 
@@ -203,10 +201,10 @@ Please review [getting_started](./docs/en/get_started.md) section for the basic 
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
 - User Guide
-  - [LLM Inference pipeline](./docs/en/inference/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
-  - [VLM Inference pipeline](./docs/en/inference/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
-  - [LLM Serving](docs/en/serving/api_server.md)
-  - [VLM Serving](docs/en/serving/api_server_vl.md)
+  - [LLM Inference pipeline](docs/en/llm/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
+  - [VLM Inference pipeline](docs/en/multi_modal/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
+  - [LLM Serving](docs/en/llm/api_server.md)
+  - [VLM Serving](docs/en/multi_modal/api_server_vl.md)
   - [Quantization](docs/en/quantization)
 - Advance Guide
   - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
@@ -215,7 +213,7 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - [Add a new model](docs/en/advance/pytorch_new_model.md)
   - gemm tuning
   - [Long context inference](docs/en/advance/long_context.md)
-  - [Multi-model inference service](docs/en/serving/proxy_server.md)
+  - [Multi-model inference service](docs/en/llm/proxy_server.md)
 
 # Third-party projects
 

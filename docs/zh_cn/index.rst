@@ -41,14 +41,46 @@ LMDeploy 工具箱提供以下核心功能：
    :maxdepth: 2
    :caption: 快速上手
 
+   installation.md
    get_started.md
 
-.. _编译和安装:
+.. _支持的模型:
 .. toctree::
    :maxdepth: 1
-   :caption: 编译和安装
+   :caption: 模型列表
 
-   build.md
+   supported_models/supported_models.md
+
+.. _llm_部署:
+.. toctree::
+   :maxdepth: 1
+   :caption: 大语言模型(LLMs)部署
+
+   llm/pipeline.md
+   llm/api_server.md
+   llm/api_server_tools.md
+   llm/api_server_lora.md
+   llm/gradio.md
+   llm/proxy_server.md
+
+.. _vlm_部署:
+.. toctree::
+   :maxdepth: 1
+   :caption: 视觉-语言模型(VLMs)部署
+
+   multi_modal/vl_pipeline.md
+   multi_modal/api_server_vl.md
+   multi_modal/index.rst
+
+
+.. _量化:
+.. toctree::
+   :maxdepth: 1
+   :caption: 量化
+
+   quantization/w4a16.md
+   quantization/w8a8.md
+   quantization/kv_quant.md
 
 .. _测试基准:
 .. toctree::
@@ -60,43 +92,6 @@ LMDeploy 工具箱提供以下核心功能：
    benchmark/profile_api_server.md
    benchmark/evaluate_with_opencompass.md
 
-.. _支持的模型:
-.. toctree::
-   :maxdepth: 1
-   :caption: 模型列表
-
-   supported_models/supported_models.md
-
-.. _推理:
-.. toctree::
-   :maxdepth: 1
-   :caption: 推理
-
-   inference/pipeline.md
-   inference/vl_pipeline.md
-
-
-.. _服务:
-.. toctree::
-   :maxdepth: 1
-   :caption: 服务
-
-   serving/api_server.md
-   serving/api_server_vl.md
-   serving/api_server_tools.md
-   serving/gradio.md
-   serving/proxy_server.md
-
-
-.. _量化:
-.. toctree::
-   :maxdepth: 1
-   :caption: 量化
-
-   quantization/w4a16.md
-   quantization/kv_quant.md
-   quantization/w8a8.md
-
 .. toctree::
    :maxdepth: 1
    :caption: 进阶指南
@@ -107,7 +102,6 @@ LMDeploy 工具箱提供以下核心功能：
    advance/long_context.md
    advance/chat_template.md
    advance/debug_turbomind.md
-   serving/qos.md
 
 .. toctree::
    :maxdepth: 1
