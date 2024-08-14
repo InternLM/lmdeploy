@@ -7,6 +7,7 @@ import fire
 import torch
 
 from lmdeploy.archs import get_model_arch
+from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_logger, get_model
 
@@ -163,9 +164,8 @@ def pack_model_repository(workspace_path: str):
 def get_tm_model(model_path,
                  model_name,
                  chat_template_name,
-                 model_format,
                  group_size,
-                 tp,
+                 engine_config,
                  out_dir: str = None):
     # TODO: open the following condition check in another PR,
     # CLI needs to be updated
@@ -173,9 +173,9 @@ def get_tm_model(model_path,
     #     raise RuntimeError(
     #         'group_size should be specified when the model is awq')
 
-    input_model_name = get_input_model_registered_name(model_path,
-                                                       model_format)
-    input_policy = get_input_policy(model_format)
+    input_model_name = get_input_model_registered_name(
+        model_path, engine_config.model_format)
+    input_policy = get_input_policy(engine_config.model_format)
     input_model = INPUT_MODELS.get(input_model_name)(model_path=model_path,
                                                      tokenizer_path=model_path,
                                                      input_policy=input_policy)
@@ -183,11 +183,12 @@ def get_tm_model(model_path,
     output_model_name, cfg, exporter_factory = \
         get_output_model_registered_name_and_config(
             model_path=model_path,
-            model_format=model_format,
+            model_format=engine_config.model_format,
             group_size=group_size)
 
     cfg.chat_template = chat_template_name
-    cfg.tensor_para_size = tp
+    cfg.model_name = model_name
+    cfg.update_from_engine_config(engine_config)
 
     output_model = OUTPUT_MODELS.get(output_model_name)(
         input_model=input_model,
@@ -266,8 +267,9 @@ def main(model_name: str,
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
 
-    tm_model = get_tm_model(model_path, model_name, chat_template,
-                            model_format, group_size, tp, tm_weight_path)
+    engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format)
+    tm_model = get_tm_model(model_path, model_name, chat_template, group_size,
+                            engine_config, tm_weight_path)
     tm_model.export()
 
 
