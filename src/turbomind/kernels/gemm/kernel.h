@@ -42,7 +42,7 @@ public:
                        cudaStream_t        stream) = 0;
 
     // virtual because different implementation may have different workspace requeirements
-    virtual int GetMaxSplits(int m, int n, size_t barrier_size, size_t partials_size) = 0;
+    virtual int GetMaxSplits(int m, int n, int k, size_t barrier_size, size_t partials_size) = 0;
 
     // true if this kernel can be used to compute the gemm
     bool is_feasible(const GemmDesc& desc) const noexcept;

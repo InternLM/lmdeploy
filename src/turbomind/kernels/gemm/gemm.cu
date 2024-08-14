@@ -110,7 +110,7 @@ struct Gemm::Impl {
 
         for (int cluster_id = 0; cluster_id < (int)proxies.size(); ++cluster_id) {
             auto&     kernel     = *proxies[cluster_id];
-            const int max_splits = kernel.GetMaxSplits(desc.m, desc.n, barrier_size, partials_size);
+            const int max_splits = kernel.GetMaxSplits(desc.m, desc.n, desc.k, barrier_size, partials_size);
 
             auto ms = kernel.Estimate_v2({desc.m, desc.n, desc.k},  //
                                          std::min(max_splits, tuning_.max_splits),
@@ -181,7 +181,7 @@ struct Gemm::Impl {
         if (cache_.Find(desc)) {
             return 0;
         }
-        std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
+        // std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
 
         const auto tmp = Find(desc, barriers_size, partials_size, tuning_.top_k);
 
@@ -197,12 +197,12 @@ struct Gemm::Impl {
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
-        for (const auto& s : specs) {
-            std::cout << s.kernel->name()          //
-                      << " swizzle=" << s.swizzle  //
-                      << ", splits=" << s.splits   //
-                      << ", measured=" << s.measured << "ms\n";
-        }
+        // for (const auto& s : specs) {
+        //     std::cout << s.kernel->name()          //
+        //               << " swizzle=" << s.swizzle  //
+        //               << ", splits=" << s.splits   //
+        //               << ", measured=" << s.measured << "ms\n";
+        // }
 
         if (!specs.empty()) {
             cache_.Insert(desc, specs.front());

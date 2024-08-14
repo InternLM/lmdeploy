@@ -347,23 +347,23 @@ struct MainloopSm80_v2 {
             for (int k = 0; k < ITER_K; ++k) {
                 // preload for next iter
                 preload((k + 1) % ITER_K);
-                // PRAGMA_UNROLL
-                // for (int n = 0; n < MMA::kMmaIterN; ++n) {
-                //     PRAGMA_UNROLL
-                //     for (int m = 0; m < MMA::kMmaIterM; ++m) {
-                //         int mm = n % 2 ? (MMA::kMmaIterM - m - 1) : m;
-                //         MMA_Atom::fma(frag_C[mm][n], frag_A[k][mm], frag_B[k][n], frag_C[mm][n]);
-                //     }
-                // }
                 PRAGMA_UNROLL
-                for (int m = 0; m < MMA::kMmaIterM; ++m) {
+                for (int n = 0; n < MMA::kMmaIterN; ++n) {
                     PRAGMA_UNROLL
-                    for (int n = 0; n < MMA::kMmaIterN; ++n) {
-                        int nn = n;
-                        int mm = m;
-                        MMA_Atom::fma(frag_C[mm][nn], frag_A[k][mm], frag_B[k][nn], frag_C[mm][nn]);
+                    for (int m = 0; m < MMA::kMmaIterM; ++m) {
+                        int mm = n % 2 ? (MMA::kMmaIterM - m - 1) : m;
+                        MMA_Atom::fma(frag_C[mm][n], frag_A[k][mm], frag_B[k][n], frag_C[mm][n]);
                     }
                 }
+                // PRAGMA_UNROLL
+                // for (int m = 0; m < MMA::kMmaIterM; ++m) {
+                //     PRAGMA_UNROLL
+                //     for (int n = 0; n < MMA::kMmaIterN; ++n) {
+                //         int nn = n;
+                //         int mm = m;
+                //         MMA_Atom::fma(frag_C[mm][nn], frag_A[k][mm], frag_B[k][nn], frag_C[mm][nn]);
+                //     }
+                // }
                 if constexpr (kFusePrefetch) {
                     prefetch_batch((k + 1) % ITER_K);
                 }

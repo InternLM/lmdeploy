@@ -34,6 +34,9 @@ struct GemmParams {
     int  log_tile;
     int3 tiled_shape;
 
+    int chunk_per_split;
+    int chunk_offset;  // splits - chunk_cnt % splits
+
     EpilogueParam<Tc> epilogue;
 };
 
@@ -105,15 +108,17 @@ struct GemmUniversal {
 
         const auto& tiled_shape = param.tiled_shape;
 
-        const int chunk_cnt = (param.k + kChunkSizeK - 1) / kChunkSizeK;
-
         // Sub-optimal when the split is uneven
         //   e.g. ceil_div(10, 3) = 4 -> [4, 4, 2], however [3, 3, 4] is better in every aspect
-        const int chunk_per_split = (chunk_cnt + tiled_shape.z - 1) / tiled_shape.z;
+        //   const int chunk_cnt = (param.k + kChunkSizeK - 1) / kChunkSizeK;
+        // const int chunk_per_split = (chunk_cnt + tiled_shape.z - 1) / tiled_shape.z;
+        // const int offset_k        = chunk_per_split * kChunkSizeK * tile_offset.z;
+        // const int gemm_k_size     = std::min(offset_k + chunk_per_split * kChunkSizeK, param.k) - offset_k;
 
-        const int offset_k = chunk_per_split * kChunkSizeK * tile_offset.z;
-
-        const int gemm_k_size = std::min(offset_k + chunk_per_split * kChunkSizeK, param.k) - offset_k;
+        int chunk_id    = tile_offset.z * param.chunk_per_split + max(tile_offset.z - param.chunk_offset, 0);
+        int offset_k    = chunk_id * kChunkSizeK;
+        int gemm_k_size = (param.chunk_per_split + int(tile_offset.z >= param.chunk_offset)) * kChunkSizeK;
+        gemm_k_size     = min(offset_k + gemm_k_size, param.k) - offset_k;
 
         const int offset_m = tile_offset.x * CTA_M;
         const int offset_n = tile_offset.y * CTA_N;

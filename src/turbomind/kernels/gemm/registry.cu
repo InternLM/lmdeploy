@@ -11,7 +11,7 @@ Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
     f16_u4g128_f16_tnt_sm70_s884();
     f16_u4g128_f16_tnt_sm75_simt();
     f16_u4g128_f16_tnt_sm75_s16816();
-    // f16_u4g128_f16_tnt_sm80_s16816();
+    f16_u4g128_f16_tnt_sm80_s16816();
     f16_u4g128_f16_tnt_sm90_s16816();
 
     u4g128_f16_f16_nnn_sm80_s16816();

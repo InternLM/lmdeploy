@@ -393,17 +393,17 @@ inline decltype(auto) get_test()
         // native
         return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, 0, 0, 0>>();
     }
-    else if constexpr (1) {
+    else if constexpr (0) {
         // sm80 / sm75
         constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 2;
         constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
         return gTestbed<gemm::Testbed<uint4_t, half, half, 1, kColMajor, kColMajor, kColMajor, kPackA, 0, kPackU, 0>>();
     }
-    else if constexpr (0) {
+    else if constexpr (1) {
         // sm80 / sm75
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
         constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
-        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kRowMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // sm70

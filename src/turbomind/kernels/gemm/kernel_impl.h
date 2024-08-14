@@ -129,12 +129,17 @@ public:
         const MatrixLayout Bdesc = transpose(_Bdesc);
         const MatrixLayout Vdesc = transpose(_Vdesc);
 
+        const int chunk_cnt = ceil_div(k, Gemm::kChunkSizeK);
+
+        // Limit splits by num of chunks to avoid chaos
+        splits = std::min(chunk_cnt, splits);
+
         auto tiles = Map::get_tiled_shape(m, n, k, CTA_M, CTA_N, splits);
 
         if (splits > 1) {
             size_t bsize{}, psize{};
             GetWorkspaceSizes(m, n, tiles.x, tiles.y, splits, bsize, psize);
-            const int max_splits = GetMaxSplits(m, n, workspace.barriers_size, workspace.partials_size);
+            const int max_splits = GetMaxSplits(m, n, k, workspace.barriers_size, workspace.partials_size);
             if (workspace.barriers_size < bsize || workspace.partials_size < psize) {
                 fprintf(
                     stderr,
@@ -220,6 +225,17 @@ public:
                                    {alpha, beta},
                                    silu_act};
 
+        const int chunk_per_split = chunk_cnt / splits;
+        const int chunk_remianing = chunk_cnt % splits;
+        const int chunk_offset    = splits - chunk_remianing;
+        // chunk_id = z * chunk_per_split + max(z - (splits - chunk_remaining), 0);
+        // offset_k = chunk_id * kChunkSizeK;
+        // gemm_k_size = offset_k + (chunk_per_split + int(z > chunk_offset)) * kChunkSizeK
+        // gemm_k_size = std::min(gemm_k_size, k) - offset_k
+
+        // std::cout << k << " " << Gemm::kChunkSizeK << " " << splits << " " << chunk_per_split << " " << chunk_remianing
+        //           << " " << chunk_offset << "\n";
+
         typename Gemm::Param param{m,
                                    n,
                                    k,
@@ -233,6 +249,8 @@ public:
                                    Vdesc.ld,
                                    swizzle,
                                    tiles,
+                                   chunk_per_split,
+                                   chunk_offset,
                                    epilogue};
 
         gemm_kernel<Gemm><<<grid, block, smem_size_, stream>>>(param, Map{});
@@ -266,7 +284,7 @@ public:
         }
     }
 
-    int GetMaxSplits(int m, int n, size_t barrier_size, size_t partials_size) override
+    int GetMaxSplits(int m, int n, int k, size_t barrier_size, size_t partials_size) override
     {
         if (!Gemm::SplitK) {  // kernel has no split-k support
             return 1;
@@ -283,7 +301,9 @@ public:
 
         if (barrier_size >= bsize_1split && partials_size >= psize_1split) {
             // Serial split-k requires workspace for 1 split only
-            return 32;
+            // But it can't exceed num of k chunks
+            const int chunk_cnt = ceil_div(k, Gemm::kChunkSizeK);
+            return std::min(chunk_cnt, 32);
         }
         else {
             return 1;

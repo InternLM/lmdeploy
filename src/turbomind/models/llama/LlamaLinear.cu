@@ -110,7 +110,8 @@ struct LlamaLinear<T>::Impl {
         const Operation operation{dispatch_policy_,
                                   type == kFusedSiluFfn ? Epilogue::kGatedSilu : Epilogue::kNone,
                                   {QuantType::kNone},
-                                  {QuantType::kDefault, weight.group_size}};
+                                  {QuantType::kDefault, weight.group_size},
+                                  0};
 
         const MatrixLayout a_desc{
             get_data_type_v<T>,
