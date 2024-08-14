@@ -1,9 +1,11 @@
-
 # internvl
 
 ## Introduction
-InternVL2 is a powerful open-source visual language model (VLM) developed by OpenGVLab LMDeploy now supports the InternVL2 series models on the PyTorch backend \[OpenGVLab/InternVL2\]（ https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e ）Here, we use the InternVL2-26B model \[OpenGVLab/InternVL2-26B\]（ https://huggingface.co/OpenGVLab/InternVL2-26B ）As an example, illustrate how to deploy the InternVL series models using the TLMDeploy framework;
+
+InternVL2 is a powerful open-source visual language model (VLM) developed by OpenGVLab, LMDeploy now supports the InternVL2 series models on both PyTorch backend and TurboMind backend \[OpenGVLab/InternVL2\]（ https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e ）Here, we use the InternVL2-26B model \[OpenGVLab/InternVL2-26B\]（ https://huggingface.co/OpenGVLab/InternVL2-26B ）As an example, illustrate how to deploy the InternVL series models using the TLMDeploy framework;
+
 ### Environment configuration and image construction
+
 Install Docker, Docker compose, and \[compose gpu support\]（ https://docs.docker.com/compose/gpu-support/ ）And ensure that your host's CUDA version is higher than 11.8 if the host's CUDA major version is CUDA11; If the CUDA major version of the host is CUDA12, please ensure that it is higher than 12.2; If the CUDA version in the image is higher than the CUDA version of the host computer, Pytorch in the image will not be available; After completing the environment configuration, execute in the root directory of the lmdeploy project:
 
 ```shell
@@ -14,6 +16,7 @@ docker build -t openmmlab/lmdeploy:latest-internvl-cu12 . -f ./docker/InternVL_D
 ```
 
 ### Start up
+
 After completing the image construction, create a docker-compose.yml configuration file in the root directory of the lmdeploy project; The environment variable CUDA_VISIBLEDEVICES can control which GPUs are used on the host machine, and the -- tp parameter can control how many GPUs are used
 
 ```yaml
@@ -68,14 +71,15 @@ INFO:     Uvicorn running on  http://0.0.0.0:23333  (Press CTRL+C to quit)
 ```
 
 ### Testing
+
 The following Python script can be used for Q&A to test the deployment of the internVL2 multimodal model
 
 ```python
 import asyncio
-from openai import AsyncOpenAI
+from openai import OpenAI
 
 async def main():
-    client = AsyncOpenAI(api_key='YOUR_API_KEY',
+    client = OpenAI(api_key='YOUR_API_KEY',
                          base_url='http://0.0.0.0:23333/v1')
     model_cards = await client.models.list()._get_page()
     response = await client.chat.completions.create(
@@ -106,4 +110,3 @@ async def main():
 
 asyncio.run(main())
 ```
-

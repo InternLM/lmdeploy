@@ -1,9 +1,8 @@
-
 # internvl
 
 ## 简介
 
-InternVL2 是由OpenGVLab开源的一个强大的开源视觉语言模型（VLM）. LMDeploy 已在PyTorch后端支持 InternVL2 系列模型 [OpenGVLab/InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e) , 这里以 InternVL2-26B 模型[OpenGVLab/InternVL2-26B](https://huggingface.co/OpenGVLab/InternVL2-26B)为例来说明如何使用通lmdeploy框架部署InternVL系列模型；
+InternVL2 是由OpenGVLab开源的一个强大的开源视觉语言模型（VLM）. LMDeploy 在PyTorch后端以及TurboMind 后端均支持 InternVL2 系列模型 [OpenGVLab/InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e) , 这里以 InternVL2-26B 模型[OpenGVLab/InternVL2-26B](https://huggingface.co/OpenGVLab/InternVL2-26B)为例来说明如何使用通lmdeploy框架部署InternVL系列模型；
 
 ### 环境配置及镜像构建
 
@@ -78,10 +77,10 @@ INFO:     Uvicorn running on http://0.0.0.0:23333 (Press CTRL+C to quit)
 
 ```python
 import asyncio
-from openai import AsyncOpenAI
+from openai import OpenAI
 
 async def main():
-    client = AsyncOpenAI(api_key='YOUR_API_KEY',
+    client = OpenAI(api_key='YOUR_API_KEY',
                          base_url='http://0.0.0.0:23333/v1')
     model_cards = await client.models.list()._get_page()
     response = await client.chat.completions.create(
