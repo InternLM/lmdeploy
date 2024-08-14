@@ -21,20 +21,18 @@ def wq_gemm_forward(
     """wq gemm forward."""
     from awq.modules.linear.gemm import awq_ext
 
-    from lmdeploy.pytorch.kernels.cuda.awq_kernels import \
-        awq_dequantize_weights
+    from lmdeploy.pytorch.kernels.cuda.awq_kernels import awq_linear
     out_shape = x.shape[:-1] + (out_features, )
     input_dtype = x.dtype
     if input_dtype != torch.float16:
         x = x.half()
 
-    FP16_MATMUL_HEURISTIC_CONDITION = x.size(0) * x.size(1) >= 1024
+    FP16_MATMUL_HEURISTIC_CONDITION = x.size(0) * x.size(1) >= 64
 
+    x = x.flatten(0, -2)
     if FP16_MATMUL_HEURISTIC_CONDITION:
-        out = awq_dequantize_weights(qweight, scales, qzeros)
-        out = torch.matmul(x, out)
+        out = awq_linear(x, qweight, scales, qzeros)
     else:
-        x = x.flatten(0, -2)
         if not x.is_contiguous():
             x = x.contiguous()
         out = awq_ext.gemm_forward_cuda(x, qweight, scales, qzeros, 8)

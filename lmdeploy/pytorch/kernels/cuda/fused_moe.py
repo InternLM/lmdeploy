@@ -79,7 +79,7 @@ def get_cuda_autotune_config():
 
 @triton.autotune(
     configs=get_cuda_autotune_config(),
-    key=['N', 'K'],
+    key=['N', 'K', 'M_NP2'],
 )
 @wrap_jit_func(type_hint=dict(
     A=torch.Tensor,
@@ -130,6 +130,7 @@ def fused_moe_kernel(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
+    M_NP2: tl.constexpr,
     ENABLE_WEIGHTS: tl.constexpr,
     top_k: tl.constexpr,
     expert_offset: tl.constexpr,
@@ -169,9 +170,11 @@ def fused_moe_kernel(
         offs_am = offs_sid
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N),
+                                BLOCK_SIZE_N)
 
     # deepseek has 160 experts, exp index would overflow int32
-    exp_off = tl.full((1, ), stride_be, dtype=tl.int64) * exp_id
+    exp_off = stride_be * exp_id.to(tl.int64)
     b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk +
                             offs_bn[None, :] * stride_bn)
 
@@ -198,11 +201,9 @@ def fused_moe_kernel(
     if reindex_c:
         offs_cm = sid
     else:
-        offs_cm = exp_start + pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = mask_sid[:, None] & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, c, mask=c_mask)
+        offs_cm = offs_sid
+    c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_bn[None, :]
+    tl.store(c_ptrs, c, mask=mask_sid[:, None])
 
 
 def fused_moe_kernel_launcher(
@@ -224,6 +225,7 @@ def fused_moe_kernel_launcher(
 
     if num_tokens is None:
         num_tokens = A.size(0)
+    M_NP2 = triton.next_power_of_2(num_tokens)
     E, N, K = B.shape
 
     def _grid_fn(META):
@@ -263,6 +265,7 @@ def fused_moe_kernel_launcher(
         reindex_a=reindex_a,
         reindex_c=reindex_c,
         GROUP_SIZE_M=GROUP_SIZE_M,
+        M_NP2=M_NP2,
         **kernel_meta,
     )
 
