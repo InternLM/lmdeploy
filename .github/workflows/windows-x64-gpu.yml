@@ -40,7 +40,8 @@ jobs:
           python-version: '3.8'
       - name: Install python packages
         run: |
-          pip install pybind11<=2.13.1 wheel
+          pip install -r requirements/build.txt
+          pip install wheel
       - name: Setup CUDA Toolkit
         id: cuda-toolkit
         shell: pwsh
