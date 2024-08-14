@@ -322,11 +322,21 @@ struct MainloopSm70 {
                     fetch_stage(rmem);
                 }
 
+                // PRAGMA_UNROLL
+                // for (int n = 0; n < MMA::kMmaIterN; ++n) {
+                //     PRAGMA_UNROLL
+                //     for (int m = 0; m < MMA::kMmaIterM; ++m) {
+                //         int mm = n % 2 ? MMA::kMmaIterM - m - 1 : m;
+                //         MMA_Atom::fma(frag_C[mm][n], frag_A[k][mm], frag_B[k][n], frag_C[mm][n]);
+                //     }
+                // }
+
                 PRAGMA_UNROLL
-                for (int n = 0; n < MMA::kMmaIterN; ++n) {
+                for (int m = 0; m < MMA::kMmaIterM; ++m) {
                     PRAGMA_UNROLL
-                    for (int m = 0; m < MMA::kMmaIterM; ++m) {
-                        MMA_Atom::fma(frag_C[m][n], frag_A[k][m], frag_B[k][n], frag_C[m][n]);
+                    for (int n = 0; n < MMA::kMmaIterN; ++n) {
+                        int nn = m % 2 ? MMA::kMmaIterN - n - 1 : n;
+                        MMA_Atom::fma(frag_C[m][nn], frag_A[k][m], frag_B[k][nn], frag_C[m][nn]);
                     }
                 }
 
