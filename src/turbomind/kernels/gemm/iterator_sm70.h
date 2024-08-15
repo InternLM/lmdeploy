@@ -236,7 +236,9 @@ struct GmemIteratorSm70 {
                 const int i1  = phases_[s % kPeriodS][c % kPeriodC];
                 auto      dst = &smem_data_.ptr_[i0 + i1];
 
-                turbomind::Store(dst, frags[s][c]);
+                if (pred_(s, c)) {
+                    turbomind::Store(dst, frags[s][c]);
+                }
             }
         }
     }

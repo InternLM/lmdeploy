@@ -395,8 +395,8 @@ FtCudaDataType getModelFileType(std::string ini_file, std::string section_name)
 
 bool is_16xx_series(const char* name)
 {
-    const std::regex re(R"(Geforce GTX 16\d\d)");
-    return std::regex_match(name, re);
+    const std::regex re(R"(GTX 16\d\d)");
+    return std::regex_search(name, re);
 }
 
 /* ************************** end of common utils ************************** */
