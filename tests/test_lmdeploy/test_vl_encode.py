@@ -7,4 +7,4 @@ def test_encode_image_base64():
     im1 = load_image(url)
     base64 = encode_image_base64(url)
     im2 = load_image_from_base64(base64)
-    assert im1 == im2
+    assert im1 == im2.convert('RGB')
