@@ -136,9 +136,11 @@ jobs:
       - name: Kill api server
         if: always()
         run: |
+          sleep 3600
           kill -15 "$restful_pid"
       - name: Attach result
         run: |
+        if: always()
           python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable.csv
           python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal.csv
       - name: Clear workfile
