@@ -270,6 +270,8 @@ def calibrate(model: str,
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     calib_ctx.export(work_dir)
+    if vl_model is not None:
+        vl_model = vl_model.vl_model
 
     return vl_model, model, tokenizer, work_dir
 

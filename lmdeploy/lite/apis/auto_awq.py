@@ -90,9 +90,9 @@ def auto_awq(model: str,
                                                      search_scale=search_scale,
                                                      batch_size=batch_size,
                                                      calib_image=calib_image)
+
     if calib_image is not None and vl_model is not None:
         # TODO models other than InternVL
-        vl_model = vl_model.vl_model
         act_scales = torch.load(work_dir / 'vision_inputs_stats.pth')['absmax']
         from .smooth_quant import _smooth_quant
         _smooth_quant(vl_model.vision_model, act_scales, device)

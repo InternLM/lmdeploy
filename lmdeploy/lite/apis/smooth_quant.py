@@ -98,7 +98,6 @@ def smooth_quant(model: str,
     _smooth_quant(model, act_scales, device)
     if calib_image is not None and vl_model is not None:
         # TODO models other than InternVL
-        vl_model = vl_model.vl_model
         act_scales = torch.load(work_dir / 'vision_inputs_stats.pth')['absmax']
         _smooth_quant(vl_model.vision_model, act_scales, device)
         vl_model.vision_model.config.update(
