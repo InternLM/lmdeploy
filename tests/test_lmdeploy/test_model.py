@@ -469,7 +469,7 @@ def test_internvl2():
     }]
     expected = '<|im_start|>system\n你是由上海人工智能实验室联合商汤科技开发的'\
         '书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。'\
-        '<|im_end|>\n<|im_start|>user\nwho are you<|im_end|>\n<|im_start|>'\
+        '<|im_end|><|im_start|>user\nwho are you<|im_end|><|im_start|>'\
         'assistant\nI am an AI'
     res = model.messages2prompt(messages)
     assert res == expected
