@@ -1,22 +1,43 @@
-# InternVL2
+# InternVL
 
-## Introduction
+LMDeploy supports the following InternVL series of models, which are detailed in the table below:
 
-InternVL is an open source vision-language base model that expands the Vision Transformer (ViT) to 600 million parameters and aligns with the Large Language Model (LLM). It is the largest open-source vision/vision-language foundation model (14B) to date, achieving 32 state-of-the-art performance on a wide range of tasks such as visual perception, cross-modal retrieval, multimodal dialogue, etc. LMDeploy supports InternVL series of models. The following uses InternVL2-8B as an example to demonstrate its usage.
+|    Model    |  Size   | Supported Inference Engine |
+| :---------: | :-----: | :------------------------: |
+|  InternVL   | 13B-19B |         TurboMind          |
+| InternVL1.5 | 2B-26B  |     TurboMind, PyTorch     |
+|  InternVL2  |   1B    |          PyTorch           |
+|  InternVL2  | 2B-76B  |     TurboMind, PyTorch     |
 
-## Quick Start
+The next chapter demonstrates how to deploy an InternVL model using LMDeploy, with [InternVL2-8B](https://huggingface.co/OpenGVLab/InternVL2-8B) as an example.
 
-### Installation
+## Installation
 
 Please install LMDeploy by following the [installation guide](../installation.md), and install other packages that InternVL2 needs
 
 ```shell
 pip install timm
+# It is recommended to find the whl package that matches the environment from the releases on https://github.com/Dao-AILab/flash-attention.
+pip install flash-attn
 ```
 
-### Offline inference pipeline
+Or, you can build a docker image to set up the inference environment. If the CUDA version on your host machine is `>=12.4`, you can run:
 
-The following sample code shows the basic usage of VLM pipeline. For more examples, please refer to [VLM Offline Inference Pipeline](./vl_pipeline.md)
+```
+docker build --build-arg CUDA_VERSION=cu12 -t openmmlab/lmdeploy:internvl . -f ./docker/InternVL_Dockerfile
+```
+
+Otherwise, you can go with:
+
+```shell
+git clone https://github.com/InternLM/lmdeploy.git
+cd lmdeploy
+docker build --build-arg CUDA_VERSION=cu11 -t openmmlab/lmdeploy:internvl . -f ./docker/InternVL_Dockerfile
+```
+
+## Offline inference
+
+The following sample code shows the basic usage of VLM pipeline. For detailed information, please refer to [VLM Offline Inference Pipeline](./vl_pipeline.md)
 
 ```python
 from lmdeploy import pipeline
@@ -29,7 +50,7 @@ response = pipe((f'describe this image', image))
 print(response)
 ```
 
-## More examples
+More examples are listed below:
 
 <details>
   <summary>
@@ -38,8 +59,6 @@ print(response)
 
 ```python
 from lmdeploy import pipeline, GenerationConfig
-from lmdeploy.vl import load_image
-from lmdeploy.vl.utils import encode_image_base64
 from lmdeploy.vl.constants import IMAGE_TOKEN
 
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
@@ -66,8 +85,6 @@ out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 
 ```python
 from lmdeploy import pipeline, GenerationConfig
-from lmdeploy.vl import load_image
-from lmdeploy.vl.utils import encode_image_base64
 from lmdeploy.vl.constants import IMAGE_TOKEN
 
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
@@ -117,7 +134,7 @@ def get_index(bound, fps, max_frame, first_idx=0, num_segments=32):
     return frame_indices
 
 
-def load_video(video_path, bound=None, input_size=448, max_num=1, num_segments=32):
+def load_video(video_path, bound=None, num_segments=32):
     vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
     max_frame = len(vr) - 1
     fps = float(vr.get_avg_fps())
@@ -131,7 +148,7 @@ def load_video(video_path, bound=None, input_size=448, max_num=1, num_segments=3
 
 
 video_path = 'red-panda.mp4'
-imgs = load_video(video_path, num_segments=8, max_num=1)
+imgs = load_video(video_path, num_segments=8)
 
 question = ''
 for i in range(len(imgs)):
@@ -152,3 +169,73 @@ out = pipe(messages, gen_config=GenerationConfig(top_k=1))
 ```
 
 </details>
+
+## Online serving
+
+You can launch the server by the `lmdeploy serve api_server` CLI:
+
+```shell
+lmdeploy serve api_server OpenGVLab/InternVL2-8B
+```
+
+You can also start the service using the aforementioned built docker image:
+
+```shell
+docker run --runtime nvidia --gpus all \
+    -v ~/.cache/huggingface:/root/.cache/huggingface \
+    --env "HUGGING_FACE_HUB_TOKEN=<secret>" \
+    -p 23333:23333 \
+    --ipc=host \
+    openmmlab/lmdeploy:internvl \
+    lmdeploy serve api_server OpenGVLab/InternVL2-8B
+```
+
+The docker compose is another option. Create a `docker-compose.yml` configuration file in the root directory of the lmdeploy project as follows:
+
+```yaml
+version: '3.5'
+
+services:
+  lmdeploy:
+    container_name: lmdeploy
+    image: openmmlab/lmdeploy:internvl
+    ports:
+      - "23333:23333"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: <secret>
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    stdin_open: true
+    tty: true
+    ipc: host
+    command: lmdeploy serve api_server OpenGVLab/InternVL2-8B
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: "all"
+              capabilities: [gpu]
+```
+
+Then, you can execute the startup command as below:
+
+```shell
+docker-compose up -d
+```
+
+If you find the following logs after running `docker logs -f lmdeploy`, it means the service launches successfully.
+
+```text
+HINT:    Please open  http://0.0.0.0:23333   in a browser for detailed api usage!!!
+HINT:    Please open  http://0.0.0.0:23333   in a browser for detailed api usage!!!
+HINT:    Please open  http://0.0.0.0:23333   in a browser for detailed api usage!!!
+INFO:     Started server process [2439]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on  http://0.0.0.0:23333  (Press CTRL+C to quit)
+```
+
+The arguments of `lmdeploy serve api_server` can be reviewed in detail by `lmdeploy serve api_server -h`.
+
+More information about `api_server` as well as how to access the service can be found from [here](api_server_vl.md)

@@ -24,7 +24,7 @@ ENV PATH=/opt/py3/bin:$PATH
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools==69.5.1 &&\
     python3 -m pip install --no-cache-dir torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} --index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT} &&\
     python3 -m pip install --no-cache-dir cmake packaging wheel &&\
-    rm -rf ~/.cache
+    rm -rf ~/.cache/*
 
 # install openmpi
 RUN wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz &&\
@@ -55,7 +55,7 @@ RUN cd /opt/lmdeploy &&\
     cd .. &&\
     python3 -m pip install -e . &&\
     rm -rf build  &&\
-    rm -rf ~/.cache
+    rm -rf ~/.cache/*
 
 ENV LD_LIBRARY_PATH=/opt/lmdeploy/install/lib:$LD_LIBRARY_PATH
 ENV PATH=/opt/lmdeploy/install/bin:$PATH
