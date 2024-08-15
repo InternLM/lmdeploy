@@ -347,11 +347,11 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         adapter_name=adapter_name,
     )
 
-    def create_stream_response_json(
-            index: int,
-            text: str,
-            finish_reason: Optional[str] = None,
-            logprobs: Optional[LogProbs] = None) -> str:
+    def create_stream_response_json(index: int,
+                                    text: str,
+                                    finish_reason: Optional[str] = None,
+                                    logprobs: Optional[LogProbs] = None,
+                                    usage: Optional[UsageInfo] = None) -> str:
         choice_data = ChatCompletionResponseStreamChoice(
             index=index,
             delta=DeltaMessage(role='assistant', content=text),
@@ -362,6 +362,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=usage,
         )
         response_json = response.model_dump_json()
 
@@ -369,17 +370,27 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         async for res in result_generator:
-            logprobs = None
+            logprobs, usage = None, None
             if gen_logprobs and res.logprobs:
                 logprobs = _create_chat_completion_logprobs(
                     VariableInterface.async_engine.tokenizer, res.token_ids,
                     res.logprobs)
-
+            if request.stream_options and request.stream_options.include_usage:
+                total_tokens = sum([
+                    res.history_token_len, res.input_token_len,
+                    res.generate_token_len
+                ])
+                usage = UsageInfo(
+                    prompt_tokens=res.input_token_len,
+                    completion_tokens=res.generate_token_len,
+                    total_tokens=total_tokens,
+                )
             response_json = create_stream_response_json(
                 index=0,
                 text=res.response,
                 finish_reason=res.finish_reason,
-                logprobs=logprobs)
+                logprobs=logprobs,
+                usage=usage)
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -583,7 +594,7 @@ async def completions_v1(request: CompletionRequest,
                         res.token_ids, res.logprobs,
                         gen_config.skip_special_tokens, offset, all_token_ids,
                         state)
-                if res.finish_reason is not None:
+                if request.stream_options and request.stream_options.include_usage:  # noqa E501
                     final_res = res
                     total_tokens = sum([
                         final_res.history_token_len, final_res.input_token_len,
