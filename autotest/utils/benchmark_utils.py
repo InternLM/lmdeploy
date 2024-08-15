@@ -73,13 +73,10 @@ def generation_test(config,
             f.writelines(benchmark_res.stderr)
             print(benchmark_res.stderr)
 
-    if backend == "pytorch":
-        p = Process(target=pytorch_testcase,
-                    args=(cmd, benchmark_log))
-        p.start()
-        p.join()
-    else:
-        pytorch_testcase(cmd, benchmark_log)
+    p = Process(target=pytorch_testcase,
+                args=(cmd, benchmark_log))
+    p.start()
+    p.join()
 
     if not os.path.isfile(csv_path):
         return False, benchmark_log, 'result is empty'
@@ -151,13 +148,11 @@ def throughput_test(config,
         ])
 
         print('reproduce command: ' + cmd)
-        if backend == "pytorch":
-            p = Process(target=pytorch_testcase,
-                        args=(cmd, benchmark_log))
-            p.start()
-            p.join()
-        else:
-            pytorch_testcase(cmd, benchmark_log)
+
+        p = Process(target=pytorch_testcase,
+                    args=(cmd, benchmark_log))
+        p.start()
+        p.join()
        
         if not os.path.isfile(csv_path):
             return False, benchmark_log, 'result is empty'
