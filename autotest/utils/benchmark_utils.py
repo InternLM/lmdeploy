@@ -1,5 +1,6 @@
 import os
 import subprocess
+from multiprocessing import Process
 from subprocess import PIPE
 
 from utils.config_utils import get_workerid
@@ -59,20 +60,26 @@ def generation_test(config,
         get_max_cache_entry(model), '--csv', csv_path
     ])
 
-    with open(benchmark_log, 'w') as f:
-        f.writelines('reproduce command: ' + cmd + '\n')
-        print('reproduce command: ' + cmd)
+    print('reproduce command: ' + cmd)
 
-        benchmark_res = subprocess.run([cmd],
-                                       stdout=f,
-                                       stderr=PIPE,
-                                       shell=True,
-                                       text=True)
-        f.writelines(benchmark_res.stderr)
+    def pytorch_testcase(cmd, benchmark_log):
+        with open(benchmark_log, 'w') as f:
+            f.writelines('reproduce command: ' + cmd + '\n')
+            benchmark_res = subprocess.run([cmd],
+                                           stdout=f,
+                                           stderr=PIPE,
+                                           shell=True,
+                                           text=True)
+            f.writelines(benchmark_res.stderr)
+            print(benchmark_res.stderr)
 
-    if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
+    p = Process(target=pytorch_testcase, args=(cmd, benchmark_log))
+    p.start()
+    p.join()
+
+    if not os.path.isfile(csv_path):
         return False, benchmark_log, 'result is empty'
-    return benchmark_res.returncode == 0, benchmark_log, benchmark_res.stderr
+    return os.path.isfile(csv_path), benchmark_log, ''
 
 
 def throughput_test(config,
@@ -118,6 +125,17 @@ def throughput_test(config,
             command += ' --model-format awq'
         run_config = run_config + f' --quant-policy {quant_policy}'
 
+    def pytorch_testcase(cmd, benchmark_log):
+        with open(benchmark_log, 'w') as f:
+            f.writelines('reproduce command: ' + cmd + '\n')
+            benchmark_res = subprocess.run([cmd],
+                                           stdout=f,
+                                           stderr=PIPE,
+                                           shell=True,
+                                           text=True)
+            f.writelines(benchmark_res.stderr)
+            print(benchmark_res.stderr)
+
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/throughput_batch_{batch}_1th.csv'
         cmd = ' '.join([
@@ -127,20 +145,15 @@ def throughput_test(config,
             get_max_cache_entry(model), '--csv ', csv_path
         ])
 
-        with open(benchmark_log, 'w') as f:
-            f.writelines('reproduce command: ' + cmd + '\n')
-            print('reproduce command: ' + cmd)
+        print('reproduce command: ' + cmd)
 
-            benchmark_res = subprocess.run([cmd],
-                                           stdout=f,
-                                           stderr=PIPE,
-                                           shell=True,
-                                           text=True,
-                                           encoding='utf-8')
-            f.writelines(benchmark_res.stderr)
-    if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
-        return False, benchmark_log, 'result is empty'
-    return benchmark_res.returncode == 0, benchmark_log, benchmark_res.stderr
+        p = Process(target=pytorch_testcase, args=(cmd, benchmark_log))
+        p.start()
+        p.join()
+
+        if not os.path.isfile(csv_path):
+            return False, benchmark_log, 'result is empty'
+    return True, benchmark_log, ''
 
 
 def restful_test(config,

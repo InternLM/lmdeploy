@@ -23,6 +23,8 @@ on:
         description: 'Dependency packages, you can also set a specific version'
         type: string
         default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'
+  schedule:
+    - cron:  '00 19 * * *'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -138,8 +140,8 @@ jobs:
         run: |
           kill -15 "$restful_pid"
       - name: Attach result
-        run: |
         if: always()
+        run: |
           python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable.csv
           python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal.csv
       - name: Clear workfile
