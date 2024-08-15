@@ -1,10 +1,11 @@
 import os
 import subprocess
+from multiprocessing import Process
 from subprocess import PIPE
 
+import psutil
 from utils.config_utils import get_workerid
 from utils.run_restful_chat import health_check
-from multiprocessing import Process
 
 DEFAULT_PORT = 23333
 GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
@@ -66,21 +67,24 @@ def generation_test(config,
         with open(benchmark_log, 'w') as f:
             f.writelines('reproduce command: ' + cmd + '\n')
             benchmark_res = subprocess.run([cmd],
-                                        stdout=f,
-                                        stderr=PIPE,
-                                        shell=True,
-                                        text=True)
+                                           stdout=f,
+                                           stderr=PIPE,
+                                           shell=True,
+                                           text=True)
             f.writelines(benchmark_res.stderr)
             print(benchmark_res.stderr)
 
-    p = Process(target=pytorch_testcase,
-                args=(cmd, benchmark_log))
+    p = Process(target=pytorch_testcase, args=(cmd, benchmark_log))
+    if p.pid > 0:
+        parent = psutil.Process(p.pid)
+        for child in parent.children(recursive=True):
+            child.terminate()
     p.start()
     p.join()
 
     if not os.path.isfile(csv_path):
         return False, benchmark_log, 'result is empty'
-    return os.path.isfile(csv_path), benchmark_log, ""
+    return os.path.isfile(csv_path), benchmark_log, ''
 
 
 def throughput_test(config,
@@ -126,15 +130,14 @@ def throughput_test(config,
             command += ' --model-format awq'
         run_config = run_config + f' --quant-policy {quant_policy}'
 
-
     def pytorch_testcase(cmd, benchmark_log):
         with open(benchmark_log, 'w') as f:
             f.writelines('reproduce command: ' + cmd + '\n')
             benchmark_res = subprocess.run([cmd],
-                                        stdout=f,
-                                        stderr=PIPE,
-                                        shell=True,
-                                        text=True)
+                                           stdout=f,
+                                           stderr=PIPE,
+                                           shell=True,
+                                           text=True)
             f.writelines(benchmark_res.stderr)
             print(benchmark_res.stderr)
 
@@ -149,14 +152,17 @@ def throughput_test(config,
 
         print('reproduce command: ' + cmd)
 
-        p = Process(target=pytorch_testcase,
-                    args=(cmd, benchmark_log))
+        p = Process(target=pytorch_testcase, args=(cmd, benchmark_log))
+        if p.pid > 0:
+            parent = psutil.Process(p.pid)
+            for child in parent.children(recursive=True):
+                child.terminate()
         p.start()
         p.join()
-       
+
         if not os.path.isfile(csv_path):
             return False, benchmark_log, 'result is empty'
-    return True, benchmark_log, ""
+    return True, benchmark_log, ''
 
 
 def restful_test(config,
