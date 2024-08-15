@@ -75,12 +75,13 @@ def generation_test(config,
             print(benchmark_res.stderr)
 
     p = Process(target=pytorch_testcase, args=(cmd, benchmark_log))
+    p.start()
     if p.pid > 0:
         parent = psutil.Process(p.pid)
-        for child in parent.children(recursive=True):
-            child.terminate()
-    p.start()
     p.join()
+    for child in parent.children(recursive=True):
+            child.terminate()
+    parent.terminate()
 
     if not os.path.isfile(csv_path):
         return False, benchmark_log, 'result is empty'
@@ -153,12 +154,13 @@ def throughput_test(config,
         print('reproduce command: ' + cmd)
 
         p = Process(target=pytorch_testcase, args=(cmd, benchmark_log))
+        p.start()
         if p.pid > 0:
             parent = psutil.Process(p.pid)
-            for child in parent.children(recursive=True):
-                child.terminate()
-        p.start()
         p.join()
+        for child in parent.children(recursive=True):
+                child.terminate()
+        parent.terminate()
 
         if not os.path.isfile(csv_path):
             return False, benchmark_log, 'result is empty'
