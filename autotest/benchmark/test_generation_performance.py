@@ -59,6 +59,7 @@ def test_generation_tp2(config, run_id, run_config, worker_id):
 
 
 @pytest.mark.gpu_num_2
+@pytest.mark.longtext
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config',
                          get_benchmark_model_list(tp_num=2, is_longtext=True))

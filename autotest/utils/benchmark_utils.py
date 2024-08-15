@@ -1,9 +1,7 @@
 import os
 import subprocess
-from multiprocessing import Process
 from subprocess import PIPE
 
-import psutil
 from utils.config_utils import get_workerid
 from utils.run_restful_chat import health_check
 
@@ -61,31 +59,20 @@ def generation_test(config,
         get_max_cache_entry(model), '--csv', csv_path
     ])
 
-    print('reproduce command: ' + cmd)
+    with open(benchmark_log, 'w') as f:
+        f.writelines('reproduce command: ' + cmd + '\n')
+        print('reproduce command: ' + cmd)
 
-    def pytorch_testcase(cmd, benchmark_log):
-        with open(benchmark_log, 'w') as f:
-            f.writelines('reproduce command: ' + cmd + '\n')
-            benchmark_res = subprocess.run([cmd],
-                                           stdout=f,
-                                           stderr=PIPE,
-                                           shell=True,
-                                           text=True)
-            f.writelines(benchmark_res.stderr)
-            print(benchmark_res.stderr)
+        benchmark_res = subprocess.run([cmd],
+                                       stdout=f,
+                                       stderr=PIPE,
+                                       shell=True,
+                                       text=True)
+        f.writelines(benchmark_res.stderr)
 
-    p = Process(target=pytorch_testcase, args=(cmd, benchmark_log))
-    p.start()
-    if p.pid > 0:
-        parent = psutil.Process(p.pid)
-    p.join()
-    for child in parent.children(recursive=True):
-            child.terminate()
-    parent.terminate()
-
-    if not os.path.isfile(csv_path):
+    if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
         return False, benchmark_log, 'result is empty'
-    return os.path.isfile(csv_path), benchmark_log, ''
+    return benchmark_res.returncode == 0, benchmark_log, benchmark_res.stderr
 
 
 def throughput_test(config,
@@ -131,17 +118,6 @@ def throughput_test(config,
             command += ' --model-format awq'
         run_config = run_config + f' --quant-policy {quant_policy}'
 
-    def pytorch_testcase(cmd, benchmark_log):
-        with open(benchmark_log, 'w') as f:
-            f.writelines('reproduce command: ' + cmd + '\n')
-            benchmark_res = subprocess.run([cmd],
-                                           stdout=f,
-                                           stderr=PIPE,
-                                           shell=True,
-                                           text=True)
-            f.writelines(benchmark_res.stderr)
-            print(benchmark_res.stderr)
-
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/throughput_batch_{batch}_1th.csv'
         cmd = ' '.join([
@@ -151,20 +127,20 @@ def throughput_test(config,
             get_max_cache_entry(model), '--csv ', csv_path
         ])
 
-        print('reproduce command: ' + cmd)
+        with open(benchmark_log, 'w') as f:
+            f.writelines('reproduce command: ' + cmd + '\n')
+            print('reproduce command: ' + cmd)
 
-        p = Process(target=pytorch_testcase, args=(cmd, benchmark_log))
-        p.start()
-        if p.pid > 0:
-            parent = psutil.Process(p.pid)
-        p.join()
-        for child in parent.children(recursive=True):
-                child.terminate()
-        parent.terminate()
-
-        if not os.path.isfile(csv_path):
-            return False, benchmark_log, 'result is empty'
-    return True, benchmark_log, ''
+            benchmark_res = subprocess.run([cmd],
+                                           stdout=f,
+                                           stderr=PIPE,
+                                           shell=True,
+                                           text=True,
+                                           encoding='utf-8')
+            f.writelines(benchmark_res.stderr)
+    if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
+        return False, benchmark_log, 'result is empty'
+    return benchmark_res.returncode == 0, benchmark_log, benchmark_res.stderr
 
 
 def restful_test(config,

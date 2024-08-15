@@ -136,7 +136,6 @@ jobs:
       - name: Kill api server
         if: always()
         run: |
-          sleep 3600
           kill -15 "$restful_pid"
       - name: Attach result
         run: |

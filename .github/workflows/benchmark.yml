@@ -130,6 +130,14 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Run generation benchmark
+        if: matrix.benchmark_type == 'generation'
+        run: |
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m 'gpu_num_2 and not longtext' --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m 'gpu_num_2 and longtext' --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m gpu_num_4 --lf --alluredir=${{env.REPORT_DIR}}/allure-results
+      - name: Run other benchmark
+        if: matrix.benchmark_type != 'generation'
         run: |
             pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
             pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m gpu_num_2 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
