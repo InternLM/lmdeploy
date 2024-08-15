@@ -312,7 +312,7 @@ class ArgumentHelper:
         return parser.add_argument(
             '--calib-image',
             type=str,
-            default='ptb',
+            default=None,
             help='The calibration image for vision model.')
 
     @staticmethod
