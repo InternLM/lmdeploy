@@ -1,6 +1,6 @@
 ARG CUDA_VERSION=cu12
 
-FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS cu12
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS cu12
 ENV CUDA_VERSION_SHORT=cu121
 
 FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 AS cu11

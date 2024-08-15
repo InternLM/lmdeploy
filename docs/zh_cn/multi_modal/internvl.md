@@ -1,113 +1,154 @@
-# internvl
+# InternVL2
 
 ## 简介
 
-InternVL2 是由OpenGVLab开源的一个强大的开源视觉语言模型（VLM）. LMDeploy 在PyTorch后端以及TurboMind 后端均支持 InternVL2 系列模型 [OpenGVLab/InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e) , 这里以 InternVL2-26B 模型[OpenGVLab/InternVL2-26B](https://huggingface.co/OpenGVLab/InternVL2-26B)为例来说明如何使用通lmdeploy框架部署InternVL系列模型；
+InternVL是一个开源的视觉语言基础模型，它将Vision Transformer（ViT）扩展至6亿参数，并与大型语言模型（LLM）对齐。作为目前最大的开源视觉/视觉语言基础模型（14亿参数），InternVL在视觉感知、跨模态检索、多模态对话等多个任务上实现了32项最先进的性能。LMDeploy 支持了 InternVL 系列模型的推理。下面以 InternVL2-8B 为例，展示其使用方法。
 
-### 环境配置及镜像构建
+## 快速开始
 
-安装docker以及docker-compose以及[compose-gpu-support](https://docs.docker.com/compose/gpu-support/),并确保您的宿主机cuda版本，若宿主机的cuda大版本为cuda11，请确保其高于11.8；若宿主机的cuda大版本为cuda12，请确保其高于12.2；若镜像内的cuda版本高于宿主机的cuda版本，镜像内的Pytorch将无法使用；完成环境配置后，在lmdeploy项目根目录执行：
+### 安装
 
-```shell
-#build the base image,it only use to base LLM
-docker build -t openmmlab/lmdeploy:latest-cu12 . -f ./docker/Dockerfile
-#build the internvl need image,it can be use to VLM like intervl2
-docker build -t openmmlab/lmdeploy:latest-internvl-cu12 . -f ./docker/InternVL_Dockerfile
-```
-
-### 启动
-
-完成镜像构建后，在lmdeploy项目根目录创建docker-compose.yml配置文件;其中环境变量CUDA_VISIBLE_DEVICES可以控制用宿主机上的哪些gpu，--tp参数可以控制使用几块gpu
-
-```yaml
-version: '3.5'
-
-services:
-  lmdeploy:
-    container_name: lmdeploy
-    image: openmmlab/lmdeploy:latest-internvl-cu12
-    ports:
-      - "23333:23333"
-    environment:
-      HUGGING_FACE_HUB_TOKEN: <secret>
-      CUDA_VISIBLE_DEVICES: 0,1,2,3
-    volumes:
-      #- ~/.cache/huggingface:/root/.cache/huggingface
-      - ./root:/root
-    stdin_open: true
-    tty: true
-    ipc: host #for nccl,it is necessary
-    command: lmdeploy serve api_server OpenGVLab/InternVL2-26B  --server-name 0.0.0.0 --server-port 23333  --tp 4 --model-name internvl2-internlm2 --cache-max-entry-count 0.5
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: "all"
-              capabilities: [gpu]
-
-```
-
-执行启动命令
+请参考[安装文档](../installation.md)安装 LMDeploy，并安装上游模型库 InternVL2 所需的依赖。
 
 ```shell
-docker-compose up -d
+pip install timm
 ```
 
-执行docker logs -f lmdeploy看到以下日志，表明启动成功
+### 离线推理 pipeline
 
-```shell
-Fetching 33 files: 100%|█████████████████████████████████████████████████████████████████| 33/33 [00:00<00:00, 102908.57it/s]
-[WARNING] gemm_config.in is not found; using default GEMM algo
-[WARNING] gemm_config.in is not found; using default GEMM algo
-[WARNING] gemm_config.in is not found; using default GEMM algo
-[WARNING] gemm_config.in is not found; using default GEMM algo
-HINT:    Please open http://0.0.0.0:23333 in a browser for detailed api usage!!!
-HINT:    Please open http://0.0.0.0:23333 in a browser for detailed api usage!!!
-HINT:    Please open http://0.0.0.0:23333 in a browser for detailed api usage!!!
-INFO:     Started server process [2439]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:23333 (Press CTRL+C to quit)
-```
-
-### 测试
-
-可以通过以下python脚本进行问答，以测试internVL2多模态模型的部署情况
+以下是使用pipeline进行离线推理的示例，更多用法参考[VLM离线推理 pipeline](./vl_pipeline.md)
 
 ```python
-import asyncio
-from openai import OpenAI
+from lmdeploy import pipeline
+from lmdeploy.vl import load_image
 
-async def main():
-    client = OpenAI(api_key='YOUR_API_KEY',
-                         base_url='http://0.0.0.0:23333/v1')
-    model_cards = await client.models.list()._get_page()
-    response = await client.chat.completions.create(
-        model=model_cards.data[0].id,
-        messages=[
-            {
-                'role': 'system',
-                'content': 'You are a helpful assistant.'
-            },
-            {
-                'role': 'user',
-                #'content': ' provide three suggestions about time management'
-                #'content': '请列出广州10个适合带女生去购物的地方'
-                'content':[
-                {"type": "text", "text": "画面中的人物穿的是什么服饰？"},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "https://c-ssl.duitang.com/uploads/item/201707/12/20170712134209_chaxS.jpeg",
-                    },
-                },
-            ]
-            },
-        ],
-        temperature=0.8,
-        top_p=0.8)
-    print(response)
+pipe = pipeline('OpenGVLab/InternVL2-8B')
 
-asyncio.run(main())
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe((f'describe this image', image))
+print(response)
 ```
+
+## 更多使用例子
+
+<details>
+  <summary>
+    <b>多图多轮对话，拼接图像</b>
+  </summary>
+
+```python
+from lmdeploy import pipeline, GenerationConfig
+from lmdeploy.vl import load_image
+from lmdeploy.vl.utils import encode_image_base64
+from lmdeploy.vl.constants import IMAGE_TOKEN
+
+pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
+messages = [
+    dict(role='user', content=[
+        dict(type='text', text=f'<img>{IMAGE_TOKEN}{IMAGE_TOKEN}</img>\nDescribe the two images in detail.'),
+        dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image1.jpg')),
+        dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image2.jpg'))
+    ])
+]
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
+
+messages.append(dict(role='assistant', content=out.text))
+messages.append(dict(role='user', content='What are the similarities and differences between these two images.'))
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
+```
+
+</details>
+
+<details>
+  <summary>
+    <b>多图多轮对话，独立图像</b>
+  </summary>
+
+```python
+from lmdeploy import pipeline, GenerationConfig
+from lmdeploy.vl import load_image
+from lmdeploy.vl.utils import encode_image_base64
+from lmdeploy.vl.constants import IMAGE_TOKEN
+
+pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
+messages = [
+    dict(role='user', content=[
+        dict(type='text', text=f'Image-1: <img>{IMAGE_TOKEN}</img>\nImage-2: <img>{IMAGE_TOKEN}</img>\nDescribe the two images in detail.'),
+        dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image1.jpg')),
+        dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image2.jpg'))
+    ])
+]
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
+
+messages.append(dict(role='assistant', content=out.text))
+messages.append(dict(role='user', content='What are the similarities and differences between these two images.'))
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
+```
+
+</details>
+
+<details>
+  <summary>
+    <b>视频多轮对话</b>
+  </summary>
+
+```python
+import numpy as np
+from lmdeploy import pipeline, GenerationConfig
+from decord import VideoReader, cpu
+from lmdeploy.vl.constants import IMAGE_TOKEN
+from lmdeploy.vl.utils import encode_image_base64
+from PIL import Image
+pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
+
+
+def get_index(bound, fps, max_frame, first_idx=0, num_segments=32):
+    if bound:
+        start, end = bound[0], bound[1]
+    else:
+        start, end = -100000, 100000
+    start_idx = max(first_idx, round(start * fps))
+    end_idx = min(round(end * fps), max_frame)
+    seg_size = float(end_idx - start_idx) / num_segments
+    frame_indices = np.array([
+        int(start_idx + (seg_size / 2) + np.round(seg_size * idx))
+        for idx in range(num_segments)
+    ])
+    return frame_indices
+
+
+def load_video(video_path, bound=None, input_size=448, max_num=1, num_segments=32):
+    vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
+    max_frame = len(vr) - 1
+    fps = float(vr.get_avg_fps())
+    pixel_values_list, num_patches_list = [], []
+    frame_indices = get_index(bound, fps, max_frame, first_idx=0, num_segments=num_segments)
+    imgs = []
+    for frame_index in frame_indices:
+        img = Image.fromarray(vr[frame_index].asnumpy()).convert('RGB')
+        imgs.append(img)
+    return imgs
+
+
+video_path = 'red-panda.mp4'
+imgs = load_video(video_path, num_segments=8, max_num=1)
+
+question = ''
+for i in range(len(imgs)):
+    question = question + f'Frame{i+1}: <img>{IMAGE_TOKEN}</img>\n'
+
+question += 'What is the red panda doing?'
+
+content = [{'type': 'text', 'text': question}]
+for img in imgs:
+    content.append({'type': 'image_url', 'image_url': {'max_dynamic_patch': 1, 'url': f'data:image/jpeg;base64,{encode_image_base64(img)}'}})
+
+messages = [dict(role='user', content=content)]
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
+
+messages.append(dict(role='assistant', content=out.text))
+messages.append(dict(role='user', content='Describe this video in detail. Don\'t repeat.'))
+out = pipe(messages, gen_config=GenerationConfig(top_k=1))
+```
+
+</details>
