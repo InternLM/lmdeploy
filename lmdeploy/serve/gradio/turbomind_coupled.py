@@ -175,9 +175,8 @@ def run_local(model_path: str,
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
 
-            chatbot = gr.Chatbot(
-                elem_id='chatbot',
-                label=InterFace.async_engine.engine.model_name)
+            chatbot = gr.Chatbot(elem_id='chatbot',
+                                 label=InterFace.async_engine.model_name)
             instruction_txtbox = gr.Textbox(
                 placeholder='Please input the instruction',
                 label='Instruction')

@@ -1,8 +1,8 @@
-# VLM 离线推理 pipeline
+# Offline Inference Pipeline
 
-LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单好用的 pipeline。它的用法与大语言模型（LLM）推理 [pipeline](./pipeline.md) 类似。
+LMDeploy abstracts the complex inference process of multi-modal Vision-Language Models (VLM) into an easy-to-use pipeline, similar to the Large Language Model (LLM) inference [pipeline](../llm/pipeline.md).
 
-目前，VLM pipeline 支持以下模型：
+Currently, it supports the following models.
 
 - [Qwen-VL-Chat](https://huggingface.co/Qwen/Qwen-VL-Chat)
 - LLaVA series: [v1.5](https://huggingface.co/collections/liuhaotian/llava-15-653aac15d994e992e2677a7e), [v1.6](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2)
@@ -11,15 +11,15 @@ LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单�
 - [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
 - [MGM](https://huggingface.co/YanweiLi/MGM-7B)
 - [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
-- [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/zh_cn/multi_modal/cogvlm.md)
+- [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/en/multi_modal/cogvlm.md)
 
-我们诚挚邀请社区在 LMDeploy 中添加更多 VLM 模型的支持。
+We genuinely invite the community to contribute new VLM support to LMDeploy. Your involvement is truly appreciated.
 
-本文将以 [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，展示 VLM pipeline 的用法。你将了解它的最基础用法，以及如何通过调整引擎参数和生成条件来逐步解锁更多高级特性，如张量并行，上下文窗口大小调整，随机采样，以及对话模板的定制。
+This article showcases the VLM pipeline using the [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model as a case study.
+You'll learn about the simplest ways to leverage the pipeline and how to gradually unlock more advanced features by adjusting engine parameters and generation arguments, such as tensor parallelism, context window sizing, random sampling, and chat template customization.
+Moreover, we will provide practical inference examples tailored to scenarios with multiple images, batch prompts etc.
 
-此外，我们还提供针对多图、批量提示词等场景的实际推理示例。
-
-## "Hello, world" 示例
+## A 'Hello, world' example
 
 ```python
 from lmdeploy import pipeline
@@ -32,9 +32,9 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-如果在执行这个用例时，出现 `ImportError` 的错误，请按照提示安装相关的依赖包。
+If `ImportError` occurs while executing this case, please install the required dependency packages as prompted.
 
-上面的例子中，推理时的提示词是 (prompt, image) 的 tuple 结构。除了这种结构外，pipeline 支持 openai 格式的提示词：
+In the above example, the inference prompt is a tuple structure consisting of (prompt, image). Besides this structure, the pipeline also supports prompts in the OpenAI format:
 
 ```python
 from lmdeploy import pipeline
@@ -54,9 +54,9 @@ response = pipe(prompts)
 print(response)
 ```
 
-### 设置多卡并行
+### Set tensor parallelism
 
-设置引擎参数 `tp`，可激活多卡并行能力
+Tensor paramllelism can be activated by setting the engine parameter `tp`
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
@@ -70,9 +70,9 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-### 设置上下文长度
+### Set context window size
 
-创建 pipeline 时，通过设置引擎参数 `session_len`，可以定制上下文窗口的最大长度
+When creating the pipeline, you can customize the size of the context window by setting the engine parameter `session_len`.
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
@@ -86,9 +86,9 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-### 设置随机采样参数
+### Set sampling parameters
 
-可通过传入 `GenerationConfig` 修改 pipeline 的生成接口中的默认采样参数。
+You can change the default sampling parameters of pipeline by passing `GenerationConfig`
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -102,9 +102,9 @@ response = pipe(('describe this image', image), gen_config=gen_config)
 print(response)
 ```
 
-### 自定义图片 token 的位置
+### Customize image token position
 
-默认情况下，LMDeploy 会根据算法 repo 提供的对话模版将表示图片的特殊 token 插入到 user prompt 中，但在一些模型中，图片 token 的位置并没有限制，如 deepseek-vl，或者用户需要自定义图片 token 插入的位置。这种情况下，用户需要手动将表示图片的 token 插入到 prompt 中。LMDeploy 使用 `<IMAGE_TOKEN>` 作为表示图片的特殊 token。
+By default, LMDeploy inserts the special image token into the user prompt following the chat template defined by the upstream algorithm repository. However, for certain models where the image token's position is unrestricted, such as deepseek-vl, or when users require a customized image token placement, manual insertion of the special image token into the prompt is necessary. LMDeploy use `<IMAGE_TOKEN>` as the special image token.
 
 ```python
 from lmdeploy import pipeline
@@ -118,9 +118,9 @@ response = pipe((f'describe this image{IMAGE_TOKEN}', image))
 print(response)
 ```
 
-### 设置对话模板
+### Set chat template
 
-推理时，LMDeploy 会根据模型路径匹配内置的对话模板，并把对话模板应用到输入的提示词上。如果用户使用的是本地模型，并且模型文件夹名字与官方模型不一致时，需要手动指定对话模版。以 [llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) 为例，官方使用 ['llava-v1'](https://github.com/haotian-liu/LLaVA/blob/v1.2.2/llava/conversation.py#L325-L335) 对话模版，如果本地文件夹名字不是 `llava-v1.5-7b`，可以按照如下方式使用。
+While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, [liuhaotian/llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) employs the ['llava-v1'](https://github.com/haotian-liu/LLaVA/blob/v1.2.2/llava/conversation.py#L325-L335) chat template, if user have a custom folder name instead of the official 'llava-v1.5-7b', the user needs to specify it by setting 'llava-v1' to `ChatTemplateConfig` as follows:
 
 ```python
 from lmdeploy import pipeline, ChatTemplateConfig
@@ -132,11 +132,11 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-关于如何自定义对话模版，请参考[这里](../advance/chat_template.md)
+For more information about customizing a chat template, please refer to [this](../advance/chat_template.md) guide
 
-### 设置视觉模型参数
+### Setting vision model parameters
 
-可通过设置 `VisionConfig` 修改视觉模型默认参数
+The default parameters of the visual model can be modified by setting `VisionConfig`.
 
 ```python
 from lmdeploy import pipeline, VisionConfig
@@ -148,9 +148,9 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-### 计算 logits
+### Calculate logits
 
-LMDeploy 支持用户自定义输入，用户可以调用`prepare_inputs`，了解多模态的输入是如何组织的。
+We provide support for custom inputs. Users can utilize 'prepare_inputs' to understand how the inputs are organized.
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
@@ -166,9 +166,9 @@ embedding_ranges = inputs['input_embedding_ranges']
 logits = pipe.get_logits(input_ids, embeddings, embedding_ranges)
 ```
 
-## 多图推理
+## Multi-images inference
 
-对于多图的场景，在推理时，只要把它们放在一个列表中即可。不过，多图意味着输入 token 数更多，所以通常需要[增大推理的上下文长度](#设置上下文长度)
+When dealing with multiple images, you can put them all in one list. Keep in mind that multiple images will lead to a higher number of input tokens, and as a result, the size of the [context window](#set-context-window-size) typically needs to be increased.
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
@@ -187,9 +187,9 @@ response = pipe(('describe these images', images))
 print(response)
 ```
 
-## 提示词批处理
+## Batch prompts inference
 
-做批量提示词推理非常简单，只要把它们放在一个 list 结构中：
+Conducting inference with batch prompts is quite straightforward; just place them within a list structure:
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
@@ -207,9 +207,9 @@ response = pipe(prompts)
 print(response)
 ```
 
-## 多轮对话
+## Multi-turn conversation
 
-pipeline 进行多轮对话有两种方式，一种是按照 openai 的格式来构造 messages，另外一种是使用 `pipeline.chat` 接口。
+There are two ways to do the multi-turn conversations with the pipeline. One is to construct messages according to the format of OpenAI and use above introduced method, the other is to use the `pipeline.chat` interface.
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig, GenerationConfig
@@ -219,7 +219,7 @@ pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
                 backend_config=TurbomindEngineConfig(session_len=8192))
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
-gen_config = GenerationConfig(top_k=40, top_p=0.8, temperature=0.6)
+gen_config = GenerationConfig(top_k=40, top_p=0.8, temperature=0.8)
 sess = pipe.chat(('describe this image', image), gen_config=gen_config)
 print(sess.response.text)
 sess = pipe.chat('What is the woman doing?', session=sess, gen_config=gen_config)

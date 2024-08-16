@@ -8,15 +8,11 @@
 
 ### 安装
 
-使用 pip(Python 3.8+) 安装 LMDeploy，更多安装方式参考 [安装](https://lmdeploy.readthedocs.io/zh-cn/latest/get_started.html#id2)。
-
-```shell
-pip install lmdeploy
-```
+请参考[安装文档](../installation.md)安装 LMDeploy
 
 ### 离线推理 pipeline
 
-以下是使用pipeline进行离线推理的示例，更多用法参考[VLM离线推理 pipeline](https://lmdeploy.readthedocs.io/zh-cn/latest/inference/vl_pipeline.html#vlm-pipeline)
+以下是使用pipeline进行离线推理的示例，更多用法参考[VLM离线推理 pipeline](./vl_pipeline.md)
 
 ```python
 from lmdeploy import pipeline

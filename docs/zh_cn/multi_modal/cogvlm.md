@@ -17,16 +17,7 @@ pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https:
 pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu121
 ```
 
-使用 pip(Python 3.8+)安装LMDeploy，更多安装方式参考 [安装](https://lmdeploy.readthedocs.io/zh-cn/latest/get_started.html#id2)。
-
-```shell
-# cuda 11.8
-export LMDEPLOY_VERSION=0.5.1
-export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
-# cuda 12.1
-pip install lmdeploy
-```
+请参考[安装文档](../installation.md)安装 LMDeploy
 
 ### 准备
 
@@ -41,7 +32,7 @@ huggingface-cli download lmsys/vicuna-7b-v1.5 special_tokens_map.json tokenizer.
 
 ### 离线推理 pipeline
 
-以下是使用pipeline进行离线推理的示例，更多用法参考[VLM离线推理 pipeline](https://lmdeploy.readthedocs.io/zh-cn/latest/inference/vl_pipeline.html#vlm-pipeline)
+以下是使用pipeline进行离线推理的示例，更多用法参考[VLM离线推理 pipeline](./vl_pipeline.md)
 
 ```python
 from lmdeploy import pipeline

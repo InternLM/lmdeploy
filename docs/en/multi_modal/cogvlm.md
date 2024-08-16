@@ -1,4 +1,4 @@
-# cogvlm
+# CogVLM
 
 ## Introduction
 
@@ -17,17 +17,7 @@ pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https:
 pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu121
 ```
 
-Install LMDeploy with pip (Python 3.8+). Refer to [Installation](https://lmdeploy.readthedocs.io/en/latest/get_started.html#installation) for more.
-
-```shell
-# cuda 11.8
-# to get the latest version, run: pip index versions lmdeploy
-export LMDEPLOY_VERSION=0.5.1
-export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
-# cuda 12.1
-pip install lmdeploy
-```
+Install LMDeploy by following the [installation guide](../installation.md)
 
 ### Prepare
 
@@ -43,7 +33,7 @@ huggingface-cli download lmsys/vicuna-7b-v1.5 special_tokens_map.json tokenizer.
 
 ### Offline inference pipeline
 
-The following sample code shows the basic usage of VLM pipeline. For more examples, please refer to [VLM Offline Inference Pipeline](https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#vlm-offline-inference-pipeline)
+The following sample code shows the basic usage of VLM pipeline. For more examples, please refer to [VLM Offline Inference Pipeline](./vl_pipeline.md)
 
 ```python
 from lmdeploy import pipeline

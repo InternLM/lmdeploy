@@ -18,7 +18,6 @@
 #include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/debug_utils.h"
-#include "src/turbomind/utils/gemm_test/gemm_func.h"
 #include "src/turbomind/utils/logger.h"
 #include <algorithm>
 #include <cmath>
@@ -265,18 +264,24 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         const int  input_length = r->inputs[rank_].getVal<int>("input_lengths");
         const int* input_ids    = r->inputs[rank_].getPtr<int>("input_ids");
 
-        // `output_ids` contains all token ids of the sequences
-        const auto output_ids_base = state.output_ids + session_len_ * idx;
-        auto       output_ids      = output_ids_base;
+        {
+            // `output_ids` contains all token ids of the sequences
+            const auto output_ids_base = state.output_ids + session_len_ * idx;
+            auto       output_ids      = output_ids_base;
+            // copy history tokens
+            if (!seq.tokens.empty()) {
+                output_ids = Copy(seq.tokens.data(), seq.tokens.size(), output_ids);
+            }
 
-        // copy history tokens
-        if (!seq.tokens.empty()) {
-            output_ids = Copy(seq.tokens.data(), seq.tokens.size(), output_ids);
-        }
+            // copy input tokens
+            if (input_length) {
+                output_ids = Copy(input_ids, input_length, output_ids);
+            }
 
-        // copy input tokens
-        if (input_length) {
-            output_ids = Copy(input_ids, input_length, output_ids);
+            // total context length (history + input)
+            state.h_prompt_length[idx]  = output_ids - output_ids_base;
+            state.h_context_length[idx] = output_ids - output_ids_base;
+            state.h_finished[idx]       = false;
         }
 
         // copy input tokens to prompt for prefix matching
@@ -338,11 +343,6 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
                 }
             }
         }
-
-        // total context length (history + input)
-        state.h_prompt_length[idx]  = output_ids - output_ids_base;
-        state.h_context_length[idx] = output_ids - output_ids_base;
-        state.h_finished[idx]       = false;
 
         const int request_output_len = state.requests[idx]->inputs[rank_].getVal<int>("request_output_len");
         state.seq_len_limit[idx]     = state.h_context_length[idx] + request_output_len;
@@ -424,9 +424,9 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
 }
 
 template<typename T>
-void LlamaBatch<T>::AdjustMaxInputCount(GenerationState&                    g,
-                                        const std::vector<const Sequence*>& sequences,
-                                        const std::vector<int>&             context_length)
+int LlamaBatch<T>::AdjustMaxInputCount(GenerationState&                    g,
+                                       const std::vector<const Sequence*>& sequences,
+                                       const std::vector<int>&             context_length)
 {
     int input_count = 0;
     for (int i = 0; i < sequences.size(); ++i) {
@@ -448,11 +448,12 @@ void LlamaBatch<T>::AdjustMaxInputCount(GenerationState&                    g,
         x = std::max(x, input_count);
     }
 
+    // Enlarge to satisfy `max_prefill_iters_`
     input_count = std::max(g.min_input_count.front() + batch_size, num_tokens_per_iter_);
-    input_count = std::min(input_count, max_context_token_num_);
-    // update max input count
-    g.max_input_count1 = input_count;
-    g.max_input_count2 = std::min(input_count + extra_tokens_per_iter_, max_context_token_num_);
+    // Clamp to conform memory constraint
+    input_count = std::min(input_count, max_forward_token_num_);
+
+    return input_count;
 }
 
 template<typename T>
@@ -493,10 +494,8 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     process(state_);
     process(incoming_);
 
-    auto adjust = [this, &g](const Sequences&        sequences,
-                             const std::vector<int>& context_length) -> std::pair<int, int> {
-        AdjustMaxInputCount(g, sequences, context_length);
-        return {g.max_input_count1, g.max_input_count2};
+    auto adjust = [this, &g](const Sequences& sequences, const std::vector<int>& context_length) -> int {
+        return AdjustMaxInputCount(g, sequences, context_length);
     };
 
     // TM_LOG_INFO("max_input_count %d", max_input_count);
@@ -711,19 +710,19 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
         batch_size * ((session_len + cache_block_seq_len - 1) / cache_block_seq_len) + 1;
 
     if (model_->lora_params_.policy == LoraPolicy::kPlora) {
-        lora_mask_buf_ = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_context_token_num_, false);
-        size_t sz      = sizeof(T) * max_context_token_num_ * (hidden_units + model_->lora_params_.max_wo_r);
-        context_decoder_output_buf_ = (T*)allocator_->reMalloc(context_decoder_output_buf_, sz, false);
+        lora_mask_buf_ = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_forward_token_num_, false);
+        size_t sz      = sizeof(T) * max_forward_token_num_ * (hidden_units + model_->lora_params_.max_wo_r);
+        context_decoder_output_buf_ = (T*)peer_allocator_->reMalloc(context_decoder_output_buf_, sz, false);
     }
     else {
-        context_decoder_output_buf_ = (T*)allocator_->reMalloc(
-            context_decoder_output_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
+        context_decoder_output_buf_ = (T*)peer_allocator_->reMalloc(
+            context_decoder_output_buf_, sizeof(T) * max_forward_token_num_ * hidden_units, false);
     }
 
     context_decoder_input_buf_ =
-        (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
+        (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_forward_token_num_ * hidden_units, false);
     context_decoder_ids_buf_ =
-        (int*)allocator_->reMalloc(context_decoder_ids_buf_, sizeof(int) * max_context_token_num_, false);
+        (int*)allocator_->reMalloc(context_decoder_ids_buf_, sizeof(int) * max_forward_token_num_, false);
 
     decoder_input_buf_  = (T*)allocator_->reMalloc(decoder_input_buf_, sizeof(T) * batchxbeam * hidden_units, false);
     decoder_output_buf_ = (T*)allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units, false);
@@ -738,8 +737,9 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     cu_block_counts_ = (int*)allocator_->reMalloc(cu_block_counts_, sizeof(int) * (batch_size + 1));
     block_ptrs_      = (uintptr_t*)allocator_->reMalloc(block_ptrs_, sizeof(uintptr_t) * max_batch_block_count);
 
-    logits_buf_       = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
-    local_logits_buf_ = (float*)allocator_->reMalloc(local_logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
+    logits_buf_ = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
+    local_logits_buf_ =
+        (float*)peer_allocator_->reMalloc(local_logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
 
     sampled_logprobs_ =
         (float*)allocator_->reMalloc(sampled_logprobs_, sizeof(float) * batchxbeam * kMaxLogProb, false);
@@ -851,7 +851,7 @@ void LlamaBatch<T>::FreeBuffer()
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)&context_decoder_input_buf_);
-        allocator_->free((void**)&context_decoder_output_buf_);
+        peer_allocator_->free((void**)&context_decoder_output_buf_);
         allocator_->free((void**)&context_decoder_ids_buf_);
         allocator_->free((void**)&lora_mask_buf_);
 
@@ -869,10 +869,10 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&block_ptrs_);
 
         allocator_->free((void**)&logits_buf_);
-        allocator_->free((void**)&local_logits_buf_);
+        peer_allocator_->free((void**)&local_logits_buf_);
 
         if (local_context_logits_buf_) {
-            allocator_->free((void**)&local_context_logits_buf_);
+            peer_allocator_->free((void**)&local_context_logits_buf_);
         }
         if (context_logits_buf_) {
             allocator_->free((void**)&context_logits_buf_);
@@ -932,6 +932,7 @@ void LlamaBatch<T>::FreeBuffer()
 template<typename T>
 LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, int quant_policy, LlamaV2<T>* model):
     max_batch_size_(params.max_batch_size),
+    max_forward_token_num_(params.max_prefill_token_num + params.max_batch_size),
     max_context_token_num_(params.max_context_token_num),
     session_len_(params.session_len),
     rank_(model->tensor_para_.rank_),
@@ -940,11 +941,11 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
     model_(model),
     data_type_(getTensorType<T>()),
     num_tokens_per_iter_(params.num_tokens_per_iter),
-    extra_tokens_per_iter_(params.extra_tokens_per_iter),
     max_prefill_iters_(params.max_prefill_iters)
 {
     stream_         = model_->stream_;
     allocator_      = model_->allocator_;
+    peer_allocator_ = model_->peer_allcator_;
     cublas_wrapper_ = model_->cublas_wrapper_;
 
     const int elem_bits = quant_policy ? quant_policy : bitsof<T>;
@@ -981,6 +982,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
     }
 
     FT_CHECK(max_context_token_num_ >= session_len_);
+    FT_CHECK(max_forward_token_num_ >= max_batch_size_);
 
     for (auto& s : states_) {
         s.requests.resize(max_batch_size_);
@@ -1172,7 +1174,7 @@ void LlamaBatch<T>::OutputContextLogits(T*                                  cont
             NcclGuard guard(model_->tensor_para_, stream_, true);
             FT_CHECK(model_->vocab_size_padded_ % tp == 0);
             const auto local_vocab_size = model_->vocab_size_padded_ / tp;
-            local_context_logits_buf_   = (float*)allocator_->reMalloc(
+            local_context_logits_buf_   = (float*)peer_allocator_->reMalloc(
                 local_context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * num_token, false);
         }
     }
@@ -1459,22 +1461,17 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
         FT_CHECK(step_length_ == 1);
 
         if (state_->active_size) {
-            for (int i = 0; i < step_length_; ++i) {
-                //
-                auto cont = Forward(g, i);
-                //
-                if (auto signals = Finish(g); !signals.empty()) {
-                    if (g.finished_count) {
-                        // Finished requests and corresponding output tensors will be released when notified
-                        // wait for all ranks to ensure no rank (except for output thread) will access related
-                        // resources
-                        shared_state->barrier->wait();
-                    }
-                    SendSignals(std::move(signals));
+            //
+            (void)Forward(g);
+            //
+            if (auto signals = Finish(g); !signals.empty()) {
+                if (g.finished_count) {
+                    // Finished requests and corresponding output tensors will be released when notified
+                    // wait for all ranks to ensure no rank (except for output thread) will access related
+                    // resources
+                    shared_state->barrier->wait();
                 }
-                if (!cont) {  // early exit
-                    break;
-                }
+                SendSignals(std::move(signals));
             }
         }
 
@@ -1540,7 +1537,7 @@ void LlamaBatch<T>::OutputThreadEntry()
 }
 
 template<typename T>
-bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
+bool LlamaBatch<T>::Forward(GenerationState& g)
 {
     NvtxScope _("Forward");
 
@@ -1556,26 +1553,17 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
     int               pf_offset = -1;
     std::vector<int*> input_d_ptrs(active_size);
 
-    if (iter == 0) {  // The first iter may have pre-fill tokens
-        for (int i = 0; i < active_size; ++i) {
-            const auto& seq = *state_->sequences[i];
-            // const int   missing    = state_->h_context_length[i] - seq.cache_len;
-            FT_CHECK(seq.input_length >= 1);
-            h_input_length_buf_[i] = seq.input_length;
-            input_d_ptrs[i]        = state_->output_ids + i * session_len_ + seq.cache_len;
-            if (seq.input_length > 1 && pf_offset < 0) {
-                pf_offset = i;
-            }
-        }
-        if (pf_offset < 0) {
-            pf_offset = active_size;
+    for (int i = 0; i < active_size; ++i) {
+        const auto& seq = *state_->sequences[i];
+        // const int   missing = state_->h_context_length[i] - seq.cache_len;
+        FT_CHECK(seq.input_length >= 1);
+        h_input_length_buf_[i] = seq.input_length;
+        input_d_ptrs[i]        = state_->output_ids + i * session_len_ + seq.cache_len;
+        if (seq.input_length > 1 && pf_offset < 0) {
+            pf_offset = i;
         }
     }
-    else {
-        for (int i = 0; i < active_size; ++i) {
-            h_input_length_buf_[i] = 1;
-            input_d_ptrs[i]        = state_->output_ids + i * session_len_ + state_->h_context_length[i] - 1;
-        }
+    if (pf_offset < 0) {
         pf_offset = active_size;
     }
 
@@ -1587,23 +1575,23 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 
     // Find mini-batch offsets: input length > 1 ? prefill() : decode()
     // Constraints on mini-batches
-    // - `context_decoder_input` and `context_decoder_output` can hold `max_context_token_num_` tokens w/o padding
+    //   sum(Q) <= `max_forward_token_num` && sum(K) <= `max_context_token_num`
     std::vector<int> offsets{0};
     // initialize first mini-batch with decode tokens
-    int accum_q_count = pf_offset;
-    int accum_k_count = 0;  // only for prefill
+    int sum_q = pf_offset;
+    int sum_k = 0;  // only for prefill
     for (int i = pf_offset; i < active_size; ++i) {
-        FT_CHECK(iter == 0);
-        int q_count = accum_q_count + h_input_length_buf_[i];
-        int k_count = accum_k_count + state_->h_context_length[i];
-        if (q_count <= max_context_token_num_ && k_count <= max_context_token_num_) {
-            accum_q_count = q_count;
-            accum_k_count = k_count;
+        FT_CHECK(h_input_length_buf_[i] <= max_forward_token_num_);
+        const int q = sum_q + h_input_length_buf_[i];
+        const int k = sum_k + state_->h_context_length[i];
+        if (q <= max_forward_token_num_ && k <= max_context_token_num_) {
+            sum_q = q;
+            sum_k = k;
         }
         else {
             offsets.push_back(i);
-            accum_q_count = h_input_length_buf_[i];
-            accum_k_count = state_->h_context_length[i];
+            sum_q = h_input_length_buf_[i];
+            sum_k = state_->h_context_length[i];
         }
     }
     offsets.push_back(active_size);
@@ -1621,14 +1609,18 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
         std::vector<const Sequence*> sequences;
 
         BatchedCopy batched_copy;
+        int         sum_k = 0;
         for (int i = first; i < last; ++i) {
             input_ids = batched_copy.Add(input_d_ptrs[i], h_input_length_buf_[i], input_ids);
             dbg(i, h_input_length_buf_[i]);
             decode_indices.push_back(i);
             decode_lengths.push_back(h_input_length_buf_[i]);
             sequences.push_back(state_->sequences[i]);
+            if (h_input_length_buf_[i] > 1) {
+                sum_k += state_->h_context_length[i];
+            }
         }
-        int token_count = input_ids - context_decoder_ids_buf_;
+        int sum_q = input_ids - context_decoder_ids_buf_;
 
         batched_copy.Submit(stream_);
 
@@ -1639,12 +1631,13 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
             if (pf_batch_size) {
                 const auto max_q = *std::max_element(h_input_length_buf_ + first, h_input_length_buf_ + last);
                 const auto max_k = *std::max_element(state_->h_context_length + first, state_->h_context_length + last);
-                TM_LOG_INFO("[Forward] [%d, %d), dc_bsz = %d, pf_bsz = %d, n_tok = %d, max_q = %d, max_k = %d",
+                TM_LOG_INFO("[Forward] [%d, %d), dc=%d, pf=%d, sum_q=%d, sum_k=%d, max_q=%d, max_k=%d",
                             first,
                             last,
                             dc_batch_size,
                             pf_batch_size,
-                            token_count,
+                            sum_q,
+                            sum_k,
                             max_q,
                             max_k);
             }
@@ -1660,16 +1653,14 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
                                state_->h_context_length + first,
                                rope_theta_ + first,
                                finished_buf_ + first,
-                               token_count,
+                               sum_q,
                                dc_batch_size,
                                pf_batch_size,
                                lora_mask_buf_,
                                sequences.data());
 
-        if (iter == 0) {
-            // compute logits of inputs if requested
-            OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths, sequences);
-        }
+        // compute logits of inputs if requested
+        OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths, sequences);
     }
 
     std::fill(h_input_length_buf_, h_input_length_buf_ + active_size, 0);
@@ -1682,8 +1673,6 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
         }
     }
 
-    bool should_stop{};
-
     if (active_size > g.partial) {
         model_->postDecodeEmbedding(logits_buf_, local_logits_buf_, decoder_output_buf_, active_size - g.partial);
 
@@ -1695,7 +1684,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 
         // TM_LOG_INFO("dyn decode bsz %d, partial %d", active_size, g.partial);
 
-        if (iter == 0 && !g.skip_init_sampling) {
+        if (!g.skip_init_sampling) {
             InitializeSampling(g);
         }
         // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is
@@ -1703,7 +1692,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
         model_->dynamicDecode(token_ids_buf_,
                               finished_buf_,
                               sequence_lengths_,
-                              &should_stop,
+                              nullptr,
                               state_->curand_state,
                               &inputs_,
                               &outputs_,
@@ -1748,7 +1737,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 
     // PrintDecodeTokens(token_ids_buf_, g.step, active_size, stream_, "Forward");
 
-    return !should_stop;
+    return true;
 }
 
 template class LlamaBatch<half>;
