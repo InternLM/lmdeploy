@@ -212,17 +212,16 @@ public:
 
         const bool silu_act = ((int)operation.epilogue & (int)Epilogue::kGatedSilu);
 
-        const int partial_C_ld = mk2cs<Gemm::kOrderC>(Cdesc.rows, Cdesc.cols).x;
+        const int partial_C_ld = mk2cs<Gemm::kOrderC>(Ddesc.rows, Ddesc.cols).x;
 
         EpilogueParam<Tc> epilogue{m,
                                    n,
                                    (Tc*)D,
-                                   Cdesc.ld,
+                                   Ddesc.ld,
                                    (float*)workspace.partials,
                                    partial_C_ld,
                                    (int*)workspace.barriers,
-                                   {},
-                                   {alpha, beta},
+                                   {alpha, beta, (const Tc*)C, Cdesc.ld},
                                    silu_act};
 
         const int chunk_per_split = chunk_cnt / splits;

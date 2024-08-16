@@ -71,6 +71,8 @@ struct LlamaLinear<T>::Impl {
                                   0.0f);                                          // beta
 
             invokeMask(output_data, lora_mask, batch_size, weight.output_dims, stream_);
+            sync_check_cuda_error();
+
             type = kFusedAdd;
         }
         switch (weight.type) {
@@ -146,7 +148,6 @@ struct LlamaLinear<T>::Impl {
                             c_desc,
                             workspace_,
                             stream_);
-        sync_check_cuda_error();
 
         if (ec) {
             TM_LOG_ERROR("%s: %d", __PRETTY_FUNCTION__, ec);

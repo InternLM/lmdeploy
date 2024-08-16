@@ -104,6 +104,7 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
         const auto type = weights->is_fused_silu ? LlamaLinear<T>::kFusedSiluFfn : LlamaLinear<T>::kGemm;
 
         linear_.forward(gating_buf_, ffn_input_data, num_token, weights->fused_gating_intermediate, type);
+        sync_check_cuda_error();
 
         if (!weights->is_fused_silu) {
             activation(num_token, true);
@@ -115,6 +116,7 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
         {  // w1(x)
             NvtxScope scope("w1");
             linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating, LlamaLinear<T>::kGemm, lora_mask);
+            sync_check_cuda_error();
         }
         count_and_fix(gating_buf_, num_token * weights->gating.output_dims, Concat("w1", layer_id), 3);
 
@@ -122,6 +124,7 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
             NvtxScope scope("w3");
             linear_.forward(
                 inter_buf_, ffn_input_data, num_token, weights->intermediate, LlamaLinear<T>::kGemm, lora_mask);
+            sync_check_cuda_error();
         }
         count_and_fix(inter_buf_, num_token * weights->intermediate.output_dims, Concat("w3", layer_id), 3);
 
@@ -136,6 +139,7 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
         const int pitch = (weights->fused_gating_intermediate.kernel && !weights->is_fused_silu) ? inter_size_ * 2 : 0;
         linear_.forward(
             ffn_output_data, {gating_buf_, pitch}, num_token, weights->output, LlamaLinear<T>::kGemm, lora_mask);
+        sync_check_cuda_error();
     }
 
     count_and_fix(ffn_output_data, num_token * weights->output.output_dims, Concat("w2", layer_id), 3);

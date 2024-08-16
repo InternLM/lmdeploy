@@ -210,7 +210,7 @@ struct EpilogueParam {
 
     int* locks;  // (m/cta_m, n/cta_n, k)
 
-    ChannelCombination_v3<Tc> combine_chn;
+    // ChannelCombination_v3<Tc> combine_chn;
     MatrixCombination_v3<Tc>  combine_mat;
     bool                      silu_act;
 };
@@ -380,40 +380,6 @@ struct Epilogue_ {
             ptr -= dc * C;
             ptr += ds;
         }
-
-        // if (split_id > 0) {
-        //     auto ptr = ptr0;
-        //     PRAGMA_UNROLL
-        //     for (int s = 0; s < S; ++s) {
-        //         PRAGMA_UNROLL
-        //         for (int c = 0; c < C; ++c) {
-        //             if (pred(s, c)) {
-        //                 OutputC<Dtype> tmp;
-        //                 Load(tmp, reinterpret_cast<Dtype*>(ptr));
-        //                 using namespace ops;
-        //                 frag_C[s][c] = frag_C[s][c] + tmp;
-        //             }
-        //             ptr += dc;
-        //         }
-        //         ptr -= dc * C;
-        //         ptr += ds;
-        //     }
-        // }
-        // if (!is_last) {
-        //     auto ptr = ptr0;
-        //     PRAGMA_UNROLL
-        //     for (int s = 0; s < S; ++s) {
-        //         PRAGMA_UNROLL
-        //         for (int c = 0; c < C; ++c) {
-        //             if (pred(s, c)) {
-        //                 Store(reinterpret_cast<Dtype*>(ptr), frag_C[s][c]);
-        //             }
-        //             ptr += dc;
-        //         }
-        //         ptr -= dc * C;
-        //         ptr += ds;
-        //     }
-        // }
     }
 
     template<class FragC>
@@ -467,7 +433,7 @@ struct Epilogue_ {
 
         constexpr pair<Map::kDeltaC, Map::kDeltaS> delta_cs{};
 
-        param.combine_chn(tmp_C, cs0, delta_cs, pred);
+        // param.combine_chn(tmp_C, cs0, delta_cs, pred);
 
         param.combine_mat(tmp_C, cs0, delta_cs, pred);
 

@@ -181,6 +181,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     /// qkv gemm
     // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
     linear_.forward(qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
+    sync_check_cuda_error();
 
     count_and_fix(qkv_buf_, token_num * weights->qkv.output_dims, Concat("qkv", layer_id), 3);
 
@@ -344,6 +345,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
     linear_.forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
+    sync_check_cuda_error();
 
     // ++count;
 
