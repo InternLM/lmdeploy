@@ -80,6 +80,11 @@ class ToolChoice(BaseModel):
                                       examples=['function'])
 
 
+class StreamOptions(BaseModel):
+    """The stream options."""
+    include_usage: Optional[bool] = False
+
+
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
@@ -96,6 +101,8 @@ class ChatCompletionRequest(BaseModel):
     stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
     # yapf: enable
     stream: Optional[bool] = False
+    stream_options: Optional[StreamOptions] = Field(default=None,
+                                                    examples=[None])
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
@@ -205,6 +212,8 @@ class CompletionRequest(BaseModel):
     stop: Optional[Union[str, List[str]]] = Field(default=None,
                                                   examples=[None])
     stream: Optional[bool] = False
+    stream_options: Optional[StreamOptions] = Field(default=None,
+                                                    examples=[None])
     top_p: Optional[float] = 1.0
     logprobs: Optional[int] = None
     echo: Optional[bool] = False
@@ -252,6 +261,7 @@ class CompletionStreamResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[CompletionResponseStreamChoice]
+    usage: Optional[UsageInfo] = None
 
 
 class EmbeddingsRequest(BaseModel):
