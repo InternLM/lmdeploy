@@ -8,7 +8,7 @@
 from lmdeploy import pipeline
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig
 
-model = 'internlm/internlm2-chat-7b'
+model = 'internlm/internlm2-chat-1_8b'
 guide = {
     'type': 'object',
     'properties': {
@@ -53,7 +53,7 @@ print(response)
 首先，先启动 InternLM2 模型的 api_server 服务。
 
 ```shell
-lmdeploy serve api_server internlm/internlm2-chat-7b --backend pytorch
+lmdeploy serve api_server internlm/internlm2-chat-1_8b --backend pytorch
 ```
 
 客户端可以使用 OpenAI 的 python 包进行测试：

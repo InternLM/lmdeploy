@@ -8,7 +8,7 @@ Currently, only the Pytorch backend has this capability. Therefore, whether you 
 from lmdeploy import pipeline
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig
 
-model = 'internlm/internlm2-chat-7b'
+model = 'internlm/internlm2-chat-1_8b'
 guide = {
     'type': 'object',
     'properties': {
@@ -53,7 +53,7 @@ print(response)
 Firstly, start the api_server service for the InternLM2 model.
 
 ```shell
-lmdeploy serve api_server internlm/internlm2-chat-7b --backend pytorch
+lmdeploy serve api_server internlm/internlm2-chat-1_8b --backend pytorch
 ```
 
 The client can test using OpenAI’s python package: The output result is a response in JSON format.
