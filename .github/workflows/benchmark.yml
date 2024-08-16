@@ -75,16 +75,16 @@ jobs:
 
   benchmark:
     needs: linux-build
-    if: ${{github.event_name == 'schedule' || (!cancelled() && contains(fromJSON(github.event.inputs.benchmark_type), 'generation'))}}
+    if: ${{github.event_name == 'schedule' || !cancelled()}}
     runs-on: [self-hosted, linux-a100]
     strategy:
       fail-fast: false
       matrix:
         benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
-    timeout-minutes: 300
+    timeout-minutes: 480
     container:
-      image: nvcr.io/nvidia/tritonserver:24.03-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
+      image: openmmlab/lmdeploy:latest-cu11
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -106,16 +106,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
-      - name: Install pytorch
-        run: |
-          python3 -m pip cache dir
-          python3 -m pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -U 'xformers' --index-url https://download.pytorch.org/whl/cu118 --no-deps
           python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -134,6 +130,14 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Run generation benchmark
+        if: matrix.benchmark_type == 'generation'
+        run: |
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m 'gpu_num_2 and not longtext' --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m 'gpu_num_2 and longtext' --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m gpu_num_4 --lf --alluredir=${{env.REPORT_DIR}}/allure-results
+      - name: Run other benchmark
+        if: matrix.benchmark_type != 'generation'
         run: |
             pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
             pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m gpu_num_2 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true

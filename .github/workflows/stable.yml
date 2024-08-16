@@ -74,6 +74,7 @@ jobs:
     needs: linux-build
     if: ${{github.event_name == 'schedule' || !cancelled()}}
     runs-on: [self-hosted, lmdeploy-stable]
+    timeout-minutes: 10080
     strategy:
       fail-fast: false
       matrix:
