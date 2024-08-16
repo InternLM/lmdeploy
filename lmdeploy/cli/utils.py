@@ -452,3 +452,11 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='the vision model batch size')
+
+    @staticmethod
+    def device_type(parser):
+        return parser.add_argument(
+            '--device-type',
+            type=str,
+            default='cuda',
+            help='the device_type used in PyTorch Engine')

@@ -111,6 +111,7 @@ class CLI(object):
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
         ArgumentHelper.adapters(pt_group)
+        ArgumentHelper.device_type(pt_group)
 
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
@@ -250,6 +251,7 @@ class CLI(object):
                 cache_max_entry_count=args.cache_max_entry_count,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
+                device_type=args.device_type,
             )
             run_chat(args.model_path,
                      engine_config,
