@@ -719,6 +719,7 @@ inline __device__ Array<nv_bfloat16, 4> cvt_bf16x4_e4m3(const Array<fp8_e4m3, 4>
     for (int i = 0; i < 4; ++i) {
         result[i] *= exp_shfit;
     }
+    return result;
 #else
     return {};
 #endif
