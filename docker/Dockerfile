@@ -23,8 +23,7 @@ ENV PATH=/opt/py3/bin:$PATH
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools==69.5.1 &&\
     python3 -m pip install --no-cache-dir torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} --index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT} &&\
-    python3 -m pip install --no-cache-dir cmake packaging wheel &&\
-    rm -rf ~/.cache/*
+    python3 -m pip install --no-cache-dir cmake packaging wheel
 
 # install openmpi
 RUN wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz &&\
@@ -35,12 +34,6 @@ ENV PATH=$PATH:/usr/local/openmpi/bin
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
 
 ENV NCCL_LAUNCH_MODE=GROUP
-
-#install nccl
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb && \
-    dpkg -i cuda-keyring_1.0-1_all.deb && \
-    apt update -y && \
-    apt install libnccl2 libnccl-dev
 
 # Should be in the lmdeploy root directory when building docker image
 COPY . /opt/lmdeploy
