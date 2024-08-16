@@ -1,6 +1,6 @@
 ARG CUDA_VERSION=cu12
 
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS cu12
+FROM nvidia/cuda:12.0.0-devel-ubuntu22.04 AS cu12
 ENV CUDA_VERSION_SHORT=cu121
 
 FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 AS cu11
@@ -35,12 +35,6 @@ ENV PATH=$PATH:/usr/local/openmpi/bin
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
 
 ENV NCCL_LAUNCH_MODE=GROUP
-
-#install nccl
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb && \
-    dpkg -i cuda-keyring_1.0-1_all.deb && \
-    apt update -y && \
-    apt install libnccl2 libnccl-dev
 
 # Should be in the lmdeploy root directory when building docker image
 COPY . /opt/lmdeploy
