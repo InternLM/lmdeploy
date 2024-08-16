@@ -11,62 +11,8 @@ void Registry::f16_u4g128_f16_tnt_sm80_s16816()
 {
     using namespace sm80_s16816;
     using namespace cache_policy;
-    using S = Stream;
-    using D = Default;
-#if 0
-    using Config = Sm80_s16816<Sm80,
-                               Operand_A<half, kRowMajor>,          // A
-                               Transform_Default,                   // tarnsform A
-                               VoidOperand,                         // U
-                               Operand_B_Pack<uint4_t, kRowMajor>,  // B
-                               Transform_HMMA_16816<1, 0>,          // transform B
-                               Operand_UV_Pack<uint32_t, true>,     // V
-                               kRowMajor,                           // order_C
-                               half>;                               // Tc
-
-
-    // N = 256
-    Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 3, true, 1, 128>>();
-    Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 5, true, 1, 128>>();
-    Add<Config::Type<128, 256, 64, 1, 8, 1, Default, Default, 3, true, 1, 128>>();
-
-    // N = 128, non-streaming
-    Add<Config::Type<128, 128, 32, 1, 4, 1, Default, Default, 6, true, 1, 128>>();
-    Add<Config::Type<96, 128, 32, 1, 4, 1, Default, Default, 5, true, 1, 128>>();
-    Add<Config::Type<96, 128, 64, 1, 4, 1, Default, Default, 3, true, 1, 128>>();
-    Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Default, 3, true, 1, 128>>();
-
-    if constexpr (1) {  // kernels that use smaller smem for `sm_86` and `sm_89`
-        Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 3, true, 1, 128, 128, 128>>();
-        Add<Config::Type<128, 256, 32, 1, 8, 1, Default, Default, 6, true, 1, 128, 128, 128>>();
-        Add<Config::Type<128, 128, 32, 1, 4, 1, Default, Default, 4, true, 1, 128, 64, 128>>();
-        Add<Config::Type<64, 128, 32, 1, 4, 1, Default, Default, 4, true, 1, 128>>();
-    }
-
-    // N = 128, streaming
-    Add<Config::Type<128, 128, 32, 1, 4, 1, Default, Stream, 6, true, 1, 128>>();
-    Add<Config::Type<128, 128, 32, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
-
-    Add<Config::Type<96, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
-    Add<Config::Type<96, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
-
-    Add<Config::Type<64, 256, 64, 1, 4, 1, Default, Default, 3, true, 1, 128>>();
-    Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
-    Add<Config::Type<64, 128, 64, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
-    Add<Config::Type<64, 128, 32, 1, 4, 1, Default, Stream, 4, true, 1, 128>>();
-    Add<Config::Type<64, 64, 64, 1, 2, 2, Default, Default, 3, true, 1, 128>>();
-
-    Add<Config::Type<48, 256, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
-    Add<Config::Type<48, 128, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
-    Add<Config::Type<48, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
-    Add<Config::Type<48, 64, 128, 1, 2, 2, Default, Stream, 3, true, 1, 128>>();
-
-    Add<Config::Type<32, 256, 64, 1, 4, 1, Default, Stream, 3, true, 1, 128>>();
-    Add<Config::Type<32, 128, 64, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
-    Add<Config::Type<32, 128, 32, 1, 4, 1, Default, Stream, 5, true, 1, 128>>();
-    Add<Config::Type<32, 64, 128, 1, 2, 2, Default, Stream, 3, true, 1, 128>>();
-
-#endif
+    using S = cache_policy::Stream;
+    using D = cache_policy::Default;
 
     using C = Sm80_s16816<Sm80,
                           Operand_A<half, kRowMajor>,          // A
@@ -79,9 +25,9 @@ void Registry::f16_u4g128_f16_tnt_sm80_s16816()
                           half>;                               // Tc
 
     // clang-format off
+    // Add<C::Type<128, 256,  64, 1, 8, 1, D, S, 3, true, 1, 128>>(); // 0/0
     Add<C::Type<128, 256,  32, 1, 8, 1, D, D, 3, true, 1, 128, 128, 128>>(); // 30/3
     Add<C::Type<128, 256,  32, 1, 8, 1, D, D, 4, true, 1, 128, 128, 128>>(); // --/20
-    Add<C::Type<128, 256,  64, 1, 8, 1, D, S, 3, true, 1, 128>>();
     Add<C::Type<128, 128,  32, 1, 4, 1, D, D, 3, true, 1, 128, 64, 128>>();  // --/13
     Add<C::Type<128, 128,  32, 1, 4, 1, D, S, 4, true, 1, 128, 64, 128>>();  // 21/13
     Add<C::Type<128, 128,  64, 1, 4, 2, D, S, 3, true, 1, 128, 64, 128>>();  // 6/6
