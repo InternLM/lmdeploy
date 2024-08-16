@@ -164,17 +164,44 @@ def pack_model_repository(workspace_path: str):
                dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
+def find_quantization_config(nested, target_key):
+    if isinstance(nested, dict):
+        for key, value in nested.items():
+            if key == target_key:
+                return value
+            if isinstance(value, (dict, list)):
+                result = find_quantization_config(value, target_key)
+                if result is not None:
+                    return result
+    elif isinstance(nested, list):
+        for item in nested:
+            result = find_quantization_config(item, target_key)
+            if result is not None:
+                return result
+    return None
+
+
 def get_tm_model(model_path,
                  model_name,
                  chat_template_name,
-                 group_size,
                  engine_config,
+                 group_size: int = None,
                  out_dir: str = None):
-    # TODO: open the following condition check in another PR,
-    # CLI needs to be updated
-    # if model_format == 'awq' and group_size <= 0:
-    #     raise RuntimeError(
-    #         'group_size should be specified when the model is awq')
+    if engine_config.model_format is None:
+        _, cfg = get_model_arch(model_path)
+        quant_config = find_quantization_config(cfg.to_dict(),
+                                                'quantization_config')
+        if quant_config:
+            quant_method = quant_config.get('quant_method')
+            _group_size = int(quant_config.get('group_size', 0))
+            version = quant_config.get('version')
+            if quant_method == 'awq' and version == 'gemm':
+                engine_config.model_format = 'awq'
+                group_size = group_size if group_size else _group_size
+                assert group_size == _group_size
+
+    if engine_config.model_format == 'awq':
+        assert group_size
 
     input_model_name = get_input_model_registered_name(
         model_path, engine_config.model_format)
@@ -203,7 +230,7 @@ def main(model_name: str,
          tokenizer_path: str = None,
          dst_path: str = 'workspace',
          tp: int = 1,
-         group_size: int = 0,
+         group_size: int = 128,
          revision: str = None,
          download_dir: str = None,
          **kwargs):
@@ -265,8 +292,8 @@ def main(model_name: str,
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
 
     engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format)
-    tm_model = get_tm_model(model_path, model_name, chat_template, group_size,
-                            engine_config, tm_weight_path)
+    tm_model = get_tm_model(model_path, model_name, chat_template,
+                            engine_config, group_size, tm_weight_path)
     tm_model.export()
 
 
