@@ -123,7 +123,9 @@ class CUDASingleGraphRunner:
         self.input_buffers['position_ids'][:, :num_tokens] = position_ids
         self.input_buffers[
             'block_offsets'][:batch_size, :num_blocks] = block_offsets
+        self.input_buffers['q_seqlens'].zero_()
         self.input_buffers['q_seqlens'][:batch_size] = q_seqlens
+        self.input_buffers['kv_seqlens'].zero_()
         self.input_buffers['kv_seqlens'][:batch_size] = kv_seqlens
         self.input_buffers['q_start_loc'][:batch_size] = q_start_loc
         if inputs_embeds is not None:

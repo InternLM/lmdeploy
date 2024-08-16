@@ -122,7 +122,7 @@ class Engine:
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
             eviction_type=engine_config.eviction_type,
-            prefill_interval=engine_config.prefill_interval)
+            prefill_interval=16)
 
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters

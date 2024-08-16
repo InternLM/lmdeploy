@@ -17,204 +17,6 @@ TRITON_VERSION = version.parse(triton.__version__)
 assert TRITON_VERSION >= version.parse('2.1.0')
 
 
-@triton.jit
-def _load_block_offsets(offset_ptr, block_id, BLOCK: tl.constexpr):
-    """load block offsets."""
-    offs_n = tl.arange(0, BLOCK)
-    return tl.load(offset_ptr + block_id) * BLOCK + offs_n
-
-
-@triton.autotune(configs=[
-    triton.Config({}, num_stages=1, num_warps=16),
-    triton.Config({}, num_stages=1, num_warps=8),
-    triton.Config({}, num_stages=1, num_warps=4),
-],
-                 key=['BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
-@wrap_jit_func(type_hint=dict(
-    Q=torch.Tensor,
-    K=torch.Tensor,
-    V=torch.Tensor,
-    sm_scale=float,
-    KV_seqlens=torch.Tensor,
-    Block_offsets=torch.Tensor,
-    Acc_out=torch.Tensor,
-    stride_qbs=int,
-    stride_qh=int,
-    stride_qd=int,
-    stride_kbs=int,
-    stride_kh=int,
-    stride_kd=int,
-    stride_vbs=int,
-    stride_vh=int,
-    stride_vd=int,
-    stride_ok=int,
-    stride_obs=int,
-    stride_oh=int,
-    stride_od=int,
-    stride_boffb=int,
-    kv_group_num=torch.int32,
-    block_per_cta=torch.int32,
-    window_size=torch.int32,
-    head_size=torch.int32,
-    head_size_v=torch.int32,
-    shared_kv=bool,
-    BLOCK_DMODEL=torch.int32,
-    BLOCK_DV=torch.int32,
-    BLOCK_N=torch.int32,
-))
-@triton.jit
-def _fwd_split_kernel(
-    Q,
-    K,
-    V,
-    sm_scale,
-    KV_seqlens,
-    Block_offsets,
-    Acc_out,
-    stride_qbs,
-    stride_qh,
-    stride_qd,
-    stride_kbs,
-    stride_kh,
-    stride_kd,
-    stride_vbs,
-    stride_vh,
-    stride_vd,
-    stride_ok,
-    stride_obs,
-    stride_oh,
-    stride_od,
-    stride_boffb,
-    kv_group_num,
-    block_per_cta,
-    window_size: tl.constexpr,
-    head_size: tl.constexpr,
-    head_size_v: tl.constexpr,
-    shared_kv: tl.constexpr,
-    logit_softcapping: tl.constexpr,
-    BLOCK_DMODEL: tl.constexpr,
-    BLOCK_DV: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-):
-    """first step kernel of split k attention."""
-    cur_batch = tl.program_id(0)
-    cur_head = tl.program_id(1)
-    split_k_id = tl.program_id(2)
-
-    cur_kv_head = cur_head // kv_group_num
-
-    q_seqlen = 1
-    kv_seqlen = tl.load(KV_seqlens + cur_batch)
-    history_len = kv_seqlen - q_seqlen
-
-    # initialize offsets
-    offs_n = tl.arange(0, BLOCK_N)
-    offs_d = tl.arange(0, BLOCK_DMODEL)
-    mask_d = offs_d < head_size
-    offs_dv = tl.arange(0, BLOCK_DV)
-    mask_dv = offs_dv < head_size_v
-    off_q = (cur_batch * stride_qbs + cur_head * stride_qh +
-             offs_d * stride_qd)
-    off_k = (cur_kv_head * stride_kh + offs_d[None, :] * stride_kd)
-    off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd)
-
-    q = tl.load(Q + off_q, mask=mask_d, other=0).to(tl.float32)
-
-    k_ptrs = K + off_k
-    v_ptrs = V + off_v
-
-    block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
-
-    # initialize pointer to m and l
-    m_i = -float('inf')
-    l_i = float(0)
-    acc = tl.zeros([BLOCK_DV], dtype=tl.float32)
-
-    kv_len_per_prog = block_per_cta * BLOCK_N
-    loop_start = kv_len_per_prog * split_k_id
-    loop_end = tl.minimum(loop_start + kv_len_per_prog, kv_seqlen)
-
-    # load block offset
-    # dirty
-    start_block_id = loop_start // BLOCK_N
-    if window_size > 0:
-        start_block_id = tl.maximum(history_len - window_size,
-                                    loop_start) // BLOCK_N
-        kv_min_loc = tl.maximum(history_len - window_size, 0)
-    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, BLOCK_N)
-
-    loop_start = start_block_id * BLOCK_N
-    for start_n in range(loop_start, loop_end, BLOCK_N):
-        start_n = tl.multiple_of(start_n, BLOCK_N)
-
-        mask = (start_n + offs_n[:, None]) < kv_seqlen
-
-        # -- compute qk ----
-        k = tl.load(
-            k_ptrs + b_offset[:, None] * stride_kbs,
-            mask=mask & mask_d[None, :],
-            other=0.0,
-        )
-
-        if shared_kv:
-            v = k
-        else:
-            v = tl.load(
-                v_ptrs + b_offset[:, None] * stride_vbs,
-                mask=mask & mask_dv[None, :],
-                other=0.0,
-            )
-
-        # prefetch b_offset
-        if start_n + BLOCK_N < loop_end:
-            start_block_id += 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           BLOCK_N)
-
-        qk = tl.sum(q[None, :] * k, 1)
-        qk *= sm_scale
-        if logit_softcapping > 0.0:
-            qk = qk / logit_softcapping
-            qk = tl.math.tanh(qk)
-            qk = qk * logit_softcapping
-        # NOTE: inf - inf = nan, and nan will leads to error
-        qk_mask = history_len >= (start_n + offs_n)
-        if window_size > 0:
-            qk_mask = qk_mask and ((start_n + offs_n) >= kv_min_loc)
-        qk = tl.where(
-            qk_mask,
-            qk,
-            -float('inf'),
-        )
-
-        # -- compute p, m_i and l_i
-        m_i_new = tl.maximum(m_i, tl.max(qk, 0))
-        p = tl.exp(qk - m_i_new)
-        alpha = tl.exp(m_i - m_i_new)
-        l_i_new = alpha * l_i + tl.sum(p, 0)
-
-        # -- update output accumulator --
-        # scale acc
-        acc = acc * alpha
-
-        # update acc
-        p_new = p.to(v.dtype)
-        acc += tl.sum(p_new[:, None] * v, 0)
-        # update m_i and l_i
-        l_i = l_i_new
-        m_i = m_i_new
-
-    # initialize pointers to output
-    off_acc = (cur_batch * stride_obs + split_k_id * stride_ok +
-               cur_head * stride_oh + offs_dv * stride_od)
-    tl.store(Acc_out + off_acc, acc, mask=mask_dv)
-
-    off_meta = (cur_batch * stride_obs + split_k_id * stride_ok +
-                cur_head * stride_oh + head_size_v)
-    tl.store(Acc_out + off_meta + tl.arange(0, 1), m_i)
-    tl.store(Acc_out + off_meta + 1 + tl.arange(0, 1), l_i)
-
-
 @triton.autotune(configs=[
     triton.Config({}, num_stages=1, num_warps=16),
     triton.Config({}, num_stages=1, num_warps=8),
@@ -264,28 +66,30 @@ def _fwd_grouped_split_kernel(
     KV_seqlens,
     Block_offsets,
     Acc_out,
-    stride_qbs,
-    stride_qh,
-    stride_qd,
-    stride_kbs,
-    stride_kh,
-    stride_kd,
-    stride_vbs,
-    stride_vh,
-    stride_vd,
-    stride_ok,
-    stride_obs,
-    stride_oh,
-    stride_od,
+    stride_qbs: tl.constexpr,
+    stride_qh: tl.constexpr,
+    stride_qd: tl.constexpr,
+    stride_kp: tl.constexpr,
+    stride_kbs: tl.constexpr,
+    stride_kh: tl.constexpr,
+    stride_kd: tl.constexpr,
+    stride_vp: tl.constexpr,
+    stride_vbs: tl.constexpr,
+    stride_vh: tl.constexpr,
+    stride_vd: tl.constexpr,
+    stride_ok: tl.constexpr,
+    stride_obs: tl.constexpr,
+    stride_oh: tl.constexpr,
+    stride_od: tl.constexpr,
     stride_boffb,
     kv_group_num: tl.constexpr,
-    block_per_cta,
     window_size: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
     num_heads_q: tl.constexpr,
     shared_kv: tl.constexpr,
     logit_softcapping: tl.constexpr,
+    SPLIT_K: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_DV: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -297,9 +101,12 @@ def _fwd_grouped_split_kernel(
     cur_kv_head = tl.program_id(1)
     split_k_id = tl.program_id(2)
 
-    heads_per_cta = min(BLOCK_H, kv_group_num)
-    cur_head = cur_kv_head * heads_per_cta + tl.arange(0, BLOCK_H)
-    mask_h = cur_head < cur_kv_head * heads_per_cta + heads_per_cta
+    if BLOCK_H < kv_group_num:
+        HEAD_PER_CTA: tl.constexpr = BLOCK_H
+    else:
+        HEAD_PER_CTA: tl.constexpr = kv_group_num
+    cur_head = cur_kv_head * HEAD_PER_CTA + tl.arange(0, BLOCK_H)
+    mask_h = cur_head < cur_kv_head * HEAD_PER_CTA + HEAD_PER_CTA
     mask_h = mask_h & (cur_head < num_heads_q)
 
     q_seqlen = 1
@@ -310,10 +117,14 @@ def _fwd_grouped_split_kernel(
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     mask_d = offs_d < head_size
+    offs_d = offs_d % head_size
     offs_dv = tl.arange(0, BLOCK_DV)
     mask_dv = offs_dv < head_size_v
-    off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd)
-    off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd)
+    offs_dv = offs_dv % head_size_v
+    off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd +
+             offs_n[None, :] * stride_kbs)
+    off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd +
+             offs_n[:, None] * stride_vbs)
 
     off_q = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh +
              offs_d[None, :] * stride_qd)
@@ -325,12 +136,14 @@ def _fwd_grouped_split_kernel(
     if BLOCK_DMODEL1 != 0:
         offs_d1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
         mask_d1 = offs_d1 < head_size
+        offs_d1 = offs_d1 % head_size
         off_q1 = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh +
                   offs_d1[None, :] * stride_qd)
         q1 = tl.load(Q + off_q1,
                      mask=mask_h[:, None] & mask_d1[None, :],
                      other=0)
-        off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd)
+        off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd +
+                  offs_n[None, :] * stride_kbs)
         k1_ptrs = K + off_k1
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
@@ -340,7 +153,9 @@ def _fwd_grouped_split_kernel(
     l_i = tl.zeros([BLOCK_H], dtype=tl.float32)
     acc = tl.zeros([BLOCK_H, BLOCK_DV], dtype=tl.float32)
 
-    kv_len_per_prog = block_per_cta * BLOCK_N
+    num_total_blocks = tl.cdiv(kv_seqlen, BLOCK_N)
+    BLOCK_PER_CTA = tl.cdiv(num_total_blocks, SPLIT_K)
+    kv_len_per_prog = BLOCK_PER_CTA * BLOCK_N
     loop_start = kv_len_per_prog * split_k_id
     loop_end = tl.minimum(loop_start + kv_len_per_prog, kv_seqlen)
 
@@ -351,41 +166,26 @@ def _fwd_grouped_split_kernel(
         start_block_id = tl.maximum(history_len - window_size,
                                     loop_start) // BLOCK_N
         kv_min_loc = tl.maximum(history_len - window_size, 0)
-    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, BLOCK_N)
+    b_offset = tl.load(block_offset_ptrs + start_block_id)
 
     loop_start = start_block_id * BLOCK_N
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
-        mask = (start_n + offs_n) < kv_seqlen
-
         # -- compute qk ----
-        k = tl.load(
-            k_ptrs + b_offset[None, :] * stride_kbs,
-            mask=mask[None, :] & mask_d[:, None],
-            other=0.0,
-        )
+        k = tl.load(k_ptrs + b_offset * stride_kp)
         if BLOCK_DMODEL1 != 0:
-            k1 = tl.load(
-                k1_ptrs + b_offset[None, :] * stride_kbs,
-                mask=mask[None, :] & mask_d1[:, None],
-                other=0.0,
-            )
+            k1 = tl.load(k1_ptrs + b_offset * stride_kp)
 
         if shared_kv:
             v = tl.trans(k)
         else:
-            v = tl.load(
-                v_ptrs + b_offset[:, None] * stride_vbs,
-                mask=mask[:, None] & mask_dv[None, :],
-                other=0.0,
-            )
+            v = tl.load(v_ptrs + b_offset * stride_vp)
 
         # prefetch b_offset
         if start_n + BLOCK_N < loop_end:
             start_block_id += 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           BLOCK_N)
+            b_offset = tl.load(block_offset_ptrs + start_block_id)
 
         qk = tl.zeros([BLOCK_H, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -408,8 +208,8 @@ def _fwd_grouped_split_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl.exp(qk - m_i_new[:, None])
-        alpha = tl.exp(m_i - m_i_new)
+        p = tl.math.fast_expf(qk - m_i_new[:, None])
+        alpha = tl.math.fast_expf(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
 
         # -- update output accumulator --
@@ -482,7 +282,7 @@ def _reduce_split_kernel(
     l_k = tl.load(Acc + offs_mi + 1)
 
     m_max = tl.max(m_k, 0)
-    alpha = tl.exp(m_k - m_max)
+    alpha = tl.math.fast_expf(m_k - m_max)
     acc_k = acc_k * alpha[:, None]
     l_k = l_k * alpha
 
@@ -537,20 +337,22 @@ def _fwd_kernel(
     KV_seqlens,
     Block_offsets,
     Out,
-    stride_qbs,
-    stride_qh,
-    stride_qd,
-    stride_kbs,
-    stride_kh,
-    stride_kd,
-    stride_vbs,
-    stride_vh,
-    stride_vd,
-    stride_obs,
-    stride_oh,
-    stride_od,
+    stride_qbs: tl.constexpr,
+    stride_qh: tl.constexpr,
+    stride_qd: tl.constexpr,
+    stride_kp: tl.constexpr,
+    stride_kbs: tl.constexpr,
+    stride_kh: tl.constexpr,
+    stride_kd: tl.constexpr,
+    stride_vp: tl.constexpr,
+    stride_vbs: tl.constexpr,
+    stride_vh: tl.constexpr,
+    stride_vd: tl.constexpr,
+    stride_obs: tl.constexpr,
+    stride_oh: tl.constexpr,
+    stride_od: tl.constexpr,
     stride_boffb,
-    kv_group_num,
+    kv_group_num: tl.constexpr,
     window_size: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
@@ -575,18 +377,24 @@ def _fwd_kernel(
     history_len = kv_seqlen - q_seqlen
 
     block_start_loc = BLOCK_M * start_m
+    if block_start_loc >= q_seqlen:
+        return
 
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     offs_dv = tl.arange(0, BLOCK_DV)
     mask_d = offs_d < head_size
+    offs_d = offs_d % head_size
     mask_dv = offs_dv < head_size_v
+    offs_d = offs_d % head_size_v
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     off_q = ((q_start_loc + offs_m[:, None]) * stride_qbs +
              cur_head * stride_qh + offs_d[None, :] * stride_qd)
-    off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd)
-    off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd)
+    off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd +
+             offs_n[None, :] * stride_kbs)
+    off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd +
+             offs_n[:, None] * stride_vbs)
 
     q = tl.load(Q + off_q,
                 mask=(offs_m[:, None] < q_seqlen) & mask_d[None, :],
@@ -598,10 +406,12 @@ def _fwd_kernel(
     if BLOCK_DMODEL1 != 0:
         offs_d1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
         mask_d1 = offs_d1 < head_size
+        offs_d1 = offs_d1 % head_size
         off_q1 = ((q_start_loc + offs_m[:, None]) * stride_qbs +
                   cur_head * stride_qh + offs_d1[None, :] * stride_qd)
         q1 = tl.load(Q + off_q1, mask=(offs_m[:, None] < q_seqlen) & mask_d1)
-        off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd)
+        off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd +
+                  offs_n[None, :] * stride_kbs)
         k1_ptrs = K + off_k1
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
@@ -611,45 +421,28 @@ def _fwd_kernel(
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
 
-    block_mask = tl.where(block_start_loc < q_seqlen, 1, 0)
-
     # this is dirty
     start_block_id = kv_seqlen - kv_seqlen
     if window_size > 0:
         start_block_id = tl.maximum(history_len - window_size, 0) // BLOCK_N
         kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
-    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, BLOCK_N)
+    b_offset = tl.load(block_offset_ptrs + start_block_id)
     kv_start_loc = start_block_id * BLOCK_N
-    for start_n in range(kv_start_loc, block_mask * kv_seqlen, BLOCK_N):
+    for start_n in range(kv_start_loc, kv_seqlen, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
         # -- compute qk ----
-        k = tl.load(
-            k_ptrs + b_offset[None, :] * stride_kbs,
-            mask=(start_n + offs_n[None, :] < kv_seqlen) & mask_d[:, None],
-            other=0.0,
-        )
+        k = tl.load(k_ptrs + b_offset * stride_kp)
         if BLOCK_DMODEL1 != 0:
-            k1 = tl.load(
-                k1_ptrs + b_offset[None, :] * stride_kbs,
-                mask=(start_n + offs_n[None, :] < kv_seqlen)
-                & mask_d1[:, None],
-                other=0.0,
-            )
+            k1 = tl.load(k1_ptrs + b_offset * stride_kp)
 
         if shared_kv:
             v = tl.trans(k)
         else:
-            v = tl.load(
-                v_ptrs + b_offset[:, None] * stride_vbs,
-                mask=(start_n + offs_n[:, None] < kv_seqlen)
-                & mask_dv[None, :],
-                other=0.0,
-            )
+            v = tl.load(v_ptrs + b_offset * stride_vp)
         if start_n + BLOCK_N < kv_seqlen:
             start_block_id = start_n // BLOCK_N + 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           BLOCK_N)
+            b_offset = tl.load(block_offset_ptrs + start_block_id)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -674,8 +467,8 @@ def _fwd_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl.exp(qk - m_i_new[:, None])
-        alpha = tl.exp(m_i - m_i_new)
+        p = tl.math.fast_expf(qk - m_i_new[:, None])
+        alpha = tl.math.fast_expf(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
         # -- update output accumulator --
         # scale acc
@@ -688,7 +481,7 @@ def _fwd_kernel(
         l_i = l_i_new
         m_i = m_i_new
 
-    acc = acc / l_i[:, None]
+    acc = tl.math.fast_dividef(acc, l_i[:, None])
     # initialize pointers to output
     off_o = ((q_start_loc + offs_m[:, None]) * stride_obs +
              cur_head * stride_oh + offs_dv[None, :] * stride_od)
@@ -787,9 +580,11 @@ def paged_attention_fwd(
                           stride_qbs=q.stride(-3),
                           stride_qh=q.stride(-2),
                           stride_qd=q.stride(-1),
+                          stride_kp=k.stride(-4),
                           stride_kbs=k.stride(-3),
                           stride_kh=k.stride(-2),
                           stride_kd=k.stride(-1),
+                          stride_vp=v.stride(-4),
                           stride_vbs=v.stride(-3),
                           stride_vh=v.stride(-2),
                           stride_vd=v.stride(-1),
@@ -813,90 +608,49 @@ def paged_attention_fwd(
                           **kernel_meta)
     else:
         SPLIT_K = 4
-        block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
         acc = q.new_empty(batch, head, SPLIT_K, Lv + 2, dtype=torch.float32)
-        if False:
-            # TODO: make sure if we need to keep this kernel
-            BLOCK_DMODEL = triton.next_power_of_2(Lk)
-            if shared_kv:
-                BLOCK_DV = BLOCK_DMODEL
-            else:
-                BLOCK_DV = triton.next_power_of_2(Lv)
-            grid = (batch, head, SPLIT_K)
-            _fwd_split_kernel[grid](q,
-                                    k,
-                                    v,
-                                    sm_scale,
-                                    kv_seqlens,
-                                    block_offsets,
-                                    acc,
-                                    stride_qbs=q.stride(-3),
-                                    stride_qh=q.stride(-2),
-                                    stride_qd=q.stride(-1),
-                                    stride_kbs=k.stride(-3),
-                                    stride_kh=k.stride(-2),
-                                    stride_kd=k.stride(-1),
-                                    stride_vbs=v.stride(-3),
-                                    stride_vh=v.stride(-2),
-                                    stride_vd=v.stride(-1),
-                                    stride_ok=acc.stride(-2),
-                                    stride_obs=acc.stride(-4),
-                                    stride_oh=acc.stride(-3),
-                                    stride_od=acc.stride(-1),
-                                    stride_boffb=block_offsets.stride(0),
-                                    kv_group_num=kv_group_num,
-                                    block_per_cta=block_per_cta,
-                                    window_size=window_size,
-                                    head_size=Lk,
-                                    head_size_v=Lv,
-                                    shared_kv=shared_kv,
-                                    logit_softcapping=logit_softcapping,
-                                    BLOCK_DMODEL=BLOCK_DMODEL,
-                                    BLOCK_DV=BLOCK_DV,
-                                    BLOCK_N=BLOCK,
-                                    **kernel_meta)
-        else:
-            BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lk)
-            p2_kv_group_num = triton.next_power_of_2(kv_group_num)
-            BLOCK_H = max(16, min(BLOCK, p2_kv_group_num))
-            grid_1 = triton.cdiv(head, min(BLOCK_H, kv_group_num))
-            grid = (batch, grid_1, SPLIT_K)
-            _fwd_grouped_split_kernel[grid](
-                q,
-                k,
-                v,
-                sm_scale,
-                kv_seqlens,
-                block_offsets,
-                acc,
-                stride_qbs=q.stride(-3),
-                stride_qh=q.stride(-2),
-                stride_qd=q.stride(-1),
-                stride_kbs=k.stride(-3),
-                stride_kh=k.stride(-2),
-                stride_kd=k.stride(-1),
-                stride_vbs=v.stride(-3),
-                stride_vh=v.stride(-2),
-                stride_vd=v.stride(-1),
-                stride_ok=acc.stride(-2),
-                stride_obs=acc.stride(-4),
-                stride_oh=acc.stride(-3),
-                stride_od=acc.stride(-1),
-                stride_boffb=block_offsets.stride(0),
-                kv_group_num=kv_group_num,
-                block_per_cta=block_per_cta,
-                window_size=window_size,
-                head_size=Lk,
-                head_size_v=Lv,
-                num_heads_q=head,
-                shared_kv=shared_kv,
-                logit_softcapping=logit_softcapping,
-                BLOCK_DMODEL=BLOCK_DMODEL,
-                BLOCK_DV=BLOCK_DV,
-                BLOCK_N=BLOCK,
-                BLOCK_H=BLOCK_H,
-                BLOCK_DMODEL1=BLOCK_DMODEL1,
-                **kernel_meta)
+        BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lk)
+        p2_kv_group_num = triton.next_power_of_2(kv_group_num)
+        BLOCK_H = max(16, min(BLOCK, p2_kv_group_num))
+        grid_1 = triton.cdiv(head, min(BLOCK_H, kv_group_num))
+        grid = (batch, grid_1, SPLIT_K)
+        _fwd_grouped_split_kernel[grid](q,
+                                        k,
+                                        v,
+                                        sm_scale,
+                                        kv_seqlens,
+                                        block_offsets,
+                                        acc,
+                                        stride_qbs=q.stride(-3),
+                                        stride_qh=q.stride(-2),
+                                        stride_qd=q.stride(-1),
+                                        stride_kp=k.stride(-4),
+                                        stride_kbs=k.stride(-3),
+                                        stride_kh=k.stride(-2),
+                                        stride_kd=k.stride(-1),
+                                        stride_vp=v.stride(-4),
+                                        stride_vbs=v.stride(-3),
+                                        stride_vh=v.stride(-2),
+                                        stride_vd=v.stride(-1),
+                                        stride_ok=acc.stride(-2),
+                                        stride_obs=acc.stride(-4),
+                                        stride_oh=acc.stride(-3),
+                                        stride_od=acc.stride(-1),
+                                        stride_boffb=block_offsets.stride(0),
+                                        kv_group_num=kv_group_num,
+                                        window_size=window_size,
+                                        head_size=Lk,
+                                        head_size_v=Lv,
+                                        num_heads_q=head,
+                                        shared_kv=shared_kv,
+                                        logit_softcapping=logit_softcapping,
+                                        SPLIT_K=SPLIT_K,
+                                        BLOCK_DMODEL=BLOCK_DMODEL,
+                                        BLOCK_DV=BLOCK_DV,
+                                        BLOCK_N=BLOCK,
+                                        BLOCK_H=BLOCK_H,
+                                        BLOCK_DMODEL1=BLOCK_DMODEL1,
+                                        **kernel_meta)
 
         num_warps = 4
         grid = (batch, head)
