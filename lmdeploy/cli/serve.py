@@ -125,10 +125,6 @@ class SubCliServe:
                             type=str,
                             default=['*'],
                             help='A list of allowed http headers for cors')
-        parser.add_argument('--qos-config-path',
-                            type=str,
-                            default='',
-                            help='Qos policy config path')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -288,8 +284,7 @@ class SubCliServe:
                        allow_headers=args.allow_headers,
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
-                       ssl=args.ssl,
-                       qos_config_path=args.qos_config_path)
+                       ssl=args.ssl)
 
     @staticmethod
     def api_client(args):
