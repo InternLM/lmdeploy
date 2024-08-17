@@ -67,6 +67,7 @@ struct Binding {
     __device__ Binding(A& a, B& b, U& u, V& v): a{a}, b{b}, u{u}, v{v} {}  // CTAD
 };
 
+// Inspired by https://github.com/NVIDIA/cutlass/blob/f93a69134ec8259fd235f220209d6f8734a5cb06/include/cutlass/gemm/threadblock/mma_pipelined.h
 template<class MMA,
          class OperandA_,
          class IteratorA_,
