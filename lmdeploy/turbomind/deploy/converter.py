@@ -187,21 +187,34 @@ def get_tm_model(model_path,
                  engine_config,
                  group_size: int = None,
                  out_dir: str = None):
-    if engine_config.model_format is None:
-        _, cfg = get_model_arch(model_path)
-        quant_config = find_quantization_config(cfg.to_dict(),
-                                                'quantization_config')
-        if quant_config:
-            quant_method = quant_config.get('quant_method')
-            _group_size = int(quant_config.get('group_size', 0))
+    _, cfg = get_model_arch(model_path)
+    quant_config = find_quantization_config(cfg.to_dict(),
+                                            'quantization_config')
+    if quant_config:
+        quant_method = quant_config.get('quant_method')
+        _group_size = int(quant_config.get('group_size', 0))
+        assert engine_config.model_format is None or \
+            engine_config.model_format == quant_method, \
+            f'mismatched quant method: {engine_config.model_format}' \
+            f' vs {quant_method}'
+        assert group_size is None or group_size == _group_size, \
+            f'mismatched quant group: {group_size} vs {_group_size}'
+        engine_config.model_format = quant_method
+        group_size = _group_size
+        if quant_method == 'awq':
             version = quant_config.get('version')
-            if quant_method == 'awq' and version == 'gemm':
-                engine_config.model_format = 'awq'
-                group_size = group_size if group_size else _group_size
-                assert group_size == _group_size
+            assert version == 'gemm', \
+                f'unsupported quant config: {quant_config}'
+        elif quant_method == 'gptq':
+            # TODO
+            pass
+        else:
+            assert 0, f'unsupported quant_config: {quant_config}'
 
-    if engine_config.model_format == 'awq':
-        assert group_size
+    if engine_config.model_format in ['awq', 'gptq']:
+        assert group_size, \
+            f'model format is specified "{engine_config.model_format}" ' \
+            f'but group_size is {group_size}'
 
     input_model_name = get_input_model_registered_name(
         model_path, engine_config.model_format)
@@ -230,7 +243,7 @@ def main(model_name: str,
          tokenizer_path: str = None,
          dst_path: str = 'workspace',
          tp: int = 1,
-         group_size: int = 128,
+         group_size: int = 0,
          revision: str = None,
          download_dir: str = None,
          **kwargs):
@@ -290,7 +303,6 @@ def main(model_name: str,
 
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
-
     engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format)
     tm_model = get_tm_model(model_path, model_name, chat_template,
                             engine_config, group_size, tm_weight_path)
