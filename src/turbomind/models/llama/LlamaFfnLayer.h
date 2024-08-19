@@ -33,7 +33,7 @@ class LlamaFfnLayer {
 public:
     LlamaFfnLayer(size_t         head_num,
                   size_t         size_per_head,
-                  size_t           hidden_units,
+                  size_t         hidden_units,
                   size_t         inter_size,
                   NcclParam      tensor_para,
                   cudaStream_t   stream,
