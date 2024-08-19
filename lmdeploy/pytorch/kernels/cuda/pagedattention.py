@@ -111,6 +111,8 @@ def _fwd_grouped_split_kernel(
 
     q_seqlen = 1
     kv_seqlen = tl.load(KV_seqlens + cur_batch)
+    if kv_seqlen <= 0:
+        return
     history_len = kv_seqlen - q_seqlen
 
     # initialize offsets
@@ -197,14 +199,15 @@ def _fwd_grouped_split_kernel(
             qk = tl.math.tanh(qk)
             qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
-        qk_mask = history_len >= (start_n + offs_n)
-        if window_size > 0:
-            qk_mask = qk_mask and ((start_n + offs_n) >= kv_min_loc)
-        qk = tl.where(
-            qk_mask[None, :],
-            qk,
-            -float('inf'),
-        )
+        if start_n + BLOCK_N > history_len or window_size > 0:
+            qk_mask = history_len >= (start_n + offs_n)
+            if window_size > 0:
+                qk_mask = qk_mask and ((start_n + offs_n) >= kv_min_loc)
+            qk = tl.where(
+                qk_mask[None, :],
+                qk,
+                -float('inf'),
+            )
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
@@ -387,7 +390,7 @@ def _fwd_kernel(
     mask_d = offs_d < head_size
     offs_d = offs_d % head_size
     mask_dv = offs_dv < head_size_v
-    offs_d = offs_d % head_size_v
+    offs_dv = offs_dv % head_size_v
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     off_q = ((q_start_loc + offs_m[:, None]) * stride_qbs +
              cur_head * stride_qh + offs_d[None, :] * stride_qd)
@@ -454,16 +457,17 @@ def _fwd_kernel(
             qk = tl.math.tanh(qk)
             qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
-        qk_mask = (history_len + offs_m[:, None]) >= (start_n +
-                                                      offs_n[None, :])
-        if window_size > 0:
-            qk_mask = qk_mask and (
-                (start_n + offs_n[None, :]) >= kv_min_loc[:, None])
-        qk = tl.where(
-            qk_mask,
-            qk,
-            float(-1e30),
-        )
+        if start_n + BLOCK_N > history_len or window_size > 0:
+            qk_mask = (history_len + offs_m[:, None]) >= (start_n +
+                                                          offs_n[None, :])
+            if window_size > 0:
+                qk_mask = qk_mask and (
+                    (start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+            qk = tl.where(
+                qk_mask,
+                qk,
+                float(-1e30),
+            )
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
