@@ -211,8 +211,8 @@ struct EpilogueParam {
     int* locks;  // (m/cta_m, n/cta_n, k)
 
     // ChannelCombination_v3<Tc> combine_chn;
-    MatrixCombination_v3<Tc>  combine_mat;
-    bool                      silu_act;
+    MatrixCombination_v3<Tc> combine_mat;
+    bool                     silu_act;
 };
 
 template<class Tc_, int M, int N, int TM_, int TN_, int THREADS, class RearrangeC, class OperandC, bool SplitK_>
