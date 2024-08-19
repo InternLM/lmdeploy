@@ -1,6 +1,5 @@
 import os
 import subprocess
-from multiprocessing import Process
 from subprocess import PIPE, Popen
 
 import psutil
@@ -58,18 +57,14 @@ def generation_test(config,
     cmd = ' '.join([
         command, run_config, '--tp',
         str(tp_num),
-        get_max_cache_entry(model), '--csv', csv_path
+        get_max_cache_entry(model, backend), '--csv', csv_path
     ])
 
-    print('reproduce command: ' + cmd)
+    returncode, stderr = run_testcase(cmd, benchmark_log)
 
-    p = Process(target=run_testcase, args=(cmd, benchmark_log))
-    p.start()
-    p.join()
-
-    if not os.path.isfile(csv_path):
+    if returncode == 0 and not os.path.isfile(csv_path):
         return False, benchmark_log, 'result is empty'
-    return os.path.isfile(csv_path), benchmark_log, ''
+    return returncode == 0, benchmark_log, stderr
 
 
 def throughput_test(config,
@@ -121,18 +116,14 @@ def throughput_test(config,
             command, '--concurrency',
             str(batch), run_config, '--tp',
             str(tp_num),
-            get_max_cache_entry(model), '--csv ', csv_path
+            get_max_cache_entry(model, backend), '--csv ', csv_path
         ])
 
-        print('reproduce command: ' + cmd)
+        returncode, stderr = run_testcase(cmd, benchmark_log)
 
-        p = Process(target=run_testcase, args=(cmd, benchmark_log))
-        p.start()
-        p.join()
-
-        if not os.path.isfile(csv_path):
+        if returncode == 0 and not os.path.isfile(csv_path):
             return False, benchmark_log, 'result is empty'
-    return True, benchmark_log, ''
+        return returncode == 0, benchmark_log, stderr
 
 
 def restful_test(config,
@@ -203,9 +194,10 @@ def restful_test(config,
 def run_testcase(cmd, benchmark_log):
     with open(benchmark_log, 'w') as f:
         f.writelines('reproduce command: ' + cmd + '\n')
+        print('reproduce command: ' + cmd)
         with Popen([cmd],
                    stdin=PIPE,
-                   stdout=PIPE,
+                   stdout=f,
                    stderr=PIPE,
                    shell=True,
                    text=True,
@@ -219,15 +211,15 @@ def run_testcase(cmd, benchmark_log):
                 kill_process(process.pid)
                 raise
             retcode = process.poll()
-        f.writelines(retcode)
-        f.writelines(stderr)
-        print(retcode, stderr)
+    return retcode, stderr
+
 
 def kill_process(pid):
     parent = psutil.Process(pid)
     for child in parent.children(recursive=True):
         child.kill()
     parent.kill()
+
 
 def get_command_with_extra(cmd, cuda_prefix: str = None):
     if cuda_prefix is not None and len(cuda_prefix) > 0:
@@ -243,7 +235,9 @@ def create_multi_level_directory(path):
         return
 
 
-def get_max_cache_entry(model):
+def get_max_cache_entry(model, backend):
+    if backend != 'turbomind':
+        return ''
     if 'Llama-2' in model:
         return '--cache-max-entry-count 0.95'
     elif 'internlm2' in model:
