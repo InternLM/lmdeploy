@@ -5,6 +5,8 @@ from typing import List
 import torch
 from transformers.generation.logits_process import LogitsWarper
 
+from lmdeploy.messages import LogitsProcessor
+
 from ..messages import SchedulerSequence
 
 
@@ -105,6 +107,7 @@ class SamplingInputs:
     random_offsets: int = None
     max_top_k: int = 1
     min_top_p: float = 1.0
+    logits_processors: List[List[LogitsProcessor]] = None
 
     @classmethod
     def from_sampling_params(cls, seqs: List[SchedulerSequence]):
@@ -118,6 +121,7 @@ class SamplingInputs:
         stop_words = [None] * batch_size
         random_seeds = [torch.seed() & 0xffffffff] * batch_size
         random_offsets = [None] * batch_size
+        logits_processors = [None] * batch_size
 
         def __gather_params():
             """gather params."""
@@ -138,6 +142,7 @@ class SamplingInputs:
                     bw = bw + sw
                 bad_words[idx] = bw
                 stop_words[idx] = sw
+                logits_processors[idx] = param.logits_processors
 
         def __get_topp(top_p):
             """get topp."""
@@ -201,6 +206,7 @@ class SamplingInputs:
             random_offsets=random_offsets,
             max_top_k=max_top_k,
             min_top_p=min_top_p,
+            logits_processors=logits_processors,
         )
         return sampling_input
 

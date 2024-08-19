@@ -492,7 +492,28 @@ class Engine:
             last_idx = seq_length.cumsum(-1) - 1
             return logits[last_idx, :]
 
+        def _apply_logits_processors(batched_processors, input_ids, seq_length,
+                                     history_ids, logits):
+            if not any(batched_processors):
+                return None
+            for seq_id, processors in enumerate(batched_processors):
+                if processors is not None:
+                    if history_ids.shape[-1] == 0:
+                        seq_cumsum = [0] + seq_length.cumsum(0).tolist()
+                        input_id = input_ids[0][
+                            seq_cumsum[seq_id]:seq_cumsum[seq_id + 1]]
+                        for processor in processors:
+                            logits[seq_id] = processor(input_id,
+                                                       logits[seq_id])
+                    else:
+                        for processor in processors:
+                            logits[seq_id] = processor(history_ids[seq_id],
+                                                       logits[seq_id])
+
         split_logits = __get_last_logits().cuda()
+        _apply_logits_processors(sampling_inputs.logits_processors,
+                                 inputs.input_ids, inputs.seq_length,
+                                 history_ids, split_logits)
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos)
         logits = logits_processor(history_ids, split_logits)
         next_token_ids = logits_processor.sampling(logits)
@@ -715,7 +736,8 @@ class Engine:
 
         def __gather_history(seqs: SeqList, sampling_inputs: SamplingInputs):
             """gather history."""
-            if sampling_inputs.repetition_penalty is None:
+            if sampling_inputs.repetition_penalty is None and not any(
+                    sampling_inputs.logits_processors):
                 return None
             batch = len(seqs)
             max_len = max(seq.history_len for seq in seqs)
