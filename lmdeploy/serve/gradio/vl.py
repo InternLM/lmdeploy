@@ -174,7 +174,10 @@ def run_local(model_path: str,
 
     def reset(session):
         """Reset a new session."""
-        stop(session)
+        if session is None:
+            session = Session()
+        else:
+            stop(session)
         session._step = 0
         session._message = []
         return [], session, enable_btn

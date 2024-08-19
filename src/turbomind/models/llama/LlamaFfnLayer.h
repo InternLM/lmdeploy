@@ -31,21 +31,21 @@ namespace turbomind {
 template<typename T>
 class LlamaFfnLayer {
 public:
-    LlamaFfnLayer(size_t           head_num,
-                  size_t           size_per_head,
+    LlamaFfnLayer(size_t         head_num,
+                  size_t         size_per_head,
                   size_t           hidden_units,
-                  size_t           inter_size,
-                  NcclParam        tensor_para,
-                  cudaStream_t     stream,
-                  cublasMMWrapper* cublas_wrapper,
-                  IAllocator*      allocator,
-                  bool             is_free_buffer_after_forward):
+                  size_t         inter_size,
+                  NcclParam      tensor_para,
+                  cudaStream_t   stream,
+                  LlamaLinear<T> linear,
+                  IAllocator*    allocator,
+                  bool           is_free_buffer_after_forward):
         head_num_(head_num),
         size_per_head_(size_per_head),
         inter_size_(inter_size / tensor_para.world_size_),
         hidden_units_(hidden_units),
         stream_(stream),
-        linear_(cublas_wrapper, stream),
+        linear_(linear),
         allocator_(allocator),
         tensor_para_(tensor_para),
         is_free_buffer_after_forward_(is_free_buffer_after_forward)
@@ -64,7 +64,7 @@ private:
 
     void freeBuffer();
 
-    void activation(int num_token);
+    void activation(int token_num, bool is_chunked);
 
     size_t         head_num_;
     size_t         size_per_head_;

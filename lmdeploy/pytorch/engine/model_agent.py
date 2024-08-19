@@ -830,13 +830,12 @@ def _tp_build_model(
         return config_list[0]
 
     try:
-        config = model_config.hf_config
         torch_dtype = model_config.dtype
         device_map = None
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            model = model_config.auto_model_cls.from_config(
-                config,
+            model = model_config.auto_model_cls.from_pretrained(
+                model_path,
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code,
                 **model_config.init_kwargs)
@@ -844,10 +843,10 @@ def _tp_build_model(
             _remove_unused_modules(model, model_config)
             if rank == 0:
                 device_map = _create_device_map(model, world_size)
-            _add_adapters(model, adapters)
-            if rank == 0:
-                # adapter would remove weight of linear.
-                device_map = _create_device_map(model, world_size, device_map)
+        _add_adapters(model, adapters)
+        if rank == 0:
+            # adapter would remove weight of linear.
+            device_map = _create_device_map(model, world_size, device_map)
 
         model.eval()
         model.config.use_cache = True

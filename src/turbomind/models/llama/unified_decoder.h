@@ -18,10 +18,10 @@ protected:
     void
     initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, int cache_block_seq_len, int quant_policy);
 
-    cudaStream_t     stream_;
-    cublasMMWrapper* cublas_wrapper_;
-    IAllocator*      allocator_;
-    bool             is_free_buffer_after_forward_{};
+    cudaStream_t   stream_;
+    LlamaLinear<T> linear_;
+    IAllocator*    allocator_;
+    bool           is_free_buffer_after_forward_{};
 
     size_t head_num_;
     size_t size_per_head_;
@@ -42,6 +42,8 @@ protected:
 
     UnifiedAttentionLayer<T>* attn_layer_{};
     LlamaFfnLayer<T>*         ffn_layer_{};
+
+    cudaEvent_t ev_h_cu_x_{};
 
     const DataType dtype_;
 
@@ -68,7 +70,7 @@ public:
                    float                       rmsnorm_eps,
                    NcclParam                   tensor_para,
                    cudaStream_t                stream,
-                   cublasMMWrapper*            cublas_wrapper,
+                   LlamaLinear<T>              linear,
                    IAllocator*                 allocator,
                    const LoraParams&           lora_params,
                    bool                        is_free_buffer_after_forward,
@@ -76,7 +78,7 @@ public:
                    int                         cache_block_seq_len,
                    int                         quant_policy):
         stream_(stream),
-        cublas_wrapper_(cublas_wrapper),
+        linear_(linear),
         allocator_(allocator),
         lora_params_(lora_params),
         is_free_buffer_after_forward_(is_free_buffer_after_forward),

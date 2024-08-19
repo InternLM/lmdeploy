@@ -221,6 +221,8 @@ class BaseChatTemplate(BaseModel):
             role = message['role']
             content = message['content']
             ret += f'{box_map[role]}{content}{eox_map[role]}'
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return ret[:-len(eox_map['assistant'])]  # prefix of response
         ret += f'{self.assistant}'
         return ret
 
@@ -483,11 +485,13 @@ class InternLM2Chat7B(InternLMChat7B):
         box_map = dict(user=self.user,
                        assistant=self.assistant,
                        system=self.system,
-                       environment=self.environment)
+                       environment=self.environment,
+                       tool=self.environment)
         eox_map = dict(user=self.eoh,
                        assistant=self.eoa + self.separator,
                        system=self.eosys,
-                       environment=self.eoenv)
+                       environment=self.eoenv,
+                       tool=self.eoenv)
         name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
         ret = ''
         if self.meta_instruction is not None and sequence_start:
@@ -506,10 +510,20 @@ class InternLM2Chat7B(InternLMChat7B):
         for message in messages:
             role = message['role']
             content = message['content']
-            begin = box_map[role].strip(
-            ) + f" name={name_map[message['name']]}\n" if 'name' in message else box_map[
-                role]
+            if role == 'assistant' and message.get('tool_calls',
+                                                   None) is not None:
+                for tool_call in message['tool_calls']:
+                    function = tool_call.get('function', {})
+                    function['arguments'] = function.pop('parameters', {})
+                    content += f'<|action_start|><|plugin|>\n{json.dumps(function)}<|action_end|>'
+            if 'name' in message and message['name'] in name_map:
+                begin = box_map[role].strip(
+                ) + f" name={name_map[message['name']]}\n"
+            else:
+                begin = box_map[role]
             ret += f'{begin}{content}{eox_map[role]}'
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return ret[:-len(eox_map['assistant'])]  # prefix of response
         ret += f'{self.assistant}'
         return ret
 
@@ -544,9 +558,15 @@ class InternVL2InternLM2(InternLM2Chat7B):
     def __init__(
             self,
             meta_instruction='你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。',
+            eosys='<|im_end|>',
+            eoh='<|im_end|>',
+            separator='',
             stop_words=['<|im_start|>', '<|im_end|>'],
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         separator=separator,
+                         eoh=eoh,
                          stop_words=stop_words,
                          **kwargs)
 
@@ -747,6 +767,120 @@ class Llama3(BaseChatTemplate):
         """
         if 'llama-3-' in model_path.lower() or 'llama3-' in model_path.lower():
             return 'llama3'
+
+
+@MODELS.register_module(name='llama3_1')
+class Llama3_1(Llama3):
+    """Chat template of LLaMA3.1 model."""
+
+    def __init__(
+            self,
+            tools="""# Tool Instructions
+- Always execute python code in messages that you share.
+- When looking for real time information use relevant functions if available else fallback to brave_search
+
+
+
+You have access to the following functions:
+
+""",  # noqa
+            eotools="""
+
+If a you choose to call a function ONLY reply in the following format:
+<{start_tag}={function_name}>{parameters}{end_tag}
+where
+
+start_tag => `<function`
+parameters => a JSON dict with the function argument name as key and function argument value as value.
+end_tag => `</function>`
+
+Here is an example,
+<function=example_function_name>{"example_name": "example_value"}</function>
+
+Reminder:
+- Function calls MUST follow the specified format
+- Required parameters MUST be specified
+- Only call one function at a time
+- Put the entire function call reply on one line"
+- Always add your sources when using search results to answer the user query\n\n""",  #  noqa
+            knowledge='Cutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\n',
+            meta_instruction='You are a helpful assistant.',
+            ipython='<|start_header_id|>ipython<|end_header_id|>\n\n',
+            eoi='<|eot_id|>',
+            stop_words=['<|eot_id|>', '<|end_of_text|>', '<|eom_id|>'],
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         stop_words=stop_words,
+                         **kwargs)
+        self.ipython = ipython
+        self.eoi = eoi
+        self.tools = tools
+        self.eotools = eotools
+        self.knowledge = knowledge
+
+    def messages2prompt(self,
+                        messages,
+                        sequence_start=True,
+                        tools=None,
+                        **kwargs):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        box_map = dict(user=self.user,
+                       ipython=self.ipython,
+                       assistant=self.assistant,
+                       system=self.system)
+        eox_map = dict(user=self.eoh,
+                       ipython=self.eoi,
+                       assistant=self.eoa + self.separator,
+                       system=self.eosys)
+        ret = ''
+        tool_prompt = ''
+        if tools is not None:
+            for tool in tools:
+                tool_prompt += "Use the function '{}' to: {}\n{}\n".format(
+                    tool['name'], tool['description'],
+                    json.dumps(tool, ensure_ascii=False))
+        if self.meta_instruction is not None and sequence_start:
+            if len(messages) and messages[0]['role'] != 'system':
+                if tools is None:
+                    ret += f'{self.system}{self.knowledge}{self.meta_instruction}{self.eosys}'
+                else:
+                    ret += f'{self.system}{self.knowledge}{self.tools}{tool_prompt}{self.eotools}{self.meta_instruction}{self.eosys}'
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            if role == 'assistant' and ('<|python_tag|>' in content
+                                        or '</function>' in content):
+                ret += f'{box_map[role]}{content}<|eom_id|>'
+            elif role == 'system' and tools is not None:
+                ret += f'{box_map[role]}{self.tools}{tool_prompt}{self.eotools}{content}{eox_map[role]}'
+            else:
+                ret += f'{box_map[role]}{content}{eox_map[role]}'
+        if sequence_start and not isinstance(messages, str):
+            ret = '<|begin_of_text|>' + ret
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return ret[:-len(eox_map['assistant'])]  # prefix of response
+        ret += f'{self.assistant}'
+        return ret
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'llama-3.1-' in model_path.lower(
+        ) or 'llama3.1-' in model_path.lower():
+            return 'llama3_1'
 
 
 @MODELS.register_module(name='qwen')
@@ -1593,4 +1727,5 @@ def best_match_model(query: str) -> Optional[str]:
     for name, model in MODELS.module_dict.items():
         if model.match(query):
             return model.match(query)
+    logger.warn(f'Did not find a chat template matching {query}.')
     return 'base'

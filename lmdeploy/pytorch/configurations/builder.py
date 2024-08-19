@@ -77,5 +77,4 @@ class ProxyAutoModel:
         if hasattr(self.model_cls,
                    '_from_config') and 'trust_remote_code' in kwargs:
             kwargs.pop('trust_remote_code')
-
         return self.model_cls.from_pretrained(*args, **kwargs)

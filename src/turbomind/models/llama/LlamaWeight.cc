@@ -19,6 +19,8 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptWeight.cc
 
 #include "src/turbomind/models/llama/LlamaWeight.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include <cuda_runtime.h>
 
 namespace turbomind {
 
@@ -147,6 +149,23 @@ TensorMap LlamaWeight<T>::getParams()
     }
 
     return output;
+}
+
+template<typename T>
+void LlamaWeight<T>::prepare(const cudaDeviceProp& prop)
+{
+    const auto workspace_size = decoder_layer_weights[0]->workspace_size();
+    char*      workspace{};
+
+    TM_LOG_INFO("[LlamaWeight<T>::prepare] workspace size: %d\n", workspace_size);
+
+    if (workspace_size) {
+        deviceMalloc((char**)&workspace, workspace_size);
+    }
+    for (auto& layer : decoder_layer_weights) {
+        layer->prepare(workspace, workspace_size, prop);
+    }
+    deviceFree(workspace);
 }
 
 #ifdef ENABLE_FP32

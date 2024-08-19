@@ -58,7 +58,7 @@ public:
                           NcclParam            tensor_para,
                           LoraParams           lora_params,
                           cudaStream_t         stream,
-                          cublasMMWrapper*     cublas_wrapper,
+                          LlamaLinear<T>       linear,
                           IAllocator*          allocator,
                           bool                 is_free_buffer_after_forward,
                           int                  cache_block_seq_len,
@@ -73,8 +73,7 @@ public:
         tensor_para_(tensor_para),
         lora_params_(lora_params),
         stream_(stream),
-        cublas_wrapper_(cublas_wrapper),
-        linear_(cublas_wrapper, stream),
+        linear_(linear),
         allocator_(allocator),
         kv_cache_block_len_(cache_block_seq_len),
         is_free_buffer_after_forward_(is_free_buffer_after_forward),
@@ -148,10 +147,9 @@ private:
 
     LoraParams lora_params_;
 
-    cudaStream_t     stream_;
-    IAllocator*      allocator_;
-    cublasMMWrapper* cublas_wrapper_;
-    LlamaLinear<T>   linear_;
+    cudaStream_t   stream_;
+    IAllocator*    allocator_;
+    LlamaLinear<T> linear_;
 
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;

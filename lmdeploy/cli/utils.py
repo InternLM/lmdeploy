@@ -61,6 +61,30 @@ def get_lora_adapters(adapters: List[str]):
     return output
 
 
+def get_chat_template(chat_template: str):
+    """get chat template config.
+
+    Args
+        chat_template(str): it could be a builtin chat template name,
+        or a chat template json file
+    """
+    import os
+
+    from lmdeploy.model import ChatTemplateConfig
+    if chat_template:
+        if os.path.isfile(chat_template):
+            return ChatTemplateConfig.from_json(chat_template)
+        else:
+            from lmdeploy.model import MODELS
+            assert chat_template in MODELS.module_dict.keys(), \
+                f"chat template '{chat_template}' is not " \
+                f'registered. The builtin chat templates are: ' \
+                f'{MODELS.module_dict.keys()}'
+            return ChatTemplateConfig(model_name=chat_template)
+    else:
+        return None
+
+
 class ArgumentHelper:
     """Helper class to add unified argument."""
 
@@ -72,10 +96,9 @@ class ArgumentHelper:
             '--model-name',
             type=str,
             default=None,
-            help='The name of the to-be-deployed model, such as'
-            ' llama-7b, llama-13b, vicuna-7b and etc. You '
-            'can run `lmdeploy list` to get the supported '
-            'model names')
+            help='The name of the served model. It can be accessed '
+            'by the RESTful API `/v1/models`. If it is not specified, '
+            '`model_path` will be adopted')
 
     @staticmethod
     def model_format(parser, default: str = None):
@@ -83,7 +106,7 @@ class ArgumentHelper:
             '--model-format',
             type=str,
             default=default,
-            choices=['hf', 'llama', 'awq'],
+            choices=['hf', 'llama', 'awq', 'gptq'],
             help='The format of input model. `hf` meaning `hf_llama`, `llama` '
             'meaning `meta_llama`, `awq` meaning the quantized model by awq')
 
@@ -223,18 +246,6 @@ class ArgumentHelper:
                                    help='Parameter to penalize repetition')
 
     @staticmethod
-    def cap(parser):
-        """Add argument cap to parser."""
-
-        return parser.add_argument(
-            '--cap',
-            type=str,
-            default='chat',
-            choices=['completion', 'infilling', 'chat', 'python'],
-            help='The capability of a model. '
-            'Deprecated. Please use --chat-template instead')
-
-    @staticmethod
     def log_level(parser):
         """Add argument log_level to parser."""
 
@@ -348,17 +359,6 @@ class ArgumentHelper:
                                    help='Device type of running')
 
     @staticmethod
-    def meta_instruction(parser):
-        """Add argument meta_instruction to parser."""
-
-        return parser.add_argument(
-            '--meta-instruction',
-            type=str,
-            default=None,
-            help='System prompt for ChatTemplateConfig. Deprecated. '
-            'Please use --chat-template instead')
-
-    @staticmethod
     def chat_template(parser):
         """Add chat template config to parser."""
 
@@ -407,15 +407,6 @@ class ArgumentHelper:
             help='The working directory to save results')
 
     @staticmethod
-    def trust_remote_code(parser):
-        """Add argument trust_remote_code to parser."""
-        return parser.add_argument(
-            '--trust-remote-code',
-            action='store_false',
-            default=True,
-            help='Trust remote code for loading hf models')
-
-    @staticmethod
     def cache_block_seq_len(parser):
         """Add argument cache_block_seq_len to parser."""
 
@@ -461,3 +452,12 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='the vision model batch size')
+
+    @staticmethod
+    def device_type(parser, default: str = 'cuda'):
+        return parser.add_argument(
+            '--device-type',
+            type=str,
+            default=default,
+            choices=['cuda', 'ascend'],
+            help='The inference device type for pytorch engine.')

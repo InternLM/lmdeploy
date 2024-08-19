@@ -1,26 +1,35 @@
-import pytest
+import configparser
+import os
+import tempfile
 
-from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
-from lmdeploy.model import ChatTemplateConfig
-from lmdeploy.serve.async_engine import deduce_a_name
+from lmdeploy.serve.async_engine import get_names_from_model
 
 
-@pytest.mark.parametrize(
-    'backend_config',
-    [TurbomindEngineConfig('internlm'),
-     PytorchEngineConfig(None), None])
-@pytest.mark.parametrize(
-    'chat_template_config',
-    [ChatTemplateConfig('internlm'),
-     ChatTemplateConfig(None), None])
-@pytest.mark.parametrize('model_name', ['internlm', None])
-@pytest.mark.parametrize('model_path', ['internlm/internlm2-chat-7b'])
-def test_deduce_a_name(model_path, model_name, chat_template_config,
-                       backend_config):
-    name = deduce_a_name(model_path, model_name, chat_template_config,
-                         backend_config)
-    if model_name or getattr(backend_config, 'model_name', None) or getattr(
-            chat_template_config, 'model_name', None):
-        assert name == 'internlm'
-    else:
-        assert name == model_path
+def test_get_names_from_hf_model():
+    cases = [
+        # model repo_id from huggingface hub, model_name, chat_template_name
+        ('InternLM/internlm2_5-7b-chat', 'internlm2.5-7b-chat', 'internlm2'),
+        ('InternLM/internlm2_5-7b-chat', None, 'internlm2'),
+    ]
+    for model_path, model_name, chat_template in cases:
+        _model_name, _chat_template = get_names_from_model(
+            model_path=model_path, model_name=model_name)
+        assert _chat_template == chat_template
+        assert _model_name == model_name if model_name else model_path
+
+
+def test_get_names_from_turbomind_model():
+    workspace = tempfile.TemporaryDirectory('internlm2_5-7b-chat').name
+    os.makedirs(os.path.join(workspace, 'triton_models', 'weights'),
+                exist_ok=True)
+
+    expected_chat_template = 'internlm2'
+    config = configparser.ConfigParser()
+    config.add_section('llama')
+    config.set('llama', 'chat_template', expected_chat_template)
+
+    with open(f'{workspace}/triton_models/weights/config.ini', 'w') as f:
+        config.write(f)
+
+    _, chat_template = get_names_from_model(workspace)
+    assert chat_template == expected_chat_template

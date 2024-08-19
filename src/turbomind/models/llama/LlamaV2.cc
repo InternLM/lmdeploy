@@ -22,9 +22,11 @@
 
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
+#include "src/turbomind/kernels/gemm/tuner/params.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
@@ -33,11 +35,17 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include <algorithm>
+#include <chrono>
+#include <exception>
 #include <functional>
 #include <memory>
+#include <ratio>
 #include <sstream>
 
 namespace turbomind {
@@ -65,6 +73,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     cudaStream_t                 stream,
                     cublasMMWrapper*             cublas_wrapper,
                     IAllocator*                  allocator,
+                    IAllocator*                  peer_alloctor,
                     bool                         is_free_buffer_after_forward,
                     cudaDeviceProp*              cuda_device_prop):
     head_num_(head_num),
@@ -85,9 +94,11 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     stream_(stream),
     cublas_wrapper_(cublas_wrapper),
     allocator_(allocator),
+    peer_allcator_(peer_alloctor),
     is_free_buffer_after_forward_(is_free_buffer_after_forward),
     cuda_device_prop_(cuda_device_prop),
     debug_(isDebug()),
+    linear_{cublas_wrapper, stream},
     lora_params_(lora_params),
     shared_state_(shared_state)
 
@@ -134,7 +145,7 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                                                  rmsnorm_eps_,
                                                  tensor_para_,
                                                  stream_,
-                                                 cublas_wrapper_,
+                                                 linear_,
                                                  allocator_,
                                                  lora_params_,
                                                  is_free_buffer_after_forward_,
@@ -359,6 +370,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                             tensor_para_.rank_,
                             tensor_para_,
                             stream_);
+            sync_check_cuda_error();
         }
         invokeTransposeAxis01(logits, local_logits, tensor_para_.world_size_, batch_size, local_vocab_size, stream_);
         sync_check_cuda_error();
@@ -547,6 +559,105 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
             ss << (i ? "" : " ") << error_codes[i];
         }
         throw std::runtime_error(ss.str());
+    }
+}
+
+template<class First, class Last>
+static std::string Join(First first, Last last, const std::string& delim)
+{
+    if (first == last) {
+        return {};
+    }
+    std::ostringstream oss;
+    oss << *first++;
+    while (first != last) {
+        oss << delim << *first++;
+    }
+    return oss.str();
+}
+
+// Only called when `weight_type == INT4` for now
+template<typename T>
+void LlamaV2<T>::tune()
+{
+
+    if (auto str = std::getenv("TM_GEMM_IMPORT")) {
+        std::ifstream ifs(str);
+        const int     n_imported = linear_.Import(ifs);
+        TM_LOG_INFO("[Gemm2] %d records imported", n_imported);
+        return;
+    }
+
+    std::vector<int> bss = linear_.GetTuningSeq();
+    if (bss.empty()) {
+        bss = gemm::GenerateTuningSequence(gemm::GetDefaultTuningGenerators());
+    }
+
+    {
+        auto str = Join(bss.begin(), bss.end(), ", ");
+        TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
+    }
+
+    LlamaAttentionWeight<T>& attn = weights_->decoder_layer_weights[0]->self_attn_weights;
+    LlamaFfnWeight<T>&       ffn  = weights_->decoder_layer_weights[0]->ffn_weights;
+
+    std::vector<LlamaDenseWeight<T>*> weights{&attn.qkv, &attn.output, &ffn.output};
+
+    for (auto& layer : weights_->decoder_layer_weights) {
+        if (layer->ffn_weights.gating.kernel) {
+            weights.push_back(&layer->ffn_weights.gating);
+            break;
+        }
+    }
+    for (auto& layer : weights_->decoder_layer_weights) {
+        if (layer->ffn_weights.fused_gating_intermediate.kernel) {
+            weights.push_back(&layer->ffn_weights.fused_gating_intermediate);
+            break;
+        }
+    }
+
+    const int max_bs  = *std::max_element(bss.begin(), bss.end());
+    int       max_in  = 0;
+    int       max_out = 0;
+    for (auto& w : weights) {
+        max_in  = std::max<int>(max_in, w->input_dims);
+        max_out = std::max<int>(max_out, w->output_dims);
+    }
+
+    T* in_data  = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_in);
+    T* out_data = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_out);
+
+    cudaRandomUniform(in_data, (size_t)max_bs * max_in);
+    cudaDeviceSynchronize();
+
+    linear_.set_measure(true);
+
+    auto tick = std::chrono::steady_clock::now();
+
+    for (auto bs : bss) {
+        TM_LOG_INFO("[Gemm2] %d", bs);
+        for (auto& w : weights) {
+            linear_.forward(out_data, in_data, bs, *w);
+        }
+    }
+
+    auto tock = std::chrono::steady_clock::now();
+
+    TM_LOG_INFO("[Gemm2] Tuning finished in %.2f seconds.",
+                std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
+
+    linear_.set_measure(false);
+
+    allocator_->free((void**)&in_data);
+    allocator_->free((void**)&out_data);
+
+    // Only rank-0 exports the dispatch cache
+    if (tensor_para_.rank_ == 0) {
+        if (auto path = std::getenv("TM_GEMM_EXPORT")) {
+            std::ofstream ofs(path);
+            const auto    n_records = linear_.Export(ofs);
+            TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
+        }
     }
 }
 

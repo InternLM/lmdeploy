@@ -23,7 +23,7 @@ class LlamaReader(BaseReader):
     output_weight_key = 'lm_head.weight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
+                 model_cfg: dict, policy):
         super().__init__()
         self.params = unused_params
         self.params.update(new_params)
@@ -32,6 +32,7 @@ class LlamaReader(BaseReader):
         tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
+        self.weight_suffix, self.processor = policy
         self.init_layer_id()
 
     def init_layer_id(self):
@@ -64,32 +65,34 @@ class LlamaReader(BaseReader):
         """Get output."""
         return self.params.get(self.output_weight_key, None)
 
-    def _attn(self, i: int, kind: str, allow_none=False):
+    def _transform(self, x: torch.Tensor, kind: str):
+        return self.processor(x, kind)
+
+    def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params.get(
                 f'{self.attn_layer_prefix}.{i}.self_attn.{key}_proj.{kind}')
-            if not allow_none:
-                assert tensor is not None
+            tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
 
     def attn(self, i: int):
         """Get q, k, v, o weight for layer i."""
-        return self._attn(i, 'weight')
+        return self._attn(i, self.weight_suffix)
 
     def attn_bias(self, i: int):
         """Get q, k, v, o bias for layer i."""
-        return self._attn(i, 'bias', allow_none=True)
+        return self._attn(i, 'bias')
 
     def attn_zero(self, i: int):
         """Get q, k, v, o zero point for layer i."""
-        return (None, ) * 4
+        return self._attn(i, 'qzeros')
 
     def attn_scale(self, i: int):
         """Get q, k, v, o scale for layer i."""
-        return (None, ) * 4
+        return self._attn(i, 'scales')
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
@@ -102,20 +105,21 @@ class LlamaReader(BaseReader):
         for key in ['gate', 'down', 'up']:
             tensor = self.params[
                 f'{self.attn_layer_prefix}.{i}.mlp.{key}_proj.{kind}']
+            tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
 
     def ffn(self, i: int):
         """Get ffn weight for layer i."""
-        return self._ffn(i, 'weight')
+        return self._ffn(i, self.weight_suffix)
 
     def ffn_zero(self, i: int):
         """Get ffn zero point for layer i."""
-        return (None, ) * 3
+        return self._ffn(i, 'qzeros')
 
     def ffn_scale(self, i: int):
         """Get ffn scale for layer i."""
-        return (None, ) * 3
+        return self._ffn(i, 'scales')
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
@@ -132,6 +136,7 @@ class LlamaModel(BaseInputModel):
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
         ckpt_path = kwargs.get('ckpt_path')
+        self.policy = kwargs.get('input_policy')
         if ckpt_path is None:
             ckpt_path = model_path
         self.ckpt_path = ckpt_path
@@ -169,8 +174,11 @@ class LlamaModel(BaseInputModel):
                                             map_location='cpu')
                 else:
                     new_params = load_file(osp.join(self.ckpt_path, ckpt))
-                ret = self.Reader(new_params, unused_params,
-                                  i == self.nmgrs - 1, self.model_config)
+                ret = self.Reader(new_params,
+                                  unused_params,
+                                  i == self.nmgrs - 1,
+                                  self.model_config,
+                                  policy=self.policy)
                 yield ret
                 ret.clean_up(is_last_bin)
         except GeneratorExit:
@@ -183,6 +191,8 @@ class LlamaModel(BaseInputModel):
         n_words = tk_model.vocab_size
         bos_id = tk_model.bos_token_id
         eos_id = tk_model.eos_token_id
+        # bos_id may be None
+        bos_id = bos_id or 0
         return n_words, bos_id, eos_id
 
     def model_info(self):
