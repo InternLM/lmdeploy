@@ -123,9 +123,12 @@ class CUDASingleGraphRunner:
         self.input_buffers['position_ids'][:, :num_tokens] = position_ids
         self.input_buffers[
             'block_offsets'][:batch_size, :num_blocks] = block_offsets
-        self.input_buffers['q_seqlens'].zero_()
+        if q_seqlens.data_ptr() != self.input_buffers['q_seqlens'].data_ptr():
+            self.input_buffers['q_seqlens'].zero_()
         self.input_buffers['q_seqlens'][:batch_size] = q_seqlens
-        self.input_buffers['kv_seqlens'].zero_()
+        if kv_seqlens.data_ptr() != self.input_buffers['kv_seqlens'].data_ptr(
+        ):
+            self.input_buffers['kv_seqlens'].zero_()
         self.input_buffers['kv_seqlens'][:batch_size] = kv_seqlens
         self.input_buffers['q_start_loc'][:batch_size] = q_start_loc
         if inputs_embeds is not None:
@@ -188,6 +191,7 @@ class CUDASingleGraphRunner:
             output = self.model(**padded_kwargs)
 
         self.output_buffers['logits'] = output
+        return output
 
     def forward(self, **kwargs):
         """forward."""
@@ -275,7 +279,6 @@ class CUDAGraphRunner(GraphRunner):
             self._runner_map[graph_key] = runner
         else:
             runner = self._runner_map[graph_key]
-
         output = runner.forward(**kwargs)
         return output
 
