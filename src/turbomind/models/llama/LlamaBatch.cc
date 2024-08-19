@@ -1,7 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/models/llama/LlamaBatch.h"
-#include "src/turbomind/kernels/attention/data_type.h"
+#include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/macro.h"
@@ -627,6 +627,8 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     g.unique_ids             = std::move(unique_ids);
     g.finished_count         = 0;
     g.skip_init_sampling     = skip_init_sampling;
+
+    // TM_LOG_ERROR("[Initialize] batch size: %d, active size: %d", state_->size, state_->active_size);
 
     if (!skip_init_sampling) {
         g.max_init_ctx_len = max_context_len;
