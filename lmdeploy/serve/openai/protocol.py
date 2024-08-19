@@ -5,14 +5,20 @@ import time
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import shortuuid
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class ErrorResponse(BaseModel):
+class OpenAIBaseModel(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+
+class ErrorResponse(OpenAIBaseModel):
     """Error responses."""
-    object: str = 'error'
     message: str
+    type: str
     code: int
+    param: Optional[str] = None
+    object: str = 'error'
 
 
 class ModelPermission(BaseModel):
