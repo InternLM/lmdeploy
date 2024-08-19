@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-from .triton_utils import get_kernel_meta
+from lmdeploy.pytorch.kernels.cuda.triton_utils import get_kernel_meta
 
 
 def per_channel_quant(x, n_bits, dtype):
@@ -343,6 +343,98 @@ def per_token_quant_int8(x, eps):
 
 
 @triton.jit
+def _layer_norm_fwd_fused_dynamic_symmetric(
+    X,  # pointer to the input
+    Y,  # pointer to the output
+    W,  # pointer to the weights
+    Bias,  # pointer to the bias
+    Scale,  # pointer to the scales of the output activation
+    stride,  # how much to increase the pointer when moving by 1 row
+    N,  # number of columns in X
+    eps,  # epsilon to avoid division by zero
+    BLOCK_SIZE: tl.constexpr,
+):
+    """A Triton kernel that calculates layer normalization with fused dynamic
+    symmetric quantization."""
+    row = tl.program_id(0)
+    Y += row * stride
+    X += row * stride
+
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < N
+    x = tl.load(X + cols, mask=mask, other=0.).to(tl.float32)
+    x2 = x * x
+    mean = tl.sum(x, axis=0) / N
+    mean_x2 = tl.sum(x2, axis=0) / N
+    var = mean_x2 - mean * mean
+    rstd = tl.math.rsqrt(var + eps)
+
+    w = tl.load(W + cols, mask=mask)
+    bias = tl.load(Bias + cols, mask=mask)
+    x_hat = (x - mean) * rstd
+    y = x_hat * w + bias
+
+    scale = tl.max(tl.abs(y)).to(tl.float32) / 127
+    tl.store(Scale + row, scale)
+
+    y = tl.math.round(y / scale)
+    y = tl.minimum(y, 127)
+    y = tl.maximum(y, -128)
+    tl.store(Y + cols, y, mask=mask)
+
+
+def layer_norm_dynamic_quant(x, w, bias, eps):
+    """Performs Layer normalization with dynamic quantization.
+
+    The function reshapes the input tensor `x`, creates an empty tensor `y`
+    with the same shape as `x`, and calculates Layer normalization on the
+    reshaped `x` using a Triton kernel
+    `_layer_norm_fwd_fused_dynamic_symmetric`.
+    """
+
+    x_arg = x.flatten(0, -2)
+    y = torch.empty_like(x, dtype=torch.int8)
+    M, K = x_arg.shape
+    MAX_FUSED_SIZE = 65536 // x.element_size()
+    BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(K))
+    if K > BLOCK_SIZE:
+        raise RuntimeError(
+            "This layer norm doesn't support feature dim >= 64KB.")
+    num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
+    scale = x.new_empty(x.shape[:-1] + (1, ), dtype=torch.float32)
+    kernel_meta = get_kernel_meta(x_arg)
+    _layer_norm_fwd_fused_dynamic_symmetric[(M, )](x_arg,
+                                                   y,
+                                                   w,
+                                                   bias,
+                                                   scale,
+                                                   x_arg.stride(0),
+                                                   K,
+                                                   eps,
+                                                   BLOCK_SIZE=BLOCK_SIZE,
+                                                   num_warps=num_warps,
+                                                   **kernel_meta)
+    return y, scale
+
+
+def test_layer_norm(x, shape, weight, bias, eps=1e-5):
+    out = F.layer_norm(x, shape, weight, bias, eps)
+    scale = (out.abs().max(dim=-1)[0] / 127).unsqueeze(-1)
+    out = torch.round(out / scale).to(torch.int8).clamp(-128, 127)
+    triton_out, triton_scale = layer_norm_dynamic_quant(x, weight, bias, eps)
+    out = out.to(torch.float32)
+    triton_out = triton_out.to(torch.float32)
+    print(f'out.abs().mean() = {out.abs().mean()}')
+    print(f'triton_out.abs().mean() = {triton_out.abs().mean()}')
+    print('perchannel error: ', (out - triton_out).abs().mean())
+    cos = torch.nn.CosineSimilarity(0)
+    print(
+        'Output cos',
+        cos(out.flatten().to(torch.float32),
+            triton_out.flatten().to(torch.float32)))
+
+
+@triton.jit
 def _rms_norm_fwd_fused_dynamic_symmetric(
     X,  # pointer to the input
     Y,  # pointer to the output
@@ -543,29 +635,34 @@ if __name__ == '__main__':
     dtype = torch.float16
     # test (bs, seq_len, dim) x (dim, out_dim)
     x = torch.randn((2, 2048, 4096), dtype=dtype, device='cuda')
-    rms_weight = torch.randn((4096, ),
-                             dtype=dtype,
-                             device='cuda',
-                             requires_grad=True)
+    norm_weight = torch.randn((4096, ),
+                              dtype=dtype,
+                              device='cuda',
+                              requires_grad=True)
+    bias_weight = torch.randn((4096, ),
+                              dtype=dtype,
+                              device='cuda',
+                              requires_grad=True)
 
     linear_weight = torch.randn((11008, 4096),
                                 dtype=dtype,
                                 device='cuda',
                                 requires_grad=True)
-    test_rms_and_linear(x, rms_weight, linear_weight)
+    test_layer_norm(x, norm_weight.shape, norm_weight, bias_weight)
+    test_rms_and_linear(x, norm_weight, linear_weight)
 
     # test (M, K) x (K, N)
     x = torch.randn((4, 4096), dtype=dtype, device='cuda')
-    rms_weight = torch.randn((4096, ),
-                             dtype=dtype,
-                             device='cuda',
-                             requires_grad=True)
+    norm_weight = torch.randn((4096, ),
+                              dtype=dtype,
+                              device='cuda',
+                              requires_grad=True)
 
     linear_weight = torch.randn((2048, 4096),
                                 dtype=dtype,
                                 device='cuda',
                                 requires_grad=True)
-    test_rms_and_linear(x, rms_weight, linear_weight)
+    test_rms_and_linear(x, norm_weight, linear_weight)
 
     # test per-token quant
     x = torch.randn((4, 2048, 4096), dtype=dtype, device='cuda')

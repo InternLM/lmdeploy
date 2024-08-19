@@ -2,6 +2,7 @@
 
 import os.path as osp
 import shutil
+from typing import Optional
 
 import fire
 import torch
@@ -10,26 +11,11 @@ from torch import nn
 import lmdeploy
 from lmdeploy.lite.apis.calibrate import calibrate
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
-                                            awq_layers, smooth_layers)
+                                            smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
-from lmdeploy.pytorch.models import QLinear, QRMSNorm
+from lmdeploy.pytorch.models import QLayerNorm, QLinear, QRMSNorm
 
-LAYER_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMDecoderLayer',
-    'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
-    'QWenLMHeadModel': 'QWenBlock',
-    'BaiChuanForCausalLM': 'DecoderLayer',
-    'LlamaForCausalLM': 'LlamaDecoderLayer',
-    'ChatGLMForConditionalGeneration': 'GLMBlock',
-}
-NORM_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMRMSNorm',
-    'InternLM2ForCausalLM': 'InternLM2RMSNorm',
-    'QWenLMHeadModel': 'RMSNorm',
-    'BaiChuanForCausalLM': 'RMSNorm',
-    'LlamaForCausalLM': 'LlamaRMSNorm',
-    'ChatGLMForConditionalGeneration': 'RMSNorm',
-}
+from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP
 
 LMDEPLOY_ROOT = lmdeploy.__path__[0]
 
@@ -71,10 +57,10 @@ def smooth_quant(model: str,
                  calib_dataset: str = 'ptb',
                  calib_samples: int = 128,
                  calib_seqlen: int = 2048,
-                 search_scale: bool = False,
                  batch_size: int = 1,
                  w_bits: int = 8,
-                 device: str = 'cuda'):
+                 device: str = 'cuda',
+                 calib_image: Optional[str] = None):
 
     model_path = model
     vl_model, model, tokenizer, work_dir = calibrate(model,
@@ -85,8 +71,8 @@ def smooth_quant(model: str,
                                                      device,
                                                      w_bits=w_bits,
                                                      w_group_size=-1,
-                                                     search_scale=search_scale,
-                                                     batch_size=batch_size)
+                                                     batch_size=batch_size,
+                                                     calib_image=calib_image)
 
     # calibrate function exports the calibration statistics
     # (inputs, outputs, keys and values) to `work_dir`.
@@ -109,42 +95,14 @@ def smooth_quant(model: str,
                 'otherwise calibration and quantification will not work '
                 'properly.')
 
-    layer_type = LAYER_TYPE_MAP[type(model).__name__]
-    norm_type = NORM_TYPE_MAP[type(model).__name__]
-    fc2fcs = FC_FCS_MAP[layer_type]
-    norm2fcs = NORM_FCS_MAP[layer_type]
-
-    layers = collect_target_modules(model, layer_type)
-    fcs = {}
-    for l_name, layer in layers.items():
-        name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
-        fcs.update(name2fc)
-
-    if search_scale:
-        awq_ratios = inp_stats['ratios']
-        act_scales = inp_stats['absmean']
-        awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios, -1,
-                   device)
-    else:
-        smooth_layers(layers, fc2fcs, norm2fcs, act_scales, -1, device)
-
-    rmsnorms = collect_target_modules(model, norm_type)
-
-    for name, linear in fcs.items():
-        linear.to(device)
-        q_linear = QLinear.from_float(linear)
-        parent_name, _, child_name = name.rpartition('.')
-        parent = model.get_submodule(parent_name)
-        setattr(parent, child_name, q_linear)
-        linear.to('cpu')
-
-    for name, norm in rmsnorms.items():
-        norm.to(device)
-        q_norm = QRMSNorm.from_float(norm)
-        parent_name, _, child_name = name.rpartition('.')
-        parent = model.get_submodule(parent_name)
-        setattr(parent, child_name, q_norm)
-        norm.to('cpu')
+    _smooth_quant(model, act_scales, device)
+    if calib_image is not None and vl_model is not None:
+        # TODO models other than InternVL
+        act_scales = torch.load(work_dir / 'vision_inputs_stats.pth')['absmax']
+        _smooth_quant(vl_model.vision_model, act_scales, device)
+        vl_model.vision_model.config.update(
+            dict(quantization_config=dict(quant_method='smooth_quant',
+                                          bits=w_bits)))
 
     if hasattr(model.config, 'auto_map'):
         model.config.auto_map.update(AUTO_MAP[type(model).__name__])
@@ -161,6 +119,41 @@ def smooth_quant(model: str,
     tokenizer.save_pretrained(work_dir)
 
     shutil.copy(MODEL_PATH_MAP[type(model).__name__], work_dir)
+
+
+def _smooth_quant(model, act_scales, device):
+    layer_type = LAYER_TYPE_MAP[type(model).__name__]
+    norm_type = NORM_TYPE_MAP[type(model).__name__]
+    fc2fcs = FC_FCS_MAP[layer_type]
+    norm2fcs = NORM_FCS_MAP[layer_type]
+
+    layers = collect_target_modules(model, layer_type)
+    norms = collect_target_modules(model, norm_type)
+    fcs = {}
+    for l_name, layer in layers.items():
+        name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
+        fcs.update(name2fc)
+
+    smooth_layers(layers, fc2fcs, norm2fcs, act_scales, -1, device)
+
+    for name, linear in fcs.items():
+        linear.to(device)
+        q_linear = QLinear.from_float(linear)
+        parent_name, _, child_name = name.rpartition('.')
+        parent = model.get_submodule(parent_name)
+        setattr(parent, child_name, q_linear)
+        linear.to('cpu')
+
+    for name, norm in norms.items():
+        norm.to(device)
+        if norm_type == 'LayerNorm':
+            q_norm = QLayerNorm.from_float(norm)
+        else:
+            q_norm = QRMSNorm.from_float(norm)
+        parent_name, _, child_name = name.rpartition('.')
+        parent = model.get_submodule(parent_name)
+        setattr(parent, child_name, q_norm)
+        norm.to('cpu')
 
 
 if __name__ == '__main__':

@@ -10,3 +10,6 @@ per_token_quant_int8 = FunctionDispatcher('per_token_quant_int8').make_caller()
 
 rms_norm_dynamic_quant = FunctionDispatcher(
     'rms_norm_dynamic_quant').make_caller()
+
+layer_norm_dynamic_quant = FunctionDispatcher(
+    'layer_norm_dynamic_quant').make_caller()

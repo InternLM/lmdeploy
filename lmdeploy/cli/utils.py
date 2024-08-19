@@ -306,6 +306,16 @@ class ArgumentHelper:
                                    help='The calibration dataset name')
 
     @staticmethod
+    def calib_image(parser):
+        """Add argument calib_image to parser."""
+
+        return parser.add_argument(
+            '--calib-image',
+            type=str,
+            default=None,
+            help='The calibration image for vision model.')
+
+    @staticmethod
     def calib_samples(parser):
         """Add argument calib_samples to parser."""
 
@@ -342,7 +352,8 @@ class ArgumentHelper:
 
         return parser.add_argument(
             '--search-scale',
-            type=bool,
+            action='store_true',
+            required=False,
             default=False,
             help=\
             'Whether search scale ratio. Default to False, which means only smooth quant with 0.5 ratio will be applied'  # noqa

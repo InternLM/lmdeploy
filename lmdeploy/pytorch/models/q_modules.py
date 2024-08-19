@@ -4,7 +4,8 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from ..kernels.w8a8_triton_kernels import (matmul_kernel_dynamic_quant,
+from ..kernels.w8a8_triton_kernels import (layer_norm_dynamic_quant,
+                                           matmul_kernel_dynamic_quant,
                                            per_channel_quant,
                                            per_token_quant_int8,
                                            rms_norm_dynamic_quant)
@@ -20,6 +21,15 @@ class QTensor:
     tensor: torch.Tensor
     scale: torch.Tensor
     zero_point: torch.Tensor = None
+
+    def to(self, *args, **kwargs):
+        """Move the tensor to target dtype or device."""
+        tensor = self.tensor.to(*args, **kwargs)
+        scale = self.scale.to(*args, **kwargs)
+        zero_point = None
+        if self.zero_point is not None:
+            zero_point = self.zero_point.to(*args, **kwargs)
+        return QTensor(tensor, scale, zero_point)
 
     def __getattr__(self, name: str):
         """Allows attribute access to be forwarded to the wrapped tensor when
@@ -64,6 +74,42 @@ class QRMSNorm(nn.Module):
         hidden_states_quant, rms_scale = rms_norm_dynamic_quant(
             hidden_states, self.weight, self.variance_epsilon)
         return QTensor(hidden_states_quant, rms_scale)
+
+
+class QLayerNorm(nn.Module):
+    """It performs traditional RMS normalization and then quantizes the output
+    to 8-bit integers."""
+
+    def __init__(self, normalized_shape, bias: bool = True, eps=1e-6):
+        super().__init__()
+        self.normalized_shape = tuple(normalized_shape)
+        self.weight = nn.Parameter(torch.empty(self.normalized_shape))
+        self.variance_epsilon = eps
+        if bias:
+            self.bias = nn.Parameter(torch.empty(self.normalized_shape))
+
+    @classmethod
+    def from_float(cls, mod: nn.Module, initialization: bool = True):
+        """Class method to create a QRMSNorm instance from a floating-point
+        module.
+
+        `initialization = True` for real init.
+        `initialization = False` for dummy init.
+        """
+        normalized_shape = mod.normalized_shape
+        eps = mod.eps
+        bias = mod.bias is not None
+        q_mod = cls(normalized_shape, bias, eps)
+        if initialization:
+            q_mod.weight = nn.Parameter(mod.weight.detach())
+            if bias:
+                q_mod.bias = nn.Parameter(mod.bias.detach())
+        return q_mod
+
+    def forward(self, hidden_states):
+        out, scale = layer_norm_dynamic_quant(hidden_states, self.weight,
+                                              self.bias, self.variance_epsilon)
+        return QTensor(out, scale)
 
 
 class QLinear(nn.Module):

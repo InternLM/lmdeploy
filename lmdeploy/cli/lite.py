@@ -31,6 +31,7 @@ class SubCliLite(object):
         ArgumentHelper.download_dir(parser)
         ArgumentHelper.work_dir(parser)
         ArgumentHelper.calib_dataset(parser)
+        ArgumentHelper.calib_image(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
@@ -87,10 +88,10 @@ class SubCliLite(object):
             default='./work_dir',
             help='The working directory for outputs. defaults to "./work_dir"')
         ArgumentHelper.calib_dataset(parser)
+        ArgumentHelper.calib_image(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
-        ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.device(parser)
 
     @staticmethod

@@ -5,57 +5,6 @@ import torch
 from lmdeploy.lite.utils.global_avail import GlobalAvailMixin
 
 
-class KVCacheObserver(GlobalAvailMixin):
-    """A class to observe and record the max, min, and absolute max value of
-    given tensor."""
-
-    def __init__(self, num_head: int, head_dim: int) -> None:
-        """Constructor for KVCacheObserver.
-
-        Args:
-            num_head : Number of heads
-            head_dim : Dimension of each head
-        """
-        self.num_head = num_head
-        self.head_dim = head_dim
-        self.max_val = torch.full((num_head, head_dim),
-                                  -torch.inf,
-                                  dtype=torch.float16)
-        self.min_val = torch.full((num_head, head_dim),
-                                  torch.inf,
-                                  dtype=torch.float16)
-        self.absmax_val = torch.full((num_head, head_dim),
-                                     0,
-                                     dtype=torch.float16)
-
-    @torch.no_grad()
-    def observe(self, x: torch.Tensor) -> None:
-        """Function to observe the input tensor and update the max, min, and
-        absolute max values.
-
-        Args:
-            x : Input tensor
-        """
-        assert len(x.shape) == 4
-
-        if x.size(2) == self.num_head and x.size(3) == self.head_dim:
-            # layout: (bs, seqlen, heads, dims)
-            x = x
-        elif x.size(1) == self.num_head and x.size(3) == self.head_dim:
-            # layout: (bs, heads, seqlen, dims)
-            x = x.transpose(1, 2)
-        else:
-            raise RuntimeError
-
-        cur_max = x.flatten(0, 1).max(0)[0].cpu()
-        cur_min = x.flatten(0, 1).min(0)[0].cpu()
-        cur_absmax = x.flatten(0, 1).abs().max(0)[0].cpu()
-
-        self.max_val = torch.maximum(self.max_val, cur_max)
-        self.min_val = torch.minimum(self.min_val, cur_min)
-        self.absmax_val = torch.maximum(self.absmax_val, cur_absmax)
-
-
 class ActivationObserver(GlobalAvailMixin):
     """A class to observe and record the max, min, mean, absolute max, and
     absolute mean value of a given tensor.

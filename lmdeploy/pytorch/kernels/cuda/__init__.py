@@ -10,7 +10,8 @@ from .multinomial_sampling import multinomial_sampling
 from .pagedattention import paged_attention_fwd
 from .rearange_all_gather import rearange_all_gather
 from .rms_norm import rms_norm
-from .w8a8_triton_kernels import (matmul_kernel_dynamic_quant,
+from .w8a8_triton_kernels import (layer_norm_dynamic_quant,
+                                  matmul_kernel_dynamic_quant,
                                   per_channel_quant, per_token_quant_int8,
                                   rms_norm_dynamic_quant)
 
@@ -32,4 +33,5 @@ __all__ = [
     'per_channel_quant',
     'per_token_quant_int8',
     'rms_norm_dynamic_quant',
+    'layer_norm_dynamic_quant',
 ]

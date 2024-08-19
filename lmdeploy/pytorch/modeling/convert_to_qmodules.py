@@ -2,6 +2,7 @@
 import torch.nn as nn
 
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
+from lmdeploy.pytorch.models.q_modules import QLayerNorm
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -9,6 +10,7 @@ LAYER_TYPE_MAP = {
     'QWenLMHeadModel': 'QWenBlock',
     'BaiChuanForCausalLM': 'DecoderLayer',
     'LlamaForCausalLM': 'LlamaDecoderLayer',
+    'InternVLChatModel': 'InternVisionEncoderLayer',
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
@@ -16,6 +18,7 @@ NORM_TYPE_MAP = {
     'QWenLMHeadModel': 'RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',
     'LlamaForCausalLM': 'LlamaRMSNorm',
+    'InternVLChatModel': 'LayerNorm',
 }
 
 
@@ -30,8 +33,12 @@ def convert_decoder_layer(module, norm_type):
             new_child = QLinear.from_float(child, initialization=False)
             setattr(module, name, new_child)
         elif type(child).__name__ == norm_type:
-            new_child = QRMSNorm.from_float(child, initialization=False)
-            setattr(module, name, new_child)
+            if norm_type == 'LayerNorm':
+                new_child = QLayerNorm.from_float(child, initialization=False)
+                setattr(module, name, new_child)
+            else:
+                new_child = QRMSNorm.from_float(child, initialization=False)
+                setattr(module, name, new_child)
         else:
             convert_decoder_layer(child, norm_type)
 
