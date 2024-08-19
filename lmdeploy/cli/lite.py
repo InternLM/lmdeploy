@@ -35,7 +35,7 @@ class SubCliLite(object):
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
-        ArgumentHelper.device(parser)
+        ArgumentHelper.device(parser, choices=['cuda', 'cpu'])
         parser.add_argument('--w-bits',
                             type=int,
                             default=4,
@@ -67,7 +67,7 @@ class SubCliLite(object):
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
-        ArgumentHelper.device(parser)
+        ArgumentHelper.device(parser, choices=['cuda', 'cpu'])
 
     @staticmethod
     def add_parser_smooth_quant():
@@ -91,7 +91,7 @@ class SubCliLite(object):
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
-        ArgumentHelper.device(parser)
+        ArgumentHelper.device(parser, choices=['cuda', 'cpu'])
 
     @staticmethod
     def auto_awq(args):
