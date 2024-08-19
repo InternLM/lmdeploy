@@ -137,7 +137,6 @@ def main(model_path: str,
             if model.capability == 'chat':
                 sequence_start = (nth_round == 1)
                 sequence_end = False
-                step = step
             else:
                 sequence_start = True
                 sequence_end = True
