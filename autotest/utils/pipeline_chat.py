@@ -295,6 +295,8 @@ def run_pipeline_vl_chat_test(config, model_case):
                                                model_name='vicuna')
     else:
         backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
+    if '4bit' in model_case.lower() or 'awq' in model_case.lower():
+        backend_config.model_format = 'awq'
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     pipeline_chat_log = os.path.join(
