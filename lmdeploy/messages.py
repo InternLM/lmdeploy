@@ -203,7 +203,7 @@ class PytorchEngineConfig:
     max_batch_size: int = 128
     cache_max_entry_count: float = 0.8
     eviction_type: str = 'recompute'
-    prefill_interval: int = 16
+    prefill_interval: int = 8
     block_size: int = 64
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0

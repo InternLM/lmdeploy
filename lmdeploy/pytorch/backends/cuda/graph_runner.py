@@ -58,24 +58,14 @@ class CUDASingleGraphRunner:
         max_tokens = self.max_tokens
         num_blocks = self.num_blocks
         device = self.device
-        is_decoding = self.is_decoding
 
-        if is_decoding:
-            self.input_buffers['input_ids'] = torch.zeros(1,
-                                                          max_batches,
-                                                          dtype=torch.int64,
-                                                          device=device)
-            self.input_buffers['position_ids'] = torch.zeros((1, max_batches),
-                                                             dtype=torch.int64,
-                                                             device=device)
-        else:
-            self.input_buffers['input_ids'] = torch.zeros(1,
-                                                          max_tokens,
-                                                          dtype=torch.int64,
-                                                          device=device)
-            self.input_buffers['position_ids'] = torch.zeros((1, max_tokens),
-                                                             dtype=torch.int64,
-                                                             device=device)
+        self.input_buffers['input_ids'] = torch.zeros(1,
+                                                      max_tokens,
+                                                      dtype=torch.int64,
+                                                      device=device)
+        self.input_buffers['position_ids'] = torch.zeros((1, max_tokens),
+                                                         dtype=torch.int64,
+                                                         device=device)
 
         self.input_buffers['block_offsets'] = torch.zeros(
             (max_batches, num_blocks), dtype=torch.int64, device=device)
@@ -254,10 +244,9 @@ class CUDAGraphRunner(GraphRunner):
         """get graph key."""
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
-        block_offsets = attn_metadata.block_offsets
-        batch_size, _ = block_offsets.size()
-        new_batch_size = next_power_of_2(batch_size)
-        return (new_batch_size, is_decoding)
+        num_tokens = input_ids.numel()
+        new_num_tokens = next_power_of_2(num_tokens)
+        return (new_num_tokens, is_decoding)
 
     def __call__(self, **kwargs):
         """call."""
@@ -265,12 +254,13 @@ class CUDAGraphRunner(GraphRunner):
             return self.model(**kwargs)
 
         graph_key = self.get_graph_key(**kwargs)
-        max_batches = graph_key[0]
+        max_tokens = graph_key[0]
         is_decoding = graph_key[1]
         if graph_key not in self._runner_map:
+            max_batches = max_tokens if is_decoding else self.max_batches
             runner = CUDASingleGraphRunner(self.model,
                                            max_batches=max_batches,
-                                           max_tokens=self.max_tokens,
+                                           max_tokens=max_tokens,
                                            num_blocks=self.num_blocks,
                                            is_decoding=is_decoding,
                                            pool=self.graph_pool_handle,
