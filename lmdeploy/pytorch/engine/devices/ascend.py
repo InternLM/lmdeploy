@@ -17,7 +17,7 @@ class ASCENDDeviceUtils(DIPUDeviceUtils):
             single_attention_mask = torch.logical_not(
                 torch.tril(
                     torch.ones(step_context.q_seq_length[i],
-                               step_context.kv_seq_length[i],
+                               (step_context.kv_seq_length[i] + 31) & (~31),
                                dtype=torch.bool).cuda(),
                     diagonal=step_context.kv_seq_length[i] -
                     step_context.q_seq_length[i],
