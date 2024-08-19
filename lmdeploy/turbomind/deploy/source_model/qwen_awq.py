@@ -72,7 +72,7 @@ class Qwen2AwqReader(LlamaAwqReader):
 
         for key in ['q', 'k', 'v']:
             tensor = self.params.get(
-                f'model.layers.{i}.self_attn.{key}_proj.bias')
+                f'{self.attn_layer_prefix}.{i}.self_attn.{key}_proj.bias')
             assert tensor is not None
             result.append(tensor)
 
