@@ -212,16 +212,16 @@ def run_testcase(cmd, benchmark_log):
                    encoding='utf-8') as process:
             try:
                 stdout, stderr = process.communicate(None)
-            except:
+            except:  # noqa: E722
                 parent = psutil.Process(process.pid)
                 for child in parent.children(recursive=True):
                     child.terminate()
                 parent.terminate()
                 raise
             retcode = process.poll()
-
+        f.writelines(retcode)
         f.writelines(stderr)
-        print(stderr)
+        print(retcode, stderr)
 
 
 def get_command_with_extra(cmd, cuda_prefix: str = None):
