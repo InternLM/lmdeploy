@@ -58,6 +58,7 @@ class SubCliServe:
 
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
+        ArgumentHelper.device_type(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -125,10 +126,6 @@ class SubCliServe:
                             type=str,
                             default=['*'],
                             help='A list of allowed http headers for cors')
-        parser.add_argument('--qos-config-path',
-                            type=str,
-                            default='',
-                            help='Qos policy config path')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -147,6 +144,7 @@ class SubCliServe:
         pt_group = parser.add_argument_group('PyTorch engine arguments')
 
         ArgumentHelper.adapters(pt_group)
+        ArgumentHelper.device_type(pt_group)
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
@@ -213,7 +211,7 @@ class SubCliServe:
                 block_size=args.cache_block_seq_len,
                 session_len=args.session_len,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
+                device_type=args.device_type)
         else:
             backend_config = TurbomindEngineConfig(
                 tp=args.tp,
@@ -256,7 +254,7 @@ class SubCliServe:
                 session_len=args.session_len,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
+                device_type=args.device_type)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(
@@ -288,8 +286,7 @@ class SubCliServe:
                        allow_headers=args.allow_headers,
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
-                       ssl=args.ssl,
-                       qos_config_path=args.qos_config_path)
+                       ssl=args.ssl)
 
     @staticmethod
     def api_client(args):

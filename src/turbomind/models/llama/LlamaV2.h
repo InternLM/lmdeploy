@@ -88,6 +88,8 @@ public:
                  const std::unordered_map<std::string, Tensor>* inputs,
                  Control                                        control);
 
+    void tune();
+
     void stop(const std::vector<uint64_t>& seq_ids);
 
     size_t vocab_size() const noexcept
@@ -187,6 +189,8 @@ private:
     const bool debug_{false};
 
     LlamaWeight<T>* weights_{};
+
+    LlamaLinear<T> linear_;
 
     std::unique_ptr<UnifiedDecoder<T>> unified_decoder_;
     DynamicDecodeLayer<float>*         dynamic_decode_layer_{};

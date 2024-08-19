@@ -4,6 +4,7 @@ import os.path as osp
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from configparser import ConfigParser
+from itertools import repeat
 from queue import LifoQueue, Queue
 from typing import Dict, Iterable, List, Union
 
@@ -102,6 +103,20 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=engine_config)
 
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            ranks = [
+                self.node_id * self.gpu_count + device_id
+                for device_id in range(self.gpu_count)
+            ]
+            for _ in e.map(self.model_comm.process_weight,
+                           range(self.gpu_count), ranks):
+                pass
+            # implicit synchronization
+            for _ in e.map(self.model_comm.create_engine,
+                           range(self.gpu_count), ranks,
+                           repeat(self.nccl_params)):
+                pass
+
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
 
@@ -192,7 +207,6 @@ class TurboMind:
                 'the model may not be loaded successfully '
                 f'with {len(tm_params)} uninitialized params:\n{uninitialized}'
             )
-
         return model_comm
 
     def _from_workspace(self, model_path: str,
