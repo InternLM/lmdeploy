@@ -107,8 +107,9 @@ class ArgumentHelper:
             type=str,
             default=default,
             choices=['hf', 'llama', 'awq', 'gptq'],
-            help='The format of input model. `hf` meaning `hf_llama`, `llama` '
-            'meaning `meta_llama`, `awq` meaning the quantized model by awq')
+            help='The format of input model. `hf` means `hf_llama`, `llama` '
+            'means `meta_llama`, `awq` represents the quantized model by AWQ,'
+            ' and `gptq` refers to the quantized model by GPTQ')
 
     @staticmethod
     def revision(parser, default: str = None):
