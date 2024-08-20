@@ -33,7 +33,7 @@ def flash_context_attention(
                 q_seq_len[i:i + 1],
                 num_q_heads,
                 num_kv_heads,
-                context.attention_mask[i:i + 1],
+                attn_mask=context.attention_mask[i:i + 1],
                 attn_output=attn_output,
             )
         else:
@@ -51,7 +51,7 @@ def flash_context_attention(
                 kv_seq_len[i:i + 1],
                 num_q_heads,
                 num_kv_heads,
-                context.attention_mask[i:i + 1],
+                attn_mask=context.attention_mask[i:i + 1],
                 attn_output=attn_output,
             )
 
