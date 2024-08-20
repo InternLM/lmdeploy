@@ -88,6 +88,22 @@ def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
     return adapter_ids
 
 
+def _dynamic_prefill_interval(scheduler: Scheduler):
+    """dynamic prefill interval."""
+    scheduler_config = scheduler.scheduler_config
+    max_prefill_interval = scheduler_config.prefill_interval
+    max_batches = scheduler_config.max_batches
+    num_batches = len(scheduler.running)
+    num_waiting = len(scheduler.waiting)
+    if num_waiting == 0:
+        return max_prefill_interval
+    ratio = num_batches / max_batches
+    prefill_interval = ratio * (max_prefill_interval + 1)
+    prefill_interval = np.clip(prefill_interval, 2, max_prefill_interval)
+    prefill_interval = int(prefill_interval)
+    return prefill_interval
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -109,11 +125,9 @@ class Engine:
             check_adapters(list(engine_config.adapters.values()))
 
         self.engine_config = engine_config
-        model_name = engine_config.model_name
         tp = engine_config.tp
 
         self.tp = tp
-        self.model_name = model_name
 
         self.device_context = DeviceContext(
             device_type=engine_config.device_type)
@@ -121,8 +135,7 @@ class Engine:
         scheduler_config = SchedulerConfig(
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
-            eviction_type=engine_config.eviction_type,
-            prefill_interval=16)
+            prefill_interval=engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
@@ -664,7 +677,8 @@ class Engine:
             self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
             history_ids: torch.Tensor, sampling_inputs: SamplingInputs,
             num_appendable_ids: torch.LongTensor,
-            num_ignore_eos: torch.LongTensor, output_que: asyncio.Queue):
+            num_ignore_eos: torch.LongTensor, loop_count: int,
+            output_que: asyncio.Queue):
         """asyc forward task."""
 
         def __update_inputs(next_token_ids):
@@ -687,9 +701,6 @@ class Engine:
         sampling_inputs = sampling_inputs.to_device('cuda')
         num_appendable_ids = num_appendable_ids.cuda()
         num_ignore_eos = num_ignore_eos.cuda()
-
-        loop_count = (1 if not is_decoding else
-                      self.scheduler_config.prefill_interval - 1)
 
         for idx in range(loop_count):
             # inference
@@ -765,11 +776,12 @@ class Engine:
         while True:
             is_prefill = await in_que.get()
             try:
-                prefill_interval = self.scheduler_config.prefill_interval
+                prefill_interval = _dynamic_prefill_interval(self.scheduler)
                 schedule_output = self.scheduler.schedule(
                     is_prefill=is_prefill, prealloc_size=prefill_interval)
                 running: SeqList = schedule_output.running
                 adapters = schedule_output.adapters
+                loop_count = 1 if is_prefill else (prefill_interval - 1)
                 if len(running) == 0:
                     raise NoRunningSeqs()
 
@@ -792,6 +804,7 @@ class Engine:
                     sampling_inputs=sampling_inputs,
                     num_appendable_ids=num_appendable_ids,
                     num_ignore_eos=num_ignore_eos,
+                    loop_count=loop_count,
                     output_que=out_que,
                 )
             except Exception as e:

@@ -75,6 +75,7 @@ public:
             cudaStream_t                 stream,
             cublasMMWrapper*             cublas_wrapper,
             IAllocator*                  allocator,
+            IAllocator*                  peer_allocator,
             bool                         is_free_buffer_after_forward,
             cudaDeviceProp*              cuda_device_prop);
 
@@ -86,6 +87,8 @@ public:
     void forward(std::unordered_map<std::string, Tensor>*       outputs,
                  const std::unordered_map<std::string, Tensor>* inputs,
                  Control                                        control);
+
+    void tune();
 
     void stop(const std::vector<uint64_t>& seq_ids);
 
@@ -179,12 +182,15 @@ private:
     cudaStream_t     stream_;
     cublasMMWrapper* cublas_wrapper_;
     IAllocator*      allocator_;
+    IAllocator*      peer_allcator_;
     bool             is_free_buffer_after_forward_;
     cudaDeviceProp*  cuda_device_prop_;
 
     const bool debug_{false};
 
     LlamaWeight<T>* weights_{};
+
+    LlamaLinear<T> linear_;
 
     std::unique_ptr<UnifiedDecoder<T>> unified_decoder_;
     DynamicDecodeLayer<float>*         dynamic_decode_layer_{};

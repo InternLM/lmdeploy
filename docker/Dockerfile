@@ -13,7 +13,8 @@ ARG PYTHON_VERSION=3.10
 ARG TORCH_VERSION=2.3.0
 ARG TORCHVISION_VERSION=0.18.0
 
-RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update -y && apt-get install -y software-properties-common wget vim &&\
+RUN apt-get update -y && apt-get install -y software-properties-common wget vim git curl &&\
+    curl https://sh.rustup.rs -sSf | sh -s -- -y &&\
     add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
     ninja-build rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
@@ -46,7 +47,8 @@ RUN cd /opt/lmdeploy &&\
     ninja -j$(nproc) && ninja install &&\
     cd .. &&\
     python3 -m pip install -e . &&\
-    rm -rf build
+    rm -rf build  &&\
+    rm -rf ~/.cache/*
 
 ENV LD_LIBRARY_PATH=/opt/lmdeploy/install/lib:$LD_LIBRARY_PATH
 ENV PATH=/opt/lmdeploy/install/bin:$PATH

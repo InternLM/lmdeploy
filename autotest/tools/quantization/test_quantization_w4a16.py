@@ -19,6 +19,7 @@ def test_quantization_w4a16(config, model, worker_id):
 @pytest.mark.order(3)
 @pytest.mark.quantization_w4a16
 @pytest.mark.pr_test
+@pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(

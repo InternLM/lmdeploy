@@ -8,7 +8,6 @@ from .model import ChatTemplateConfig
 
 
 def pipeline(model_path: str,
-             model_name: Optional[str] = None,
              backend_config: Optional[Union[TurbomindEngineConfig,
                                             PytorchEngineConfig]] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
@@ -29,9 +28,6 @@ def pipeline(model_path: str,
                     on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
-        model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "internlm/internlm-chat-7b",
-            "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): backend
             config instance. Default to None.
         chat_template_config (ChatTemplateConfig): chat template configuration.
@@ -77,21 +73,11 @@ def pipeline(model_path: str,
     backend = 'pytorch' if type(
         backend_config) is PytorchEngineConfig else 'turbomind'
     logger.info(f'Using {backend} engine')
-    if 'tp' in kwargs:
-        logger.warning(
-            'The argument "tp" is deprecated and will be removed soon. '
-            'Please set "tp" in "backend_config"')
-        tp = kwargs['tp']
-        kwargs.pop('tp')
-    else:
-        tp = 1 if backend_config is None else backend_config.tp
 
     return pipeline_class(model_path,
-                          model_name=model_name,
                           backend=backend,
                           backend_config=backend_config,
                           chat_template_config=chat_template_config,
-                          tp=tp,
                           **kwargs)
 
 
@@ -123,9 +109,9 @@ def serve(model_path: str,
                     on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
-        model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "internlm/internlm-chat-7b",
-            "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
+        model_name (str): the name of the served model. It can be accessed
+            by the RESTful API `/v1/models`. If it is not specified,
+            `model_path` will be adopted
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): backend
@@ -159,11 +145,7 @@ def serve(model_path: str,
         backend_config = autoget_backend_config(model_path, backend_config)
     backend = 'pytorch' if type(
         backend_config) is PytorchEngineConfig else 'turbomind'
-    if 'tp' in kwargs:
-        tp = kwargs['tp']
-        kwargs.pop('tp')
-    else:
-        tp = 1 if backend_config is None else backend_config.tp
+
     task = Process(target=serve,
                    args=(model_path, ),
                    kwargs=dict(model_name=model_name,
@@ -172,7 +154,6 @@ def serve(model_path: str,
                                chat_template_config=chat_template_config,
                                server_name=server_name,
                                server_port=server_port,
-                               tp=tp,
                                log_level=log_level,
                                api_keys=api_keys,
                                ssl=ssl,

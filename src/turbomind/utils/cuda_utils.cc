@@ -17,6 +17,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_fp8_utils.h"
+#include <regex>
 
 namespace turbomind {
 
@@ -390,6 +391,12 @@ FtCudaDataType getModelFileType(std::string ini_file, std::string section_name)
         }
     }
     return model_file_type;
+}
+
+bool is_16xx_series(const char* name)
+{
+    const std::regex re(R"(GTX 16\d\d)");
+    return std::regex_search(name, re);
 }
 
 /* ************************** end of common utils ************************** */
