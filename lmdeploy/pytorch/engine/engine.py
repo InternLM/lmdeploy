@@ -25,6 +25,13 @@ from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
 
+try:
+    from torch_npu.contrib import transfer_to_npu  # noqa
+    logger.warning('On ascend platform, CUDA-related APIs are automatically '
+                   'mapped to NPU device.')
+except:  # noqa
+    pass
+
 SeqList = List[SchedulerSequence]
 AdapterList = List[SchedulerAdapter]
 

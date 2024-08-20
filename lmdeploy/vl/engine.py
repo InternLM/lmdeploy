@@ -16,6 +16,13 @@ from lmdeploy.vl.model.builder import load_vl_model
 
 logger = get_logger('lmdeploy')
 
+try:
+    from torch_npu.contrib import transfer_to_npu  # noqa
+    logger.warning('On ascend platform, CUDA-related APIs are automatically '
+                   'mapped to NPU device.')
+except:  # noqa
+    pass
+
 
 def _raise_exception_on_finish(task: asyncio.Task) -> None:
     """raise exception on finish."""

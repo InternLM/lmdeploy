@@ -185,7 +185,8 @@ class PytorchEngineConfig:
         max_prefill_token_num (int): tokens per iteration.
         thread_safe (bool): thread safe engine instance.
         enable_prefix_caching (bool): Enable token match and sharing caches.
-        device_type (str): The inference device type, options ['cuda']
+        device_type (str): The inference device type, options ['cuda',
+            'ascend', 'npu']
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
         revision (str): The specific model version to use.
@@ -217,7 +218,7 @@ class PytorchEngineConfig:
         assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.device_type in [
-            'cuda', 'ascend'
+            'cuda', 'ascend', 'npu'
         ], (f'invalid device_type: {self.device_type}')
 
 

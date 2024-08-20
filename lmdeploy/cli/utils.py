@@ -459,5 +459,5 @@ class ArgumentHelper:
             '--device-type',
             type=str,
             default=default,
-            choices=['cuda', 'ascend'],
+            choices=['cuda', 'ascend', 'npu'],
             help='The inference device type for pytorch engine.')

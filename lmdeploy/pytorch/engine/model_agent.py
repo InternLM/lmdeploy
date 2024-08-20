@@ -98,6 +98,15 @@ def _update_cache_config(model_config: ModelConfig,
     cache_block_size = CacheEngine.get_cache_block_size(
         cache_config.block_size, model_config, world_size)
     gpu_mem = __get_free_gpu_mem_size(cache_block_size)
+    if hasattr(torch, 'npu'):
+        max_gpu_mem = 256 * 1024 * cache_block_size / cache_config.block_size
+        if gpu_mem > max_gpu_mem:
+            gpu_mem = max_gpu_mem
+            logger.warning(
+                "kvcache engine's num_gpu_blocks is limited on Ascend: "
+                f'num_gpu_blocks * block_size({cache_config.block_size}) <= '
+                '256k, so the proportion of free device memory used for '
+                "kvcache may not reach 'cache_max_entry_count'.")
     cpu_mem = host_mem_size
     if cache_config.num_cpu_blocks == 0:
         cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)

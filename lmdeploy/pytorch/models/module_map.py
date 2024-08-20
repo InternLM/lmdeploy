@@ -368,7 +368,8 @@ MODULE_MAP.update({
 # ascend module
 ASCEND_MODULE_MAP = dict()
 
-DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)
+DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP,
+                                 npu=ASCEND_MODULE_MAP)
 
 # ascend llama
 ASCEND_MODULE_MAP.update({

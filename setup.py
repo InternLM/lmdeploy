@@ -145,7 +145,9 @@ if __name__ == '__main__':
         include_package_data=True,
         setup_requires=parse_requirements('requirements/build.txt'),
         tests_require=parse_requirements('requirements/test.txt'),
-        install_requires=parse_requirements('requirements/runtime.txt'),
+        install_requires=parse_requirements(
+            'requirements/runtime.txt' if not os.getenv('ASCEND_TOOLKIT_HOME')
+            else 'requirements/runtime_npu.txt'),
         extras_require={
             'all': parse_requirements('requirements.txt'),
             'lite': parse_requirements('requirements/lite.txt'),
