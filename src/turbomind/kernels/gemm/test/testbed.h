@@ -4,12 +4,15 @@
 
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
+#include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/test/quantization.h"
 #include "src/turbomind/kernels/gemm/test/reference.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -207,7 +210,7 @@ public:
         }
     }
 
-    void Run()
+    void Run(void* ctx = {})
     {
         const Operation operation{
             dispatch_policy_,
@@ -215,6 +218,7 @@ public:
             quant_a_,
             quant_b_,
             kBatchDim,
+            ctx,
         };
 
         const Workspace workspace{barriers_.data().get(), barriers_.size(), partials_.data().get(), partials_.size()};
@@ -237,7 +241,7 @@ public:
                                 workspace,
                                 stream_);
 
-        if (status) {
+        if (!ctx && status) {
             std::cerr << "Run failed, code =" << status << "\n";
             std::abort();
         }
@@ -280,11 +284,54 @@ public:
 
         // Compare(c_.data().get(), c_f_.data().get(), n_, n_, m_, 0);
 
+        int dims = m_, bsz = n_;
         if (order_c == kRowMajor) {
-            Compare(c_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
+            std::swap(dims, bsz);
         }
-        else {
-            Compare(c_.data().get(), c_ref_.data().get(), m_, m_, n_, 0);
+        Compare(c_.data().get(), c_ref_.data().get(), dims, dims, bsz, 0);
+    }
+
+    void Check()
+    {
+        reference_.gemm(a_f_.data().get(),  //
+                        a_desc_,
+                        b_f_.data().get(),
+                        b_desc_,
+                        c_ref_.data().get(),
+                        c_desc_);
+
+        std::vector<std::function<LaunchSpec()>> cases;
+        Run(&cases);
+
+        int dims = m_, bsz = n_;
+        if (order_c == kRowMajor) {
+            std::swap(dims, bsz);
+        }
+
+        max_vals_.resize(7);
+
+        auto infnan  = [](float x) { return std::isinf(x) || std::isnan(x); };
+        auto greater = [](auto& a, auto& b) {
+            // skip abs(src) & abs(ref)
+            for (int i = 2; i < (int)b.size(); ++i) {
+                if (a[i] > b[i]) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        for (const auto& c : cases) {
+            const auto spec = c();
+            auto       diff = FastCompare(c_.data().get(), c_ref_.data().get(), dims, bsz, stream_);
+            if (greater(diff, max_vals_) || std::any_of(diff.begin(), diff.end(), infnan)) {
+                std::cout << spec.kernel->name() << " " << spec.splits << " " << spec.swizzle      //
+                          << " " << diff[0] << " " << diff[1] << " " << diff[2] << " " << diff[3]  //
+                          << " " << diff[4] << " " << diff[5] << " " << diff[6] << "\n";
+                for (int i = 0; i < (int)max_vals_.size(); ++i) {
+                    max_vals_[i] = std::max(max_vals_[i], diff[i]);
+                }
+            }
         }
     }
 
@@ -356,6 +403,8 @@ private:
     Reference      reference_;
     DispatchPolicy dispatch_policy_;
     std::string    cache_path_;
+
+    std::vector<float> max_vals_;
 };
 
 template<class T>

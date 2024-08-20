@@ -193,7 +193,7 @@ void Quantize(const thrust::universal_vector<S>&  x,
 
     cudaStreamSynchronize(stream);
 
-    Compare(_x_p.data().get(), _x.data().get(), k, k, m);
+    // Compare(_x_p.data().get(), _x.data().get(), k, k, m);
 
     const int kg = ceil_div(k, group_size);
     for (int i = 0; i < m * kg; ++i) {

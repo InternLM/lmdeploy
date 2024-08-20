@@ -214,6 +214,7 @@ struct Operation {
     QuantDesc      quant_a;
     QuantDesc      quant_b;
     int            batch_dim;
+    void*          reserved;
 };
 
 struct MatrixLayout {
