@@ -18,7 +18,6 @@ from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model
 
-from ..archs import get_model_arch
 from .deploy.converter import SUPPORTED_FORMATS, get_tm_model
 from .deploy.target_model.base import TurbomindModelConfig
 from .supported_models import is_supported
@@ -176,33 +175,13 @@ class TurboMind:
         assert engine_config.model_format in SUPPORTED_FORMATS, \
             f'The model format should be in {SUPPORTED_FORMATS}'
 
-        group_size = 0
-        if engine_config.model_format is None:
-            _, cfg = get_model_arch(model_path)
-            quant_config = getattr(cfg, 'quantization_config', None)
-            if quant_config:
-                quant_method = quant_config.get('quant_method')
-                group_size = int(quant_config.get('group_size', 0))
-                version = quant_config.get('version')
-                if quant_method == 'awq' and group_size == 128 and \
-                        version == 'gemm':
-                    engine_config.model_format = 'awq'
-                elif all((quant_method == 'gptq', group_size == 128,
-                          not quant_config.get('desc_act', False),
-                          quant_config.get('sym', True))):
-                    engine_config.model_format = 'gptq'
-                else:
-                    raise AssertionError(
-                        f'unsupported quant config: {quant_config}')
-
         assert is_supported(model_path), (
             f'turbomind does not support {model_path}. '
             'Plz try pytorch engine instead.')
 
         # convert transformers model into turbomind model format
         tm_model = get_tm_model(model_path, self.model_name,
-                                self.chat_template_name, group_size,
-                                engine_config)
+                                self.chat_template_name, engine_config)
 
         self.config = tm_model.cfg
         logger.info(f'model_config:\n\n{self.config.toini()}')
