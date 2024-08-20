@@ -76,7 +76,6 @@ def stream_infer_basic(config, model, log_name):
                              True,
                              str(outputs),
                              write_type='a')
-    assert False
 
 
 @pytest.mark.gpu_num_1

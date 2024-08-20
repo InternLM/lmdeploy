@@ -899,8 +899,9 @@ class TestRestfulInterfaceChatInteractive:
                                                      request_output_len=512):
             continue
         assert_chat_interactive_batch_return(output)
-        assert 'a 上海 is a 上海, ' * 5 in output.get('text') or get_repeat_times(
-            output.get('text'), 'Shanghai is') > 5
+        assert get_repeat_times(output.get('text'),
+                                'is a name') > 5 or get_repeat_times(
+                                    output.get('text'), 'Shanghai is') > 5
 
     def test_minimum_repetition_penalty_streaming(self):
         api_client = APIClient(BASE_URL)
@@ -920,7 +921,7 @@ class TestRestfulInterfaceChatInteractive:
             assert_chat_interactive_stream_return(outputList[index],
                                                   index=index)
             response += outputList[index].get('text')
-        assert 'a 上海 is a 上海, ' * 5 in response or get_repeat_times(
+        assert get_repeat_times(response, 'is a name') > 5 or get_repeat_times(
             response, 'Shanghai is') > 5
 
     def test_repetition_penalty_bigger_than_1(self):

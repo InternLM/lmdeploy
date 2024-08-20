@@ -10,9 +10,11 @@ def get_turbomind_model_list(tp_num: int = None,
 
     case_list = config.get('turbomind_' + model_type)
     quatization_case_config = config.get('turbomind_quatization')
-    for key in quatization_case_config.get('4bits'):
+    for key in quatization_case_config.get('awq'):
         if key in case_list:
             case_list.append(key + '-inner-4bits')
+    if model_type == 'chat_model':
+        case_list += quatization_case_config.get('gptq')
 
     if tp_num is not None:
         return [
@@ -52,9 +54,12 @@ def get_all_model_list(tp_num: int = None, model_type: str = 'chat_model'):
     turbomind_quantization_config = config.get('turbomind_quatization')
     pytorch_quantization_config = config.get('pytorch_quatization')
     for key in turbomind_quantization_config.get(
-            '4bits') + pytorch_quantization_config.get('4bits'):
+            'awq') + pytorch_quantization_config.get('awq'):
         if key in case_list and key + '-inner-4bits' not in case_list:
             case_list.append(key + '-inner-4bits')
+
+    if model_type == 'chat_model':
+        case_list += turbomind_quantization_config.get('gptq')
 
     if tp_num is not None:
         return [
@@ -77,7 +82,7 @@ def get_kvint_model_list(tp_num: int = None, model_type: str = 'chat_model'):
         if key in case_list_base:
             case_list.append(key)
 
-    for key in config.get('turbomind_quatization').get('4bits'):
+    for key in config.get('turbomind_quatization').get('awq'):
         if key in case_list_base and key in case_list:
             case_list.append(key + '-inner-4bits')
 
@@ -91,9 +96,9 @@ def get_kvint_model_list(tp_num: int = None, model_type: str = 'chat_model'):
 
 def get_quantization_model_list(type):
     config = get_config()
-    if type == '4bits':
-        case_list = config.get('turbomind_quatization').get('4bits')
-        for key in config.get('pytorch_quatization').get('4bits'):
+    if type == 'awq':
+        case_list = config.get('turbomind_quatization').get('awq')
+        for key in config.get('pytorch_quatization').get('awq'):
             if key not in case_list:
                 case_list.append(key)
         return case_list
@@ -109,7 +114,7 @@ def get_vl_model_list(tp_num: int = None):
 
     case_list = config.get('vl_model')
 
-    for key in config.get('turbomind_quatization').get('4bits'):
+    for key in config.get('turbomind_quatization').get('awq'):
         if key in case_list:
             case_list.append(key + '-inner-4bits')
 
@@ -164,7 +169,7 @@ def get_benchmark_model_list(tp_num,
     else:
         case_list = config.get('benchmark_model')
     quatization_case_config = config.get('turbomind_quatization')
-    for key in quatization_case_config.get('4bits'):
+    for key in quatization_case_config.get('awq'):
         if key in case_list:
             case_list.append(key + '-inner-4bits')
 

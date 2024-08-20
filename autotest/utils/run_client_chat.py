@@ -19,18 +19,18 @@ def command_line_test(config,
 
     if type == 'api_client':
         cmd = 'lmdeploy serve api_client ' + extra
-    elif type == 'triton_client':
-        cmd = 'lmdeploy serve triton_client ' + extra
     else:
         cmd = get_command_with_extra('lmdeploy chat ' + dst_path +
                                      '/workspace_' + model_case,
                                      config,
                                      model_case,
                                      cuda_prefix=cuda_prefix)
-        if type == 'turbomind' and ('w4' in model_case or
-                                    ('4bits' in model_case
-                                     or 'awq' in model_case.lower())):
-            cmd += ' --model-format awq'
+        if type == 'turbomind':
+            if ('w4' in model_case
+                    or ('4bits' in model_case or 'awq' in model_case.lower())):
+                cmd += ' --model-format awq'
+            elif 'gptq' in model_case.lower():
+                cmd += ' --model-format gptq'
         if case == 'base_testcase':
             cmd += ' --chat-template ' + TEMPLATE
     return command_test(config, [cmd],
@@ -54,17 +54,21 @@ def hf_command_line_test(config,
     else:
         model_path = model_case
 
-    cmd = get_command_with_extra(' '.join(
-        ['lmdeploy chat', model_path, '--backend', type, extra]),
+    cmd = get_command_with_extra(' '.join([
+        'lmdeploy chat', model_path, '--backend', type, extra,
+        '--session-len 4096'
+    ]),
                                  config,
                                  model_case,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
-    if type == 'turbomind' and ('w4' in model_case or
-                                ('4bits' in model_case
-                                 or 'awq' in model_case.lower())):
-        cmd += ' --model-format awq'
+    if type == 'turbomind':
+        if ('w4' in model_case
+                or ('4bits' in model_case or 'awq' in model_case.lower())):
+            cmd += ' --model-format awq'
+        elif 'gptq' in model_case.lower():
+            cmd += ' --model-format gptq'
 
     if case == 'base_testcase':
         cmd += ' --chat-template ' + TEMPLATE
@@ -101,8 +105,7 @@ def command_test(config,
 
         spliter = '\n\n'
         if 'CodeLlama' in model and 'api_client' not in cmd:
-            if 'workspace' in ' '.join(cmd):
-                spliter = '\n!!\n'
+            spliter = '\n!!\n'
         # join prompt together
         prompt = ''
         for item in case_info:

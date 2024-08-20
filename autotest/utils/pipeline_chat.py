@@ -36,25 +36,21 @@ def run_pipeline_chat_test(config,
     elif 'pytorch_lora' == type:
         backend_config = PytorchEngineConfig(tp=tp,
                                              adapters=extra.get('adapters'))
-    elif 'kvint' in type:
-        if 'w4' in model_case or ('4bits' in model_case
-                                  or 'awq' in model_case.lower()):
-            backend_config = TurbomindEngineConfig(
-                tp=tp,
-                model_format='awq',
-                quant_policy=extra.get('quant_policy'))
-        else:
-            backend_config = TurbomindEngineConfig(
-                tp=tp, quant_policy=extra.get('quant_policy'))
-    # if llava support kvint or awq, this code should refactor
-    elif 'llava' in model_case:
-        backend_config = TurbomindEngineConfig(tp=tp, model_name='vicuna')
     else:
-        if 'w4' in model_case or ('4bits' in model_case
-                                  or 'awq' in model_case.lower()):
-            backend_config = TurbomindEngineConfig(tp=tp, model_format='awq')
-        else:
-            backend_config = TurbomindEngineConfig(tp=tp)
+        backend_config = TurbomindEngineConfig(tp=tp)
+
+    if 'kvint' in type:
+        backend_config.quant_policy = extra.get('quant_policy')
+
+    # if llava support kvint or awq, this code should refactor
+    if 'llava' in model_case:
+        backend_config.model_name = 'vicuna'
+    if 'w4' in model_case or ('4bits' in model_case
+                              or 'awq' in model_case.lower()):
+        backend_config.model_format = 'awq'
+    if 'gptq' in model_case.lower():
+        backend_config.model_format = 'gptq'
+
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     # run testcases
@@ -261,7 +257,7 @@ def assert_pipeline_single_element(output,
         result &= len(output.text) > 0
         result &= output.finish_reason is None
         result &= len(output.token_ids) > 0
-    if logprobs_num == 0 or is_last:
+    if logprobs_num == 0:
         result &= output.logprobs is None
     else:
         if is_stream:
