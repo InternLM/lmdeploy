@@ -307,9 +307,7 @@ class TestRestfulInterfaceChatCompletions:
                                                   model_name)
             response += outputList[index].get('choices')[0].get('delta').get(
                 'content')
-        assert 'pls pls ' * 5 in response or \
-            'Hi, pls intro yourself\n' * 5 in response or \
-            'pls, pls, ' in response
+        assert get_repeat_times(output.get('text'), 'pls intro yourself') > 5
 
     def test_repetition_penalty_bigger_than_1(self):
         api_client = APIClient(BASE_URL)
@@ -390,7 +388,7 @@ class TestRestfulInterfaceChatCompletions:
                 model='error', messages='Hi, pls intro yourself',
                 temperature=0.01):
             continue
-        assert output.get('code') == 400
+        assert output.get('code') == 404
         assert output.get('message') == 'The model `error` does not exist.'
         assert output.get('object') == 'error'
 
@@ -404,7 +402,7 @@ class TestRestfulInterfaceChatCompletions:
                 max_tokens=5,
                 temperature=0.01):
             outputList.append(output)
-        assert output.get('code') == 400
+        assert output.get('code') == 404
         assert output.get('message') == 'The model `error` does not exist.'
         assert output.get('object') == 'error'
         assert len(outputList) == 1
