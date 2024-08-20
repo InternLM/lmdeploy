@@ -96,24 +96,27 @@ def available_models():
     return ModelList(data=model_cards)
 
 
-def create_error_response(status: HTTPStatus, message: str):
+def create_error_response(status: HTTPStatus,
+                          message: str,
+                          error_type='invalid_request_error'):
     """Create error response according to http status and message.
 
     Args:
         status (HTTPStatus): HTTP status codes and reason phrases
         message (str): error message
+        error_type (str): error type
     """
-    return JSONResponse(
-        ErrorResponse(message=message,
-                      type='invalid_request_error',
-                      code=status.value).model_dump())
+    return JSONResponse(ErrorResponse(message=message,
+                                      type=error_type,
+                                      code=status.value).model_dump(),
+                        status_code=status.value)
 
 
 async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
         return create_error_response(
-            HTTPStatus.BAD_REQUEST,
+            HTTPStatus.NOT_FOUND,
             f'The model `{request.model}` does not exist.')
     if hasattr(request, 'n') and request.n <= 0:
         return create_error_response(
