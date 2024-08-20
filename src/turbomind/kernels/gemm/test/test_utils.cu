@@ -95,7 +95,7 @@ FastCompare(const T* src, const T* ref, int dims, int bsz, cudaStream_t stream, 
             return thrust::make_tuple(abs_s, abs_r, abs_diff, abs_diff, rel_diff, rel_diff, outlier);
         },
         thrust::make_tuple(0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0LL),
-        [] __host__ __device__(const Tuple& a, const Tuple& b) { // `__host__`: compiler needs the return type
+        [] __host__ __device__(const Tuple& a, const Tuple& b) {  // `__host__`: compiler needs the return type
             return thrust::make_tuple(thrust::get<0>(a) + thrust::get<0>(b),
                                       thrust::get<1>(a) + thrust::get<1>(b),
                                       thrust::get<2>(a) + thrust::get<2>(b),
