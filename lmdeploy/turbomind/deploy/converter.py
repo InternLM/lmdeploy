@@ -13,10 +13,12 @@ from lmdeploy.utils import get_logger, get_model
 
 from ...utils import _get_and_verify_max_len
 from ..supported_models import SUPPORTED_ARCHS, is_supported
+from .exporter import get_exporter_factory
+from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 
-SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', None]
+SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', 'gptq', None]
 logger = get_logger('lmdeploy')
 
 
@@ -31,8 +33,6 @@ def get_input_model_registered_name(model_path: str, model_format: str):
     """
     arch = get_model_arch(model_path)[0]
     register_name = SUPPORTED_ARCHS[arch]
-    if model_format == 'awq':
-        register_name = register_name + '-awq'
     return register_name
 
 
@@ -96,7 +96,7 @@ def get_output_model_registered_name_and_config(model_path: str,
             ['meta_llama',  'hf', 'awq']
         group_size (int): the size of group used by awq model
     """
-    register_name = 'fp16'
+    register_name = 'tm'
     turbomind_model_arch = 'llama'
     weight_type = 'fp16'
 
@@ -105,14 +105,11 @@ def get_output_model_registered_name_and_config(model_path: str,
     if model_format == 'meta_llama':
         session_len = 2048
     else:  # hf, awq, None
-        register_name = 'fp16'
         model_arch, model_config = get_model_arch(model_path)
         turbomind_model_arch = SUPPORTED_ARCHS[model_arch]
         session_len = _get_and_verify_max_len(model_config, None)
-        if model_format == 'awq':
+        if model_format in ['awq', 'gptq']:
             weight_type = 'int4'
-            register_name = 'plora-w4' \
-                if turbomind_model_arch == 'xcomposer2' else 'w4'
             group_size = 128 if group_size == 0 else group_size
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
@@ -127,16 +124,16 @@ def get_output_model_registered_name_and_config(model_path: str,
                     'Device does not support bfloat16. Set float16 forcefully')
                 weight_type = 'fp16'
 
-            register_name = weight_type
-            if turbomind_model_arch == 'xcomposer2':
-                register_name = 'plora'
-
     config.model_arch = model_arch
     config.session_len = session_len + 8
     config.weight_type = weight_type
     config.group_size = group_size
 
-    return register_name, config
+    lora_type = 'plora' if turbomind_model_arch == 'xcomposer2' else ''
+
+    exporter_factory = get_exporter_factory(weight_type, lora_type)
+
+    return register_name, config, exporter_factory
 
 
 def pack_model_repository(workspace_path: str):
@@ -178,20 +175,26 @@ def get_tm_model(model_path,
 
     input_model_name = get_input_model_registered_name(
         model_path, engine_config.model_format)
+    input_policy = get_input_policy(engine_config.model_format)
     input_model = INPUT_MODELS.get(input_model_name)(model_path=model_path,
-                                                     tokenizer_path=model_path)
+                                                     tokenizer_path=model_path,
+                                                     input_policy=input_policy)
 
-    output_model_name, cfg = get_output_model_registered_name_and_config(
-        model_path=model_path,
-        model_format=engine_config.model_format,
-        group_size=group_size)
+    output_model_name, cfg, exporter_factory = \
+        get_output_model_registered_name_and_config(
+            model_path=model_path,
+            model_format=engine_config.model_format,
+            group_size=group_size)
 
     cfg.chat_template = chat_template_name
     cfg.model_name = model_name
     cfg.update_from_engine_config(engine_config)
 
     output_model = OUTPUT_MODELS.get(output_model_name)(
-        input_model=input_model, cfg=cfg, out_dir=out_dir)
+        input_model=input_model,
+        cfg=cfg,
+        exporter_factory=exporter_factory,
+        out_dir=out_dir)
 
     return output_model
 

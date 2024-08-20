@@ -106,7 +106,7 @@ class ArgumentHelper:
             '--model-format',
             type=str,
             default=default,
-            choices=['hf', 'llama', 'awq'],
+            choices=['hf', 'llama', 'awq', 'gptq'],
             help='The format of input model. `hf` meaning `hf_llama`, `llama` '
             'meaning `meta_llama`, `awq` meaning the quantized model by awq')
 
@@ -452,3 +452,12 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='the vision model batch size')
+
+    @staticmethod
+    def device_type(parser, default: str = 'cuda'):
+        return parser.add_argument(
+            '--device-type',
+            type=str,
+            default=default,
+            choices=['cuda', 'ascend'],
+            help='The inference device type for pytorch engine.')

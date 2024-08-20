@@ -3,7 +3,7 @@
 #pragma once
 
 #include "iterator.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
+#include <cassert>
 #include <type_traits>
 
 namespace turbomind {

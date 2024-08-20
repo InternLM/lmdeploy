@@ -1,10 +1,8 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/attention/array_ops.h"
 #include "src/turbomind/kernels/attention/cta_map.h"
-#include "src/turbomind/kernels/attention/thread_map.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
-#include <cstddef>
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/thread_map.h"
 #include <type_traits>
 
 namespace turbomind::attention {

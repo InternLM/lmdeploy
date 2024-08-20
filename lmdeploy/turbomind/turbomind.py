@@ -4,6 +4,7 @@ import os.path as osp
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from configparser import ConfigParser
+from itertools import repeat
 from queue import LifoQueue, Queue
 from typing import Dict, Iterable, List, Union
 
@@ -103,6 +104,20 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=engine_config)
 
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            ranks = [
+                self.node_id * self.gpu_count + device_id
+                for device_id in range(self.gpu_count)
+            ]
+            for _ in e.map(self.model_comm.process_weight,
+                           range(self.gpu_count), ranks):
+                pass
+            # implicit synchronization
+            for _ in e.map(self.model_comm.create_engine,
+                           range(self.gpu_count), ranks,
+                           repeat(self.nccl_params)):
+                pass
+
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
 
@@ -172,6 +187,13 @@ class TurboMind:
                 if quant_method == 'awq' and group_size == 128 and \
                         version == 'gemm':
                     engine_config.model_format = 'awq'
+                elif all((quant_method == 'gptq', group_size == 128,
+                          not quant_config.get('desc_act', False),
+                          quant_config.get('sym', True))):
+                    engine_config.model_format = 'gptq'
+                else:
+                    raise AssertionError(
+                        f'unsupported quant config: {quant_config}')
 
         assert is_supported(model_path), (
             f'turbomind does not support {model_path}. '
@@ -206,7 +228,6 @@ class TurboMind:
                 'the model may not be loaded successfully '
                 f'with {len(tm_params)} uninitialized params:\n{uninitialized}'
             )
-
         return model_comm
 
     def _from_workspace(self, model_path: str,
