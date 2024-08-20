@@ -5,6 +5,7 @@
 #include "src/turbomind/macro.h"
 #include <cuda_fp16.h>
 #include <memory>
+#include <vector>
 
 namespace turbomind {
 
@@ -17,6 +18,10 @@ void Compare(const T* src,
              bool     show = false,
              float    rtol = 1e-2,
              float    atol = 1e-4);
+
+template<class T>
+std::vector<float>
+FastCompare(const T* src, const T* ref, int dims, int bsz, cudaStream_t stream, float rtol = 1e-2, float atol = 1e-4);
 
 void LoadBinary(const std::string& path, size_t size, void* dst);
 
