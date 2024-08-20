@@ -42,8 +42,8 @@ async def async_try_add_session(req_sender: RequestSender, session_id: int):
 
 async def async_end(req_sender: RequestSender, session_id: int):
     """End the given session."""
-    await req_sender.async_send_async(RequestType.END_SESSION,
-                                      dict(session_id=session_id, resp=False))
+    await req_sender.async_send_async(
+        RequestType.END_SESSION, dict(session_id=session_id, response=False))
 
 
 async def async_cancel(req_sender: RequestSender, session_id: int):
@@ -70,7 +70,7 @@ def try_add_session(req_sender: RequestSender, session_id: int):
 def end(req_sender: RequestSender, session_id: int):
     """End the given session."""
     req_sender.send_async(RequestType.END_SESSION,
-                          dict(session_id=session_id, resp=False))
+                          dict(session_id=session_id, response=False))
 
 
 def cancel(req_sender: RequestSender, session_id: int):
@@ -153,7 +153,8 @@ class EngineInstance:
         gen_config = gen_config or EngineGenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         await self.req_sender.async_send_async(
-            RequestType.ADD_SESSION, dict(session_id=session_id, resp=False))
+            RequestType.ADD_SESSION, dict(session_id=session_id,
+                                          response=False))
         input_embeddings_new: List[InputEmbeddings] = None
         if input_embeddings is not None and len(input_embeddings) > 0:
             assert len(input_embeddings) == len(input_embedding_ranges)
@@ -270,7 +271,7 @@ class EngineInstance:
         gen_config = gen_config or EngineGenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         self.req_sender.send_async(RequestType.ADD_SESSION,
-                                   dict(session_id=session_id, resp=False))
+                                   dict(session_id=session_id, response=False))
         input_embeddings_new: List[InputEmbeddings] = None
         if input_embeddings is not None and len(input_embeddings) > 0:
             assert len(input_embeddings) == len(input_embedding_ranges)

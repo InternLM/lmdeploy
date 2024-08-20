@@ -15,6 +15,7 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 128,
                 'BLOCK_SIZE_N': 256,
                 'BLOCK_SIZE_K': 64,
+                'GROUP_SIZE_M': 1,
             },
             num_stages=3,
             num_warps=8),
@@ -23,6 +24,7 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 64,
                 'BLOCK_SIZE_N': 256,
                 'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8,
             },
             num_stages=4,
             num_warps=4),
@@ -31,6 +33,7 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 128,
                 'BLOCK_SIZE_N': 128,
                 'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8,
             },
             num_stages=4,
             num_warps=4),
@@ -39,6 +42,7 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 128,
                 'BLOCK_SIZE_N': 64,
                 'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8,
             },
             num_stages=4,
             num_warps=4),
@@ -47,6 +51,7 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 64,
                 'BLOCK_SIZE_N': 128,
                 'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8,
             },
             num_stages=4,
             num_warps=4),
@@ -55,6 +60,7 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 128,
                 'BLOCK_SIZE_N': 32,
                 'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8,
             },
             num_stages=4,
             num_warps=4),
@@ -63,6 +69,7 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 64,
                 'BLOCK_SIZE_N': 32,
                 'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8,
             },
             num_stages=5,
             num_warps=2),
@@ -71,6 +78,7 @@ def get_cuda_autotune_config():
                 'BLOCK_SIZE_M': 32,
                 'BLOCK_SIZE_N': 64,
                 'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 8,
             },
             num_stages=5,
             num_warps=2),
@@ -119,12 +127,12 @@ def fused_moe_kernel(
     Weights,
     N: tl.constexpr,
     K: tl.constexpr,
-    stride_am: int,
+    stride_am: tl.constexpr,
     stride_ak: tl.constexpr,
     stride_be: tl.constexpr,
     stride_bn: tl.constexpr,
     stride_bk: tl.constexpr,
-    stride_cm: int,
+    stride_cm: tl.constexpr,
     stride_cn: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
@@ -138,8 +146,8 @@ def fused_moe_kernel(
     reindex_c: tl.constexpr,
 ):
     """fused moe kernel."""
-    exp_id = tl.program_id(0)
-    pid = tl.program_id(1)
+    exp_id = tl.program_id(1)
+    pid = tl.program_id(0)
 
     exp_start = tl.load(ExpStart + exp_id + expert_offset)
     exp_end = tl.load(ExpEnd + exp_id + expert_offset)
@@ -229,14 +237,10 @@ def fused_moe_kernel_launcher(
     E, N, K = B.shape
 
     def _grid_fn(META):
-        grid = (
-            E,
-            triton.cdiv(num_tokens, META['BLOCK_SIZE_M']) *
-            triton.cdiv(N, META['BLOCK_SIZE_N']),
-        )
+        grid = (triton.cdiv(num_tokens, META['BLOCK_SIZE_M']) *
+                triton.cdiv(N, META['BLOCK_SIZE_N']), E)
         return grid
 
-    GROUP_SIZE_M = 1
     A = A.flatten(0, -2)
     C = C.flatten(0, -2)
 
@@ -264,7 +268,6 @@ def fused_moe_kernel_launcher(
         expert_offset=expert_offset,
         reindex_a=reindex_a,
         reindex_c=reindex_c,
-        GROUP_SIZE_M=GROUP_SIZE_M,
         M_NP2=M_NP2,
         **kernel_meta,
     )
