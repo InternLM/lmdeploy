@@ -12,6 +12,7 @@
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
