@@ -495,7 +495,8 @@ class Engine:
         def _apply_logits_processors(batched_processors, input_ids, seq_length,
                                      history_ids, logits):
             if not any(batched_processors):
-                return None
+                return logits
+            logits_cloned = logits.clone()
             for seq_id, processors in enumerate(batched_processors):
                 if processors is not None:
                     if history_ids.shape[-1] == 0:
@@ -503,19 +504,20 @@ class Engine:
                         input_id = input_ids[0][
                             seq_cumsum[seq_id]:seq_cumsum[seq_id + 1]]
                         for processor in processors:
-                            logits[seq_id] = processor(input_id,
-                                                       logits[seq_id])
+                            logits_cloned[seq_id] = processor(
+                                input_id, logits_cloned[seq_id])
                     else:
                         for processor in processors:
-                            logits[seq_id] = processor(history_ids[seq_id],
-                                                       logits[seq_id])
+                            logits_cloned[seq_id] = processor(
+                                history_ids[seq_id], logits_cloned[seq_id])
+            return logits_cloned
 
         split_logits = __get_last_logits().cuda()
-        _apply_logits_processors(sampling_inputs.logits_processors,
-                                 inputs.input_ids, inputs.seq_length,
-                                 history_ids, split_logits)
+        logits = _apply_logits_processors(sampling_inputs.logits_processors,
+                                          inputs.input_ids, inputs.seq_length,
+                                          history_ids, split_logits)
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos)
-        logits = logits_processor(history_ids, split_logits)
+        logits = logits_processor(history_ids, logits)
         next_token_ids = logits_processor.sampling(logits)
 
         return next_token_ids
