@@ -245,31 +245,37 @@ class Engine:
         """on add session callback."""
         for req in reqs:
             session_id = req.data['session_id']
+            resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_REPEAT
             if session_id not in self.scheduler.sessions:
                 self.scheduler.add_session(session_id)
                 resp_type = ResponseType.SUCCESS
-            self._response(resp_type, req.sender_id, req.req_id)
+            if resp:
+                self._response(resp_type, req.sender_id, req.req_id)
 
     def _on_stop_session(self, reqs: Request, **kwargs):
         """on stop session callback."""
         for req in reqs:
             session_id = req.data['session_id']
+            resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
                 self.scheduler.stop_session(session_id)
                 resp_type = ResponseType.SUCCESS
-            self._response(resp_type, req.sender_id, req.req_id)
+            if resp:
+                self._response(resp_type, req.sender_id, req.req_id)
 
     def _on_end_session(self, reqs: Request, **kwargs):
         """on end session callback."""
         for req in reqs:
             session_id = req.data['session_id']
+            resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
                 self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
-            self._response(resp_type, req.sender_id, req.req_id)
+            if resp:
+                self._response(resp_type, req.sender_id, req.req_id)
 
     def _on_add_message(self, reqs: Request, **kwargs):
         """on add message callback."""
