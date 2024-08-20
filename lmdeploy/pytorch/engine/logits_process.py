@@ -222,6 +222,24 @@ class SamplingInputs:
         return SamplingInputs(**out_dict)
 
 
+def _apply_custom_logits_processors(batched_logits_processors, input_ids,
+                                    seq_length, history_ids, logits):
+    """Apply custom logits processors."""
+    for seq_id, processors in enumerate(batched_logits_processors):
+        if processors is not None:
+            if history_ids.shape[-1] == 0:
+                seq_cumsum = [0] + seq_length.cumsum(0).tolist()
+                input_id = input_ids[0][seq_cumsum[seq_id]:seq_cumsum[seq_id +
+                                                                      1]]
+                for processor in processors:
+                    logits[seq_id] = processor(input_id, logits[seq_id])
+            else:
+                for processor in processors:
+                    logits[seq_id] = processor(history_ids[seq_id],
+                                               logits[seq_id])
+    return logits
+
+
 class FusedLogitsProcessor(LogitsWarper):
     """Custom logits processor."""
 
@@ -230,8 +248,9 @@ class FusedLogitsProcessor(LogitsWarper):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.ignore_eos = ignore_eos
 
-    def __call__(self, input_ids: torch.LongTensor,
-                 scores: torch.FloatTensor) -> torch.FloatTensor:
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor,
+                 seq_length: torch.LongTensor,
+                 history_ids: torch.FloatTensor) -> torch.FloatTensor:
         r"""
         Args:
             input_ids (torch.LongTensor):
@@ -241,6 +260,9 @@ class FusedLogitsProcessor(LogitsWarper):
                 These can be logits for each vocabulary when not using
                 beam search or log softmax for each vocabulary token
                 when using beam search
+            seq_length (torch.LongTensor): Seq length of each sequence.
+            history_ids (torch.FloatTensor): History token ids.
+
 
         Return:
             torch.FloatTensor: The processed prediction scores.
@@ -248,6 +270,12 @@ class FusedLogitsProcessor(LogitsWarper):
         """
         sampling_inputs = self.sampling_inputs
         scores = scores.clone()
+
+        custom_logits_processors = self.sampling_inputs.logits_processors
+        if any(custom_logits_processors):
+            scores = _apply_custom_logits_processors(custom_logits_processors,
+                                                     input_ids, seq_length,
+                                                     history_ids, scores)
 
         repetition_penalty = sampling_inputs.repetition_penalty
         if repetition_penalty is not None:
