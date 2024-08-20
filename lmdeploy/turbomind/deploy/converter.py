@@ -229,9 +229,10 @@ def get_tm_model(model_path,
             assert 0, f'unsupported quant_config: {quant_config}'
 
     if engine_config.model_format in ['awq', 'gptq']:
-        assert group_size, \
+        assert group_size == 128, \
             f'model format is "{engine_config.model_format}" ' \
-            f'but group_size is {group_size}'
+            f'but group_size is {group_size}. Currently, only 128 ' \
+            'is supported'
 
     input_model_name = get_input_model_registered_name(
         model_path, engine_config.model_format)
