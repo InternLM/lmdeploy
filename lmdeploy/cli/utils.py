@@ -449,6 +449,14 @@ class ArgumentHelper:
             help='the max number of forward passes in prefill stage')
 
     @staticmethod
+    def max_prefill_token_num(parser):
+        return parser.add_argument(
+            '--max-prefill-token-num',
+            type=int,
+            default=8192,
+            help='the max number of tokens per iteration during prefill')
+
+    @staticmethod
     def vision_max_batch_size(parser):
         return parser.add_argument('--vision-max-batch-size',
                                    type=int,
