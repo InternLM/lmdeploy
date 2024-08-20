@@ -10,9 +10,11 @@ from pydantic import BaseModel, Field
 
 class ErrorResponse(BaseModel):
     """Error responses."""
-    object: str = 'error'
     message: str
+    type: str
     code: int
+    param: Optional[str] = None
+    object: str = 'error'
 
 
 class ModelPermission(BaseModel):

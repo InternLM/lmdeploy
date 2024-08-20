@@ -349,14 +349,16 @@ class ArgumentHelper:
         )
 
     @staticmethod
-    def device(parser):
+    def device(parser,
+               default: str = 'cuda',
+               choices: List[str] = ['cuda', 'ascend', 'npu']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',
                                    type=str,
-                                   default='cuda',
-                                   choices=['cuda', 'cpu'],
-                                   help='Device type of running')
+                                   default=default,
+                                   choices=choices,
+                                   help='The device type of running')
 
     @staticmethod
     def chat_template(parser):
@@ -452,12 +454,3 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='the vision model batch size')
-
-    @staticmethod
-    def device_type(parser, default: str = 'cuda'):
-        return parser.add_argument(
-            '--device-type',
-            type=str,
-            default=default,
-            choices=['cuda', 'ascend', 'npu'],
-            help='The inference device type for pytorch engine.')
