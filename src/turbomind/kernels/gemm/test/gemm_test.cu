@@ -65,10 +65,8 @@ void Run(int batch_size, int output_dims, int input_dims, int g = 128)
 
 int main(int argc, char* argv[])
 {
-
     g_check = 0;
     Run(16384, 16384, 16384);
-    // Run(1, 7168, 7168);
 
     // g_check = 1;
     // std::vector<int> bsz(1024);
@@ -84,9 +82,9 @@ int main(int argc, char* argv[])
     //     }
     // }
 
-    // if (auto ec = cudaDeviceSynchronize(); ec != cudaSuccess) {
-    //     std::cerr << "un-clean exit: " << cudaGetErrorString(ec) << "\n";
-    // }
+    if (auto ec = cudaDeviceSynchronize(); ec != cudaSuccess) {
+        std::cerr << "un-clean exit: " << cudaGetErrorString(ec) << "\n";
+    }
 
     return 0;
 }

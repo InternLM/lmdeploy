@@ -78,7 +78,9 @@ FastCompare(const T* src, const T* ref, int dims, int bsz, cudaStream_t stream, 
 {
     auto       zip_iter = thrust::make_zip_iterator(src, ref);
     const auto count    = (size_t)dims * bsz;
-    auto       res      = thrust::transform_reduce(
+    // nvcc-11.8: __host__ __device__ lambda can't be generic
+    using Tuple = thrust::tuple<float, float, float, float, float, float, int64_t>;
+    auto res    = thrust::transform_reduce(
         thrust::cuda::par.on(stream),
         zip_iter,
         zip_iter + count,
@@ -93,7 +95,7 @@ FastCompare(const T* src, const T* ref, int dims, int bsz, cudaStream_t stream, 
             return thrust::make_tuple(abs_s, abs_r, abs_diff, abs_diff, rel_diff, rel_diff, outlier);
         },
         thrust::make_tuple(0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0LL),
-        [] __device__(auto a, auto b) {
+        [] __host__ __device__(const Tuple& a, const Tuple& b) { // `__host__`: compiler needs the return type
             return thrust::make_tuple(thrust::get<0>(a) + thrust::get<0>(b),
                                       thrust::get<1>(a) + thrust::get<1>(b),
                                       thrust::get<2>(a) + thrust::get<2>(b),
