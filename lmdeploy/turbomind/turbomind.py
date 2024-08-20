@@ -318,26 +318,17 @@ class TurboMindInstance:
         self.nccl_params = tm_model.nccl_params
 
         # create model instances
-        model_insts = [None] * self.gpu_count
-        with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
-            futures = []
-            for device_id in range(self.gpu_count):
-                futures.append(
-                    executor.submit(self._create_model_instance, device_id,
-                                    model_insts))
-            for future in futures:
-                future.result()
+        self.model_inst = self._create_model_instance(0)
 
-        self.model_insts = model_insts
         self.que = Queue()
         self.executor: ThreadPoolExecutor = None
-        self.futures = [None] * self.gpu_count
+        self.future = None
 
-    def _create_model_instance(self, device_id, model_insts):
+    def _create_model_instance(self, device_id):
         rank = self.node_id * self.gpu_count + device_id
         model_inst = self.tm_model.model_comm.create_model_instance(
             device_id, rank, self.cuda_stream_id, self.nccl_params)
-        model_insts[device_id] = model_inst
+        return model_inst
 
     def _forward_callback(self, result, ctx):
         self.que.put((False, result))
@@ -346,15 +337,12 @@ class TurboMindInstance:
         instance_comm = self.tm_model.model_comm.create_instance_comm(
             self.gpu_count)
 
-        def _func(device_id, enque_output):
-            output = self.model_insts[device_id].forward(inputs, instance_comm)
-            if enque_output:
-                self.que.put((True, output))
+        def _func():
+            output = self.model_inst.forward(inputs, instance_comm)
+            self.que.put((True, output))
 
-        self.executor = ThreadPoolExecutor(self.gpu_count)
-        for device_id in range(self.gpu_count):
-            f = self.executor.submit(_func, device_id, device_id == 0)
-            self.futures[device_id] = f
+        self.executor = ThreadPoolExecutor(1)
+        self.future = self.executor.submit(_func)
 
     def _async_forward_callback(self, result, ctx, que: LifoQueue):
         que.put((False, result))
@@ -363,15 +351,12 @@ class TurboMindInstance:
         instance_comm = self.tm_model.model_comm.create_instance_comm(
             self.gpu_count)
 
-        def _func(device_id, enque_output):
-            output = self.model_insts[device_id].forward(inputs, instance_comm)
-            if enque_output:
-                que.put((True, output))
+        def _func():
+            output = self.model_inst.forward(inputs, instance_comm)
+            que.put((True, output))
 
-        self.executor = ThreadPoolExecutor(self.gpu_count)
-        for device_id in range(self.gpu_count):
-            f = self.executor.submit(_func, device_id, device_id == 0)
-            self.futures[device_id] = f
+        self.executor = ThreadPoolExecutor(1)
+        self.future = self.executor.submit(_func)
 
     def _get_logprobs(self,
                       logprob_vals: torch.Tensor,
@@ -617,7 +602,7 @@ class TurboMindInstance:
         _forward_thread = partial(self._async_forward_thread, que=que)
         if stream_output and not stop:
             logger.info(f'Register stream callback for {session_id}')
-            self.model_insts[0].register_callback(_forward_callback)
+            self.model_inst.register_callback(_forward_callback)
 
         inputs, input_lengths = self.prepare_inputs(
             session_id=session_id,
@@ -691,14 +676,13 @@ class TurboMindInstance:
             yield outputs
 
             if finish:
-                for f in self.futures:
-                    f.result()
+                self.future.result()
                 self.executor.shutdown()
                 break
 
         if stream_output and not stop:
             logger.info(f'UN-register stream callback for {session_id}')
-            self.model_insts[0].unregister_callback()
+            self.model_inst.unregister_callback()
 
     def stream_infer(self,
                      session_id,
@@ -730,7 +714,7 @@ class TurboMindInstance:
         """
         if stream_output and not stop:
             logger.info(f'Register stream callback for {session_id}')
-            self.model_insts[0].register_callback(self._forward_callback)
+            self.model_inst.register_callback(self._forward_callback)
 
         inputs, input_lengths = self.prepare_inputs(
             session_id=session_id,
@@ -803,8 +787,7 @@ class TurboMindInstance:
             yield outputs
 
             if finish:
-                for f in self.futures:
-                    f.result()
+                self.future.result()
                 self.executor.shutdown()
                 while self.que.qsize() > 0:
                     self.que.get()
@@ -812,7 +795,7 @@ class TurboMindInstance:
 
         if stream_output and not stop:
             logger.info(f'UN-register stream callback for {session_id}')
-            self.model_insts[0].unregister_callback()
+            self.model_inst.unregister_callback()
 
     def decode(self,
                input_ids,

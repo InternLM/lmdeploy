@@ -479,79 +479,60 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
     const int batch_size = outputs->at("output_ids").shape[0];
 
     const auto rank = tensor_para_.rank_;
+    FT_CHECK(rank == 0);
 
     std::vector<std::shared_ptr<Request>> requests(batch_size);
 
-    // rank-0 allocates all requests for the batch
-    if (rank == 0) {
-        for (int i = 0; i < batch_size; ++i) {
-            requests[i] = std::make_shared<Request>();
-            requests[i]->inputs.resize(tensor_para_.world_size_);
-            requests[i]->outputs.resize(tensor_para_.world_size_);
-        }
-        control.comm->setSharedObject(&requests);
-    }
-
-    control.comm->barrier();
-
-    if (rank != 0) {
-        requests = *(std::vector<std::shared_ptr<Request>>*)control.comm->getSharedObject();
+    // allocates all requests for the batch
+    for (int i = 0; i < batch_size; ++i) {
+        requests[i] = std::make_shared<Request>();
     }
 
     for (int i = 0; i < batch_size; ++i) {
         auto& r = requests[i];
 
-        r->inputs[rank]  = slice(*inputs, i);
-        r->outputs[rank] = slice(*outputs, i);
+        r->inputs  = slice(*inputs, i);
+        r->outputs = slice(*outputs, i);
 
         if (rank == 0) {
-            r->id         = r->inputs[rank].getVal<uint64_t>("CORRID", i);
-            r->start_flag = r->inputs[rank].getVal<int>("START", 1);
-            r->end_flag   = r->inputs[rank].getVal<int>("END", 1);
-            r->stop_flag  = r->inputs[rank].getVal<int>("STOP", 0);
+            r->id         = r->inputs.getVal<uint64_t>("CORRID", i);
+            r->start_flag = r->inputs.getVal<int>("START", 1);
+            r->end_flag   = r->inputs.getVal<int>("END", 1);
+            r->stop_flag  = r->inputs.getVal<int>("STOP", 0);
             r->stream_cb  = control.callback;
         }
     }
 
-    control.comm->barrier();
-
-    // rank-0 now takes the ownership of `requests`
-    // rank-0 submits the tasks and wait for finish
+    // Submits the tasks and wait for finish
     std::vector<int> error_codes;
     bool             has_error = 0;
-    if (rank == 0) {
-        TM_LOG_INFO("[forward] Enqueue requests");
 
-        std::vector<uint64_t> ids;
-        for (const auto& r : requests) {
-            ids.push_back(r->id);
+    TM_LOG_INFO("[forward] Enqueue requests");
+
+    std::vector<uint64_t> ids;
+    for (const auto& r : requests) {
+        ids.push_back(r->id);
+    }
+
+    auto futures = shared_state_->request_queue.enqueue(std::move(requests));
+
+    FT_CHECK_WITH_INFO(ids.size() == futures.size(), "check failed");
+
+    TM_LOG_INFO("[forward] Wait for requests to complete ...");
+
+    for (int i = 0; i < futures.size(); ++i) {
+        auto ec = futures[i].get();
+        error_codes.push_back(ec);
+        if (ec) {
+            has_error = true;
+            TM_LOG_WARNING("[forward] Request failed for %ld, code %d", (long)ids[i], (int)ec);
         }
-
-        auto futures = shared_state_->request_queue.enqueue(std::move(requests));
-
-        FT_CHECK_WITH_INFO(ids.size() == futures.size(), "check failed");
-
-        TM_LOG_INFO("[forward] Wait for requests to complete ...");
-
-        for (int i = 0; i < futures.size(); ++i) {
-            auto ec = futures[i].get();
-            error_codes.push_back(ec);
-            if (ec) {
-                has_error = true;
-            }
-            if (!ec) {
-                TM_LOG_INFO("[forward] Request completed for %ld", (long)ids[i]);
-            }
-            else {
-                TM_LOG_WARNING("[forward] Request failed for %ld, code %d", (long)ids[i], (int)ec);
-            }
+        else {
+            TM_LOG_INFO("[forward] Request completed for %ld", (long)ids[i]);
         }
     }
 
-    // prevents request tensors being freed before the batch completes
-    control.comm->barrier();
-
-    if (rank == 0 && has_error) {
+    if (has_error) {
         std::stringstream ss;
         for (int i = 0; i < error_codes.size(); ++i) {
             ss << (i ? "" : " ") << error_codes[i];
