@@ -22,9 +22,11 @@
 
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
+#include "src/turbomind/kernels/gemm/tuner/params.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
@@ -37,8 +39,13 @@
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include <algorithm>
+#include <chrono>
+#include <exception>
 #include <functional>
 #include <memory>
+#include <ratio>
 #include <sstream>
 
 namespace turbomind {
@@ -47,6 +54,7 @@ template<typename T>
 LlamaV2<T>::LlamaV2(size_t                       head_num,
                     size_t                       kv_head_num,
                     size_t                       size_per_head,
+                    size_t                       hidden_units,
                     size_t                       inter_size,
                     size_t                       num_layer,
                     size_t                       vocab_size,
@@ -78,7 +86,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     rmsnorm_eps_(norm_eps),
     start_id_(start_id),
     end_id_(end_id),
-    hidden_units_(head_num * size_per_head),
+    hidden_units_(hidden_units),
     local_head_num_(head_num / tensor_para.world_size_),
     local_kv_head_num_(kv_head_num / tensor_para.world_size_),
     weights_(weights),
@@ -90,6 +98,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     is_free_buffer_after_forward_(is_free_buffer_after_forward),
     cuda_device_prop_(cuda_device_prop),
     debug_(isDebug()),
+    linear_{cublas_wrapper, stream},
     lora_params_(lora_params),
     shared_state_(shared_state)
 
@@ -129,13 +138,14 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
     unified_decoder_.reset(new UnifiedDecoder<T>(head_num_,
                                                  kv_head_num,
                                                  size_per_head_,
+                                                 hidden_units_,
                                                  inter_size_,
                                                  num_layer_,
                                                  attn_params,
                                                  rmsnorm_eps_,
                                                  tensor_para_,
                                                  stream_,
-                                                 cublas_wrapper_,
+                                                 linear_,
                                                  allocator_,
                                                  lora_params_,
                                                  is_free_buffer_after_forward_,
@@ -471,84 +481,164 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
     const int batch_size = outputs->at("output_ids").shape[0];
 
     const auto rank = tensor_para_.rank_;
+    FT_CHECK(rank == 0);
 
     std::vector<std::shared_ptr<Request>> requests(batch_size);
 
-    // rank-0 allocates all requests for the batch
-    if (rank == 0) {
-        for (int i = 0; i < batch_size; ++i) {
-            requests[i] = std::make_shared<Request>();
-            requests[i]->inputs.resize(tensor_para_.world_size_);
-            requests[i]->outputs.resize(tensor_para_.world_size_);
-        }
-        control.comm->setSharedObject(&requests);
-    }
-
-    control.comm->barrier();
-
-    if (rank != 0) {
-        requests = *(std::vector<std::shared_ptr<Request>>*)control.comm->getSharedObject();
+    // allocates all requests for the batch
+    for (int i = 0; i < batch_size; ++i) {
+        requests[i] = std::make_shared<Request>();
     }
 
     for (int i = 0; i < batch_size; ++i) {
         auto& r = requests[i];
 
-        r->inputs[rank]  = slice(*inputs, i);
-        r->outputs[rank] = slice(*outputs, i);
+        r->inputs  = slice(*inputs, i);
+        r->outputs = slice(*outputs, i);
 
         if (rank == 0) {
-            r->id         = r->inputs[rank].getVal<uint64_t>("CORRID", i);
-            r->start_flag = r->inputs[rank].getVal<int>("START", 1);
-            r->end_flag   = r->inputs[rank].getVal<int>("END", 1);
-            r->stop_flag  = r->inputs[rank].getVal<int>("STOP", 0);
+            r->id         = r->inputs.getVal<uint64_t>("CORRID", i);
+            r->start_flag = r->inputs.getVal<int>("START", 1);
+            r->end_flag   = r->inputs.getVal<int>("END", 1);
+            r->stop_flag  = r->inputs.getVal<int>("STOP", 0);
             r->stream_cb  = control.callback;
         }
     }
 
-    control.comm->barrier();
-
-    // rank-0 now takes the ownership of `requests`
-    // rank-0 submits the tasks and wait for finish
+    // Submits the tasks and wait for finish
     std::vector<int> error_codes;
     bool             has_error = 0;
-    if (rank == 0) {
-        TM_LOG_INFO("[forward] Enqueue requests");
 
-        std::vector<uint64_t> ids;
-        for (const auto& r : requests) {
-            ids.push_back(r->id);
+    TM_LOG_INFO("[forward] Enqueue requests");
+
+    std::vector<uint64_t> ids;
+    for (const auto& r : requests) {
+        ids.push_back(r->id);
+    }
+
+    auto futures = shared_state_->request_queue.enqueue(std::move(requests));
+
+    FT_CHECK_WITH_INFO(ids.size() == futures.size(), "check failed");
+
+    TM_LOG_INFO("[forward] Wait for requests to complete ...");
+
+    for (int i = 0; i < futures.size(); ++i) {
+        auto ec = futures[i].get();
+        error_codes.push_back(ec);
+        if (ec) {
+            has_error = true;
+            TM_LOG_WARNING("[forward] Request failed for %ld, code %d", (long)ids[i], (int)ec);
         }
-
-        auto futures = shared_state_->request_queue.enqueue(std::move(requests));
-
-        FT_CHECK_WITH_INFO(ids.size() == futures.size(), "check failed");
-
-        TM_LOG_INFO("[forward] Wait for requests to complete ...");
-
-        for (int i = 0; i < futures.size(); ++i) {
-            auto ec = futures[i].get();
-            error_codes.push_back(ec);
-            if (ec) {
-                has_error = true;
-            }
-            if (!ec) {
-                TM_LOG_INFO("[forward] Request completed for %ld", (long)ids[i]);
-            }
-            else {
-                TM_LOG_WARNING("[forward] Request failed for %ld, code %d", (long)ids[i], (int)ec);
-            }
+        else {
+            TM_LOG_INFO("[forward] Request completed for %ld", (long)ids[i]);
         }
     }
 
-    // prevents request tensors being freed before the batch completes
-    control.comm->barrier();
-
-    if (rank == 0 && has_error) {
+    if (has_error) {
         std::stringstream ss;
         for (int i = 0; i < error_codes.size(); ++i) {
             ss << (i ? "" : " ") << error_codes[i];
         }
         throw std::runtime_error(ss.str());
+    }
+}
+
+template<class First, class Last>
+static std::string Join(First first, Last last, const std::string& delim)
+{
+    if (first == last) {
+        return {};
+    }
+    std::ostringstream oss;
+    oss << *first++;
+    while (first != last) {
+        oss << delim << *first++;
+    }
+    return oss.str();
+}
+
+// Only called when `weight_type == INT4` for now
+template<typename T>
+void LlamaV2<T>::tune()
+{
+
+    if (auto str = std::getenv("TM_GEMM_IMPORT")) {
+        std::ifstream ifs(str);
+        const int     n_imported = linear_.Import(ifs);
+        TM_LOG_INFO("[Gemm2] %d records imported", n_imported);
+        return;
+    }
+
+    std::vector<int> bss = linear_.GetTuningSeq();
+    if (bss.empty()) {
+        bss = gemm::GenerateTuningSequence(gemm::GetDefaultTuningGenerators());
+    }
+
+    {
+        auto str = Join(bss.begin(), bss.end(), ", ");
+        TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
+    }
+
+    LlamaAttentionWeight<T>& attn = weights_->decoder_layer_weights[0]->self_attn_weights;
+    LlamaFfnWeight<T>&       ffn  = weights_->decoder_layer_weights[0]->ffn_weights;
+
+    std::vector<LlamaDenseWeight<T>*> weights{&attn.qkv, &attn.output, &ffn.output};
+
+    for (auto& layer : weights_->decoder_layer_weights) {
+        if (layer->ffn_weights.gating.kernel) {
+            weights.push_back(&layer->ffn_weights.gating);
+            break;
+        }
+    }
+    for (auto& layer : weights_->decoder_layer_weights) {
+        if (layer->ffn_weights.fused_gating_intermediate.kernel) {
+            weights.push_back(&layer->ffn_weights.fused_gating_intermediate);
+            break;
+        }
+    }
+
+    const int max_bs  = *std::max_element(bss.begin(), bss.end());
+    int       max_in  = 0;
+    int       max_out = 0;
+    for (auto& w : weights) {
+        max_in  = std::max<int>(max_in, w->input_dims);
+        max_out = std::max<int>(max_out, w->output_dims);
+    }
+
+    T* in_data  = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_in);
+    T* out_data = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_out);
+
+    cudaRandomUniform(in_data, (size_t)max_bs * max_in);
+    cudaDeviceSynchronize();
+
+    linear_.set_measure(true);
+
+    auto tick = std::chrono::steady_clock::now();
+
+    for (auto bs : bss) {
+        TM_LOG_INFO("[Gemm2] %d", bs);
+        for (auto& w : weights) {
+            linear_.forward(out_data, in_data, bs, *w);
+        }
+    }
+
+    auto tock = std::chrono::steady_clock::now();
+
+    TM_LOG_INFO("[Gemm2] Tuning finished in %.2f seconds.",
+                std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
+
+    linear_.set_measure(false);
+
+    allocator_->free((void**)&in_data);
+    allocator_->free((void**)&out_data);
+
+    // Only rank-0 exports the dispatch cache
+    if (tensor_para_.rank_ == 0) {
+        if (auto path = std::getenv("TM_GEMM_EXPORT")) {
+            std::ofstream ofs(path);
+            const auto    n_records = linear_.Export(ofs);
+            TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
+        }
     }
 }
 

@@ -143,6 +143,9 @@ if (NOT CMAKE_CUDA_ARCHITECTURES)
   if (${CUDA_VERSION} VERSION_GREATER_EQUAL "11.8")
     list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real 90-real)
   endif ()
+  if (MSVC)
+    list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90-real)
+  endif ()
 endif ()
 
 message(STATUS "Building with CUDA archs: ${CMAKE_CUDA_ARCHITECTURES}")
@@ -322,7 +325,6 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:DynamicDecodeLayer>
   $<TARGET_OBJECTS:Llama>
   $<TARGET_OBJECTS:LlamaTritonBackend>
-  $<TARGET_OBJECTS:gemm_s4_f16>
   $<TARGET_OBJECTS:TopKSamplingLayer>
   $<TARGET_OBJECTS:TopPSamplingLayer>
   $<TARGET_OBJECTS:TransformerTritonBackend>

@@ -58,12 +58,14 @@ class SubCliServe:
 
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
+        ArgumentHelper.device(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
-
+        max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(
+            pt_group)
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
@@ -73,6 +75,7 @@ class SubCliServe:
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(cache_block_seq_len_act)
         tb_group._group_actions.append(prefix_caching_act)
+        tb_group._group_actions.append(max_prefill_token_num_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
@@ -125,10 +128,6 @@ class SubCliServe:
                             type=str,
                             default=['*'],
                             help='A list of allowed http headers for cors')
-        parser.add_argument('--qos-config-path',
-                            type=str,
-                            default='',
-                            help='Qos policy config path')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -147,6 +146,7 @@ class SubCliServe:
         pt_group = parser.add_argument_group('PyTorch engine arguments')
 
         ArgumentHelper.adapters(pt_group)
+        ArgumentHelper.device(pt_group)
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
@@ -154,7 +154,8 @@ class SubCliServe:
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
-
+        max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(
+            pt_group)
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
@@ -164,6 +165,7 @@ class SubCliServe:
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(cache_block_seq_len_act)
         tb_group._group_actions.append(prefix_caching_act)
+        tb_group._group_actions.append(max_prefill_token_num_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
@@ -213,7 +215,8 @@ class SubCliServe:
                 block_size=args.cache_block_seq_len,
                 session_len=args.session_len,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
+                device_type=args.device,
+                max_prefill_token_num=args.max_prefill_token_num)
         else:
             backend_config = TurbomindEngineConfig(
                 tp=args.tp,
@@ -225,7 +228,7 @@ class SubCliServe:
                 cache_max_entry_count=args.cache_max_entry_count,
                 cache_block_seq_len=args.cache_block_seq_len,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
+                max_prefill_token_num=args.max_prefill_token_num)
         chat_template_config = get_chat_template(args.chat_template)
         run(args.model_path_or_server,
             server_name=args.server_name,
@@ -256,7 +259,8 @@ class SubCliServe:
                 session_len=args.session_len,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
+                device_type=args.device,
+                max_prefill_token_num=args.max_prefill_token_num)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(
@@ -269,7 +273,7 @@ class SubCliServe:
                 cache_max_entry_count=args.cache_max_entry_count,
                 cache_block_seq_len=args.cache_block_seq_len,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
+                max_prefill_token_num=args.max_prefill_token_num)
         chat_template_config = get_chat_template(args.chat_template)
 
         from lmdeploy.messages import VisionConfig
@@ -288,8 +292,7 @@ class SubCliServe:
                        allow_headers=args.allow_headers,
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
-                       ssl=args.ssl,
-                       qos_config_path=args.qos_config_path)
+                       ssl=args.ssl)
 
     @staticmethod
     def api_client(args):
