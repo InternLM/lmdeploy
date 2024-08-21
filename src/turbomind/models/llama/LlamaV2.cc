@@ -68,7 +68,6 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
     param_(model),
     attn_param_(attn),
     lora_param_(lora),
-
     head_num_(model.head_num),
     size_per_head_(model.head_dim),
     inter_size_(model.inter_size),
