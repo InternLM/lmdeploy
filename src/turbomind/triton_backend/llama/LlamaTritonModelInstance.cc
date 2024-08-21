@@ -43,10 +43,10 @@ void triton_stream_callback(std::unordered_map<std::string, ft::Tensor>* output_
 }
 
 template<typename T>
-LlamaTritonModelInstance<T>::LlamaTritonModelInstance(std::shared_ptr<LlamaTritonSharedModelInstance<T>>      instance,
+LlamaTritonModelInstance<T>::LlamaTritonModelInstance(ft::Engine<T>&                                          instance,
                                                       std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator,
                                                       int device_id):
-    device_id_{device_id}, instance_(std::move(instance)), allocator_(std::move(allocator))
+    device_id_{device_id}, instance_(&instance), allocator_(std::move(allocator))
 {
 }
 
@@ -147,15 +147,15 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
     const bool   is_return_logits =
         input_tensors->count("is_return_logits") && *(bool*)input_tensors->at("is_return_logits").data;
 
-    const size_t vocab_size = instance_->llm->vocab_size();
+    const size_t vocab_size = instance_->model().vocab_size();
 
-    allocateBuffer(request_batch_size, max_input_len, beam_width, instance_->session_len, is_return_logits);
+    allocateBuffer(request_batch_size, max_input_len, beam_width, instance_->session_len(), is_return_logits);
 
     std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
         {"output_ids",
          ft::Tensor{ft::MEMORY_CPU,
                     ft::TYPE_UINT32,
-                    std::vector<size_t>{request_batch_size, beam_width, (size_t)instance_->session_len},
+                    std::vector<size_t>{request_batch_size, beam_width, (size_t)instance_->session_len()},
                     d_output_ids_}},
         {"sequence_length",
          ft::Tensor{ft::MEMORY_CPU,
@@ -177,7 +177,7 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
     }
 
     if (input_tensors->count("logprobs")) {
-        size_t max_logprob_length = std::min((int)max_request_output_len, instance_->session_len) + 1;
+        size_t max_logprob_length = std::min((int)max_request_output_len, instance_->session_len()) + 1;
         h_logprob_vals_           = (float*)std::realloc(
             h_logprob_vals_, sizeof(float) * request_batch_size * beam_width * max_logprob_length * ft::kMaxLogProb);
         h_logprob_indexes_ = (uint32_t*)std::realloc(h_logprob_indexes_,
@@ -223,7 +223,7 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
         }
 
         ft::check_cuda_error(cudaStreamSynchronize(allocator_->returnStream()));
-        instance_->llm->forward(&output_tensors, &ft_input_tensors, {instance_comm, callback});
+        instance_->Submit(&output_tensors, &ft_input_tensors, {instance_comm, callback});
         // ! stream synced by the model before returning
     }
     catch (...) {
@@ -251,8 +251,10 @@ void LlamaTritonModelInstance<T>::allocateBuffer(const size_t request_batch_size
     d_sequence_lengths_ = (int*)std::realloc(d_sequence_lengths_, sizeof(int) * request_batch_size * beam_width);
 
     if (is_return_logits) {
-        d_output_logits_ = (float*)allocator_->reMalloc(
-            d_output_logits_, sizeof(float) * request_batch_size * max_input_len * instance_->llm->vocab_size(), false);
+        d_output_logits_ = (float*)allocator_->reMalloc(d_output_logits_,
+                                                        sizeof(float) * request_batch_size * max_input_len
+                                                            * instance_->model().vocab_size(),
+                                                        false);
     }
 }
 

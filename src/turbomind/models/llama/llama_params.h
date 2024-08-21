@@ -9,7 +9,22 @@
 
 namespace turbomind {
 
-struct LlamaAttentionParams {
+struct ModelParam {
+    int   head_num;
+    int   head_dim;
+    int   kv_head_num;
+    int   hidden_units;
+    int   layer_num;
+    int   inter_size;
+    int   vocab_size;
+    float norm_eps;
+    int   quant_policy;
+    //
+    int start_id;
+    int end_id;
+};
+
+struct AttentionParam {
     int         rotary_embedding_dim;
     float       rotary_embedding_base;
     int         max_position_embeddings;
@@ -20,9 +35,10 @@ struct LlamaAttentionParams {
     float       high_freq_factor;
     bool        use_dynamic_ntk;
     bool        use_logn_attn;
+    int         cache_block_seq_len;
 };
 
-struct EngineParams {
+struct EngineParam {
     // batch params
     int max_batch_size;
     int session_len;
@@ -40,7 +56,7 @@ struct EngineParams {
     int max_prefill_iters;
 };
 
-struct LoraParams {
+struct LoraParam {
     int        r;
     float      scale;
     LoraPolicy policy;

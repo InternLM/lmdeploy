@@ -38,7 +38,7 @@ public:
                             size_t     inter_size,
                             WeightType weight_type,
                             int        group_size,
-                            LoraParams lora_params,
+                            LoraParam  lora_param,
                             bool       attn_bias,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank);
