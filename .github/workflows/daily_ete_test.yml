@@ -63,7 +63,6 @@ env:
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.run_id }}
-  COVERAGE_FILE: /nvme/qa_test_models/test-reports/${{ github.run_id }}/.coverage
 
 jobs:
   linux-build:
@@ -167,86 +166,85 @@ jobs:
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
-          mkdir ${{env.REPORT_DIR}} -p
       - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir
+          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'quantization'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - convert
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'convert'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/convert -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/convert -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - chat workspace
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - chat hf torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'chat'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - pipeline turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - pipeline torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - pipeline turbomind vl
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - restful turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - restful turbomind vl
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'restful'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - restful workspace
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - restful torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'restful'))
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}}
       - name: Test lmdeploy - local testcase
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
         run: |
-          coverage run --source lmdeploy -m -a pytest /local_case/issue_regression --alluredir=${{env.REPORT_DIR}}
+          pytest /local_case/issue_regression --alluredir=${{env.REPORT_DIR}}
       - name: Clear workfile
         if: always()
         run: |
@@ -310,7 +308,6 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
-          mkdir ${{env.REPORT_DIR}} -p
       - name: Start restful api turbomind
         if: matrix.backend == 'turbomind'
         run: |
@@ -326,7 +323,7 @@ jobs:
       - name: Test lmdeploy - restful api
         timeout-minutes: 75
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}}
       - name: Kill api server
         if: always()
         run: |
@@ -346,7 +343,7 @@ jobs:
       - name: Test lmdeploy - restful api - base
         timeout-minutes: 40
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=${{env.REPORT_DIR}}
       - name: Kill api server
         if: always()
         run: |
@@ -410,13 +407,12 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
-          mkdir ${{env.REPORT_DIR}} -p
       - name: Test lmdeploy - interface pipeline case
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} || true
-          coverage run --source lmdeploy -m -a pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}}
       - name: Clear workfile
         if: always()
         run: |
@@ -478,10 +474,9 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-          mkdir ${{env.REPORT_DIR}} -p
       - name: Test benchmark script
         run: |
-          coverage run --source lmdeploy -m -a pytest autotest/benchmark -n 4 --run_id ${{ github.run_id }} -m function --lf --alluredir=${{env.REPORT_DIR}}
+          pytest autotest/benchmark -n 4 --run_id ${{ github.run_id }} -m function --lf --alluredir=${{env.REPORT_DIR}}
       - name: Clear workfile
         if: always()
         run: |
@@ -511,18 +506,6 @@ jobs:
         run: |
           pip install pandas fire mmengine
           python3 .github/scripts/action_tools.py generate_benchmark_report $BENCHMARK_REPORT_DIR
-
-  get_coverage_result:
-    if: ${{!cancelled() && (github.event_name == 'schedule')}}
-    needs: [test_tools, test_restful, test_pipeline, test_benchmark]
-    timeout-minutes: 5
-    runs-on: [self-hosted, linux-a100]
-    steps:
-      - name: Get coverage
-        run: |
-          python3 -m pip install coverage
-          coverage xml
-          coverage report -m
 
   notify_to_feishu:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
