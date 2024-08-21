@@ -18,9 +18,9 @@ assert TRITON_VERSION >= version.parse('2.1.0')
 
 
 @triton.autotune(configs=[
-    triton.Config({}, num_stages=1, num_warps=16),
-    triton.Config({}, num_stages=1, num_warps=8),
-    triton.Config({}, num_stages=1, num_warps=4),
+    triton.Config({}, num_stages=2, num_warps=16),
+    triton.Config({}, num_stages=2, num_warps=8),
+    triton.Config({}, num_stages=2, num_warps=4),
 ],
                  key=['BLOCK_H', 'BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
 @wrap_jit_func(type_hint=dict(
@@ -168,11 +168,11 @@ def _fwd_grouped_split_kernel(
         start_block_id = tl.maximum(history_len - window_size,
                                     loop_start) // BLOCK_N
         kv_min_loc = tl.maximum(history_len - window_size, 0)
-    b_offset = tl.load(block_offset_ptrs + start_block_id)
 
     loop_start = start_block_id * BLOCK_N
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
+        b_offset = tl.load(block_offset_ptrs + start_n // BLOCK_N)
 
         # -- compute qk ----
         k = tl.load(k_ptrs + b_offset * stride_kp)
@@ -183,11 +183,6 @@ def _fwd_grouped_split_kernel(
             v = tl.trans(k)
         else:
             v = tl.load(v_ptrs + b_offset * stride_vp)
-
-        # prefetch b_offset
-        if start_n + BLOCK_N < loop_end:
-            start_block_id += 1
-            b_offset = tl.load(block_offset_ptrs + start_block_id)
 
         qk = tl.zeros([BLOCK_H, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -368,9 +363,9 @@ def _fwd_kernel(
     BLOCK_DMODEL1: tl.constexpr,
 ):
     """paged attention kernel."""
-    cur_batch = tl.program_id(0)
+    cur_batch = tl.program_id(2)
     cur_head = tl.program_id(1)
-    start_m = tl.program_id(2)
+    start_m = tl.program_id(0)
 
     cur_kv_head = cur_head // kv_group_num
 
@@ -429,10 +424,10 @@ def _fwd_kernel(
     if window_size > 0:
         start_block_id = tl.maximum(history_len - window_size, 0) // BLOCK_N
         kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
-    b_offset = tl.load(block_offset_ptrs + start_block_id)
     kv_start_loc = start_block_id * BLOCK_N
     for start_n in range(kv_start_loc, kv_seqlen, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
+        b_offset = tl.load(block_offset_ptrs + start_n // BLOCK_N)
 
         # -- compute qk ----
         k = tl.load(k_ptrs + b_offset * stride_kp)
@@ -443,9 +438,6 @@ def _fwd_kernel(
             v = tl.trans(k)
         else:
             v = tl.load(v_ptrs + b_offset * stride_vp)
-        if start_n + BLOCK_N < kv_seqlen:
-            start_block_id = start_n // BLOCK_N + 1
-            b_offset = tl.load(block_offset_ptrs + start_block_id)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -570,8 +562,8 @@ def paged_attention_fwd(
         BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lk)
         BLOCK_M = max(16, min(BLOCK, 16384 // BLOCK_DMODEL))
         num_warps = 4
-        num_stages = 1
-        grid = (batch, head, triton.cdiv(max_seqlen, BLOCK_M))
+        num_stages = 2
+        grid = (triton.cdiv(max_seqlen, BLOCK_M), head, batch)
         _fwd_kernel[grid](q,
                           k,
                           v,
