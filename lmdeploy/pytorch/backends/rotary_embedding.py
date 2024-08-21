@@ -8,6 +8,7 @@ class EmbeddingType(Enum):
     Default = auto()
     LinearScaling = auto()
     DynamicNTKScaling = auto()
+    Llama3 = auto()
 
 
 class RotaryEmbeddingImpl(ABC):
@@ -29,6 +30,8 @@ class RotaryEmbeddingBuilder(ABC):
         max_position_embeddings: int = 2048,
         base: int = 10000,
         scaling_factor: float = 1.0,
+        low_freq_factor: float = 1.0,
+        high_freq_factor: float = 4.0,
         emb_type: EmbeddingType = EmbeddingType.Default,
     ):
         """build."""

@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import math
+
 import torch
 from torch import nn
 
@@ -100,6 +102,43 @@ class LlamaDynamicNTKScalingRotaryEmbedding(RotaryEmbeddingImpl):
         return cos, sin
 
 
+class Llama3RotaryEmbeddingImpl(RotaryEmbeddingImpl):
+    """llama3 rotary embedding implementation."""
+
+    def __init__(
+        self,
+        dim: int,
+        base: int = 10000,
+        scaling_factor: float = 1.0,
+        low_freq_factor: float = 1.0,
+        high_freq_factor: float = 4.0,
+        original_max_position_embeddings: int = 8194,
+    ):
+        super().__init__(dim, base, scaling_factor)
+        old_context_len = original_max_position_embeddings
+        low_freq_wavelen = old_context_len / low_freq_factor
+        high_freq_wavelen = old_context_len / high_freq_factor
+
+        inv_freq = self.inv_freq
+        factor = self.scaling_factor
+        wavelen = 2 * math.pi / inv_freq
+        # wavelen < high_freq_wavelen: do nothing
+        # wavelen > low_freq_wavelen: divide by factor
+        inv_freq_llama = torch.where(wavelen > low_freq_wavelen,
+                                     inv_freq / factor, inv_freq)
+        # otherwise: interpolate between the two, using a smooth factor
+        smooth_factor = (old_context_len / wavelen - low_freq_factor) / (
+            high_freq_factor - low_freq_factor)
+        smoothed_inv_freq = (
+            1 - smooth_factor
+        ) * inv_freq_llama / factor + smooth_factor * inv_freq_llama
+        is_medium_freq = ~(wavelen < high_freq_wavelen) * ~(wavelen >
+                                                            low_freq_wavelen)
+        inv_freq_llama = torch.where(is_medium_freq, smoothed_inv_freq,
+                                     inv_freq_llama)
+        self.register_buffer('inv_freq_llama', inv_freq_llama)
+
+
 class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
     """rotary embedding builder."""
 
@@ -109,6 +148,8 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
         max_position_embeddings: int = 2048,
         base: int = 10000,
         scaling_factor: float = 1.0,
+        low_freq_factor: float = 1.0,
+        high_freq_factor: float = 4.0,
         emb_type: EmbeddingType = EmbeddingType.Default,
     ):
         """build."""
@@ -117,6 +158,10 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
         elif emb_type == EmbeddingType.DynamicNTKScaling:
             return LlamaDynamicNTKScalingRotaryEmbedding(
                 dim, base, scaling_factor, max_position_embeddings)
+        elif emb_type == EmbeddingType.Llama3:
+            return Llama3RotaryEmbeddingImpl(dim, base, scaling_factor,
+                                             low_freq_factor, high_freq_factor,
+                                             max_position_embeddings)
         else:
             raise NotImplementedError(
                 f'Unsupported embedding type: {emb_type}')

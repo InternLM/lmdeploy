@@ -10,13 +10,20 @@ def build_rotary_embedding(
         max_position_embeddings: int = 2048,
         base: int = 10000,
         scaling_factor: float = 1.0,
+        low_freq_factor: float = 1.0,
+        high_freq_factor: float = 4.0,
         emb_type: EmbeddingType = EmbeddingType.Default) -> nn.Module:
     """build rotary embedding op."""
     backend = get_backend()
 
     builder = backend.get_layer_impl_builder(LayerType.RotaryEmbedding)
-    return builder.build(dim, max_position_embeddings, base, scaling_factor,
-                         emb_type)
+    return builder.build(dim,
+                         max_position_embeddings,
+                         base,
+                         scaling_factor,
+                         low_freq_factor=low_freq_factor,
+                         high_freq_factor=high_freq_factor,
+                         emb_type=emb_type)
 
 
 class ApplyRotaryEmb(nn.Module):
