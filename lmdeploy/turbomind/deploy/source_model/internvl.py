@@ -61,6 +61,7 @@ class InternVLModel(LlamaModel):
             model_arg = json.load(f)['llm_config']
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
+            hidden_units = model_arg['hidden_size']
             attn_head_num = model_arg['num_attention_heads']
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
@@ -80,7 +81,8 @@ class InternVLModel(LlamaModel):
 
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
-                    attn_head_num=attn_head_num,
+                    hidden_units=hidden_units,
+                    head_num=attn_head_num,
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,
                     max_position_embeddings=max_position_embeddings,
