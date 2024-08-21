@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include <cstddef>
 #include <map>
 #include <regex>
 #include <string>
@@ -10,15 +11,15 @@
 namespace turbomind {
 
 struct ModelParam {
-    int   head_num;
-    int   head_dim;
-    int   kv_head_num;
-    int   hidden_units;
-    int   layer_num;
-    int   inter_size;
-    int   vocab_size;
-    float norm_eps;
-    int   quant_policy;
+    size_t head_num;
+    size_t head_dim;
+    size_t kv_head_num;
+    size_t hidden_units;
+    size_t layer_num;
+    size_t inter_size;
+    size_t vocab_size;
+    float  norm_eps;
+    int    quant_policy;
     //
     int start_id;
     int end_id;
