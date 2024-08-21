@@ -368,9 +368,9 @@ def _fwd_kernel(
     BLOCK_DMODEL1: tl.constexpr,
 ):
     """paged attention kernel."""
-    cur_batch = tl.program_id(0)
+    cur_batch = tl.program_id(2)
     cur_head = tl.program_id(1)
-    start_m = tl.program_id(2)
+    start_m = tl.program_id(0)
 
     cur_kv_head = cur_head // kv_group_num
 
@@ -571,7 +571,7 @@ def paged_attention_fwd(
         BLOCK_M = max(16, min(BLOCK, 16384 // BLOCK_DMODEL))
         num_warps = 4
         num_stages = 1
-        grid = (batch, head, triton.cdiv(max_seqlen, BLOCK_M))
+        grid = (triton.cdiv(max_seqlen, BLOCK_M), head, batch)
         _fwd_kernel[grid](q,
                           k,
                           v,
