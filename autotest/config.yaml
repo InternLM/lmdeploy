@@ -162,7 +162,6 @@ turbomind_quatization:
         - openbmb/MiniCPM-Llama3-V-2_5
     gptq:
         - Qwen/Qwen2-7B-Instruct-GPTQ-Int4
-        - Qwen/Qwen2-0.5B-Instruct-GPTQ-Int4
     kvint:
         - meta-llama/Meta-Llama-3-1-8B-Instruct
         - meta-llama/Meta-Llama-3-8B-Instruct

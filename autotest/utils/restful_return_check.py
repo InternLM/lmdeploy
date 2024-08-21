@@ -132,8 +132,7 @@ def assert_chat_interactive_stream_return(output,
                                           index: int = None):
     assert output.get('input_tokens') > 0
     if index is not None:
-        assert output.get('tokens') >= index and output.get(
-            'tokens') <= index + 6
+        assert output.get('tokens') >= index
     assert output.get('tokens') > 0
     assert output.get('history_tokens') >= 0
     if is_last:

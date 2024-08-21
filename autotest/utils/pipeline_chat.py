@@ -257,7 +257,7 @@ def assert_pipeline_single_element(output,
         result &= len(output.text) > 0
         result &= output.finish_reason is None
         result &= len(output.token_ids) > 0
-    if logprobs_num == 0:
+    if logprobs_num == 0 or (is_last and is_stream):
         result &= output.logprobs is None
     else:
         if is_stream:
