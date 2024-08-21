@@ -88,20 +88,19 @@ def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
     return adapter_ids
 
 
-def _dynamic_prefill_interval(scheduler: Scheduler):
+def _check_finish(scheduler: Scheduler, current_iter: int):
     """dynamic prefill interval."""
+    if not scheduler.has_waiting():
+        return False
     scheduler_config = scheduler.scheduler_config
     max_prefill_interval = scheduler_config.prefill_interval
     max_batches = scheduler_config.max_batches
     num_batches = len(scheduler.running)
-    num_waiting = len(scheduler.waiting)
-    if num_waiting == 0:
-        return max_prefill_interval
     ratio = num_batches / max_batches
-    prefill_interval = ratio * (max_prefill_interval + 1)
-    prefill_interval = np.clip(prefill_interval, 2, max_prefill_interval)
-    prefill_interval = int(prefill_interval)
-    return prefill_interval
+    min_iter = max_prefill_interval * ratio
+    if current_iter >= min_iter:
+        return True
+    return False
 
 
 class Engine:
@@ -723,6 +722,7 @@ class Engine:
             # send output
             stopped = stopped.cpu()
             finish = stopped.all().item() or (idx == loop_count - 1)
+            finish = finish or _check_finish(self.scheduler, idx)
             output = (next_token_ids.cpu(), logits, stopped)
             output_que.put_nowait((finish, output))
 
@@ -776,7 +776,7 @@ class Engine:
         while True:
             is_prefill = await in_que.get()
             try:
-                prefill_interval = _dynamic_prefill_interval(self.scheduler)
+                prefill_interval = self.scheduler_config.prefill_interval
                 schedule_output = self.scheduler.schedule(
                     is_prefill=is_prefill, prealloc_size=prefill_interval)
                 running: SeqList = schedule_output.running
@@ -845,6 +845,8 @@ class Engine:
             in_que.put_nowait(prefill)
             finish = False
             while not finish:
+                if self.req_manager.has_requests():
+                    self.req_manager.step()
                 finish, out = await out_que.get()
                 try:
                     if isinstance(out, Exception):
