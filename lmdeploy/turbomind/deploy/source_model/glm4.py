@@ -99,7 +99,7 @@ class Glm4Model(LlamaModel):
         seq_length = config['seq_length']
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
-                    attn_head_num=attn_head_num,
+                    head_num=attn_head_num,
                     kv_head_num=kv_head_num,
                     hidden_units=hidden_units,
                     rope_theta=rope_theta,

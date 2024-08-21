@@ -191,20 +191,13 @@ class BaseOutputModel(ABC):
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model.model_info())
 
-        # head_num, vocab_size
+        # vocab_size
         for bin in self.input_model.bins():
             emb = bin.tok_embeddings()
             if emb is not None:
                 _vocab_size, dim = emb.shape
-                # legacy, may get removed
-                head_num = final_cfg['head_num'] or dim // cfg.size_per_head
-                hidden_units = final_cfg[
-                    'hidden_units'] or head_num * cfg.size_per_head
                 break
-        final_cfg.update(
-            dict(head_num=head_num,
-                 vocab_size=_vocab_size,
-                 hidden_units=hidden_units))
+        final_cfg.update(dict(vocab_size=_vocab_size))
         return TurbomindModelConfig.from_dict(final_cfg, allow_none=True)
 
     def export_config(self) -> None:
