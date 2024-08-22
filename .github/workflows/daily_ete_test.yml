@@ -54,7 +54,7 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron:  '00 19 * * 0-4'
+    - cron:  '00 18 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -104,7 +104,7 @@ jobs:
     needs: linux-build
     if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.tools_regression)}}
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 360
+    timeout-minutes: 420
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
@@ -144,7 +144,7 @@ jobs:
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install /root/packages/autoawq_kernels-0.0.6+cu118-cp310-cp310-linux_x86_64.whl
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install -U 'xformers' --index-url https://download.pytorch.org/whl/cu118 --no-deps
+          python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}

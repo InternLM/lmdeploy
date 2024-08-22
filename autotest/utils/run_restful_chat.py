@@ -45,7 +45,8 @@ def start_restful_api(config, param, model, model_path, backend_type,
         port = DEFAULT_PORT + worker_num
 
     cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path +
-                                 ' --server-port ' + str(port),
+                                 ' --session-len 8096 --server-port ' +
+                                 str(port),
                                  config,
                                  model,
                                  need_tp=True,
