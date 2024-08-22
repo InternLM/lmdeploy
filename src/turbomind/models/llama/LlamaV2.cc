@@ -43,7 +43,6 @@
 #include "src/turbomind/utils/memory_utils.h"
 #include <algorithm>
 #include <chrono>
-#include <driver_types.h>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -52,7 +51,7 @@
 
 namespace turbomind {
 
-/// TODO: Padded vocab size should also by divisible by 8
+/// TODO: Padded vocab size should also be divisible by 8
 inline int pad_vocab_size(int vocab_size, int tp)
 {
     return (vocab_size + tp - 1) / tp * tp;
@@ -458,7 +457,7 @@ void LlamaV2<T>::tune()
     T* out_data = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_out);
 
     cudaRandomUniform(in_data, (size_t)max_bs * max_in);
-    cudaDeviceSynchronize();
+    check_cuda_error(cudaDeviceSynchronize());
 
     linear_->set_measure(true);
 
@@ -478,7 +477,7 @@ void LlamaV2<T>::tune()
 
     linear_->set_measure(false);
 
-    cudaDeviceSynchronize();
+    check_cuda_error(cudaDeviceSynchronize());
 
     allocator_->free((void**)&in_data);
     allocator_->free((void**)&out_data);

@@ -120,7 +120,7 @@ private:
     const NcclParam      tensor_para_;
     const Context<T>&    context_;
 
-    const cudaStream_t    stream_;
+    cudaStream_t const    stream_;
     LlamaLinear<T>* const linear_;
     IAllocator* const     allocator_;
     const int             arch_{};
