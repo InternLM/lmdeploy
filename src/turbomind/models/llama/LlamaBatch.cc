@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cuda_runtime.h>
 #include <functional>
 #include <iomanip>
 #include <iterator>
@@ -364,15 +365,15 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
 
         // compute rope scaling factor
         if (r->start_flag) {
-            seq.rope_theta = model_->attn_params_.rotary_embedding_base;
-            if (model_->attn_params_.use_dynamic_ntk) {
-                auto scaling_factor = model_->attn_params_.rope_scaling_factor;
+            seq.rope_theta = model_->attn_param_.rotary_embedding_base;
+            if (model_->attn_param_.use_dynamic_ntk) {
+                auto scaling_factor = model_->attn_param_.rope_scaling_factor;
                 if (scaling_factor >= 1.f) {  // infer by current context length
                     auto max_seq_len = state.h_context_length[idx];
-                    auto max_pos_emb = model_->attn_params_.max_position_embeddings;
+                    auto max_pos_emb = model_->attn_param_.max_position_embeddings;
                     if (max_seq_len > max_pos_emb) {
                         scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
-                        float rope_dim = model_->attn_params_.rotary_embedding_dim;
+                        float rope_dim = model_->attn_param_.rotary_embedding_dim;
                         seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
                         TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
                                     (long)seq.id,
@@ -499,7 +500,7 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     };
 
     // TM_LOG_INFO("max_input_count %d", max_input_count);
-    auto outcome = sequence_manager_->Materialize(sequences, context_lengths, priorities, step_length_, adjust);
+    auto outcome = sequence_manager_->Materialize(sequences, context_lengths, priorities, 1, adjust);
 
     if (outcome.allocation || outcome.swap_in || outcome.swap_out) {
         dbg(outcome);
@@ -711,9 +712,9 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     const size_t max_batch_block_count =
         batch_size * ((session_len + cache_block_seq_len - 1) / cache_block_seq_len) + 1;
 
-    if (model_->lora_params_.policy == LoraPolicy::kPlora) {
-        lora_mask_buf_ = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_forward_token_num_, false);
-        size_t sz      = sizeof(T) * max_forward_token_num_ * (hidden_units + model_->lora_params_.max_wo_r);
+    if (model_->lora_param_.policy == LoraPolicy::kPlora) {
+        lora_mask_buf_  = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_forward_token_num_, false);
+        const size_t sz = sizeof(T) * max_forward_token_num_ * (hidden_units + model_->lora_param_.max_wo_r);
         context_decoder_output_buf_ = (T*)peer_allocator_->reMalloc(context_decoder_output_buf_, sz, false);
     }
     else {
@@ -932,29 +933,67 @@ void LlamaBatch<T>::FreeBuffer()
 }
 
 template<typename T>
-LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, int quant_policy, LlamaV2<T>* model):
-    max_batch_size_(params.max_batch_size),
-    max_forward_token_num_(params.max_prefill_token_num + params.max_batch_size),
-    max_context_token_num_(params.max_context_token_num),
-    session_len_(params.session_len),
-    rank_(model->tensor_para_.rank_),
-    debug_(model->debug_),
-    step_length_(params.step_length),
-    model_(model),
-    data_type_(getTensorType<T>()),
-    num_tokens_per_iter_(params.num_tokens_per_iter),
-    max_prefill_iters_(params.max_prefill_iters)
+LlamaBatch<T>::~LlamaBatch()
 {
-    stream_         = model_->stream_;
-    allocator_      = model_->allocator_;
-    peer_allocator_ = model_->peer_allcator_;
-    cublas_wrapper_ = model_->cublas_wrapper_;
+    TM_LOG_DEBUG("~LlamaBatch()");
+    shared_state_->request_queue.close();
 
-    const int elem_bits = quant_policy ? quant_policy : bitsof<T>;
+    internal_thread_.join();
 
-    auto get_free_size = [&] {
-        return GetSyncFreeMemSize(*model_->shared_state_->barrier, model_->shared_state_->free_size);
-    };
+    if (output_thread_.joinable()) {
+        {
+            std::lock_guard lock{output_mutex_};
+            output_stop_token_ = true;
+        }
+        output_cv_.notify_one();
+        output_thread_.join();
+    }
+
+    // The dtor maybe called from unknown thread, set device id before CUDA calls
+    check_cuda_error(cudaSetDevice(device_id_));
+    check_cuda_error(cudaStreamSynchronize(stream_));
+
+    FreeBuffer();
+
+    model_.reset();
+    sequence_manager_.reset();
+    context_.reset();  // This destroy all objects in context except for `stream`
+
+    check_cuda_error(cudaStreamSynchronize(stream_));
+
+    // Destroy the stream in context
+    check_cuda_error(cudaStreamDestroy(stream_));
+}
+
+template<typename T>
+LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
+                          std::unique_ptr<LlamaV2<T>>  model,  // ! This is moved
+                          std::unique_ptr<Context<T>>  ctx,    // ! This is moved
+                          std::shared_ptr<SharedState> state,
+                          int                          device_id):
+    param_(param),
+    shared_state_(state),
+    max_batch_size_(param.max_batch_size),
+    max_forward_token_num_(param.max_prefill_token_num + param.max_batch_size),
+    max_context_token_num_(param.max_context_token_num),
+    num_tokens_per_iter_(param.num_tokens_per_iter),
+    max_prefill_iters_(param.max_prefill_iters),
+    device_id_(device_id),
+    rank_(model->tensor_para_.rank_),
+    data_type_(getTensorType<T>()),
+    debug_(isDebug()),
+    stream_(ctx->stream),
+    allocator_(ctx->allocator.get()),
+    peer_allocator_(ctx->peer_allocator.get()),
+    cublas_wrapper_(ctx->cublas_wrapper.get()),
+    context_(std::move(ctx)),
+    model_(std::move(model)),
+    session_len_(param.session_len)
+{
+    const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
+
+    const auto quant_policy = model_->param_.quant_policy;
+    const int  elem_bits    = quant_policy ? quant_policy : bitsof<T>;
 
     SequenceManager::BlockConfig block_config{
         (int)model_->size_per_head_,
@@ -964,12 +1003,16 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
         elem_bits,
     };
 
-    sequence_manager_.reset(new SequenceManager{model_->num_layer_,
+    const auto get_free_size = [&] {  //
+        return GetSyncFreeMemSize(*shared_state_->barrier, shared_state_->free_size);
+    };
+
+    sequence_manager_.reset(new SequenceManager{model_->layer_num_,
                                                 block_config,
-                                                params.cache_max_block_count,
-                                                params.cache_chunk_size,
-                                                params.enable_prefix_caching,
-                                                model->tensor_para_.rank_,
+                                                param.cache_max_block_count,
+                                                param.cache_chunk_size,
+                                                param.enable_prefix_caching,
+                                                model_->tensor_para_.rank_,
                                                 allocator_,
                                                 get_free_size});
 
@@ -1422,19 +1465,17 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
 }
 
 template<typename T>
-void LlamaBatch<T>::InternalThreadEntry(int device_id)
+void LlamaBatch<T>::InternalThreadEntry()
 {
     // TM_LOG_INFO("[InternalThreadEntry] %d", (int)rank_);
-    check_cuda_error(cudaSetDevice(device_id));
+    check_cuda_error(cudaSetDevice(device_id_));
 
     // Initialize `AnomalyHandler`
     AnomalyHandler::instance().Init(rank_, model_->vocab_size_padded_, model_->end_id_, max_batch_size_, stream_);
 
-    auto& shared_state = model_->shared_state_;
-
-    auto& request_queue  = shared_state->request_queue;
-    auto& infer_requests = shared_state->infer_requests;
-    auto& stop_requests  = shared_state->stop_requests;
+    auto& request_queue  = shared_state_->request_queue;
+    auto& infer_requests = shared_state_->infer_requests;
+    auto& stop_requests  = shared_state_->stop_requests;
 
     GenerationState g{};
 
@@ -1449,8 +1490,8 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
             infer_requests.clear();
             if (is_empty || request_counter % request_interval == 0) {
                 // Block if batch is empty
-                request_queue.dequeue(stop_requests, infer_requests, free_slot_count, is_empty, shared_state->abort);
-                if (!shared_state->abort) {
+                request_queue.dequeue(stop_requests, infer_requests, free_slot_count, is_empty, shared_state_->abort);
+                if (!shared_state_->abort) {
                     RejectInvalidRequests(stop_requests, infer_requests);
                 }
             }
@@ -1459,9 +1500,9 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
         NvtxScope scope("mainloop");
 
         // wait while rank-0 is dequeueing
-        shared_state->barrier->wait();
+        shared_state_->barrier->wait();
 
-        if (shared_state->abort) {
+        if (shared_state_->abort) {
             TM_LOG_INFO("[InternalThreadEntry] stop requested.");
             return;
         }
@@ -1472,13 +1513,11 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
         ProcessInferRequests(infer_requests);
 
         // Wait while shared `requests` is being used
-        shared_state->barrier->wait();
+        shared_state_->barrier->wait();
 
         SendSignals(std::move(signals));
 
         Initialize(g);
-
-        FT_CHECK(step_length_ == 1);
 
         if (state_->active_size) {
             //
@@ -1489,7 +1528,7 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
                     // Finished requests and corresponding output tensors will be released when notified
                     // wait for all ranks to ensure no rank (except for output thread) will access related
                     // resources
-                    shared_state->barrier->wait();
+                    shared_state_->barrier->wait();
                 }
                 SendSignals(std::move(signals));
             }
@@ -1520,9 +1559,7 @@ template<typename T>
 void LlamaBatch<T>::Start()
 {
     TM_LOG_INFO("LlamaBatch<T>::Start()");
-    int device_id = -1;
-    check_cuda_error(cudaGetDevice(&device_id));
-    internal_thread_ = std::thread(&LlamaBatch::InternalThreadEntry, this, device_id);
+    internal_thread_ = std::thread(&LlamaBatch::InternalThreadEntry, this);
     if (rank_ == 0) {
         output_thread_ = std::thread(&LlamaBatch::OutputThreadEntry, this);
     }
@@ -1543,15 +1580,15 @@ void LlamaBatch<T>::OutputThreadEntry()
             }
             signals = std::move(output_signals_);
         }
-        if (rank_ == 0 && model_->ffi_lock_) {
-            model_->ffi_lock_(1);
+        if (rank_ == 0 && ffi_lock_) {
+            ffi_lock_(1);
         }
         // invoke stream cbs & signals
         for (const auto& s : signals) {
             s();
         }
-        if (rank_ == 0 && model_->ffi_lock_) {
-            model_->ffi_lock_(0);
+        if (rank_ == 0 && ffi_lock_) {
+            ffi_lock_(0);
         }
     }
 }
@@ -1758,6 +1795,101 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
     // PrintDecodeTokens(token_ids_buf_, g.step, active_size, stream_, "Forward");
 
     return true;
+}
+
+static inline Tensor slice(const Tensor& tensor, int index)
+{
+    auto shape = tensor.shape;
+    if (shape.at(0) == 1) {
+        return tensor;
+    }
+    shape[0]          = 1;
+    const auto offset = std::accumulate(shape.begin(), shape.end(), (size_t)index, std::multiplies<>{});
+    return tensor.slice(shape, offset);
+}
+
+// ! implicit conversion from `unordered_map` to `TensorMap` drops 0-sized tensors
+static inline TensorMap slice(const std::unordered_map<std::string, Tensor>& src, int index)
+{
+    TensorMap dst;
+    for (const auto& kv : src) {
+        dst.insert({kv.first, slice(kv.second, index)});
+    }
+    return dst;
+}
+
+template<typename T>
+void LlamaBatch<T>::Submit(std::unordered_map<std::string, Tensor>*       outputs,
+                           const std::unordered_map<std::string, Tensor>* inputs,
+                           Control                                        control)
+{
+    if (debug_) {
+        for (const auto& kv : *inputs) {
+            TM_LOG_INFO("[Submit] INPUT: %s", format(kv).c_str());
+        }
+        for (const auto& kv : *outputs) {
+            TM_LOG_INFO("[Submit] OUTPUT: %s", format(kv).c_str());
+        }
+    }
+
+    const int batch_size = outputs->at("output_ids").shape[0];
+
+    std::vector<std::shared_ptr<Request>> requests(batch_size);
+
+    // allocates all requests for the batch
+    for (int i = 0; i < batch_size; ++i) {
+        requests[i] = std::make_shared<Request>();
+    }
+
+    for (int i = 0; i < batch_size; ++i) {
+        auto& r = requests[i];
+
+        r->inputs  = slice(*inputs, i);
+        r->outputs = slice(*outputs, i);
+
+        r->id         = r->inputs.getVal<uint64_t>("CORRID", i);
+        r->start_flag = r->inputs.getVal<int>("START", 1);
+        r->end_flag   = r->inputs.getVal<int>("END", 1);
+        r->stop_flag  = r->inputs.getVal<int>("STOP", 0);
+        r->stream_cb  = control.callback;
+    }
+
+    // Submits the tasks and wait for finish
+    std::vector<int> error_codes;
+    bool             has_error = 0;
+
+    TM_LOG_INFO("[forward] Enqueue requests");
+
+    std::vector<uint64_t> ids;
+    for (const auto& r : requests) {
+        ids.push_back(r->id);
+    }
+
+    auto futures = shared_state_->request_queue.enqueue(std::move(requests));
+
+    FT_CHECK_WITH_INFO(ids.size() == futures.size(), "check failed");
+
+    TM_LOG_INFO("[forward] Wait for requests to complete ...");
+
+    for (int i = 0; i < futures.size(); ++i) {
+        auto ec = futures[i].get();
+        error_codes.push_back(ec);
+        if (ec) {
+            has_error = true;
+            TM_LOG_WARNING("[forward] Request failed for %ld, code %d", (long)ids[i], (int)ec);
+        }
+        else {
+            TM_LOG_INFO("[forward] Request completed for %ld", (long)ids[i]);
+        }
+    }
+
+    if (has_error) {
+        std::stringstream ss;
+        for (int i = 0; i < error_codes.size(); ++i) {
+            ss << (i ? "" : " ") << error_codes[i];
+        }
+        throw std::runtime_error(ss.str());
+    }
 }
 
 template class LlamaBatch<half>;

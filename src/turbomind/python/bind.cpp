@@ -376,14 +376,14 @@ PYBIND11_MODULE(_turbomind, m)
                 if (data_type == "half" || data_type == "fp16" || data_type == "int4") {
                     auto model = std::make_shared<LlamaTritonModel<half>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
-                    model->setFfiLock(gil_control);
+                    model->set_ffi_lock(gil_control);
                     return model;
                 }
                 else if (data_type == "bf16") {
 #ifdef ENABLE_BF16
                     auto model = std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
-                    model->setFfiLock(gil_control);
+                    model->set_ffi_lock(gil_control);
                     return model;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
@@ -393,7 +393,7 @@ PYBIND11_MODULE(_turbomind, m)
 #ifdef ENABLE_FP32
                     auto model = std::make_shared<LlamaTritonModel<float>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
-                    model->setFfiLock(gil_control);
+                    model->set_ffi_lock(gil_control);
                     return model;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
