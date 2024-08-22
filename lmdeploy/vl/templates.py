@@ -279,7 +279,7 @@ class MiniGeminiLlamaTempateWrapper(VLChatTemplateWrapper):
 
 
 class MiniCPMVTempateWrapper(VLChatTemplateWrapper):
-    """MiniCPMV chat template."""
+    """MiniCPM-Llama3-V-2_5 chat template."""
 
     def append_image_token(self, prompt, num_images: int):
         return f'<image>{IMAGE_TOKEN}</image>\n' * num_images + prompt
@@ -307,6 +307,37 @@ class MiniCPMVTempateWrapper(VLChatTemplateWrapper):
         return _prompt, _features
 
 
+class MiniCPMV26TempateWrapper(MiniCPMVTempateWrapper):
+    """MiniCPM-V-2_6 chat template."""
+
+    def update_image_token(self, prompt, features):
+        _features = []
+        _prompt = []
+        segs = prompt.split(f'<image>{IMAGE_TOKEN}</image>\n')
+        idx = 0
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(features):
+                _feat = features[i - 1]['embeddings'].split(1)
+                _feat = [x.squeeze() for x in _feat]
+                _features.extend(_feat)
+                _seg = f'<image>{IMAGE_TOKEN}</image>'
+                if features[i - 1].get('use_image_id', False):
+                    _seg = f'<image_id>{idx}</image_id>' + _seg
+                    idx += 1
+                if len(_feat) > 1:
+                    grid = features[i - 1]['grid']
+                    if grid is not None:
+                        _slice = '\n'.join(
+                            [f'<slice>{IMAGE_TOKEN}</slice>' * grid[0]] *
+                            grid[1])
+                        _seg = _seg + _slice
+                _seg += '\n'
+                _prompt.append(_seg)
+            _prompt.append(seg)
+        _prompt = ''.join(_prompt)
+        return _prompt, _features
+
+
 class GLM4VChatTemplateWrapper(VLChatTemplateWrapper):
     """glm-4v chat template."""
     pass
@@ -316,11 +347,10 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
     assert type(chat_template) != type(BaseModel()), 'failed to match ' \
-        'chat template, please explicit set chat_template_config' # noqa E721
+        'chat template, please explicit set chat_template_config'  # noqa E721
     if model_name == 'yi-vl':
         return YiVLChatTemplateWrapper(chat_template)
-
-    arch, _ = get_model_arch(model_path)
+    arch, cfg = get_model_arch(model_path)
     if arch == 'QWenLMHeadModel':
         return QwenVLChatTemplateWrapper(chat_template)
     elif arch in [
@@ -340,7 +370,12 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
     elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiLlamaTempateWrapper(chat_template)
     elif arch == 'MiniCPMV':
-        return MiniCPMVTempateWrapper(chat_template)
+        version_map = {
+            '2.5': MiniCPMVTempateWrapper,
+            '2.6': MiniCPMV26TempateWrapper
+        }
+        version = str(getattr(cfg, 'version', '2.5'))
+        return version_map[version](chat_template)
     elif arch == 'ChatGLMModel':
         return GLM4VChatTemplateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')
