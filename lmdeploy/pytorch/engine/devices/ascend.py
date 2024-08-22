@@ -1,10 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from .dipu import DIPUDeviceUtils
+from .base_device_utils import BaseDeviceUtils
 
 
-class ASCENDDeviceUtils(DIPUDeviceUtils):
+class ASCENDDeviceUtils(BaseDeviceUtils):
 
     device = 'ascend'
 
@@ -38,4 +38,7 @@ class ASCENDDeviceUtils(DIPUDeviceUtils):
             kv_start_indices, device=step_context.block_offsets.device)
         setattr(step_context, 'kv_start_indices', kv_start_indices)
         setattr(step_context, 'attention_mask', attention_mask)
+        is_unpaged_prefill = (not step_context.is_decoding) and all(
+            (step_context.q_seq_length == step_context.kv_seq_length).tolist())
+        setattr(step_context, 'is_unpaged_prefill', is_unpaged_prefill)
         return step_context

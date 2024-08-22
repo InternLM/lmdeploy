@@ -27,7 +27,7 @@ def apply_rotary_pos_emb(
     cached_cos = context.cos if context else cos
     cached_sin = context.sin if context else sin
     ext_ops.apply_rotary_pos_emb(query_states_reshaped, key_states_reshaped,
-                                 cached_cos, cached_sin, None, None, None)
+                                 cached_cos, cached_sin, None, None)
     if q_embed is None:
         q_embed = query_states
     else:
