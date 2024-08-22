@@ -56,6 +56,13 @@ struct LlamaTritonModel: public AbstractTransformerModel {
 
     TensorMap getParams(int deviceId, int rank) override;
 
+    void processWeights(int deviceId, int rank) override;
+
+    void createEngine(int                                                               device_id,
+                      int                                                               rank,
+                      std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
+                      std::shared_ptr<ft::AbstractCustomComm>) override;
+
     void createCustomComms(std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms,
                            int                                                   world_size) override;
 
@@ -84,6 +91,7 @@ private:
 
     size_t                          head_num_;
     size_t                          kv_head_num_;
+    size_t                          hidden_units_;
     size_t                          size_per_head_;
     size_t                          inter_size_;
     size_t                          num_layer_;

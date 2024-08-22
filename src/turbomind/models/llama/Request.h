@@ -21,8 +21,8 @@ struct Request {
     bool stop_flag;
 
     // per rank inputs/outputs
-    std::vector<TensorMap> inputs;
-    std::vector<TensorMap> outputs;
+    TensorMap inputs;
+    TensorMap outputs;
 
     using Callback = std::function<void(std::unordered_map<std::string, Tensor>*)>;
     Callback stream_cb;

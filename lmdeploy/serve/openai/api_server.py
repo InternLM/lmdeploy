@@ -3,6 +3,7 @@ import asyncio
 import copy
 import os
 import time
+from functools import partial
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
@@ -13,8 +14,8 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 
 from lmdeploy.archs import get_task
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import (GenerationConfig, LogitsProcessor,
+                               PytorchEngineConfig, TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
@@ -96,24 +97,27 @@ def available_models():
     return ModelList(data=model_cards)
 
 
-def create_error_response(status: HTTPStatus, message: str):
+def create_error_response(status: HTTPStatus,
+                          message: str,
+                          error_type='invalid_request_error'):
     """Create error response according to http status and message.
 
     Args:
         status (HTTPStatus): HTTP status codes and reason phrases
         message (str): error message
+        error_type (str): error type
     """
-    return JSONResponse(
-        ErrorResponse(message=message,
-                      type='invalid_request_error',
-                      code=status.value).model_dump())
+    return JSONResponse(ErrorResponse(message=message,
+                                      type=error_type,
+                                      code=status.value).model_dump(),
+                        status_code=status.value)
 
 
 async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
         return create_error_response(
-            HTTPStatus.BAD_REQUEST,
+            HTTPStatus.NOT_FOUND,
             f'The model `{request.model}` does not exist.')
     if hasattr(request, 'n') and request.n <= 0:
         return create_error_response(
@@ -236,6 +240,40 @@ async def health() -> Response:
     return Response(status_code=200)
 
 
+# modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
+def logit_bias_logits_processor(logit_bias: Union[Dict[int, float],
+                                                  Dict[str, float]],
+                                tokenizer) -> LogitsProcessor:
+    try:
+        # Convert token_id to integer
+        # Clamp the bias between -100 and 100 per OpenAI API spec
+        clamped_logit_bias: Dict[int, float] = {
+            int(token_id): min(100.0, max(-100.0, bias))
+            for token_id, bias in logit_bias.items()
+        }
+    except ValueError as exc:
+        raise ValueError(
+            'Found token_id in logit_bias that is not '
+            'an integer or string representing an integer') from exc
+
+    # Check if token_id is within the vocab size
+    for token_id, bias in clamped_logit_bias.items():
+        if token_id < 0 or token_id >= tokenizer.vocab_size:
+            raise ValueError(f'token_id {token_id} in logit_bias contains '
+                             'out-of-vocab token id')
+
+    def _logit_bias_processor(
+        logit_bias,
+        token_ids,
+        logits,
+    ):
+        for token_id, bias in logit_bias.items():
+            logits[token_id] = logits[token_id] + bias
+        return logits
+
+    return partial(_logit_bias_processor, clamped_logit_bias)
+
+
 @app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
 async def chat_completions_v1(request: ChatCompletionRequest,
                               raw_request: Request = None):
@@ -264,6 +302,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         response. Examples: `{"type": "json_object", "guide": {"properties":
         {"name": {"type": "string"}}, "required": ["name"], "type": "object"}}`
         or `{"type": "regex_object", "guide": "call me [A-Za-z]{1,10}"}`
+    - logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
     - tools (List): A list of tools the model may call. Currently, only
         internlm2 functions are supported as a tool. Use this to specify a
         list of functions for which the model can generate JSON inputs.
@@ -282,8 +321,6 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         in the decoding. Default to be True.
 
     Currently we do not support the following features:
-    - function_call (Users should implement this by themselves)
-    - logit_bias (not supported yet)
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
@@ -309,7 +346,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 
-    gen_logprobs = None
+    gen_logprobs, logits_processors = None, None
     if request.logprobs and request.top_logprobs:
         gen_logprobs = request.top_logprobs
     response_format = None
@@ -319,6 +356,16 @@ async def chat_completions_v1(request: ChatCompletionRequest,
                 HTTPStatus.BAD_REQUEST,
                 'only pytorch backend can use response_format now')
         response_format = request.response_format.model_dump()
+
+    if request.logit_bias is not None:
+        try:
+            logits_processors = [
+                logit_bias_logits_processor(
+                    request.logit_bias,
+                    VariableInterface.async_engine.tokenizer.model)
+            ]
+        except Exception as e:
+            return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens,
@@ -330,7 +377,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens,
-        response_format=response_format)
+        response_format=response_format,
+        logits_processors=logits_processors)
 
     tools = None
     if request.tools and request.tool_choice != 'none':

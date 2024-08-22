@@ -2,13 +2,12 @@
 
 #pragma once
 
-#include "array_ops.h"
-
-#include "block.h"
-#include "iterator.h"
 #include "quantization.h"
-#include "reduce_kernel.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
+#include "src/turbomind/kernels/attention/reduce_kernel.h"
+#include "src/turbomind/kernels/attention/rotary_embedding.h"
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/sync.h"
 #include <limits>
 #include <type_traits>
 

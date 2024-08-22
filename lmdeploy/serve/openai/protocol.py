@@ -10,9 +10,11 @@ from pydantic import BaseModel, Field
 
 class ErrorResponse(BaseModel):
     """Error responses."""
-    object: str = 'error'
     message: str
+    type: str
     code: int
+    param: Optional[str] = None
+    object: str = 'error'
 
 
 class ModelPermission(BaseModel):
@@ -103,6 +105,7 @@ class ChatCompletionRequest(BaseModel):
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
     n: Optional[int] = 1
+    logit_bias: Optional[Dict[str, float]] = None
     max_tokens: Optional[int] = Field(default=None, examples=[None])
     stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
     # yapf: enable

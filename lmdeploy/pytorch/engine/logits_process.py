@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 from transformers.generation.logits_process import LogitsWarper
 
+from lmdeploy.messages import LogitsProcessor
 from lmdeploy.tokenizer import Tokenizer
 
 from ..messages import SchedulerSequence
@@ -136,6 +137,7 @@ class SamplingInputs:
     max_top_k: int = 1
     min_top_p: float = 1.0
     response_formats: Tuple[str] = ()
+    logits_processors: List[List[LogitsProcessor]] = None
 
     @classmethod
     def from_sampling_params(cls, seqs: List[SchedulerSequence]):
@@ -150,6 +152,7 @@ class SamplingInputs:
         random_seeds = [torch.seed() & 0xffffffff] * batch_size
         random_offsets = [None] * batch_size
         response_formats = [None] * batch_size
+        logits_processors = [None] * batch_size
 
         def __gather_params():
             """gather params."""
@@ -171,6 +174,7 @@ class SamplingInputs:
                     bw = bw + sw
                 bad_words[idx] = bw
                 stop_words[idx] = sw
+                logits_processors[idx] = param.logits_processors
 
         def __get_topp(top_p):
             """get topp."""
@@ -235,6 +239,7 @@ class SamplingInputs:
             response_formats=tuple(response_formats),
             max_top_k=max_top_k,
             min_top_p=min_top_p,
+            logits_processors=logits_processors,
         )
         return sampling_input
 
@@ -250,6 +255,16 @@ class SamplingInputs:
         return SamplingInputs(**out_dict)
 
 
+def _apply_custom_logits_processors(batched_logits_processors, all_ids,
+                                    logits):
+    """Apply custom logits processors."""
+    for seq_id, processors in enumerate(batched_logits_processors):
+        if processors is not None:
+            for processor in processors:
+                logits[seq_id] = processor(all_ids[seq_id], logits[seq_id])
+    return logits
+
+
 class FusedLogitsProcessor(LogitsWarper):
     """Custom logits processor."""
 
@@ -261,18 +276,19 @@ class FusedLogitsProcessor(LogitsWarper):
         self.ignore_eos = ignore_eos
         self.tokenizer = tokenizer
 
-    def __call__(self, input_ids: torch.LongTensor,
+    def __call__(self, all_ids: torch.LongTensor,
                  guided_input_ids: torch.LongTensor,
                  scores: torch.FloatTensor) -> torch.FloatTensor:
         r"""
         Args:
-            input_ids (torch.LongTensor):
-                Indices of input sequence tokens in the vocabulary.
+            all_ids (torch.LongTensor): All the token ids.
+            guided_input_ids (torch.LongTensor): Guided prompt ids.
             scores (torch.FloatTensor):
                 Prediction scores of a language modeling head.
                 These can be logits for each vocabulary when not using
                 beam search or log softmax for each vocabulary token
                 when using beam search
+
 
         Return:
             torch.FloatTensor: The processed prediction scores.
@@ -281,9 +297,14 @@ class FusedLogitsProcessor(LogitsWarper):
         sampling_inputs = self.sampling_inputs
         scores = scores.clone()
 
+        custom_logits_processors = self.sampling_inputs.logits_processors
+        if any(custom_logits_processors):
+            scores = _apply_custom_logits_processors(custom_logits_processors,
+                                                     all_ids, scores)
+
         repetition_penalty = sampling_inputs.repetition_penalty
         if repetition_penalty is not None:
-            scores = _process_repetition_penalty(scores, input_ids,
+            scores = _process_repetition_penalty(scores, all_ids,
                                                  repetition_penalty)
 
         temperature = sampling_inputs.temperature

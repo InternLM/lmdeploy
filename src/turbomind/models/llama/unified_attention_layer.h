@@ -53,18 +53,19 @@ public:
     UnifiedAttentionLayer(size_t               head_num,
                           size_t               kv_head_num,
                           size_t               size_per_head,
+                          size_t               hidden_units,
                           LlamaAttentionParams attn_params,
                           NcclParam            tensor_para,
                           LoraParams           lora_params,
                           cudaStream_t         stream,
-                          cublasMMWrapper*     cublas_wrapper,
+                          LlamaLinear<T>       linear,
                           IAllocator*          allocator,
                           bool                 is_free_buffer_after_forward,
                           int                  cache_block_seq_len,
                           int                  quant_policy):
         head_num_(head_num),
         size_per_head_(size_per_head),
-        hidden_units_(head_num * size_per_head),
+        hidden_units_(hidden_units),
         local_head_num_(head_num / tensor_para.world_size_),
         local_kv_head_num_(kv_head_num / tensor_para.world_size_),
         head_n_rep_(head_num / kv_head_num),
@@ -72,8 +73,7 @@ public:
         tensor_para_(tensor_para),
         lora_params_(lora_params),
         stream_(stream),
-        cublas_wrapper_(cublas_wrapper),
-        linear_(cublas_wrapper, stream),
+        linear_(linear),
         allocator_(allocator),
         kv_cache_block_len_(cache_block_seq_len),
         is_free_buffer_after_forward_(is_free_buffer_after_forward),
@@ -147,10 +147,9 @@ private:
 
     LoraParams lora_params_;
 
-    cudaStream_t     stream_;
-    IAllocator*      allocator_;
-    cublasMMWrapper* cublas_wrapper_;
-    LlamaLinear<T>   linear_;
+    cudaStream_t   stream_;
+    IAllocator*    allocator_;
+    LlamaLinear<T> linear_;
 
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;
