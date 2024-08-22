@@ -241,7 +241,7 @@ class FusedLogitsProcessor(LogitsWarper):
         self.ignore_eos = ignore_eos
 
     def __call__(self, scores: torch.FloatTensor,
-                 all_ids: torch.FloatTensor) -> torch.FloatTensor:
+                 all_ids: torch.LongTensor) -> torch.FloatTensor:
         r"""
         Args:
             scores (torch.FloatTensor):
@@ -249,7 +249,7 @@ class FusedLogitsProcessor(LogitsWarper):
                 These can be logits for each vocabulary when not using
                 beam search or log softmax for each vocabulary token
                 when using beam search
-            all_ids (torch.FloatTensor): All the token ids.
+            all_ids (torch.LongTensor): All the token ids.
 
 
         Return:
