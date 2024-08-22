@@ -469,14 +469,15 @@ template<typename T>
 std::string LlamaTritonModel<T>::toString()
 {
     std::stringstream ss;
-    ss << "Model: "
+    ss << "Model: "  //
        << "\nhead_num: " << model_param_.head_num << "\nkv_head_num: " << model_param_.kv_head_num
        << "\nsize_per_head: " << model_param_.head_dim << "\ninter_size: " << model_param_.inter_size
        << "\nnum_layer: " << model_param_.layer_num << "\nvocab_size: " << model_param_.vocab_size
        << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_param_.max_batch_size
        << "\nmax_prefill_token_num: " << engine_param_.max_prefill_token_num
        << "\nmax_context_token_num: " << engine_param_.max_context_token_num
-       << "\nsession_len: " << engine_param_.session_len << "\nstep_length: " << engine_param_.step_length
+       << "\nnum_tokens_per_iter: " << engine_param_.num_tokens_per_iter
+       << "\nmax_prefill_iters: " << engine_param_.max_prefill_iters << "\nsession_len: " << engine_param_.session_len
        << "\ncache_max_entry_count: " << engine_param_.cache_max_block_count
        << "\ncache_block_seq_len: " << attn_param_.cache_block_seq_len
        << "\ncache_chunk_size: " << engine_param_.cache_chunk_size
