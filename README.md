@@ -136,6 +136,8 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Dbrx (132B)</li>
   <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
+  <li>Phi-3.5-mini (3.8B)</li>
+  <li>Phi-3.5-MoE (16x3.8B)</li>
 </ul>
 </td>
 <td>
@@ -152,6 +154,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>CogVLM2-Chat (19B)</li>
   <li>MiniCPM-Llama3-V-2_5</li>
   <li>Phi-3-vision (4.2B)</li>
+  <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
 </ul>
 </td>
