@@ -104,7 +104,7 @@ def command_test(config,
         file.writelines('reproduce command chat: ' + ' '.join(cmd) + '\n')
 
         spliter = '\n\n'
-        if 'CodeLlama' in model and 'api_server' not in cmd:
+        if 'codellama' in model.lower() and 'api_' not in cmd:
             spliter = '\n!!\n'
         # join prompt together
         prompt = ''

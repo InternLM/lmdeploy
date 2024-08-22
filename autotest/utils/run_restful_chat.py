@@ -119,7 +119,8 @@ def run_all_step(config,
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
-        if ('coder' in model or 'codellama' in model) and 'code' not in case:
+        if ('coder' in model.lower()
+                or 'codellama' in model.lower()) and 'code' not in case:
             continue
 
         case_info = cases_info.get(case)
