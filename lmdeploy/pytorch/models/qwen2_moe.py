@@ -7,6 +7,8 @@ from torch import distributed as dist
 from torch import nn
 
 from lmdeploy.pytorch.kernels.fused_moe import fused_moe
+from lmdeploy.pytorch.kernels.moe_gating_topk_softmax import \
+    moe_gating_topk_softmax
 
 
 class PatchedQwen2MoeSparseMoeBlock(nn.Module):
@@ -86,6 +88,48 @@ class PatchedQwen2MoeSparseMoeBlock(nn.Module):
 
         if dist.is_initialized():
             dist.all_reduce(out_states)
+
+        return out_states, router_logits
+
+
+class PatchedQwen2MoeSparseMoeBlockAscend(nn.Module):
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """"""
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+        router_logits = self.gate(hidden_states)
+
+        routing_weights, selected_experts = moe_gating_topk_softmax(
+            router_logits, self.top_k)
+        if self.norm_topk_prob:
+            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        routing_weights = routing_weights.to(hidden_states.dtype)
+
+        out_states = torch.zeros((batch_size * sequence_length, hidden_dim),
+                                 dtype=hidden_states.dtype,
+                                 device=hidden_states.device)
+
+        expert_mask = torch.nn.functional.one_hot(
+            selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            expert_layer = self.experts[expert_idx]
+            idx, top_x = torch.where(expert_mask[expert_idx])
+
+            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+            current_hidden_states = expert_layer(
+                current_state) * routing_weights[top_x, idx, None]
+
+            out_states.index_add_(
+                0, top_x, current_hidden_states.to(hidden_states.dtype))
+
+        shared_expert_output = self.shared_expert(hidden_states)
+        shared_expert_output = F.sigmoid(
+            self.shared_expert_gate(hidden_states)) * shared_expert_output
+
+        out_states = out_states + shared_expert_output
+        out_states = out_states.unflatten(0, (-1, sequence_length))
 
         return out_states, router_logits
 
