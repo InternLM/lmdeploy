@@ -6,12 +6,11 @@ import torch.distributed as dist
 from torch import nn
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from lmdeploy.pytorch.layers import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                     RMSNorm, SiluAndMul,
-                                     build_rotary_embedding)
-from lmdeploy.pytorch.layers.linear import (build_merged_colwise_linear,
-                                            build_rowwise_linear)
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
+                                 RMSNorm, SiluAndMul, build_rotary_embedding)
+from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
+                                        build_rowwise_linear)
 
 from ..weight_loader.dist_utils import (colwise_parallelize_linear,
                                         rowwise_parallelize_linear)
