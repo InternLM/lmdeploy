@@ -52,9 +52,10 @@
 
 namespace turbomind {
 
+/// TODO: Padded vocab size should also by divisible by 8
 inline int pad_vocab_size(int vocab_size, int tp)
 {
-    return (vocab_size + tp) / tp * tp;
+    return (vocab_size + tp - 1) / tp * tp;
 }
 
 template<typename T>
@@ -85,7 +86,7 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
     stream_(ctx.stream),
     cublas_wrapper_(ctx.cublas_wrapper.get()),
     allocator_(ctx.allocator.get()),
-    peer_allcator_(ctx.allocator.get()),
+    peer_allcator_(ctx.peer_allocator.get()),
     linear_(ctx.linear.get()),
     is_free_buffer_after_forward_(false),
     debug_(isDebug())
