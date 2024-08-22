@@ -341,7 +341,7 @@ int Gemm::Run(const Operation&    operation,
         k,
     };
 
-    const auto launch = [&](LaunchSpec spec, cudaStream_t st) {
+    const auto launch = [=](LaunchSpec spec, cudaStream_t st) {
         auto _workspace = workspace;
         return spec.kernel->Launch(operation,
                                    alpha,
@@ -363,6 +363,18 @@ int Gemm::Run(const Operation&    operation,
                                    _workspace,
                                    st);
     };
+
+    if (operation.reserved) {
+        auto specs = impl_->Find(desc, workspace.barriers_size, workspace.partials_size, 0);
+        auto cases = (std::vector<std::function<LaunchSpec()>>*)operation.reserved;
+        for (const auto& spec : specs) {
+            cases->push_back([=] {
+                launch(spec, stream);
+                return spec;
+            });
+        }
+        return -1;
+    }
 
     LaunchSpec spec{};
 

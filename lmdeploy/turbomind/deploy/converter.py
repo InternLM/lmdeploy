@@ -161,17 +161,78 @@ def pack_model_repository(workspace_path: str):
                dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
+def find_quantization_config(nested, target_key):
+    if isinstance(nested, dict):
+        for key, value in nested.items():
+            if key == target_key:
+                return value
+            if isinstance(value, (dict, list)):
+                result = find_quantization_config(value, target_key)
+                if result is not None:
+                    return result
+    elif isinstance(nested, list):
+        for item in nested:
+            result = find_quantization_config(item, target_key)
+            if result is not None:
+                return result
+    return None
+
+
 def get_tm_model(model_path,
                  model_name,
                  chat_template_name,
-                 group_size,
                  engine_config,
+                 group_size: int = None,
                  out_dir: str = None):
-    # TODO: open the following condition check in another PR,
-    # CLI needs to be updated
-    # if model_format == 'awq' and group_size <= 0:
-    #     raise RuntimeError(
-    #         'group_size should be specified when the model is awq')
+    """Create turbomind model.
+
+    Args:
+        model_path (str): the path of the input model, which is supposed
+            to be a local path, or huggingface hub repo_id, or modelscope
+            hub repo_id
+        model_name (str): user customized model name
+        chat_template_name (str): the name of the chat template of
+            the input model
+        engine_config(TurbomindEngineConfig): user input engine config
+        group_size(int): refers to the group_size if the input model
+            is a w4a16(awq or gptq) quantized model
+        out_dir(str): the output directory where to save to turbomind model.
+            If it is None, the turbomind model won't be saved
+    """
+    _, cfg = get_model_arch(model_path)
+    quant_config = find_quantization_config(cfg.to_dict(),
+                                            'quantization_config')
+    if quant_config:
+        quant_method = quant_config.get('quant_method')
+        _group_size = int(quant_config.get('group_size', 0))
+        version = quant_config.get('version')
+        assert engine_config.model_format is None or \
+            engine_config.model_format == quant_method, \
+            f'mismatched quant method: user input ' \
+            f'"{engine_config.model_format}" ' \
+            f'vs model quant_config "{quant_method}"'
+        assert group_size is None or group_size == _group_size, \
+            f'mismatched quant group size: user input "{group_size}" ' \
+            f'vs model quant_config "{_group_size}"'
+
+        engine_config.model_format = quant_method
+        group_size = _group_size
+
+        if quant_method == 'awq':
+            assert version == 'gemm', \
+                f'unsupported quant config: {quant_config}'
+        elif quant_method == 'gptq':
+            assert not quant_config.get('desc_act', False) and \
+                quant_config.get('sym', True), \
+                f'unsupported quant config: {quant_config}'
+        else:
+            assert 0, f'unsupported quant_config: {quant_config}'
+
+    if engine_config.model_format in ['awq', 'gptq']:
+        assert group_size == 128, \
+            f'model format is "{engine_config.model_format}" ' \
+            f'but group_size is {group_size}. Currently, only 128 ' \
+            'is supported'
 
     input_model_name = get_input_model_registered_name(
         model_path, engine_config.model_format)
@@ -266,10 +327,9 @@ def main(model_name: str,
 
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
-
     engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format)
-    tm_model = get_tm_model(model_path, model_name, chat_template, group_size,
-                            engine_config, tm_weight_path)
+    tm_model = get_tm_model(model_path, model_name, chat_template,
+                            engine_config, group_size, tm_weight_path)
     tm_model.export()
 
 

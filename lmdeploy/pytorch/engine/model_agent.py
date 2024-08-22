@@ -663,6 +663,8 @@ def _start_tp_process(proc_id: int,
     """
     rank = proc_id + 1
     try:
+        from lmdeploy.pytorch.check_env import check_env_deeplink
+        check_env_deeplink(device_context.device_type)
         dist.init_process_group('nccl',
                                 rank=rank,
                                 world_size=world_size,

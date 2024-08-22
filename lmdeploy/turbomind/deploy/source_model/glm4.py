@@ -85,6 +85,7 @@ class Glm4Model(LlamaModel):
     def model_info(self):
         """Read model info."""
         config = self.config
+        hidden_units = config.get('hidden_size', None)
         num_layer = config.get('num_hidden_layers', None)
         num_layer = config.get('num_layers', num_layer)
         norm_eps = config['layernorm_epsilon']
@@ -98,8 +99,9 @@ class Glm4Model(LlamaModel):
         seq_length = config['seq_length']
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
-                    attn_head_num=attn_head_num,
+                    head_num=attn_head_num,
                     kv_head_num=kv_head_num,
+                    hidden_units=hidden_units,
                     rope_theta=rope_theta,
                     max_position_embeddings=seq_length,
                     rotary_embedding=64,

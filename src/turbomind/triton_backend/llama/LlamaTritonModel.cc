@@ -199,6 +199,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     model_name_          = reader.Get("llama", "model_name");
     head_num_            = reader.GetInteger("llama", "head_num");
     kv_head_num_         = reader.GetInteger("llama", "kv_head_num", 0);
+    hidden_units_        = reader.GetInteger("llama", "hidden_units");
     size_per_head_       = reader.GetInteger("llama", "size_per_head");
     inter_size_          = reader.GetInteger("llama", "inter_size");
     num_layer_           = reader.GetInteger("llama", "num_layer");
@@ -338,6 +339,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     auto llama = std::make_unique<ft::LlamaV2<T>>(head_num_,
                                                   kv_head_num_,
                                                   size_per_head_,
+                                                  hidden_units_,
                                                   inter_size_,
                                                   num_layer_,
                                                   vocab_size_,
@@ -401,6 +403,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
     shared_weights_[device_id] = std::make_shared<ft::LlamaWeight<T>>(head_num_,
                                                                       kv_head_num_,
                                                                       size_per_head_,
+                                                                      hidden_units_,
                                                                       inter_size_,
                                                                       vocab_size_,
                                                                       num_layer_,

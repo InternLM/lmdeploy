@@ -12,6 +12,11 @@
 #include <cooperative_groups/memcpy_async.h>
 #include <cooperative_groups/reduce.h>
 
+#include <thrust/device_ptr.h>
+#include <thrust/iterator/zip_iterator.h>
+#include <thrust/system/cuda/execution_policy.h>
+#include <thrust/transform_reduce.h>
+
 namespace turbomind {
 
 cublasHandle_t cublas_handle{};
@@ -33,7 +38,7 @@ void Compare(const T* src, const T* ref, size_t stride, int dims, int bsz, bool 
             //     std::cout << x << "\t" << y << std::endl;
             // }
             auto abs_diff = std::abs(x - y);
-            auto rel_diff = abs_diff / std::abs(y + 1e-6f);
+            auto rel_diff = abs_diff / (std::max(std::abs(y), std::abs(x)) + 1e-8f);
             if (!(abs_diff <= atol + rtol * std::abs(y))) {
                 ++outliers;
                 if (show) {
@@ -46,8 +51,10 @@ void Compare(const T* src, const T* ref, size_t stride, int dims, int bsz, bool 
         asums += abs_diff_sum / dims;
         rsums += rel_diff_sum / dims;
     }
-    std::cout << "abs_diff = " << asums / bsz << " rel_diff = " << rsums / bsz
-              << " outliers = " << outliers / (float)bsz << std::endl;
+    const float abs_diff = asums / bsz;
+    const float rel_diff = rsums / bsz;
+    const float outlier  = outliers / (float)bsz;
+    std::cout << "abs_diff = " << abs_diff << " rel_diff = " << rel_diff << " outliers = " << outlier << std::endl;
 }
 
 template void
@@ -64,6 +71,50 @@ template void Compare(const nv_bfloat16* src,
                       float              rtol,
                       float              atol);
 #endif
+
+template<class T>
+std::vector<float>
+FastCompare(const T* src, const T* ref, int dims, int bsz, cudaStream_t stream, float rtol, float atol)
+{
+    auto       zip_iter = thrust::make_zip_iterator(src, ref);
+    const auto count    = (size_t)dims * bsz;
+    // nvcc-11.8: __host__ __device__ lambda can't be generic
+    using Tuple = thrust::tuple<float, float, float, float, float, float, int64_t>;
+    auto res    = thrust::transform_reduce(
+        thrust::cuda::par.on(stream),
+        zip_iter,
+        zip_iter + count,
+        [=] __device__(auto tup) {
+            float   s        = thrust::get<0>(tup);
+            float   r        = thrust::get<1>(tup);
+            float   abs_diff = fabsf(s - r);
+            float   abs_s    = fabsf(s);
+            float   abs_r    = fabsf(r);
+            float   rel_diff = abs_diff / (fmaxf(abs_r, abs_s) + 1e-8f);
+            int64_t outlier  = !(abs_diff <= (atol + rtol * abs_r));
+            return thrust::make_tuple(abs_s, abs_r, abs_diff, abs_diff, rel_diff, rel_diff, outlier);
+        },
+        thrust::make_tuple(0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0LL),
+        [] __host__ __device__(const Tuple& a, const Tuple& b) {  // `__host__`: compiler needs the return type
+            return thrust::make_tuple(thrust::get<0>(a) + thrust::get<0>(b),
+                                      thrust::get<1>(a) + thrust::get<1>(b),
+                                      thrust::get<2>(a) + thrust::get<2>(b),
+                                      fmaxf(thrust::get<3>(a), thrust::get<3>(b)),
+                                      thrust::get<4>(a) + thrust::get<4>(b),
+                                      fmaxf(thrust::get<5>(a), thrust::get<5>(b)),
+                                      thrust::get<6>(a) + thrust::get<6>(b));
+        });
+    return {thrust::get<0>(res) / dims / bsz,   // avg abs src
+            thrust::get<1>(res) / dims / bsz,   // avg abs ref
+            thrust::get<2>(res) / dims / bsz,   // avg abs diff
+            thrust::get<3>(res),                // max abs diff
+            thrust::get<4>(res) / dims / bsz,   // avg rel diff
+            thrust::get<5>(res),                // max rel diff
+            (float)thrust::get<6>(res) / bsz};  // outlier count
+}
+
+template std::vector<float>
+FastCompare(const half* src, const half* ref, int dims, int bsz, cudaStream_t stream, float rtol, float atol);
 
 void LoadBinary(const std::string& path, size_t size, void* dst)
 {
