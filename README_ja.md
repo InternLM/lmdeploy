@@ -152,6 +152,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
   <li>MiniCPM-Llama3-V-2_5</li>
+  <li>MiniCPM-V-2_6</li>
   <li>Phi-3-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
 </ul>
