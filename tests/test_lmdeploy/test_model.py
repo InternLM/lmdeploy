@@ -499,3 +499,37 @@ def test_codegeex4():
     ref = tokenizer.apply_chat_template(messages, tokenize=False)
     res = model.messages2prompt(messages)
     assert res.startswith(ref)
+
+
+@pytest.mark.parametrize('model_path_and_name', [
+    'microsoft/Phi-3-mini-128k-instruct',
+    'microsoft/Phi-3-vision-128k-instruct',
+    'microsoft/Phi-3.5-mini-instruct',
+    'microsoft/Phi-3.5-vision-instruct',
+    'microsoft/Phi-3.5-MoE-instruct',
+])
+def test_phi3(model_path_and_name):
+    deduced_name = best_match_model(model_path_and_name)
+    assert deduced_name == 'phi-3'
+    model = MODELS.get(deduced_name)()
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name,
+                                              trust_remote_code=True)
+    ref = tokenizer.apply_chat_template(messages,
+                                        tokenize=False,
+                                        add_generation_prompt=True)
+    res = model.messages2prompt(messages)
+    assert res.startswith(ref)
