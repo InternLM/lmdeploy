@@ -16,5 +16,5 @@ def fill_kv_cache(
     context: None,
 ):
     """fill key/value state to cache for paged attention."""
-    ext_ops.fill_kv_cache(key_states, value_states, key_caches,
-                          value_caches, context.kv_start_indices)
+    ext_ops.fill_kv_cache(key_states, value_states, key_caches, value_caches,
+                          context.kv_start_indices)

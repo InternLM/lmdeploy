@@ -21,7 +21,7 @@ def flash_context_attention(
 ):
     num_q_heads, dim = query_states.shape[1:3]
     num_kv_heads = value_states.shape[1]
-    batch = q_start_loc.shape[0]    
+    batch = q_start_loc.shape[0]
 
     for i in range(batch):
         if torch.equal(q_seq_len[i], kv_seq_len[i]):
@@ -30,15 +30,16 @@ def flash_context_attention(
                 query_states,
                 key_states,
                 value_states,
-                q_start_loc[i:i+1],
-                q_seq_len[i:i+1],
+                q_start_loc[i:i + 1],
+                q_seq_len[i:i + 1],
                 num_q_heads,
                 num_kv_heads,
-                context.attention_mask[i:i+1],
+                context.attention_mask[i:i + 1],
             )
         else:
             key_cache = key_cache.reshape(1, kv_cache_len, num_kv_heads * dim)
-            value_cache = value_cache.reshape(1, kv_cache_len, num_kv_heads * dim)
+            value_cache = value_cache.reshape(1, kv_cache_len,
+                                              num_kv_heads * dim)
             ext_ops.paged_prefill_attention(
                 attn_output,
                 query_states,
@@ -46,13 +47,14 @@ def flash_context_attention(
                 value_cache,
                 block_offsets,
                 block_size,
-                q_start_loc[i:i+1],
-                q_seq_len[i:i+1],
-                kv_seq_len[i:i+1],
+                q_start_loc[i:i + 1],
+                q_seq_len[i:i + 1],
+                kv_seq_len[i:i + 1],
                 num_q_heads,
                 num_kv_heads,
-                context.attention_mask[i:i+1],
+                context.attention_mask[i:i + 1],
             )
+
 
 def paged_token_attention(q, k_cache, v_cache, attn_output, kv_seq_len,
                           block_offsets, block_size):
@@ -68,6 +70,7 @@ def paged_token_attention(q, k_cache, v_cache, attn_output, kv_seq_len,
         num_q_heads,
         num_kv_heads,
     )
+
 
 def paged_attention_fwd(
     query_states: Tensor,
