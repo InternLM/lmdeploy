@@ -138,9 +138,6 @@ class QLinear(nn.Module):
 
         if isinstance(input, torch.Tensor):
             input_quant, input_scale = per_token_quant_int8(input, 1e-7)
-            print(input_quant)
-            print(input_scale)
-            exit()
         else:
             assert isinstance(input, QTensor)
             input_quant, input_scale = input.tensor, input.scale
