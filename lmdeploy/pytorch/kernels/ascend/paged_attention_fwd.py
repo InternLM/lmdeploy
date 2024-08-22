@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import infer_ext.ops as ext_ops
+import dlinfer.ops as ext_ops
 import torch
 from torch import Tensor
 
