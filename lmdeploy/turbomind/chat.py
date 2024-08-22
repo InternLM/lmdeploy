@@ -40,7 +40,7 @@ def main(model_path: str,
          quant_policy: int = 0,
          cache_max_entry_count: float = 0.8,
          cache_block_seq_len: int = 64,
-         rope_scaling_factor: float = 0.0,
+         rope_scaling_factor: float = None,
          enable_prefix_caching: bool = False,
          session_len: int = None,
          stream_output: bool = True,
@@ -63,7 +63,7 @@ def main(model_path: str,
         quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
         cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
         cache_block_seq_len (int): the length of the token sequence in a k/v block, default to 64
-        rope_scaling_factor (float): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
+        rope_scaling_factor (float): scaling factor used for dynamic ntk, default to None. TurboMind follows the implementation of transformer LlamaAttention
         enable_prefix_caching (bool): whether enable prefix caching
         session_len (int): the length input output tokens
         stream_output (bool): indicator for streaming output or not
@@ -95,8 +95,9 @@ def main(model_path: str,
         cache_block_seq_len=cache_block_seq_len,
         enable_prefix_caching=enable_prefix_caching,
         quant_policy=quant_policy,
-        rope_scaling_factor=rope_scaling_factor,
         tp=tp)
+    if rope_scaling_factor:
+        engine_cfg.rope_scaling_factor = rope_scaling_factor
     print('engine_cfg:\n', engine_cfg, sep='', flush=True)
 
     from lmdeploy import turbomind as tm
