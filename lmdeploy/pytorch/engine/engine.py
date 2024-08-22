@@ -478,7 +478,7 @@ class Engine:
 
     @logging_timer('SamplingLogits', logger)
     def async_sampling_logits(self, logits: torch.Tensor,
-                              history_ids: torch.Tensor,
+                              all_ids: torch.Tensor,
                               sampling_inputs: SamplingInputs,
                               inputs: ModelInputs, ignore_eos: torch.Tensor):
         """sampling logits."""
@@ -494,7 +494,7 @@ class Engine:
 
         split_logits = __get_last_logits().cuda()
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos)
-        logits = logits_processor(history_ids, split_logits)
+        logits = logits_processor(split_logits, all_ids)
         next_token_ids = logits_processor.sampling(logits)
 
         return next_token_ids
@@ -646,19 +646,18 @@ class Engine:
 
     async def _async_step_background(
             self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-            history_ids: torch.Tensor, sampling_inputs: SamplingInputs,
+            all_ids: torch.Tensor, sampling_inputs: SamplingInputs,
             num_appendable_ids: torch.LongTensor,
             num_ignore_eos: torch.LongTensor, output_que: asyncio.Queue):
         """asyc forward task."""
 
         def __update_inputs(next_token_ids):
             """update inputs."""
-            nonlocal history_ids
+            nonlocal all_ids
             inputs.update(next_token_ids)
-            if history_ids is not None:
-                history_ids = torch.cat([
-                    history_ids, next_token_ids[:, None].to(history_ids.device)
-                ], 1)
+            if all_ids is not None:
+                all_ids = torch.cat(
+                    [all_ids, next_token_ids[:, None].to(all_ids.device)], 1)
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
@@ -666,8 +665,8 @@ class Engine:
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)}')
         is_decoding = inputs.is_decoding
-        if history_ids is not None:
-            history_ids = history_ids.cuda()
+        if all_ids is not None:
+            all_ids = all_ids.cuda()
         sampling_inputs = sampling_inputs.to_device('cuda')
         num_appendable_ids = num_appendable_ids.cuda()
         num_ignore_eos = num_ignore_eos.cuda()
@@ -685,8 +684,7 @@ class Engine:
 
             # sampling
             next_token_ids = self.async_sampling_logits(
-                logits, history_ids, sampling_inputs, inputs,
-                num_ignore_eos > 0)
+                logits, all_ids, sampling_inputs, inputs, num_ignore_eos > 0)
             num_ignore_eos = num_ignore_eos - 1
 
             # stopping criteria
@@ -713,20 +711,21 @@ class Engine:
                                      out_que: asyncio.Queue):
         """async loop background."""
 
-        def __gather_history(seqs: SeqList, sampling_inputs: SamplingInputs):
+        def __gather_all_ids(seqs: SeqList, sampling_inputs: SamplingInputs):
             """gather history."""
-            if sampling_inputs.repetition_penalty is None:
+            if sampling_inputs.repetition_penalty is None and not any(
+                    sampling_inputs.logits_processors):
                 return None
             batch = len(seqs)
-            max_len = max(seq.history_len for seq in seqs)
+            max_len = max(seq.num_all_ids for seq in seqs)
             pad_id = self.model_config.bos_token_id
             pad_id = 0 if pad_id is None else pad_id
             output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
             for idx, seq in enumerate(seqs):
-                h_len = seq.history_len
+                h_len = seq.num_all_ids
                 if h_len == 0:
                     continue
-                h_ids = torch.from_numpy(seq.history_ids)
+                h_ids = torch.from_numpy(seq.all_ids)
                 output[idx, -h_len:] = h_ids
             return output
 
@@ -761,7 +760,7 @@ class Engine:
                 inputs = self.create_model_inputs(running, adapters,
                                                   is_prefill)
                 sampling_inputs = SamplingInputs.from_sampling_params(running)
-                history_ids = __gather_history(running, sampling_inputs)
+                all_ids = __gather_all_ids(running, sampling_inputs)
                 num_appendable_ids = __get_num_appendable_ids(running)
                 num_ignore_eos = __get_num_ignore_eos(running)
 
@@ -772,7 +771,7 @@ class Engine:
                     inputs=inputs,
                     swap_in_map=schedule_output.swap_in_map,
                     swap_out_map=schedule_output.swap_out_map,
-                    history_ids=history_ids,
+                    all_ids=all_ids,
                     sampling_inputs=sampling_inputs,
                     num_appendable_ids=num_appendable_ids,
                     num_ignore_eos=num_ignore_eos,
