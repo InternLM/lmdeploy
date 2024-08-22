@@ -89,8 +89,7 @@ def _multinomial_sampling(scores: torch.Tensor,
                           offsets: torch.LongTensor,
                           indices: torch.LongTensor = None):
     """sampling."""
-    from lmdeploy.pytorch.layers.multinomial_sampling import \
-        multinomial_sampling
+    from lmdeploy.pytorch.nn.multinomial_sampling import multinomial_sampling
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
