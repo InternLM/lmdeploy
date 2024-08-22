@@ -29,6 +29,7 @@ LAYER_TYPE_MAP = {
     'Phi3ForCausalLM': 'Phi3DecoderLayer',
     'ChatGLMForConditionalGeneration': 'GLMBlock',
     'InternVisionModel': 'InternVisionEncoderLayer',  # internvl2 vision
+    'MistralForCausalLM': 'MistralDecoderLayer',
 }
 
 NORM_TYPE_MAP = {
@@ -45,6 +46,7 @@ NORM_TYPE_MAP = {
     'Phi3ForCausalLM': 'Phi3RMSNorm',
     'ChatGLMForConditionalGeneration': 'RMSNorm',
     'InternVisionModel': 'LayerNorm',  # internvl2 vision
+    'MistralForCausalLM': 'MistralRMSNorm'
 }
 
 HEAD_NAME_MAP = {
@@ -59,7 +61,8 @@ HEAD_NAME_MAP = {
     'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'output',
     'Phi3ForCausalLM': 'lm_head',
-    'ChatGLMForConditionalGeneration': 'output_layer'
+    'ChatGLMForConditionalGeneration': 'output_layer',
+    'MistralForCausalLM': 'lm_head',
 }
 
 

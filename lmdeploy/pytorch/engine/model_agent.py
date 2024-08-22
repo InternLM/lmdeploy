@@ -10,7 +10,6 @@ import torch
 import torch.distributed as dist
 from torch import multiprocessing as mp
 
-from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.utils import get_logger
 
 from ..adapter.adapter import (AdapterWeightMap, SchedulerAdapter,
@@ -18,6 +17,7 @@ from ..adapter.adapter import (AdapterWeightMap, SchedulerAdapter,
                                update_lora_linears)
 from ..config import CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
+from ..models import convert_to_qmodules
 from ..models.patch import patch, update_model
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
@@ -668,19 +668,24 @@ class BaseModelAgent(AutoModelAgent):
                      adapters: Dict[str, str] = None,
                      trust_remote_code: bool = True):
         """build patched model."""
-        device = 'cuda'
-        with LoadNoInit(), warnings.catch_warnings():
+        from accelerate import init_empty_weights, load_checkpoint_and_dispatch
+        with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
+            self.model_config.init_kwargs['empty_init'] = True
             hf_model = self.model_config.auto_model_cls.from_pretrained(
-                model_path,
-                torch_dtype=torch_dtype,
-                device_map=device,
-                trust_remote_code=trust_remote_code,
-                **self.model_config.init_kwargs)
-            hf_model.eval()
-            hf_model.config.use_cache = True
-            # build for vlm model
-            _remove_unused_modules(hf_model, self.model_config)
+                model_path, trust_remote_code=trust_remote_code)
+        hf_model.eval()
+        hf_model.config.use_cache = True
+        # build for vlm model
+        _remove_unused_modules(hf_model, self.model_config)
+        # w8a8
+        if getattr(hf_model.config, 'lmdeploy_quant_config',
+                   {}).get('quant_method', None) == 'smooth_quant':
+            convert_to_qmodules(hf_model)
+        load_checkpoint_and_dispatch(model=hf_model,
+                                     checkpoint=model_path,
+                                     device_map={'': 'cuda'},
+                                     dtype=torch_dtype)
 
         if adapters:
             _load_adapters(hf_model, adapters)

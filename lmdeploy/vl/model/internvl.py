@@ -93,10 +93,9 @@ class InternVLVisionModel(VisonModel):
             else:
                 self.vl_model = model
             model.half()
-        if getattr(config.vision_config, 'quantization_config',
+        if getattr(config.vision_config, 'lmdeploy_quant_config',
                    None) is not None:
-            from lmdeploy.pytorch.modeling.convert_to_qmodules import \
-                convert_to_qmodules
+            from lmdeploy.pytorch.models import convert_to_qmodules
             convert_to_qmodules(model)
 
         from accelerate import load_checkpoint_and_dispatch

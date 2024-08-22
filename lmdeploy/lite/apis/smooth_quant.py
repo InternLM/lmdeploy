@@ -1,14 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import os.path as osp
-import shutil
 from typing import Optional
 
 import fire
 import torch
 from torch import nn
 
-import lmdeploy
 from lmdeploy.lite.apis.calibrate import calibrate
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             smooth_layers)
@@ -16,40 +13,6 @@ from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLayerNorm, QLinear, QRMSNorm
 
 from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP
-
-LMDEPLOY_ROOT = lmdeploy.__path__[0]
-
-MODEL_PATH_MAP = {
-    'InternLMForCausalLM':
-    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_internlm.py'),
-    'InternLM2ForCausalLM':
-    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_internlm2.py'),
-    'LlamaForCausalLM':
-    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_llama.py'),
-    'BaiChuanForCausalLM':
-    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_baichuan.py')
-}
-
-AUTO_MAP = {
-    'InternLMForCausalLM': {
-        'AutoConfig': 'configuration_internlm.InternLMConfig',
-        'AutoModel': 'modeling_internlm.InternLMForCausalLM',
-        'AutoModelForCausalLM': 'modeling_internlm.InternLMForCausalLM'
-    },
-    'InternLM2ForCausalLM': {
-        'AutoConfig': 'configuration_internlm2.InternLMConfig',
-        'AutoModelForCausalLM': 'modeling_internlm2.InternLM2ForCausalLM',
-        'AutoModel': 'modeling_internlm2.InternLM2ForCausalLM'
-    },
-    'LlamaForCausalLM': {
-        'AutoModel': 'modeling_llama.LlamaForCausalLM',
-        'AutoModelForCausalLM': 'modeling_llama.LlamaForCausalLM'
-    },
-    'BaiChuanForCausalLM': {
-        'AutoConfig': 'configuration_baichuan.BaiChuanConfig',
-        'AutoModelForCausalLM': 'modeling_baichuan.BaiChuanForCausalLM'
-    }
-}
 
 
 def smooth_quant(model: str,
@@ -101,24 +64,20 @@ def smooth_quant(model: str,
         act_scales = torch.load(work_dir / 'vision_inputs_stats.pth')['absmax']
         _smooth_quant(vl_model.vision_model, act_scales, device)
         vl_model.vision_model.config.update(
-            dict(quantization_config=dict(quant_method='smooth_quant',
-                                          bits=w_bits)))
-
-    if hasattr(model.config, 'auto_map'):
-        model.config.auto_map.update(AUTO_MAP[type(model).__name__])
-    else:
-        model.config.auto_map = AUTO_MAP[type(model).__name__]
+            dict(lmdeploy_quant_config=dict(quant_method='smooth_quant',
+                                            bits=w_bits)))
 
     if vl_model:
         from .auto_awq import save_vl_model
         save_vl_model(vl_model, model_path, work_dir)
     else:
+        model.config.update(
+            dict(lmdeploy_quant_config=dict(quant_method='smooth_quant',
+                                            bits=w_bits)))
         model.save_pretrained(work_dir,
                               max_shard_size='2GB',
                               safe_serialization=False)
     tokenizer.save_pretrained(work_dir)
-
-    shutil.copy(MODEL_PATH_MAP[type(model).__name__], work_dir)
 
 
 def _smooth_quant(model, act_scales, device):

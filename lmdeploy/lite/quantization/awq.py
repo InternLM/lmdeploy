@@ -43,7 +43,12 @@ NORM_FCS_MAP = {
     'InternVisionEncoderLayer': {
         'norm1': ['attn.qkv'],
         'norm2': ['mlp.fc1']
-    }
+    },
+    'MistralDecoderLayer': {
+        'input_layernorm':
+        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
 }
 
 FC_FCS_MAP = {
@@ -80,6 +85,10 @@ FC_FCS_MAP = {
     },
     'InternVisionEncoderLayer': {
         'mlp.fc1': ['mlp.fc2']
+    },
+    'MistralDecoderLayer': {
+        'self_attn.v_proj': ['self_attn.o_proj'],
+        'mlp.up_proj': ['mlp.down_proj']
     }
 }
 
