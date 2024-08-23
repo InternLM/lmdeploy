@@ -182,7 +182,7 @@ class ArgumentHelper:
 
         return parser.add_argument('--rope-scaling-factor',
                                    type=float,
-                                   default=None,
+                                   default=0.0,
                                    help='Rope scaling factor')
 
     @staticmethod
