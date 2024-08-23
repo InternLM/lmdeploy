@@ -3,12 +3,14 @@ import asyncio
 import os.path as osp
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from itertools import repeat
 from queue import LifoQueue, Queue
 from typing import Dict, Iterable, List, Union
 
 import numpy as np
 import torch
+import yaml
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
@@ -185,11 +187,10 @@ class TurboMind:
                                 self.chat_template_name, engine_config)
 
         self.config = tm_model.cfg
-        logger.info(f'model_config:\n\n{self.config.toini()}')
-
+        logger.info(f'model_config:\n\n{self.config}')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir='',
-            config=self.config.toini(),
+            config=yaml.safe_dump(asdict(self.config)),
             tensor_para_size=self.gpu_count,
             data_type=self.config.weight_type)
 
@@ -217,7 +218,6 @@ class TurboMind:
                                'config.yaml')
         # load cfg
         with open(config_path, 'r') as f:
-            import yaml
             _cfg = yaml.safe_load(f)
         cfg = TurbomindModelConfig.from_dict(_cfg)
 
@@ -236,13 +236,12 @@ class TurboMind:
             cfg.chat_template_name = self.chat_template_name
         # update cfg
         self.config = cfg
-        print(yaml.safe_dump(cfg.__dict__))
         # create model
         logger.warning(f'model_config:\n\n{cfg}')
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir=weight_dir,
-            config=yaml.safe_dump(cfg.__dict__),
+            config=yaml.safe_dump(asdict(cfg)),
             tensor_para_size=self.gpu_count,
             data_type=self.config.weight_type)
 

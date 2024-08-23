@@ -1,11 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import copy
 import inspect
-import io
 import json
 import os.path as osp
 from abc import ABC, abstractmethod
-from configparser import ConfigParser
 
 import torch
 import tqdm
@@ -122,16 +119,6 @@ class TurbomindModelConfig:
             self.max_prefill_iters = (self.session_len +
                                       config.max_prefill_token_num -
                                       1) // config.max_prefill_token_num
-
-    def toini(self):
-        config = copy.deepcopy(self.__dict__)
-        parser = ConfigParser()
-        parser['llama'] = config
-        with io.StringIO() as ss:
-            parser.write(ss)
-            ss.seek(0)
-            ini = ss.read()
-        return ini
 
     def __str__(self):
         return json.dumps(self.__dict__, indent=2)
