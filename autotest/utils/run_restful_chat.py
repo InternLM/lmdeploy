@@ -2,7 +2,6 @@ import os
 import random
 import string
 import subprocess
-from subprocess import PIPE
 from time import sleep, time
 
 import allure
@@ -77,15 +76,17 @@ def start_restful_api(config, param, model, model_path, backend_type,
 
         startRes = subprocess.Popen([cmd],
                                     stdout=f,
-                                    stderr=PIPE,
+                                    stderr=f,
                                     shell=True,
                                     text=True,
                                     encoding='utf-8')
         pid = startRes.pid
-        stderr = startRes.stderr.read()
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
 
     http_url = BASE_HTTP_URL + ':' + str(port)
+    with open(start_log, 'r') as file:
+        content = file.read()
+        print(content)
     start_time = int(time())
     sleep(5)
     for i in range(300):
@@ -95,9 +96,6 @@ def start_restful_api(config, param, model, model_path, backend_type,
         result = health_check(http_url)
         if result or total_time >= 300:
             break
-        if len(stderr) != 0:
-            stop_restful_api(pid, startRes, param)
-            assert False, stderr
     return pid, startRes
 
 
