@@ -243,7 +243,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_param_.max_prefill_token_num = reader["max_prefill_token_num"].as<int>(0);
     engine_param_.max_context_token_num = reader["max_context_token_num"].as<int>(0);
     engine_param_.session_len           = reader["session_len"].as<int>(0);
-    engine_param_.step_length           = reader["step_length"].as<int>(0);
 
     engine_param_.cache_max_block_count = reader["cache_max_entry_count"].as<float>(0);
     engine_param_.cache_chunk_size      = reader["cache_chunk_size"].as<int>(0);

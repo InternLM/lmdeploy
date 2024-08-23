@@ -52,18 +52,6 @@ class TurbomindModelConfig:
     rope_theta: float = 10000.0
     size_per_head: int = 128
     group_size: int = 0
-    max_batch_size: int = 64
-    max_prefill_token_num: int = 8192
-    max_context_token_num: int = 1
-    step_length: int = 1
-    cache_max_entry_count: float = 0.8
-    cache_block_seq_len: int = 64
-    cache_chunk_size: int = -1
-    enable_prefix_caching: bool = False
-    num_tokens_per_iter: int = 0
-    max_prefill_iters: int = 1
-    use_context_fmha: int = 1
-    quant_policy: int = 0
     max_position_embeddings: int = 0
     original_max_position_embeddings: int = 0
     rope_scaling_type: str = ''
@@ -78,6 +66,18 @@ class TurbomindModelConfig:
     lora_max_wo_r: int = 0
     lora_rank_pattern: str = ''
     lora_scale_pattern: str = ''
+    # The following parameters are hyperparameters used by turbomind,
+    # which can be input by users
+    max_batch_size: int = 64
+    max_prefill_token_num: int = 8192
+    max_context_token_num: int = 1
+    cache_max_entry_count: float = 0.8
+    cache_block_seq_len: int = 64
+    cache_chunk_size: int = -1
+    enable_prefix_caching: bool = False
+    num_tokens_per_iter: int = 0
+    max_prefill_iters: int = 1
+    quant_policy: int = 0
 
     @classmethod
     def from_dict(cls, env, allow_none=False):
