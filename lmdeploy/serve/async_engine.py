@@ -23,18 +23,17 @@ logger = get_logger('lmdeploy')
 
 def get_names_from_model(model_path: str, model_name: str = None):
     """Get model name and chat template name from workspace model."""
-    from configparser import ConfigParser
     triton_model_path = os.path.join(model_path, 'triton_models', 'weights')
     if not os.path.exists(triton_model_path):
         chat_template_name = best_match_model(model_path)
     else:
         # `model_path` refers to a turbomind model, reading
         # chat_template_name from the config
-        ini_path = os.path.join(triton_model_path, 'config.ini')
-        with open(ini_path, 'r') as f:
-            parser = ConfigParser()
-            parser.read_file(f)
-        chat_template_name = parser['llama']['chat_template']
+        config_path = os.path.join(triton_model_path, 'config.yaml')
+        with open(config_path, 'r') as f:
+            import yaml
+            config = yaml.safe_load(f)
+        chat_template_name = config['chat_template']
     model_name = model_name if model_name else model_path
     return model_name, chat_template_name
 

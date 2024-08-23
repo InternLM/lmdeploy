@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import configparser
 import copy
 import inspect
 import io
@@ -10,6 +9,7 @@ from configparser import ConfigParser
 
 import torch
 import tqdm
+import yaml
 from mmengine import Registry
 from pydantic.dataclasses import dataclass
 
@@ -203,13 +203,15 @@ class BaseOutputModel(ABC):
     def export_config(self) -> None:
         """export turbomind config."""
         if self.to_file:
-            config = configparser.ConfigParser()
-            cfg = dict(llama=self.cfg.__dict__)
-            for section, key_values in cfg.items():
-                config[section] = key_values
-            config_path = osp.join(self.out_dir, 'config.ini')
-            with open(config_path, 'w') as f:
-                config.write(f)
+            # # config = configparser.ConfigParser()
+            # cfg = dict(llama=self.cfg.__dict__)
+            # for section, key_values in cfg.items():
+            #     # config[section] = key_values
+            config_path = osp.join(self.out_dir, 'config.yaml')
+            with open(config_path, 'w') as file:
+                yaml.safe_dump(self.cfg.__dict__, file)
+            # with open(config_path, 'w') as f:
+            #     config.write(f)
 
     def export_weight(self, param: torch.Tensor, name: str) -> None:
         """export turbomind weight."""

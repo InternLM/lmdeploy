@@ -3,7 +3,6 @@ import asyncio
 import os.path as osp
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from configparser import ConfigParser
 from itertools import repeat
 from queue import LifoQueue, Queue
 from typing import Dict, Iterable, List, Union
@@ -18,7 +17,6 @@ from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model
 
-from .deploy.converter import SUPPORTED_FORMATS, get_tm_model
 from .deploy.target_model.base import TurbomindModelConfig
 from .supported_models import is_supported
 from .utils import ModelSource, get_model_source
@@ -172,6 +170,8 @@ class TurboMind:
         if engine_config is None:
             logger.warning('input engine config is None, using the default')
             engine_config = TurbomindEngineConfig()
+
+        from .deploy.converter import SUPPORTED_FORMATS
         assert engine_config.model_format in SUPPORTED_FORMATS, \
             f'The model format should be in {SUPPORTED_FORMATS}'
 
@@ -180,6 +180,7 @@ class TurboMind:
             'Plz try pytorch engine instead.')
 
         # convert transformers model into turbomind model format
+        from .deploy.converter import get_tm_model
         tm_model = get_tm_model(model_path, self.model_name,
                                 self.chat_template_name, engine_config)
 
@@ -212,20 +213,18 @@ class TurboMind:
     def _from_workspace(self, model_path: str,
                         engine_config: TurbomindEngineConfig):
         """Load model which is converted by `lmdeploy convert`"""
-        ini_path = osp.join(model_path, 'triton_models', 'weights',
-                            'config.ini')
+        config_path = osp.join(model_path, 'triton_models', 'weights',
+                               'config.yaml')
         # load cfg
-        with open(ini_path, 'r') as f:
-            parser = ConfigParser()
-            parser.read_file(f)
-        section_name = 'llama'
-        _cfg = parser._sections[section_name]
+        with open(config_path, 'r') as f:
+            import yaml
+            _cfg = yaml.safe_load(f)
         cfg = TurbomindModelConfig.from_dict(_cfg)
 
         # check whether input tp is valid
         if cfg.tensor_para_size != 1 and \
                 self.gpu_count != cfg.tensor_para_size:
-            logger.info(f'found tp={cfg.tensor_para_size} in config.ini.')
+            logger.info(f'found tp={cfg.tensor_para_size} in config.yaml.')
             self.gpu_count = cfg.tensor_para_size
 
         if engine_config is not None:
@@ -237,13 +236,13 @@ class TurboMind:
             cfg.chat_template_name = self.chat_template_name
         # update cfg
         self.config = cfg
-
+        print(yaml.safe_dump(cfg.__dict__))
         # create model
-        logger.warning(f'model_config:\n\n{cfg.toini()}')
+        logger.warning(f'model_config:\n\n{cfg}')
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir=weight_dir,
-            config=cfg.toini(),
+            config=yaml.safe_dump(cfg.__dict__),
             tensor_para_size=self.gpu_count,
             data_type=self.config.weight_type)
 

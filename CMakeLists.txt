@@ -42,6 +42,8 @@ endif()
 option(BUILD_PY_FFI "Build python ffi" ON)
 option(BUILD_TEST "Build tests" OFF)
 
+find_package(yaml-cpp REQUIRED)
+
 include(FetchContent)
 if (BUILD_TEST)
   FetchContent_Declare(

@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.archs import get_model_arch
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -74,6 +73,7 @@ def is_supported(model_path: str):
     if os.path.exists(triton_model_path):
         support_by_turbomind = True
     else:
+        from lmdeploy.archs import get_model_arch
         arch, cfg = get_model_arch(model_path)
 
         if arch in SUPPORTED_ARCHS.keys():

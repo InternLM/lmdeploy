@@ -7,7 +7,6 @@ from glob import glob
 import torch
 from safetensors.torch import load_file
 
-from lmdeploy.archs import get_model_arch
 from lmdeploy.tokenizer import Tokenizer
 
 from .base import INPUT_MODELS, BaseInputModel, BaseReader
@@ -141,6 +140,7 @@ class LlamaModel(BaseInputModel):
             ckpt_path = model_path
         self.ckpt_path = ckpt_path
         self.ckpt_files = self.get_ckpt()
+        from lmdeploy.archs import get_model_arch
         _, self.model_config = get_model_arch(model_path)
         self.model_config = self.model_config.to_dict()
 
