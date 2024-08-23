@@ -13,7 +13,7 @@ ARG PYTHON_VERSION=3.10
 ARG TORCH_VERSION=2.3.0
 ARG TORCHVISION_VERSION=0.18.0
 
-RUN apt-get update -y && apt-get install -y software-properties-common wget vim git curl libyaml-cpp-dev &&\
+RUN apt-get update -y && apt-get install -y software-properties-common wget vim git curl &&\
     curl https://sh.rustup.rs -sSf | sh -s -- -y &&\
     add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
     ninja-build rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \

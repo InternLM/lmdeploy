@@ -42,8 +42,6 @@ endif()
 option(BUILD_PY_FFI "Build python ffi" ON)
 option(BUILD_TEST "Build tests" OFF)
 
-find_package(yaml-cpp REQUIRED)
-
 include(FetchContent)
 if (BUILD_TEST)
   FetchContent_Declare(
@@ -60,6 +58,15 @@ if (BUILD_TEST)
   set(CUTLASS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/include)
   set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/turbomind/cutlass_extensions/include)
 endif()
+
+FetchContent_Declare(
+  yaml-cpp
+  GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+  GIT_TAG 0.8.0
+)
+set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build static library of yaml-cpp")
+FetchContent_MakeAvailable(yaml-cpp)
+
 
 option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF)
 
