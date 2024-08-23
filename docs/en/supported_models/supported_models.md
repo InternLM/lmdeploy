@@ -76,3 +76,6 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |      GLM4      |     9B      | LLM  |    Yes    |   No    |  No  |  No   |
 |     GLM-4V     |     9B      | MLLM |    Yes    |   No    |  No  |  No   |
 |   CodeGeeX4    |     9B      | LLM  |    Yes    |   No    |  No  |   -   |
+|  Phi-3.5-mini  |    3.8B     | LLM  |    Yes    |   No    |  No  |   -   |
+|  Phi-3.5-MoE   |   16x3.8B   | LLM  |    Yes    |   No    |  No  |   -   |
+| Phi-3.5-vision |    4.2B     | MLLM |    Yes    |   No    |  No  |   -   |
