@@ -171,7 +171,7 @@ class BaseOutputModel(ABC):
 
     @abstractmethod
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
-        """Generate turbomind model config (config.ini)."""
+        """Generate turbomind model config."""
         _, bos_id, eos_id = self.input_model.tokenizer_info()
 
         final_cfg = cfg.__dict__

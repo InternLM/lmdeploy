@@ -203,7 +203,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
         if (!config.empty()) {
             reader = YAML::Load(config);
         }
-    } catch (const YAML::Exception& e) {
+    }
+    catch (const YAML::Exception& e) {
         std::cerr << "Error reading YAML config: " << e.what() << std::endl;
         ft::FT_CHECK(false);
     }

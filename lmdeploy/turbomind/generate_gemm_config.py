@@ -15,22 +15,19 @@ def get_llama_gemm():
     return bin_path
 
 
-def read_config(ini_path: str):
+def read_config(config_file: str):
     """read turbomind config from turbomind.
 
     Args:
-        ini_path (str): the path of `config.ini` file in turbomind model
+        config_file (str): the path of turbomind config file in turbomind model
     """
-    from configparser import ConfigParser
+
+    import yaml
 
     from lmdeploy.turbomind.deploy.target_model.base import \
         TurbomindModelConfig
-
-    with open(ini_path, 'r') as f:
-        parser = ConfigParser()
-        parser.read_file(f)
-    section_name = 'llama'
-    _cfg = parser._sections[section_name]
+    with open(config_file, 'r') as f:
+        _cfg = yaml.safe_load(f)
     cfg = TurbomindModelConfig.from_dict(_cfg)
     return cfg.head_num, cfg.size_per_head, cfg.inter_size, \
         cfg.vocab_size, cfg.tensor_para_size
@@ -52,7 +49,7 @@ def main(head_num: int = 32,
             head_num, size_per_head, inter_size, vocab_size, \
                 tensor_para_size = read_config(
                     osp.join(model_path,
-                             'triton_models', 'weights', 'config.ini'))
+                             'triton_models', 'weights', 'config.yaml'))
         else:
             from transformers import AutoConfig
             config = AutoConfig.from_pretrained(model_path,
