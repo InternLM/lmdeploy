@@ -265,6 +265,12 @@ def get_tm_model(model_path,
         # the rope_scaling_factor in TurbomindModelConfig
         engine_config.rope_scaling_factor = None
     output_model.cfg.update_from_engine_config(engine_config)
+    # cast bool to int, otherwise, the bool variables will be saved to
+    # config.ini as string
+    # TODO(lvhan): change config.ini to config.yaml
+    output_model.cfg.enable_prefix_caching = int(
+        output_model.cfg.enable_prefix_caching)
+    output_model.cfg.use_logn_attn = int(output_model.cfg.use_logn_attn)
     return output_model
 
 
