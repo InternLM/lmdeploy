@@ -4,7 +4,7 @@ from .apply_rotary_pos_emb import apply_rotary_pos_emb
 from .fill_kv_cache import fill_kv_cache
 from .fused_rotary_emb import fused_rotary_emb
 from .moe_gating_topk_softmax import moe_gating_topk_softmax
-from .paged_attention_fwd import paged_attention_fwd
+from .pagedattention import paged_attention_fwd
 from .rms_norm import rms_norm
 
 __all__ = [

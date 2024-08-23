@@ -4,7 +4,7 @@ import torch
 from torch import Tensor
 
 
-def flash_context_attention(
+def prefill_attention(
     query_states: Tensor,
     key_states: Tensor,
     value_states: Tensor,
@@ -54,7 +54,7 @@ def flash_context_attention(
         )
 
 
-def paged_token_attention(q, k_cache, v_cache, attn_output, kv_seq_len,
+def paged_decode_attention(q, k_cache, v_cache, attn_output, kv_seq_len,
                           max_kv_seq_len, block_offsets, block_size):
     num_kv_heads, num_q_heads = k_cache.shape[1], q.shape[1]
     ext_ops.paged_decode_attention(
@@ -92,7 +92,7 @@ def paged_attention_fwd(
     k = key_cache.reshape(block_num * block_size, head, dim)
     v = value_cache.reshape(block_num * block_size, head, dim)
     if not is_decoding:
-        flash_context_attention(
+        prefill_attention(
             query_states,
             key_states,
             value_states,
@@ -108,7 +108,7 @@ def paged_attention_fwd(
             context=context,
         )
     else:
-        paged_token_attention(
+        paged_decode_attention(
             query_states,
             k,
             v,
