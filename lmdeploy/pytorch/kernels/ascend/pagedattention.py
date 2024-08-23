@@ -55,7 +55,7 @@ def prefill_attention(
 
 
 def paged_decode_attention(q, k_cache, v_cache, attn_output, kv_seq_len,
-                          max_kv_seq_len, block_offsets, block_size):
+                           max_kv_seq_len, block_offsets, block_size):
     num_kv_heads, num_q_heads = k_cache.shape[1], q.shape[1]
     ext_ops.paged_decode_attention(
         q,

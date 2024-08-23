@@ -26,15 +26,18 @@ def apply_rotary_pos_emb(
             cos = cos[position_ids_1d].view(1, bs, 1, -1)
             sin = sin[position_ids_1d].view(1, bs, 1, -1)
         else:
-            raise RuntimeError("Cannot handle cos/sin shape dims!")
+            raise RuntimeError('Cannot handle cos/sin shape dims!')
 
         if context:
             setattr(context, 'cos', cos)
             setattr(context, 'sin', sin)
     cached_cos = context.cos if context else cos
     cached_sin = context.sin if context else sin
-    ext_ops.apply_rotary_pos_emb(query_states_reshaped, key_states_reshaped,
-                                 cached_cos, cached_sin, None, None)
+    query_states, key_states = ext_ops.apply_rotary_pos_emb(
+        query_states_reshaped, key_states_reshaped, cached_cos, cached_sin,
+        None, None)
+    query_states = query_states.view(bs, head, dim)
+    key_states = key_states.view(bs, num_kv_heads, dim)
     if q_embed is None:
         q_embed = query_states
     else:
