@@ -3,13 +3,29 @@
 #pragma once
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include <cstddef>
 #include <map>
 #include <regex>
 #include <string>
 
 namespace turbomind {
 
-struct LlamaAttentionParams {
+struct ModelParam {
+    size_t head_num;
+    size_t head_dim;
+    size_t kv_head_num;
+    size_t hidden_units;
+    size_t layer_num;
+    size_t inter_size;
+    size_t vocab_size;
+    float  norm_eps;
+    int    quant_policy;
+    //
+    int start_id;
+    int end_id;
+};
+
+struct AttentionParam {
     int         rotary_embedding_dim;
     float       rotary_embedding_base;
     int         max_position_embeddings;
@@ -20,9 +36,10 @@ struct LlamaAttentionParams {
     float       high_freq_factor;
     bool        use_dynamic_ntk;
     bool        use_logn_attn;
+    int         cache_block_seq_len;
 };
 
-struct EngineParams {
+struct EngineParam {
     // batch params
     int max_batch_size;
     int session_len;
@@ -40,7 +57,7 @@ struct EngineParams {
     int max_prefill_iters;
 };
 
-struct LoraParams {
+struct LoraParam {
     int        r;
     float      scale;
     LoraPolicy policy;

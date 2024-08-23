@@ -348,7 +348,7 @@ class Llavav1(Vicuna):
         """
         path = model_path.lower()
         if 'llava' in path and 'v1' in path and 'v1.6-34b' not in path \
-            and 'mistral' not in path:
+                and 'mistral' not in path:
             return 'llava-v1'
         elif 'llava-1.5' in path:
             return 'llava-v1'
@@ -802,7 +802,7 @@ Reminder:
 - Required parameters MUST be specified
 - Only call one function at a time
 - Put the entire function call reply on one line"
-- Always add your sources when using search results to answer the user query\n\n""",  #  noqa
+- Always add your sources when using search results to answer the user query\n\n""",  # noqa
             knowledge='Cutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\n',
             meta_instruction='You are a helpful assistant.',
             ipython='<|start_header_id|>ipython<|end_header_id|>\n\n',
@@ -883,6 +883,7 @@ Reminder:
             return 'llama3_1'
 
 
+@MODELS.register_module(name='minicpmv-2d6')
 @MODELS.register_module(name='qwen')
 class Qwen7BChat(BaseChatTemplate):
     """Chat template for Qwen-7B-Chat."""
@@ -918,6 +919,8 @@ class Qwen7BChat(BaseChatTemplate):
         """
         if 'qwen' in model_path.lower():
             return 'qwen'
+        if 'minicpm-v-2_6' in model_path.lower():
+            return 'minicpmv-2d6'
 
 
 @MODELS.register_module(name='codellama')
@@ -1500,8 +1503,8 @@ class Phi3Instruct(BaseChatTemplate):
                  eoh='<|end|>\n',
                  assistant='<|assistant|>\n',
                  eoa='<|end|>\n',
-                 separator='\n',
-                 stop_words=['<|end|>', '<|endoftext|>'],
+                 separator='',
+                 stop_words=['<|end|>', '<|endoftext|>', '<|assistant|>'],
                  **kwargs):
         super().__init__(system=system,
                          meta_instruction=meta_instruction,

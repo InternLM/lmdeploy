@@ -137,6 +137,8 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Dbrx (132B)</li>
   <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
+  <li>Phi-3.5-mini (3.8B)</li>
+  <li>Phi-3.5-MoE (16x3.8B)</li>
 </ul>
 </td>
 <td>
@@ -152,7 +154,9 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
   <li>MiniCPM-Llama3-V-2_5</li>
+  <li>MiniCPM-V-2_6</li>
   <li>Phi-3-vision (4.2B)</li>
+  <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
 </ul>
 </td>

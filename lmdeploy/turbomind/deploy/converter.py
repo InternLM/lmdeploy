@@ -228,6 +228,10 @@ def get_tm_model(model_path,
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 
+    # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
+    if not group_size:
+        group_size = 128
+
     if engine_config.model_format in ['awq', 'gptq']:
         assert group_size == 128, \
             f'model format is "{engine_config.model_format}" ' \
@@ -249,14 +253,24 @@ def get_tm_model(model_path,
 
     cfg.chat_template = chat_template_name
     cfg.model_name = model_name
-    cfg.update_from_engine_config(engine_config)
+    cfg.tensor_para_size = engine_config.tp
 
     output_model = OUTPUT_MODELS.get(output_model_name)(
         input_model=input_model,
         cfg=cfg,
         exporter_factory=exporter_factory,
         out_dir=out_dir)
-
+    if engine_config.rope_scaling_factor == 0:
+        # to avoid `rope_scaling_factor` from engine_config override
+        # the rope_scaling_factor in TurbomindModelConfig
+        engine_config.rope_scaling_factor = None
+    output_model.cfg.update_from_engine_config(engine_config)
+    # cast bool to int, otherwise, the bool variables will be saved to
+    # config.ini as string
+    # TODO(lvhan): change config.ini to config.yaml
+    output_model.cfg.enable_prefix_caching = int(
+        output_model.cfg.enable_prefix_caching)
+    output_model.cfg.use_logn_attn = int(output_model.cfg.use_logn_attn)
     return output_model
 
 

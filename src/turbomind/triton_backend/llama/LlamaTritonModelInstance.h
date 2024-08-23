@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
@@ -28,22 +29,9 @@
 namespace ft = turbomind;
 
 template<typename T>
-struct LlamaTritonSharedModelInstance {
-    std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator;
-    std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> peer_allocator;
-    std::unique_ptr<ft::cublasAlgoMap>                      cublas_algo_map;
-    std::unique_ptr<std::mutex>                             cublas_wrapper_mutex;
-    std::unique_ptr<ft::cublasMMWrapper>                    cublas_wrapper;
-    std::unique_ptr<cudaDeviceProp>                         cuda_device_prop_ptr;
-    std::shared_ptr<ft::LlamaWeight<T>>                     llm_weight;
-    std::unique_ptr<ft::LlamaV2<T>>                         llm;
-    const int                                               session_len;
-};
-
-template<typename T>
 struct LlamaTritonModelInstance: AbstractTransformerModelInstance {
 
-    LlamaTritonModelInstance(std::shared_ptr<LlamaTritonSharedModelInstance<T>>      instance,
+    LlamaTritonModelInstance(ft::Engine<T>&                                          instance,
                              std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator,
                              int                                                     device_id);
     ~LlamaTritonModelInstance();
@@ -62,7 +50,7 @@ struct LlamaTritonModelInstance: AbstractTransformerModelInstance {
     convert_outputs(const std::unordered_map<std::string, ft::Tensor>& output_tensors);
 
 private:
-    const std::shared_ptr<LlamaTritonSharedModelInstance<T>>      instance_;
+    ft::Engine<T>*                                                instance_;
     const std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator_;
 
     std::unordered_map<std::string, ft::Tensor>

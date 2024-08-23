@@ -99,6 +99,7 @@ class ChatCompletionRequest(BaseModel):
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
     n: Optional[int] = 1
+    logit_bias: Optional[Dict[str, float]] = None
     max_tokens: Optional[int] = Field(default=None, examples=[None])
     stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
     # yapf: enable
@@ -114,6 +115,7 @@ class ChatCompletionRequest(BaseModel):
     ignore_eos: Optional[bool] = False
     skip_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40
+    seed: Optional[int] = None
 
 
 class FunctionResponse(BaseModel):
@@ -228,6 +230,7 @@ class CompletionRequest(BaseModel):
     ignore_eos: Optional[bool] = False
     skip_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40  # for opencompass
+    seed: Optional[int] = None
 
 
 class CompletionResponseChoice(BaseModel):
@@ -314,6 +317,7 @@ class GenerateRequest(BaseModel):
     skip_special_tokens: Optional[bool] = True
     cancel: Optional[bool] = False  # cancel a responding request
     adapter_name: Optional[str] = Field(default=None, examples=[None])
+    seed: Optional[int] = None
 
 
 class GenerateResponse(BaseModel):
