@@ -1503,8 +1503,8 @@ class Phi3Instruct(BaseChatTemplate):
                  eoh='<|end|>\n',
                  assistant='<|assistant|>\n',
                  eoa='<|end|>\n',
-                 separator='\n',
-                 stop_words=['<|end|>', '<|endoftext|>'],
+                 separator='',
+                 stop_words=['<|end|>', '<|endoftext|>', '<|assistant|>'],
                  **kwargs):
         super().__init__(system=system,
                          meta_instruction=meta_instruction,

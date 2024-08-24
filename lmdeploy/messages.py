@@ -135,7 +135,7 @@ class TurbomindEngineConfig:
         cache_block_seq_len (int): the length of the token sequence in a k/v block, default to 64
         enable_prefix_caching (bool): enable cache prompts for block reuse, default to False
         quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
-        rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
+        rope_scaling_factor (float): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
         download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
         revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
         max_prefill_token_num(int): the number of tokens each iteration during prefill, default to 8192
@@ -152,7 +152,7 @@ class TurbomindEngineConfig:
     cache_block_seq_len: int = 64
     enable_prefix_caching: bool = False
     quant_policy: int = 0
-    rope_scaling_factor: float = None
+    rope_scaling_factor: float = 0.0
     download_dir: Optional[str] = None
     revision: Optional[str] = None
     max_prefill_token_num: int = 8192
@@ -165,7 +165,7 @@ class TurbomindEngineConfig:
         assert self.max_batch_size >= 1, 'max_batch_size must be a positive integer'  # noqa
         assert self.cache_max_entry_count > 0 and self.cache_max_entry_count < 1, 'invalid cache_max_entry_count'  # noqa
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
-        assert self.rope_scaling_factor is None or self.rope_scaling_factor > 0, 'invalid rope_scaling_factor'  # noqa
+        assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
 

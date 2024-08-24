@@ -101,7 +101,7 @@ class ArgumentHelper:
             '`model_path` will be adopted')
 
     @staticmethod
-    def model_format(parser, default: str = None):
+    def model_format(parser, default: str = 'hf'):
         return parser.add_argument(
             '--model-format',
             type=str,
@@ -182,7 +182,7 @@ class ArgumentHelper:
 
         return parser.add_argument('--rope-scaling-factor',
                                    type=float,
-                                   default=None,
+                                   default=0.0,
                                    help='Rope scaling factor')
 
     @staticmethod

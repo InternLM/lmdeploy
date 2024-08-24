@@ -94,6 +94,7 @@ class BaseOutputModel(ABC):
                                                   allow_none=True)
 
     def update_attention_config(self):
+        """update attention config according to input model's model info."""
         final_cfg = self.attention_config.__dict__ \
             if self.attention_config else dict()
         final_cfg.update(self.input_model_info)
@@ -102,6 +103,7 @@ class BaseOutputModel(ABC):
                                                       allow_none=True)
 
     def update_lora_config(self):
+        """update lora config according to input model's model info."""
         final_cfg = self.lora_config.__dict__ if self.lora_config else dict()
         final_cfg.update(self.input_model_info)
         self.lora_config = init_config_from_dict(LoraConfig,
@@ -111,15 +113,9 @@ class BaseOutputModel(ABC):
     def export_config(self) -> None:
         """export turbomind config."""
         if self.to_file:
-            from dataclasses import asdict
             config_path = osp.join(self.out_dir, 'config.yaml')
-            # TODO(lvhan) make the sequence of dict is the same as the config
-            cfg = dict(model_config=asdict(self.model_config),
-                       attention_config=asdict(self.attention_config),
-                       lora_config=asdict(self.lora_config),
-                       engine_config=asdict(self.engine_config))
             with open(config_path, 'w') as f:
-                yaml.safe_dump(cfg, f)
+                yaml.safe_dump(self.tm_config.to_dict(), f)
 
     def export_weight(self, param: torch.Tensor, name: str) -> None:
         """export turbomind weight."""
@@ -254,3 +250,10 @@ class BaseOutputModel(ABC):
         """Export transformer block."""
         for e in self.exporters:
             e.export(bin, i)
+
+    @property
+    def tm_config(self):
+        return TurbomindModelConfig(model_config=self.model_config,
+                                    attention_config=self.attention_config,
+                                    lora_config=self.lora_config,
+                                    engine_config=self.engine_config)

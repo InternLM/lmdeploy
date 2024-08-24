@@ -166,33 +166,42 @@ class TurboMind:
                     tm_params[k] = []
                 tm_params[k].append(v)
 
+    def _get_internal_engine_config(self,
+                                    engine_config: TurbomindEngineConfig):
+        cfg = engine_config.__dict__ if engine_config else dict()
+        return init_config_from_dict(InternalEngineConfig,
+                                     cfg,
+                                     allow_none=True)
+
+    def _update_internal_engine_config(self, internal_engine_config,
+                                       engine_config):
+        pass
+
     def _from_hf(self, model_source: ModelSource, model_path: str,
                  engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
-        if engine_config is None:
-            logger.warning('input engine config is None, using the default')
-            engine_config = TurbomindEngineConfig()
-
-        from .deploy.converter import SUPPORTED_FORMATS
-        assert engine_config.model_format in SUPPORTED_FORMATS, \
-            f'The model format should be in {SUPPORTED_FORMATS}'
-
         assert is_supported(model_path), (
             f'turbomind does not support {model_path}. '
             'Plz try pytorch engine instead.')
 
-        # convert transformers model into turbomind model format
+        dict_config = asdict(engine_config) if engine_config else dict()
+        internal_engine_config = init_config_from_dict(InternalEngineConfig,
+                                                       dict_config,
+                                                       allow_none=True)
+
+        # convert transformers model into turbomind model
         from .deploy.converter import get_tm_model
         tm_model = get_tm_model(model_path, self.model_name,
-                                self.chat_template_name, engine_config)
+                                self.chat_template_name,
+                                internal_engine_config)
 
-        self.config = tm_model.cfg
-        logger.info(f'model_config:\n\n{self.config}')
+        self.config = tm_model.tm_config
+        logger.info(f'turbomind model config:\n\n{self.config}')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir='',
-            config=yaml.safe_dump(asdict(self.config)),
+            config=yaml.safe_dump(self.config.to_dict()),
             tensor_para_size=self.gpu_count,
             data_type=self.config.model_config.weight_type)
 

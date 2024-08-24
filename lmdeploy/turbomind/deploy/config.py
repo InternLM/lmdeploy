@@ -2,7 +2,8 @@
 # from dataclasses import dataclass
 import inspect
 import json
-from typing import TypeVar
+from dataclasses import asdict
+from typing import Optional
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
@@ -69,8 +70,9 @@ class LoraConfig:
 
 @dataclass
 class InternalEngineConfig:
-    tensor_para_size: int = None
-    session_len: int = None
+    model_format: Optional[str] = None
+    tensor_para_size: int = 1
+    session_len: int = 0
     max_batch_size: int = 64
     max_prefill_token_num: int = 8192
     max_context_token_num: int = 1
@@ -80,7 +82,7 @@ class InternalEngineConfig:
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
     quant_policy: int = 0
-    rope_scaling_factor: float = None
+    rope_scaling_factor: float = 0.0
 
 
 @dataclass
@@ -91,6 +93,13 @@ class TurbomindModelConfig:
     engine_config: InternalEngineConfig = None
     lora_config: LoraConfig = None
 
+    def to_dict(self):
+        # TODO(lvhan) make the sequence of dict is the same as the config attrs
+        return dict(model_config=asdict(self.model_config),
+                    attention_config=asdict(self.attention_config),
+                    lora_config=asdict(self.lora_config),
+                    engine_config=asdict(self.engine_config))
+
     @property
     def session_len(self):
         return self.engine_config.session_len
@@ -98,34 +107,6 @@ class TurbomindModelConfig:
     @property
     def tensor_para_size(self):
         return self.engine_config.tensor_para_size
-
-    def update_engine_config(self, config: TypeVar('TurbomindEngineConfig')):
-        """Update the attributes of this instance with the attributes from
-        TurbomindEngineConfig.
-
-        Args:
-            config (TurbomindEngineConfig): The turbomind engine config
-        """
-        if config is None:
-            return
-        # Iterate over the fields of 'self.engine_config'
-        for field_name, _ in self.engine_config.__dataclass_fields__.items():
-            # If the field value in 'other' is not None,
-            # update the corresponding field in 'self.engine_config'
-            if hasattr(config, field_name) and getattr(config,
-                                                       field_name) is not None:
-                setattr(self.engine_config, field_name,
-                        getattr(config, field_name))
-
-        self.engine_config.tensor_para_size = config.tp
-        assert self.session_len is not None
-        if config.max_prefill_token_num is not None and \
-                config.num_tokens_per_iter == 0:
-            self.engine_config.num_tokens_per_iter = \
-                config.max_prefill_token_num
-            self.engine_config.max_prefill_iters = (
-                self.session_len + config.max_prefill_token_num -
-                1) // config.max_prefill_token_num
 
     def __str__(self):
         return json.dumps(self.__dict__, indent=2)

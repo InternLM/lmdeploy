@@ -356,6 +356,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         except Exception as e:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
+    random_seed = request.seed if request.seed else None
+
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens,
         logprobs=gen_logprobs,
@@ -366,7 +368,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens,
-        logits_processors=logits_processors)
+        logits_processors=logits_processors,
+        random_seed=random_seed)
 
     tools = None
     if request.tools and request.tool_choice != 'none':
@@ -583,6 +586,8 @@ async def completions_v1(request: CompletionRequest,
         request.prompt = [request.prompt]
     if isinstance(request.stop, str):
         request.stop = [request.stop]
+    random_seed = request.seed if request.seed else None
+
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens if request.max_tokens else 512,
         logprobs=request.logprobs,
@@ -592,7 +597,8 @@ async def completions_v1(request: CompletionRequest,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        skip_special_tokens=request.skip_special_tokens)
+        skip_special_tokens=request.skip_special_tokens,
+        random_seed=random_seed)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -831,6 +837,8 @@ async def chat_interactive_v1(request: GenerateRequest,
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 
+    random_seed = request.seed if request.seed else None
+
     gen_config = GenerationConfig(
         max_new_tokens=request.request_output_len,
         top_p=request.top_p,
@@ -839,7 +847,8 @@ async def chat_interactive_v1(request: GenerateRequest,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        skip_special_tokens=request.skip_special_tokens)
+        skip_special_tokens=request.skip_special_tokens,
+        random_seed=random_seed)
     if request.image_url:
         from lmdeploy.vl import load_image
         if isinstance(request.image_url, List):
