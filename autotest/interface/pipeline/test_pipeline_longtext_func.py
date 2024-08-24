@@ -148,7 +148,6 @@ def passkey_retrival(config,
         else:
             backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
                                                    session_len=session_len,
-                                                   use_logn_attn=True,
                                                    tp=tp_num)
     else:
         if 'internlm2_5' in model and '-1m' in model:
