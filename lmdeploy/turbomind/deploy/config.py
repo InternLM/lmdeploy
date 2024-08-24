@@ -95,8 +95,11 @@ class TurbomindModelConfig:
     def session_len(self):
         return self.engine_config.session_len
 
-    def update_from_engine_config(self,
-                                  config: TypeVar('TurbomindModelConfig')):
+    @property
+    def tensor_para_size(self):
+        return self.engine_config.tensor_para_size
+
+    def update_engine_config(self, config: TypeVar('TurbomindEngineConfig')):
         """Update the attributes of this instance with the attributes from
         TurbomindEngineConfig.
 

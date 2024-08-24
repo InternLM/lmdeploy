@@ -19,7 +19,9 @@ from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model
 
-from .deploy.target_model.base import TurbomindModelConfig
+from .deploy.config import (AttentionConfig, InternalEngineConfig, LoraConfig,
+                            ModelConfig, TurbomindModelConfig,
+                            init_config_from_dict)
 from .supported_models import is_supported
 from .utils import ModelSource, get_model_source
 
@@ -216,10 +218,18 @@ class TurboMind:
         """Load model which is converted by `lmdeploy convert`"""
         config_path = osp.join(model_path, 'triton_models', 'weights',
                                'config.yaml')
-        # load cfg
+        # load TurboMindModelConfig from config file
         with open(config_path, 'r') as f:
             _cfg = yaml.safe_load(f)
-        cfg = TurbomindModelConfig.from_dict(_cfg)
+
+        cfg = TurbomindModelConfig(
+            model_config=init_config_from_dict(ModelConfig,
+                                               _cfg['model_config']),
+            attention_config=init_config_from_dict(AttentionConfig,
+                                                   _cfg['attention_config']),
+            lora_config=init_config_from_dict(LoraConfig, _cfg['lora_config']),
+            engine_config=init_config_from_dict(InternalEngineConfig,
+                                                _cfg['engine_config']))
 
         # check whether input tp is valid
         if cfg.tensor_para_size != 1 and \
@@ -229,15 +239,15 @@ class TurboMind:
 
         if engine_config is not None:
             engine_config.tp = cfg.tensor_para_size
-            cfg.update_from_engine_config(engine_config)
+            cfg.update_engine_config(engine_config)
         if self.model_name:
-            cfg.model_name = self.model_name
+            cfg.model_config.model_name = self.model_name
         if self.chat_template_name:
-            cfg.chat_template_name = self.chat_template_name
+            cfg.model_config.chat_template_name = self.chat_template_name
         # update cfg
         self.config = cfg
         # create model
-        logger.warning(f'model_config:\n\n{cfg}')
+        logger.warning(f'turbomind_model_config:\n\n{cfg}')
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir=weight_dir,

@@ -111,12 +111,13 @@ class BaseOutputModel(ABC):
     def export_config(self) -> None:
         """export turbomind config."""
         if self.to_file:
+            from dataclasses import asdict
             config_path = osp.join(self.out_dir, 'config.yaml')
             # TODO(lvhan) make the sequence of dict is the same as the config
-            cfg = dict(model_config=self.model_config.__dict__,
-                       attention_config=self.attention_config.__dict__,
-                       lora_config=self.lora_config.__dict__,
-                       engine_config=self.engine_config.__dict__)
+            cfg = dict(model_config=asdict(self.model_config),
+                       attention_config=asdict(self.attention_config),
+                       lora_config=asdict(self.lora_config),
+                       engine_config=asdict(self.engine_config))
             with open(config_path, 'w') as f:
                 yaml.safe_dump(cfg, f)
 

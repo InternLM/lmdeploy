@@ -135,7 +135,7 @@ def get_output_model_registered_name_and_config(model_path: str,
                 weight_type = 'fp16'
 
     config.model_config.model_arch = model_arch
-    config.engine_config.session_len = session_len + 8
+    config.engine_config.session_len = session_len
     config.model_config.weight_type = weight_type
     config.model_config.group_size = group_size
 
@@ -258,7 +258,7 @@ def get_tm_model(model_path,
             group_size=group_size)
     cfg.model_config.chat_template = chat_template_name
     cfg.model_config.model_name = model_name
-    cfg.update_from_engine_config(engine_config)
+    cfg.update_engine_config(engine_config)
     output_model = OUTPUT_MODELS.get(output_model_name)(
         input_model=input_model,
         cfg=cfg,

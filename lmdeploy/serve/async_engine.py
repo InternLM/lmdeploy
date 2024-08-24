@@ -33,7 +33,7 @@ def get_names_from_model(model_path: str, model_name: str = None):
         with open(config_path, 'r') as f:
             import yaml
             config = yaml.safe_load(f)
-        chat_template_name = config['chat_template']
+        chat_template_name = config['model_config']['chat_template']
     model_name = model_name if model_name else model_path
     return model_name, chat_template_name
 
