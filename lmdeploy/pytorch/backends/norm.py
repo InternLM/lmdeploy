@@ -8,7 +8,10 @@ class RMSNormImpl(ABC):
     """RMS norm implementation api."""
 
     @abstractmethod
-    def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
+    def forward(self,
+                x: torch.Tensor,
+                weight: torch.Tensor,
+                residual: torch.Tensor = None):
         """forward."""
         raise NotImplementedError
 
@@ -18,6 +21,6 @@ class RMSNormBuilder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(weight: torch.Tensor, eps: float = 1e-6, inplace: bool = False):
+    def build(hidden_size: int, eps: float = 1e-6, inplace: bool = False):
         """build."""
         raise NotImplementedError

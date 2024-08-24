@@ -1,9 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import List
 
 import torch
-from torch import nn
 
 
 class SoftmaxTopKImpl(ABC):
@@ -25,12 +23,18 @@ class SoftmaxTopKBuilder(ABC):
         raise NotImplementedError
 
 
-class FusedMoEImpl(ABC, nn.Module):
+class FusedMoEImpl(ABC):
     """fused moe implementation."""
+
+    def update_weights(self, gate_up_weights: torch.Tensor,
+                       down_weights: torch.Tensor):
+        """update weights."""
+        return gate_up_weights, down_weights
 
     @abstractmethod
     def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor,
-                topk_ids: torch.LongTensor):
+                topk_ids: torch.LongTensor, gate_up_weights: torch.Tensor,
+                down_weights: torch.Tensor):
         """forward."""
         raise NotImplementedError
 
@@ -40,10 +44,6 @@ class FusedMoEBuilder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build_from_mlp(gates: List[torch.Tensor],
-                       ups: List[torch.Tensor],
-                       downs: List[torch.Tensor],
-                       top_k: int,
-                       renormalize: bool = False):
+    def build(top_k: int, renormalize: bool = False):
         """build from mlp."""
         raise NotImplementedError

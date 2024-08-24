@@ -4,11 +4,10 @@ from torch import nn
 from ..activation import SiluAndMulBuilder, SiluAndMulImpl
 
 
-class DefaultSiluAndMulImpl(SiluAndMulImpl, nn.Module):
+class DefaultSiluAndMulImpl(SiluAndMulImpl):
     """silu + multiple residual fused implementation."""
 
     def __init__(self, inplace: bool):
-        super().__init__()
         self.inplace = inplace
         self.silu = nn.SiLU(inplace)
 

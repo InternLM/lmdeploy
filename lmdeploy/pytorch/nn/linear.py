@@ -105,7 +105,27 @@ class AwqLinear(nn.Module):
         super().__init__()
         impl_builder = get_backend().get_layer_impl_builder(
             LayerType.LinearW4A16)
-        self.impl = impl_builder.build(mod, ctx_mgr)
+        qweight = mod.qweight
+        scales = mod.scales
+        qzeros = mod.qzeros
+        bias = mod.bias
+        self.impl = impl_builder.build(mod.in_features,
+                                       mod.out_features,
+                                       mod.w_bit,
+                                       mod.group_size,
+                                       bias is not None,
+                                       dtype=scales.dtype)
+        qweight, scales, qzeros, bias = self.impl.update_weights(
+            qweight, scales, qzeros, bias)
+        qweight = torch.nn.Parameter(qweight, requires_grad=False)
+        scales = torch.nn.Parameter(scales, requires_grad=False)
+        qzeros = torch.nn.Parameter(qzeros, requires_grad=False)
+        if bias is not None:
+            bias = torch.nn.Parameter(bias, requires_grad=False)
+        self.register_parameter('qweight', qweight)
+        self.register_parameter('scales', scales)
+        self.register_parameter('qzeros', qzeros)
+        self.register_parameter('bias', bias)
 
         adapter_infos = adapter_infos if adapter_infos is not None else []
         self.lora_adapters = None
@@ -120,9 +140,11 @@ class AwqLinear(nn.Module):
         """w4a16 forward."""
         is_tp = False if self.colwise else self.is_tp
         if self.lora_adapters is None:
-            return self.impl.forward(x, is_tp)
+            return self.impl.forward(x, self.qweight, self.scales, self.qzeros,
+                                     self.bias, is_tp)
 
-        out = self.impl.forward(x, False)
+        out = self.impl.forward(x, self.qweight, self.scales, self.qzeros,
+                                self.bias, False)
         if self.lora_adapters is not None:
             for lora_adapter in self.lora_adapters:
                 out = lora_adapter(x, out)
@@ -142,14 +164,29 @@ class W8A8Linear(nn.Module):
         super().__init__()
         impl_builder = get_backend().get_layer_impl_builder(
             LayerType.LinearW8A8)
-        self.impl = impl_builder.build(mod, ctx_mgr)
+        weight = mod.weight
+        scale = mod.scale
+        bias = mod.bias
+
+        self.impl = impl_builder.build(mod.in_features,
+                                       mod.out_features,
+                                       bias is not None,
+                                       dtype=torch.float16)
+        weight, scale, bias = self.impl.update_weights(weight, scale, bias)
+        weight = torch.nn.Parameter(weight, requires_grad=False)
+        scale = torch.nn.Parameter(scale, requires_grad=False)
+        if bias is not None:
+            bias = torch.nn.Parameter(bias, requires_grad=False)
+        self.register_parameter('weight', weight)
+        self.register_parameter('scale', scale)
+        self.register_parameter('bias', bias)
         self.is_tp = is_tp
         self.colwise = colwise
 
     def forward(self, x):
         """forward of w8a8."""
         is_tp = False if self.colwise else self.is_tp
-        return self.impl.forward(x, is_tp)
+        return self.impl.forward(x, self.weight, self.scale, self.bias, is_tp)
 
 
 class BaseLinear(nn.Module):
@@ -163,7 +200,15 @@ class BaseLinear(nn.Module):
                  is_tp: bool = False):
         super().__init__()
         impl_builder = get_backend().get_layer_impl_builder(LayerType.Linear)
-        self.impl = impl_builder.build(mod, ctx_mgr)
+        weight = mod.weight
+        bias = mod.bias
+        self.impl = impl_builder.build(mod.in_features,
+                                       mod.out_features,
+                                       bias is not None,
+                                       dtype=weight.dtype)
+        weight, bias = self.impl.update_weights(weight, bias)
+        self.register_parameter('weight', weight)
+        self.register_parameter('bias', bias)
 
         adapter_infos = adapter_infos if adapter_infos is not None else []
         self.lora_adapters = None
@@ -178,9 +223,9 @@ class BaseLinear(nn.Module):
         """forward of linear layer."""
         is_tp = False if self.colwise else self.is_tp
         if self.lora_adapters is None:
-            return self.impl.forward(x, is_tp)
+            return self.impl.forward(x, self.weight, self.bias, is_tp)
 
-        out = self.impl.forward(x, False)
+        out = self.impl.forward(x, self.weight, self.bias, False)
         if self.lora_adapters is not None:
             for lora_adapter in self.lora_adapters:
                 out = lora_adapter(x, out)

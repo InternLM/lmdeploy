@@ -1,27 +1,28 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
-from torch import nn
 
 from lmdeploy.pytorch.kernels.cuda import rms_norm
 
 from ..norm import RMSNormBuilder, RMSNormImpl
 
 
-class TritonRMSNormImpl(RMSNormImpl, nn.Module):
+class TritonRMSNormImpl(RMSNormImpl):
     """triton RMS norm implementation."""
 
-    def __init__(self, weight: torch.Tensor, eps: float = 1e-6):
-        super().__init__()
-        self.weight = nn.Parameter(weight.clone())
+    def __init__(self, hidden_size: int, eps: float = 1e-6):
+        self.hidden_size = hidden_size
         self.eps = eps
 
-    def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
+    def forward(self,
+                x: torch.Tensor,
+                weight: torch.Tensor,
+                residual: torch.Tensor = None):
         """forward."""
         if residual is None:
-            x = rms_norm(x, self.weight, self.eps)
+            x = rms_norm(x, weight, self.eps)
             return x
         else:
-            x, residual = rms_norm(x, self.weight, self.eps, residual=residual)
+            x, residual = rms_norm(x, weight, self.eps, residual=residual)
             return x, residual
 
 
@@ -29,6 +30,6 @@ class TritonRMSNormBuilder(RMSNormBuilder):
     """triton RMS norm implementation builder."""
 
     @staticmethod
-    def build(weight: torch.Tensor, eps: float = 1e-6):
+    def build(weight: torch.Tensor, eps: float = 1e-6, inplace: bool = False):
         """build."""
         return TritonRMSNormImpl(weight, eps)

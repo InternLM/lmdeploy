@@ -16,6 +16,28 @@ from .adapter_weight_loader import AdapterWeightLoader
 logger = get_logger('lmdeploy')
 
 
+def load_weight(param: torch.nn.Parameter, loaded_weight: torch.Tensor,
+                **kwargs):
+    """load weight."""
+    if hasattr(param, 'weight_loader'):
+        param.weight_loader(param, loaded_weight, **kwargs)
+    else:
+        assert len(kwargs) == 0
+        default_weight_loader(param, loaded_weight)
+
+
+def default_weight_loader(param: torch.nn.Parameter,
+                          loaded_weight: torch.Tensor):
+    """default weight loader."""
+    if param.numel() == 1 and loaded_weight.numel() == 1:
+        param.data.fill_(loaded_weight.item())
+    else:
+        assert param.size() == loaded_weight.size(), (
+            f'Attempted to load weight ({loaded_weight.size()}) '
+            f'into parameter ({param.size()})')
+        param.data.copy_(loaded_weight)
+
+
 def _get_weight_type(model_path: str, use_safetensors: bool = None):
     """get weight type."""
     weight_type = None

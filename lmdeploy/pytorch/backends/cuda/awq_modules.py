@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Optional
+
 import torch
 from torch import distributed as dist
-from torch import nn
-
-from lmdeploy.pytorch.model_inputs import StepContextManager
 
 from ..awq_modules import LinearW4A16Builder, LinearW4A16Impl
 
@@ -52,25 +51,26 @@ def wq_gemm_forward(
 class AwqLinearW4A16Impl(LinearW4A16Impl):
     """awq kernel linear."""
 
-    def __init__(self, mod: nn.Module):
-        super().__init__()
+    def __init__(self, in_features: int, out_features: int, w_bit: int,
+                 group_size: int):
         from awq.modules.linear.gemm import AWQ_INSTALLED
         assert AWQ_INSTALLED
-        self.qweight = mod.qweight
-        self.qzeros = mod.qzeros
-        self.scales = mod.scales
-        self.w_bit = mod.w_bit
-        self.group_size = mod.group_size
-        self.bias = mod.bias
-        self.in_features = mod.in_features
-        self.out_features = mod.out_features
+        self.in_features = in_features
+        self.out_features = out_features
+        self.w_bit = w_bit
+        self.group_size = group_size
 
-    def forward(self, x, all_reduce: bool = False):
+    def forward(self,
+                x,
+                qweight: torch.Tensor,
+                scales: torch.Tensor,
+                qzeros: torch.Tensor,
+                bias: Optional[torch.Tensor] = None,
+                all_reduce: bool = False):
         """forward."""
-        out_features = self.scales.size(1)
-        out = wq_gemm_forward(x, self.qweight, self.qzeros, self.scales,
-                              self.w_bit, self.group_size, self.bias,
-                              out_features)
+        out_features = scales.size(1)
+        out = wq_gemm_forward(x, qweight, qzeros, scales, self.w_bit,
+                              self.group_size, bias, out_features)
         if all_reduce:
             dist.all_reduce(out)
         return out
@@ -80,6 +80,11 @@ class AwqLinearW4A16Builder(LinearW4A16Builder):
     """awq linear builder."""
 
     @staticmethod
-    def build(mod: nn.Module, ctx_mgr: StepContextManager = None):
+    def build(in_features: int,
+              out_features: int,
+              w_bit: int,
+              group_size: int,
+              bias: bool = False,
+              dtype: torch.dtype = None):
         """build."""
-        return AwqLinearW4A16Impl(mod)
+        return AwqLinearW4A16Impl(in_features, out_features, w_bit, group_size)

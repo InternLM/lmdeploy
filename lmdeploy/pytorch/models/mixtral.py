@@ -13,6 +13,7 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
                                         build_merged_colwise_linear,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_moe_from_mlp
+from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from ..weight_loader.dist_utils import (colwise_parallelize_linear,
                                         rowwise_parallelize_linear)
@@ -202,17 +203,24 @@ class MixtralDecoderLayer(nn.Module):
         input_layernorm = origin.input_layernorm
         is_w8a8 = hasattr(input_layernorm, 'from_float')
         self.input_layernorm = RMSNorm(
-            input_layernorm.weight,
+            input_layernorm.weight.size(0),
             input_layernorm.variance_epsilon,
+            dtype=input_layernorm.weight.dtype,
+            device=input_layernorm.weight.device,
             is_w8a8=is_w8a8,
         )
+        load_weight(self.input_layernorm.weight, input_layernorm.weight)
         post_attention_layernorm = origin.post_attention_layernorm
         is_w8a8 = hasattr(post_attention_layernorm, 'from_float')
         self.post_attention_layernorm = RMSNorm(
-            post_attention_layernorm.weight,
+            post_attention_layernorm.weight.size(0),
             post_attention_layernorm.variance_epsilon,
+            dtype=post_attention_layernorm.weight.dtype,
+            device=post_attention_layernorm.weight.device,
             is_w8a8=is_w8a8,
         )
+        load_weight(self.post_attention_layernorm.weight,
+                    post_attention_layernorm.weight)
 
     def forward(
         self,
@@ -260,9 +268,12 @@ class MixtralModel(nn.Module):
         ])
         norm = origin.norm
         is_w8a8 = hasattr(norm, 'from_float')
-        self.norm = RMSNorm(norm.weight,
+        self.norm = RMSNorm(norm.weight.size(0),
                             norm.variance_epsilon,
+                            dtype=norm.weight.dtype,
+                            device=norm.weight.device,
                             is_w8a8=is_w8a8)
+        load_weight(self.norm.weight, norm.weight)
 
         emb_type = EmbeddingType.LinearScaling
         config = origin.config

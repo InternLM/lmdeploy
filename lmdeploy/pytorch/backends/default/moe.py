@@ -1,15 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
-from torch import nn
 
 from ..moe import SoftmaxTopKBuilder, SoftmaxTopKImpl
 
 
-class DefaultSoftmaxTopKImpl(SoftmaxTopKImpl, nn.Module):
+class DefaultSoftmaxTopKImpl(SoftmaxTopKImpl):
     """RMS norm implementation api."""
 
     def __init__(self, top_k: int, dim: int = -1):
-        super().__init__()
         self.top_k = top_k
         self.dim = dim
 
