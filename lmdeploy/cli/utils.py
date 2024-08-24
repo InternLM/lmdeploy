@@ -186,16 +186,6 @@ class ArgumentHelper:
                                    help='Rope scaling factor')
 
     @staticmethod
-    def use_logn_attn(parser):
-        """Add argument use_logn_attn to parser."""
-
-        return parser.add_argument(
-            '--use-logn-attn',
-            action='store_true',
-            default=False,
-            help='Whether to use logn attention scaling')
-
-    @staticmethod
     def block_size(parser):
         """Add argument block_size to parser."""
 

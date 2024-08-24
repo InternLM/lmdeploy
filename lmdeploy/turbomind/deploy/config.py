@@ -40,7 +40,6 @@ class ModelConfig:
     size_per_head: int = 128
     group_size: int = 0
     weight_type: str = None
-    quant_policy: int = 0
 
 
 @dataclass
@@ -80,6 +79,8 @@ class InternalEngineConfig:
     enable_prefix_caching: bool = False
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    quant_policy: int = 0
+    rope_scaling_factor: float = None
 
 
 @dataclass
@@ -125,15 +126,3 @@ class TurbomindModelConfig:
 
     def __str__(self):
         return json.dumps(self.__dict__, indent=2)
-
-    # @property
-    # def valid(self):
-    #     """Check if cfg is valid."""
-    #     for config in [
-    #             self.model_config, self.attn_config, self.lora_config,
-    #             self.engine_config
-    #     ]:
-    #         for _, v in config.__dict__.items():
-    #             if v is None:
-    #                 return False
-    #     return True
