@@ -33,31 +33,35 @@
 
 namespace ft = turbomind;
 
-std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaModel(std::string inifile)
+std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaModel(std::string config_file)
 {
-    INIReader reader = INIReader(inifile);
-    if (reader.ParseError() < 0) {
-        std::cout << "[ERROR] Can't load '" << inifile << "'\n";
-        return nullptr;
+    YAML::Node reader;
+    try {
+        reader = YAML::Load(config_file);
+    }
+    catch (const YAML::Exception& e) {
+        std::cerr << "Error reading YAML config: " << e.what() << std::endl;
+        ft::FT_CHECK(false);
     }
 
-    const std::string data_type        = reader.Get("ft_instance_hyperparameter", "data_type");
-    int               tensor_para_size = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
-    std::string       model_dir        = reader.Get("ft_instance_hyperparameter", "model_dir");
+    auto ft_instance_hyperparameter = reader["ft_instance_hyperparameter"];
+    const std::string data_type        = ft_instance_hyperparameter["data_type"].as<std::string>();
+    int               tensor_para_size = ft_instance_hyperparameter["tensor_para_size"].as<int>();
+    std::string       model_dir        = ft_instance_hyperparameter["model_dir"].as<std::string>();
 
     if (data_type == "half" || data_type == "fp16") {
         return std::make_shared<LlamaTritonModel<half>>(
-            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
+            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
+            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
+            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
             model_dir);
     }
     else if (data_type == "bf16") {
 #ifdef ENABLE_BF16
         return std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
-            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
+            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
+            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
+            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
             model_dir);
 #else
         TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF16");
@@ -67,9 +71,9 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
     else {
 #ifdef ENABLE_FP32
         return std::make_shared<LlamaTritonModel<float>>(
-            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
+            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
+            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
+            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
             model_dir);
 #else
         TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF32");
