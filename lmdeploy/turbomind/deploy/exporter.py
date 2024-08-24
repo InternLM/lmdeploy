@@ -74,9 +74,9 @@ class BaseExporter(ABC):
 
     def __init__(self, model: BaseOutputModel):
         self.model = model
-        self.tp = model.cfg.tensor_para_size
-        self.head_dim = model.cfg.size_per_head
-        self.inter_size = model.cfg.inter_size
+        self.tp = model.tensor_para_size
+        self.head_dim = model.model_config.size_per_head
+        self.inter_size = model.model_config.inter_size
 
     def export_attn(self, idx: int, qkvo, kind: str, pack_fn=identity):
         if all(x is None for x in qkvo):

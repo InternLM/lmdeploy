@@ -13,10 +13,11 @@ from lmdeploy.utils import get_logger, get_model
 
 from ...utils import _get_and_verify_max_len
 from ..supported_models import SUPPORTED_ARCHS, is_supported
+# from .config import TurbomindModelConfig
 from .exporter import get_exporter_factory
 from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
-from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
+from .target_model.base import OUTPUT_MODELS
 
 SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', 'gptq', None]
 logger = get_logger('lmdeploy')
@@ -100,7 +101,16 @@ def get_output_model_registered_name_and_config(model_path: str,
     turbomind_model_arch = 'llama'
     weight_type = 'fp16'
 
-    config = TurbomindModelConfig.from_dict({}, allow_none=True)
+    from .config import (AttentionConfig, InternalEngineConfig, LoraConfig,
+                         ModelConfig, TurbomindModelConfig,
+                         init_config_from_dict)
+    config = TurbomindModelConfig(
+        model_config=init_config_from_dict(ModelConfig, {}, allow_none=True),
+        attention_config=init_config_from_dict(AttentionConfig, {},
+                                               allow_none=True),
+        lora_config=init_config_from_dict(LoraConfig, {}, allow_none=True),
+        engine_config=init_config_from_dict(InternalEngineConfig, {},
+                                            allow_none=True))
 
     if model_format == 'meta_llama':
         session_len = 2048
@@ -124,10 +134,10 @@ def get_output_model_registered_name_and_config(model_path: str,
                     'Device does not support bfloat16. Set float16 forcefully')
                 weight_type = 'fp16'
 
-    config.model_arch = model_arch
-    config.session_len = session_len + 8
-    config.weight_type = weight_type
-    config.group_size = group_size
+    config.model_config.model_arch = model_arch
+    config.engine_config.session_len = session_len + 8
+    config.model_config.weight_type = weight_type
+    config.model_config.group_size = group_size
 
     lora_type = 'plora' if turbomind_model_arch == 'xcomposer2' else ''
 
@@ -246,11 +256,9 @@ def get_tm_model(model_path,
             model_path=model_path,
             model_format=engine_config.model_format,
             group_size=group_size)
-
-    cfg.chat_template = chat_template_name
-    cfg.model_name = model_name
+    cfg.model_config.chat_template = chat_template_name
+    cfg.model_config.model_name = model_name
     cfg.update_from_engine_config(engine_config)
-
     output_model = OUTPUT_MODELS.get(output_model_name)(
         input_model=input_model,
         cfg=cfg,

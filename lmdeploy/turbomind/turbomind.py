@@ -192,7 +192,7 @@ class TurboMind:
             model_dir='',
             config=yaml.safe_dump(asdict(self.config)),
             tensor_para_size=self.gpu_count,
-            data_type=self.config.weight_type)
+            data_type=self.config.model_config.weight_type)
 
         # create empty weight
         self._create_weight(model_comm)

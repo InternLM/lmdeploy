@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import inspect
-import json
 import os.path as osp
 from abc import ABC, abstractmethod
 
@@ -8,10 +6,9 @@ import torch
 import tqdm
 import yaml
 from mmengine import Registry
-from pydantic.dataclasses import dataclass
 
-from lmdeploy.messages import TurbomindEngineConfig
-
+from ..config import (AttentionConfig, LoraConfig, ModelConfig,
+                      TurbomindModelConfig, init_config_from_dict)
 from ..source_model.base import BaseInputModel, BaseReader
 
 OUTPUT_MODELS = Registry(
@@ -28,112 +25,8 @@ def tprint(*args, **kwargs):
     tqdm.tqdm.write(s.getvalue())
 
 
-@dataclass
-class TurbomindModelConfig:
-    """Config for turbomind model."""
-
-    model_name: str = ''
-    chat_template: str = ''
-    model_arch: str = None
-    tensor_para_size: int = None
-    head_num: int = None
-    kv_head_num: int = None
-    hidden_units: int = None
-    vocab_size: int = None
-    num_layer: int = None
-    inter_size: int = None
-    norm_eps: float = None
-    attn_bias: int = None
-    start_id: int = None
-    end_id: int = None
-    session_len: int = None
-    weight_type: str = None
-    rotary_embedding: int = 128
-    rope_theta: float = 10000.0
-    size_per_head: int = 128
-    group_size: int = 0
-    max_position_embeddings: int = 0
-    original_max_position_embeddings: int = 0
-    rope_scaling_type: str = ''
-    rope_scaling_factor: float = 0.0
-    use_dynamic_ntk: int = 0
-    low_freq_factor: float = 1.0
-    high_freq_factor: float = 1.0
-    use_logn_attn: int = 0
-    lora_policy: str = ''
-    lora_r: int = 0
-    lora_scale: float = 0.0
-    lora_max_wo_r: int = 0
-    lora_rank_pattern: str = ''
-    lora_scale_pattern: str = ''
-    # The following parameters are hyperparameters used by turbomind,
-    # which can be input by users
-    max_batch_size: int = 64
-    max_prefill_token_num: int = 8192
-    max_context_token_num: int = 1
-    cache_max_entry_count: float = 0.8
-    cache_block_seq_len: int = 64
-    cache_chunk_size: int = -1
-    enable_prefix_caching: bool = False
-    num_tokens_per_iter: int = 0
-    max_prefill_iters: int = 1
-    quant_policy: int = 0
-
-    @classmethod
-    def from_dict(cls, env, allow_none=False):
-        """Construct from dict."""
-        params = inspect.signature(cls).parameters
-        used = {k: v for k, v in env.items() if k in params and v is not None}
-        if not allow_none:
-            return cls(**used)
-        else:
-            default = {
-                k: None
-                for k in params.keys() if params[k].default is inspect._empty
-            }
-            default.update(used)
-            return cls(**default)
-
-    def update_from_engine_config(self, config: TurbomindEngineConfig):
-        """Update the attributes of this instance with the attributes from
-        TurbomindEngineConfig.
-
-        Args:
-            config (TurbomindEngineConfig): The turbomind engine config
-        """
-        if config is None:
-            return
-        # Iterate over the fields of 'self'
-        for field_name, _ in self.__dataclass_fields__.items():
-            # If the field value in 'other' is not None,
-            # update the corresponding field in 'self'
-            if hasattr(config, field_name) and getattr(config,
-                                                       field_name) is not None:
-                setattr(self, field_name, getattr(config, field_name))
-
-        self.tensor_para_size = config.tp
-        assert self.session_len is not None
-        if config.max_prefill_token_num is not None and \
-                config.num_tokens_per_iter == 0:
-            self.num_tokens_per_iter = config.max_prefill_token_num
-            self.max_prefill_iters = (self.session_len +
-                                      config.max_prefill_token_num -
-                                      1) // config.max_prefill_token_num
-
-    def __str__(self):
-        return json.dumps(self.__dict__, indent=2)
-
-    @property
-    def valid(self):
-        """Check if cfg is valid."""
-        for _, v in self.__dict__.items():
-            if v is None:
-                return False
-        return True
-
-
 def _weight_dtype_map(weight_type: str, default=None):
-    """get weight dtype map."""
+    """map literal data type to torch dtype."""
 
     _WEIGHT_DTYPE_MAP = dict(
         int4=torch.float16,
@@ -156,43 +49,76 @@ class BaseOutputModel(ABC):
                  out_dir: str = ''):
         super().__init__()
         self.input_model = input_model
-        self.cfg = cfg
-        if not cfg.valid:
-            self.cfg = self.get_config(cfg)
-        assert self.cfg.valid
-        assert self.cfg.kv_head_num % self.cfg.tensor_para_size == 0
+        self.model_config = cfg.model_config
+        self.attention_config = cfg.attention_config
+        self.lora_config = cfg.lora_config
+        self.engine_config = cfg.engine_config
+        self.tensor_para_size = self.engine_config.tensor_para_size
         self.out_dir = out_dir
         self.to_file = True if out_dir else False
         self.tm_params = {}
-        model_info = self.input_model.model_info()
-        self.permute_qk = model_info.get('permute_qk', True)
+
+        # get `model_info` and `tokenizer_info` at first, which
+        # will be updated to `self.model_config` and `self.attention_config`
+        self.input_model_info = self.input_model.model_info()
+        self.input_model_tokenizer_info = self.input_model.tokenizer_info()
+        self.permute_qk = self.input_model_info.get('permute_qk', True)
+
+        self.update_model_config()
+        assert self.model_config.kv_head_num % self.tensor_para_size == 0
+
+        self.update_attention_config()
+        self.update_lora_config()
         # ! Dependency on `self`
         self.exporters = exporter_factory(self)
 
     @abstractmethod
-    def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
-        """Generate turbomind model config."""
-        _, bos_id, eos_id = self.input_model.tokenizer_info()
+    def update_model_config(self):
+        """Update `self.model_config` according to the input_model's
+        `tokenizer_info` and `model_info`"""
+        _, bos_id, eos_id = self.input_model_tokenizer_info
 
-        final_cfg = cfg.__dict__
+        final_cfg = self.model_config.__dict__
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
-        final_cfg.update(self.input_model.model_info())
+        final_cfg.update(self.input_model_info)
 
-        # vocab_size
+        # get vocab_size
         for bin in self.input_model.bins():
             emb = bin.tok_embeddings()
             if emb is not None:
-                _vocab_size, dim = emb.shape
+                _vocab_size, _ = emb.shape
                 break
         final_cfg.update(dict(vocab_size=_vocab_size))
-        return TurbomindModelConfig.from_dict(final_cfg, allow_none=True)
+        self.model_config = init_config_from_dict(ModelConfig,
+                                                  final_cfg,
+                                                  allow_none=True)
+
+    def update_attention_config(self):
+        final_cfg = self.attention_config.__dict__ \
+            if self.attention_config else dict()
+        final_cfg.update(self.input_model_info)
+        self.attention_config = init_config_from_dict(AttentionConfig,
+                                                      final_cfg,
+                                                      allow_none=True)
+
+    def update_lora_config(self):
+        final_cfg = self.lora_config.__dict__ if self.lora_config else dict()
+        final_cfg.update(self.input_model_info)
+        self.lora_config = init_config_from_dict(LoraConfig,
+                                                 final_cfg,
+                                                 allow_none=True)
 
     def export_config(self) -> None:
         """export turbomind config."""
         if self.to_file:
             config_path = osp.join(self.out_dir, 'config.yaml')
+            # TODO(lvhan) make the sequence of dict is the same as the config
+            cfg = dict(model_config=self.model_config.__dict__,
+                       attention_config=self.attention_config.__dict__,
+                       lora_config=self.lora_config.__dict__,
+                       engine_config=self.engine_config.__dict__)
             with open(config_path, 'w') as f:
-                yaml.safe_dump(self.cfg.__dict__, f)
+                yaml.safe_dump(cfg, f)
 
     def export_weight(self, param: torch.Tensor, name: str) -> None:
         """export turbomind weight."""
@@ -205,14 +131,14 @@ class BaseOutputModel(ABC):
 
         if self.to_file:
             if torch.is_floating_point(param):
-                torch_type = _weight_dtype_map(self.cfg.weight_type,
+                torch_type = _weight_dtype_map(self.model_config.weight_type,
                                                torch.float16)
                 param = param.to(torch_type)
             tprint(name, param.shape)
             _tofile(param, osp.join(self.out_dir, name))
         elif len(self.tm_params) > 0:
             tm_params = self.tm_params
-            weight_type = self.cfg.weight_type
+            weight_type = self.model_config.weight_type
             assert weight_type in ['fp16', 'fp32', 'bf16', 'int4']
 
             # currently, the tensor type should in
@@ -252,7 +178,7 @@ class BaseOutputModel(ABC):
             split_dim = None
             copy = True
 
-        tp = self.cfg.tensor_para_size
+        tp = self.tensor_para_size
         if split_dim is not None:
             tprint(
                 f'*** splitting {name}, shape={tensor.shape}, '
@@ -278,7 +204,7 @@ class BaseOutputModel(ABC):
 
     def export(self) -> None:
         """Export to turbomind model format."""
-        num_layer = self.cfg.num_layer
+        num_layer = self.model_config.num_layer
         from tqdm import tqdm
         pbar = tqdm(total=num_layer,
                     desc='Convert to turbomind format',
@@ -304,8 +230,8 @@ class BaseOutputModel(ABC):
 
         def pad_weight(tensor):
             pad_size = None
-            vocab_size = self.cfg.vocab_size
-            tp = self.cfg.tensor_para_size
+            vocab_size = self.model_config.vocab_size
+            tp = self.tensor_para_size
             if vocab_size % tp != 0:
                 pad_size = (vocab_size + tp - 1) // tp * tp - vocab_size
 
