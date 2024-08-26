@@ -123,7 +123,9 @@ def throughput_test(config,
 
         if returncode == 0 and not os.path.isfile(csv_path):
             return False, benchmark_log, 'result is empty'
-        return returncode == 0, benchmark_log, stderr
+        if returncode != 0:
+            return returncode == 0, benchmark_log, stderr
+    return returncode == 0, benchmark_log, stderr
 
 
 def restful_test(config,

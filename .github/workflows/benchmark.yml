@@ -33,7 +33,7 @@ env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
-  REPORT_DIR: /nvme/qa_test_models/benchmark_reports/${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'}}
 
