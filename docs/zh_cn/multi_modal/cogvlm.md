@@ -17,7 +17,7 @@ pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https:
 pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu121
 ```
 
-请参考[安装文档](../installation.md)安装 LMDeploy
+请参考[安装文档](../get_started/installation.md)安装 LMDeploy
 
 ### 准备
 

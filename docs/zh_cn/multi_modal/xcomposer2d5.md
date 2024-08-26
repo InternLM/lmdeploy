@@ -8,7 +8,7 @@
 
 ### 安装
 
-请参考[安装文档](../installation.md)安装 LMDeploy，并安装上游模型库 InternLM-XComposer-2.5 所需的依赖。
+请参考[安装文档](../get_started/installation.md)安装 LMDeploy，并安装上游模型库 InternLM-XComposer-2.5 所需的依赖。
 
 ```shell
 pip install decord

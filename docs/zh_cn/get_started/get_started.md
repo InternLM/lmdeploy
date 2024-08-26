@@ -21,7 +21,7 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-在构造 `pipeline` 时，如果没有指定使用 TurboMind 引擎或 PyTorch 引擎进行推理，LMDeploy 将根据[它们各自的能力](supported_models/supported_models.md)自动分配一个，默认优先使用 TurboMind 引擎。
+在构造 `pipeline` 时，如果没有指定使用 TurboMind 引擎或 PyTorch 引擎进行推理，LMDeploy 将根据[它们各自的能力](../supported_models/supported_models.md)自动分配一个，默认优先使用 TurboMind 引擎。
 
 然而，你可以选择手动选择一个引擎。例如，
 
@@ -73,7 +73,7 @@ response = pipe(prompts,
 
 在 `GenerationConfig` 中，`top_k=1` 或 `temperature=0.0` 表示贪心搜索。
 
-有关 pipeline 的更多信息，请参考[这里](llm/pipeline.md)
+有关 pipeline 的更多信息，请参考[这里](../llm/pipeline.md)
 
 ### VLM 推理
 
@@ -144,7 +144,7 @@ response = client.chat.completions.create(
 print(response)
 ```
 
-我们鼓励你参考详细指南，了解关于[使用 Docker 部署服务](./llm/api_server.md)、[工具调用](llm/api_server_tools.md)和其他更多功能的信息。
+我们鼓励你参考详细指南，了解关于[使用 Docker 部署服务](../llm/api_server.md)、[工具调用](../llm/api_server_tools.md)和其他更多功能的信息。
 
 ### VLM 模型服务
 

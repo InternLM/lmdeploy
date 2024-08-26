@@ -41,8 +41,8 @@ LMDeploy 工具箱提供以下核心功能：
    :maxdepth: 2
    :caption: 快速上手
 
-   installation.md
-   get_started.md
+   get_started/installation.md
+   get_started/get_started.md
 
 .. _支持的模型:
 .. toctree::

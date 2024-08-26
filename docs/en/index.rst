@@ -41,8 +41,8 @@ Documentation
    :maxdepth: 2
    :caption: Get Started
 
-   installation.md
-   get_started.md
+   get_started/installation.md
+   get_started/get_started.md
 
 .. _supported_models:
 .. toctree::

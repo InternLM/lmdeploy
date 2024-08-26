@@ -13,7 +13,7 @@ LMDeploy 支持 InternVL 系列模型，具体如下：
 
 ## 安装
 
-请参考[安装文档](../installation.md)安装 LMDeploy，并安装上游 InternVL 模型库需的依赖。
+请参考[安装文档](../get_started/installation.md)安装 LMDeploy，并安装上游 InternVL 模型库需的依赖。
 
 ```shell
 pip install timm
