@@ -46,6 +46,13 @@ def auto_gptq(model: str,
         level=logging.INFO,
         datefmt='%Y-%m-%d %H:%M:%S',
     )
+    # support internlm2
+    from auto_gptq.modeling import GPTQ_CAUSAL_LM_MODEL_MAP
+    from auto_gptq.modeling._const import SUPPORTED_MODELS
+
+    from ..modeling.internlm2_gptq import InternLM2GPTQForCausalLM
+    SUPPORTED_MODELS.append('internlm2')
+    GPTQ_CAUSAL_LM_MODEL_MAP.update(dict(internlm2=InternLM2GPTQForCausalLM))
 
     pretrained_model_dir = model
     quantized_model_dir = work_dir
