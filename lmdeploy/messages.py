@@ -1,11 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Optional
+from typing import Callable, Dict, List, Literal, Optional
 
+import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from .tokenizer import Tokenizer
+
+LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+"""LogitsProcessor is a function that takes a tensor of input_ids, the logits
+tensor for the next token, and returns a modified tensor of logits
+to sample from."""
 
 
 @dataclass
@@ -50,6 +56,7 @@ class GenerationConfig:
     min_new_tokens: int = None
     skip_special_tokens: bool = True
     logprobs: int = None
+    logits_processors: Optional[List[LogitsProcessor]] = None
 
 
 @dataclass
@@ -99,7 +106,8 @@ class EngineGenerationConfig(GenerationConfig):
             random_seed=gen_config.random_seed,
             skip_special_tokens=gen_config.skip_special_tokens,
             stop_words=special_word_token_ids(gen_config.stop_words),
-            bad_words=special_word_token_ids(gen_config.bad_words))
+            bad_words=special_word_token_ids(gen_config.bad_words),
+            logits_processors=gen_config.logits_processors)
 
     def __post_init__(self):
         """Check input validation."""

@@ -21,6 +21,7 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc
 
 #include "src/turbomind/models/llama/LlamaV2.h"
+#include "src/turbomind/kernels/attention/attention_params.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
@@ -50,115 +51,66 @@
 
 namespace turbomind {
 
-template<typename T>
-LlamaV2<T>::LlamaV2(size_t                       head_num,
-                    size_t                       kv_head_num,
-                    size_t                       size_per_head,
-                    size_t                       inter_size,
-                    size_t                       num_layer,
-                    size_t                       vocab_size,
-                    float                        norm_eps,
-                    const LlamaAttentionParams&  attn_params,
-                    int                          start_id,
-                    int                          end_id,
-                    int                          cache_block_seq_len,
-                    int                          quant_policy,
-                    bool                         use_context_fmha,
-                    const EngineParams&          engine_params,
-                    const LoraParams&            lora_params,
-                    std::shared_ptr<SharedState> shared_state,
-                    LlamaWeight<T>*              weights,
-                    NcclParam                    tensor_para,
-                    cudaStream_t                 stream,
-                    cublasMMWrapper*             cublas_wrapper,
-                    IAllocator*                  allocator,
-                    IAllocator*                  peer_alloctor,
-                    bool                         is_free_buffer_after_forward,
-                    cudaDeviceProp*              cuda_device_prop):
-    head_num_(head_num),
-    size_per_head_(size_per_head),
-    inter_size_(inter_size),
-    num_layer_(num_layer),
-    vocab_size_(vocab_size),
-    attn_params_(attn_params),
-    vocab_size_padded_(vocab_size),
-    rmsnorm_eps_(norm_eps),
-    start_id_(start_id),
-    end_id_(end_id),
-    hidden_units_(head_num * size_per_head),
-    local_head_num_(head_num / tensor_para.world_size_),
-    local_kv_head_num_(kv_head_num / tensor_para.world_size_),
-    weights_(weights),
-    tensor_para_(tensor_para),
-    stream_(stream),
-    cublas_wrapper_(cublas_wrapper),
-    allocator_(allocator),
-    peer_allcator_(peer_alloctor),
-    is_free_buffer_after_forward_(is_free_buffer_after_forward),
-    cuda_device_prop_(cuda_device_prop),
-    debug_(isDebug()),
-    linear_{cublas_wrapper, stream},
-    lora_params_(lora_params),
-    shared_state_(shared_state)
+/// TODO: Padded vocab size should also be divisible by 8
+inline int pad_vocab_size(int vocab_size, int tp)
+{
+    return (vocab_size + tp - 1) / tp * tp;
+}
 
+template<typename T>
+LlamaV2<T>::LlamaV2(const ModelParam&               model,
+                    const AttentionParam&           attn,
+                    const LoraParam&                lora,
+                    const NcclParam&                tp,
+                    const Context<T>&               ctx,
+                    int                             max_batch_size,
+                    std::shared_ptr<LlamaWeight<T>> weights):
+    param_(model),
+    attn_param_(attn),
+    lora_param_(lora),
+    head_num_(model.head_num),
+    size_per_head_(model.head_dim),
+    inter_size_(model.inter_size),
+    hidden_units_(model.hidden_units),
+    layer_num_(model.layer_num),
+    vocab_size_(model.vocab_size),
+    vocab_size_padded_(pad_vocab_size(model.vocab_size, tp.world_size_)),
+    rmsnorm_eps_(model.norm_eps),
+    start_id_(model.start_id),
+    end_id_(model.end_id),
+    tensor_para_(tp),
+    local_head_num_(model.head_num / tp.world_size_),
+    local_kv_head_num_(model.kv_head_num / tp.world_size_),
+    weights_(std::move(weights)),
+    stream_(ctx.stream),
+    cublas_wrapper_(ctx.cublas_wrapper.get()),
+    allocator_(ctx.allocator.get()),
+    peer_allcator_(ctx.peer_allocator.get()),
+    linear_(ctx.linear.get()),
+    is_free_buffer_after_forward_(false),
+    debug_(isDebug())
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    TM_LOG_INFO("NCCL group_id = %d", tensor_para_.group_id_);
 
-    vocab_size_padded_ =
-        (vocab_size_padded_ + tensor_para_.world_size_ - 1) / tensor_para_.world_size_ * tensor_para_.world_size_;
+    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, lora, tp, ctx);
 
-    batch_ = std::make_unique<LlamaBatch<T>>(engine_params, cache_block_seq_len, quant_policy, this);
+    dynamic_decode_layer_ = std::make_unique<DynamicDecodeLayer<float>>(vocab_size_,
+                                                                        vocab_size_padded_,
+                                                                        0,  // end_id, deprecated
+                                                                        stream_,
+                                                                        cublas_wrapper_,
+                                                                        allocator_,
+                                                                        is_free_buffer_after_forward_,
+                                                                        (cudaDeviceProp*)&ctx.cuda_device_prop);
 
-    initialize(attn_params, kv_head_num, use_context_fmha, cache_block_seq_len, quant_policy);
-
-    unified_decoder_->allocateBuffer(engine_params.max_batch_size);
-
-    /// TODO: decouple Llama model and batch inference
-    batch_->Start();
+    unified_decoder_->allocateBuffer(max_batch_size);
 }
 
 template<typename T>
 LlamaV2<T>::~LlamaV2()
 {
+    dynamic_decode_layer_.reset();
     unified_decoder_.reset();
-    delete dynamic_decode_layer_;
-}
-
-template<typename T>
-void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
-                            size_t                      kv_head_num,
-                            bool                        use_context_fmha,
-                            int                         cache_block_seq_len,
-                            int                         quant_policy)
-{
-    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-    unified_decoder_.reset(new UnifiedDecoder<T>(head_num_,
-                                                 kv_head_num,
-                                                 size_per_head_,
-                                                 inter_size_,
-                                                 num_layer_,
-                                                 attn_params,
-                                                 rmsnorm_eps_,
-                                                 tensor_para_,
-                                                 stream_,
-                                                 linear_,
-                                                 allocator_,
-                                                 lora_params_,
-                                                 is_free_buffer_after_forward_,
-                                                 use_context_fmha,
-                                                 cache_block_seq_len,
-                                                 quant_policy));
-
-    dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
-                                                          vocab_size_padded_,
-                                                          0,  // end_id, deprecated
-                                                          stream_,
-                                                          cublas_wrapper_,
-                                                          allocator_,
-                                                          is_free_buffer_after_forward_,
-                                                          cuda_device_prop_);
 }
 
 template<typename T>
@@ -439,108 +391,6 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
     dynamic_decode_layer_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
 }
 
-static inline Tensor slice(const Tensor& tensor, int index)
-{
-    auto shape = tensor.shape;
-    if (shape.at(0) == 1) {
-        return tensor;
-    }
-    shape[0]          = 1;
-    const auto offset = std::accumulate(shape.begin(), shape.end(), (size_t)index, std::multiplies<>{});
-    return tensor.slice(shape, offset);
-}
-
-// ! implicit conversion from `unordered_map` to `TensorMap` drops 0-sized tensors
-static inline TensorMap slice(const std::unordered_map<std::string, Tensor>& src, int index)
-{
-    TensorMap dst;
-    for (const auto& kv : src) {
-        dst.insert({kv.first, slice(kv.second, index)});
-    }
-    return dst;
-}
-
-template<typename T>
-void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
-                         const std::unordered_map<std::string, Tensor>* inputs,
-                         Control                                        control)
-{
-    if (debug_) {
-        if (tensor_para_.rank_ == 0) {
-            for (const auto& kv : *inputs) {
-                TM_LOG_INFO("[forward][rank=%d] INPUT: %s", (int)tensor_para_.rank_, format(kv).c_str());
-            }
-            for (const auto& kv : *outputs) {
-                TM_LOG_INFO("[forward][rank=%d] OUTPUT: %s", (int)tensor_para_.rank_, format(kv).c_str());
-            }
-        }
-    }
-
-    const int batch_size = outputs->at("output_ids").shape[0];
-
-    const auto rank = tensor_para_.rank_;
-    FT_CHECK(rank == 0);
-
-    std::vector<std::shared_ptr<Request>> requests(batch_size);
-
-    // allocates all requests for the batch
-    for (int i = 0; i < batch_size; ++i) {
-        requests[i] = std::make_shared<Request>();
-    }
-
-    for (int i = 0; i < batch_size; ++i) {
-        auto& r = requests[i];
-
-        r->inputs  = slice(*inputs, i);
-        r->outputs = slice(*outputs, i);
-
-        if (rank == 0) {
-            r->id         = r->inputs.getVal<uint64_t>("CORRID", i);
-            r->start_flag = r->inputs.getVal<int>("START", 1);
-            r->end_flag   = r->inputs.getVal<int>("END", 1);
-            r->stop_flag  = r->inputs.getVal<int>("STOP", 0);
-            r->stream_cb  = control.callback;
-        }
-    }
-
-    // Submits the tasks and wait for finish
-    std::vector<int> error_codes;
-    bool             has_error = 0;
-
-    TM_LOG_INFO("[forward] Enqueue requests");
-
-    std::vector<uint64_t> ids;
-    for (const auto& r : requests) {
-        ids.push_back(r->id);
-    }
-
-    auto futures = shared_state_->request_queue.enqueue(std::move(requests));
-
-    FT_CHECK_WITH_INFO(ids.size() == futures.size(), "check failed");
-
-    TM_LOG_INFO("[forward] Wait for requests to complete ...");
-
-    for (int i = 0; i < futures.size(); ++i) {
-        auto ec = futures[i].get();
-        error_codes.push_back(ec);
-        if (ec) {
-            has_error = true;
-            TM_LOG_WARNING("[forward] Request failed for %ld, code %d", (long)ids[i], (int)ec);
-        }
-        else {
-            TM_LOG_INFO("[forward] Request completed for %ld", (long)ids[i]);
-        }
-    }
-
-    if (has_error) {
-        std::stringstream ss;
-        for (int i = 0; i < error_codes.size(); ++i) {
-            ss << (i ? "" : " ") << error_codes[i];
-        }
-        throw std::runtime_error(ss.str());
-    }
-}
-
 template<class First, class Last>
 static std::string Join(First first, Last last, const std::string& delim)
 {
@@ -562,12 +412,12 @@ void LlamaV2<T>::tune()
 
     if (auto str = std::getenv("TM_GEMM_IMPORT")) {
         std::ifstream ifs(str);
-        const int     n_imported = linear_.Import(ifs);
+        const int     n_imported = linear_->Import(ifs);
         TM_LOG_INFO("[Gemm2] %d records imported", n_imported);
         return;
     }
 
-    std::vector<int> bss = linear_.GetTuningSeq();
+    std::vector<int> bss = linear_->GetTuningSeq();
     if (bss.empty()) {
         bss = gemm::GenerateTuningSequence(gemm::GetDefaultTuningGenerators());
     }
@@ -607,16 +457,16 @@ void LlamaV2<T>::tune()
     T* out_data = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_out);
 
     cudaRandomUniform(in_data, (size_t)max_bs * max_in);
-    cudaDeviceSynchronize();
+    check_cuda_error(cudaDeviceSynchronize());
 
-    linear_.set_measure(true);
+    linear_->set_measure(true);
 
     auto tick = std::chrono::steady_clock::now();
 
     for (auto bs : bss) {
         TM_LOG_INFO("[Gemm2] %d", bs);
         for (auto& w : weights) {
-            linear_.forward(out_data, in_data, bs, *w);
+            linear_->forward(out_data, in_data, bs, *w);
         }
     }
 
@@ -625,7 +475,9 @@ void LlamaV2<T>::tune()
     TM_LOG_INFO("[Gemm2] Tuning finished in %.2f seconds.",
                 std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
 
-    linear_.set_measure(false);
+    linear_->set_measure(false);
+
+    check_cuda_error(cudaDeviceSynchronize());
 
     allocator_->free((void**)&in_data);
     allocator_->free((void**)&out_data);
@@ -634,7 +486,7 @@ void LlamaV2<T>::tune()
     if (tensor_para_.rank_ == 0) {
         if (auto path = std::getenv("TM_GEMM_EXPORT")) {
             std::ofstream ofs(path);
-            const auto    n_records = linear_.Export(ofs);
+            const auto    n_records = linear_->Export(ofs);
             TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
         }
     }

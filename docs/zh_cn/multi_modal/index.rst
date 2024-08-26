@@ -10,3 +10,4 @@
    xcomposer2d5.md
    cogvlm.md
    minicpmv.md
+   phi3.md

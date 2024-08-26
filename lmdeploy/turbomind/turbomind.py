@@ -230,6 +230,10 @@ class TurboMind:
 
         if engine_config is not None:
             engine_config.tp = cfg.tensor_para_size
+            if engine_config.rope_scaling_factor == 0:
+                # to avoid `rope_scaling_factor` from engine_config override
+                # the rope_scaling_factor in TurbomindModelConfig
+                engine_config.rope_scaling_factor = None
             cfg.update_from_engine_config(engine_config)
         if self.model_name:
             cfg.model_name = self.model_name
