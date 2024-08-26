@@ -20,7 +20,6 @@ struct ModelParam {
     size_t vocab_size;
     float  norm_eps;
     int    quant_policy;
-    bool   tie_word_embeddings;
     //
     int start_id;
     int end_id;
