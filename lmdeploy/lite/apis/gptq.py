@@ -1,30 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
-import os.path as osp
-import shutil
 
 import torch
 from transformers import AutoTokenizer
 
 from lmdeploy.lite.utils.calib_dataloader import get_calib_loaders
-
-
-def save_vl_model(vl_model, model_path, dst_path):
-    safe_serialization = type(vl_model).__name__ == 'MGMLlamaForCausalLM'
-    vl_model.save_pretrained(dst_path,
-                             max_shard_size='2GB',
-                             safe_serialization=safe_serialization)
-    candidate = [
-        'preprocessor_config.json', 'processor_config.json', 'vit',
-        'generation_config.json', 'added_tokens.json'
-    ]
-    for name in candidate:
-        tmp_path = osp.join(model_path, name)
-        if osp.exists(tmp_path):
-            if osp.isfile(tmp_path):
-                shutil.copy(tmp_path, osp.join(dst_path, name))
-            elif osp.isdir(tmp_path):
-                shutil.copytree(tmp_path, osp.join(dst_path, name))
 
 
 def auto_gptq(model: str,
