@@ -19,9 +19,8 @@ from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model
 
-from .deploy.config import (AttentionConfig, InternalEngineConfig, LoraConfig,
-                            ModelConfig, TurbomindModelConfig,
-                            init_config_from_dict)
+from .deploy.config import (AttentionConfig, LoraConfig, ModelConfig,
+                            TurbomindModelConfig, init_config_from_dict)
 from .supported_models import is_supported
 from .utils import ModelSource, get_model_source
 
@@ -166,16 +165,15 @@ class TurboMind:
                     tm_params[k] = []
                 tm_params[k].append(v)
 
-    def _get_internal_engine_config(self,
-                                    engine_config: TurbomindEngineConfig):
-        cfg = engine_config.__dict__ if engine_config else dict()
-        return init_config_from_dict(InternalEngineConfig,
-                                     cfg,
-                                     allow_none=True)
-
-    def _update_internal_engine_config(self, internal_engine_config,
-                                       engine_config):
-        pass
+    def _update_engine_config(self, engine_config):
+        if engine_config.max_prefill_token_num is not None \
+                and engine_config.num_tokens_per_iter == 0:
+            engine_config.num_tokens_per_iter = \
+                engine_config.max_prefill_token_num
+            engine_config.max_prefill_iters = (
+                self.config.session_len + engine_config.max_prefill_token_num -
+                1) // engine_config.max_prefill_token_num
+        return engine_config
 
     def _from_hf(self, model_source: ModelSource, model_path: str,
                  engine_config: TurbomindEngineConfig):
@@ -186,22 +184,24 @@ class TurboMind:
             f'turbomind does not support {model_path}. '
             'Plz try pytorch engine instead.')
 
-        dict_config = asdict(engine_config) if engine_config else dict()
-        internal_engine_config = init_config_from_dict(InternalEngineConfig,
-                                                       dict_config,
-                                                       allow_none=True)
-
         # convert transformers model into turbomind model
         from .deploy.converter import get_tm_model
         tm_model = get_tm_model(model_path, self.model_name,
                                 self.chat_template_name,
-                                internal_engine_config)
-
+                                engine_config.model_format)
         self.config = tm_model.tm_config
+        # Turbomind config must be updated before
+        self.config.update_from_engine_config(engine_config)
         logger.info(f'turbomind model config:\n\n{self.config}')
+        self.engine_config = self._update_engine_config(engine_config)
+
+        # pack `self.config` and `self.engine_config` into a dict
+        config_dict = self.config.dict()
+        config_dict.update(dict(engine_config=asdict(self.engine_config)))
+
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir='',
-            config=yaml.safe_dump(self.config.to_dict()),
+            config=yaml.safe_dump(config_dict),
             tensor_para_size=self.gpu_count,
             data_type=self.config.model_config.weight_type)
 
@@ -237,26 +237,28 @@ class TurboMind:
             attention_config=init_config_from_dict(AttentionConfig,
                                                    _cfg['attention_config']),
             lora_config=init_config_from_dict(LoraConfig, _cfg['lora_config']),
-            engine_config=init_config_from_dict(InternalEngineConfig,
-                                                _cfg['engine_config']))
+            # engine_config=init_config_from_dict(InternalEngineConfig,
+            #                                     _cfg['engine_config'])
+        )
 
         # check whether input tp is valid
+        self.gpu_count = engine_config.tp
         if cfg.tensor_para_size != 1 and \
                 self.gpu_count != cfg.tensor_para_size:
             logger.info(f'found tp={cfg.tensor_para_size} in config.yaml.')
             self.gpu_count = cfg.tensor_para_size
+        engine_config.tp = self.gpu_count
 
-        if engine_config is not None:
-            engine_config.tp = cfg.tensor_para_size
-            cfg.update_engine_config(engine_config)
-        if self.model_name:
-            cfg.model_config.model_name = self.model_name
-        if self.chat_template_name:
-            cfg.model_config.chat_template_name = self.chat_template_name
         # update cfg
         self.config = cfg
-        # create model
+        self.config.update_from_engine_config(engine_config)
         logger.warning(f'turbomind_model_config:\n\n{cfg}')
+        self.engine_config = self._update_engine_config(engine_config)
+
+        # pack `self.config` and `self.engine_config` into a dict
+        config_dict = self.config.to_dict()
+        config_dict.update(dict(engine_config=asdict(self.engine_config)))
+
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir=weight_dir,

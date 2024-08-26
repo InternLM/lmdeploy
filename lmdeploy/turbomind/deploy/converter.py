@@ -7,13 +7,14 @@ import fire
 import torch
 
 from lmdeploy.archs import get_model_arch
+from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_logger, get_model
 
 from ...utils import _get_and_verify_max_len
 from ..supported_models import SUPPORTED_ARCHS, is_supported
-from .config import (AttentionConfig, InternalEngineConfig, LoraConfig,
-                     ModelConfig, TurbomindModelConfig, init_config_from_dict)
+from .config import (AttentionConfig, LoraConfig, ModelConfig,
+                     TurbomindModelConfig, init_config_from_dict)
 from .exporter import get_exporter_factory
 from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
@@ -84,17 +85,16 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
             shutil.copy(json_path, osp.join(tm_tokenizer_path, _file))
 
 
-def get_output_model_registered_name_and_config(
-        model_path: str, internal_engine_config: InternalEngineConfig,
-        group_size: int):
+def get_output_model_registered_name_and_config(model_path: str,
+                                                model_format: str,
+                                                group_size: int):
     """Get the registered name of the turbomind model and its configuration
     according to the input model path, format and user-input config. The name
     will be used to access the OUTPUT_MODELS registry.
 
     Args:
         model_path (str): the path of the input model
-        internal_engine_config (InternalEngineConfig): the internal engine
-            config
+        model_format (str):
         group_size (int): the size of group used by awq model
     """
     register_name = 'tm'
@@ -105,16 +105,15 @@ def get_output_model_registered_name_and_config(
         model_config=init_config_from_dict(ModelConfig, {}, allow_none=True),
         attention_config=init_config_from_dict(AttentionConfig, {},
                                                allow_none=True),
-        lora_config=init_config_from_dict(LoraConfig, {}, allow_none=True),
-        engine_config=internal_engine_config)
+        lora_config=init_config_from_dict(LoraConfig, {}, allow_none=True))
 
-    if internal_engine_config.model_format == 'meta_llama':
+    if model_format == 'meta_llama':
         session_len = 2048
     else:  # hf, awq, None
         model_arch, model_config = get_model_arch(model_path)
         turbomind_model_arch = SUPPORTED_ARCHS[model_arch]
         session_len = _get_and_verify_max_len(model_config, None)
-        if internal_engine_config.model_format in ['awq', 'gptq']:
+        if model_format in ['awq', 'gptq']:
             weight_type = 'int4'
             group_size = 128 if group_size == 0 else group_size
         else:
@@ -132,8 +131,9 @@ def get_output_model_registered_name_and_config(
 
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type
+    config.model_config.model_format = model_format
     config.model_config.group_size = group_size
-    config.engine_config.session_len = session_len
+    config.model_config.session_len = session_len
 
     lora_type = 'plora' if turbomind_model_arch == 'xcomposer2' else ''
 
@@ -187,7 +187,7 @@ def find_quantization_config(nested, target_key):
 def get_tm_model(model_path,
                  model_name,
                  chat_template_name,
-                 engine_config,
+                 engine_config: TurbomindEngineConfig,
                  group_size: int = None,
                  out_dir: str = None):
     """Create turbomind model.
@@ -254,20 +254,12 @@ def get_tm_model(model_path,
     output_model_name, tm_cfg, exporter_factory = \
         get_output_model_registered_name_and_config(
             model_path=model_path,
-            internal_engine_config=engine_config,
+            model_format=engine_config.model_format,
             group_size=group_size)
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name
-    # update engine_config in turbomind model config
-    tm_cfg.engine_config = engine_config
-    if tm_cfg.engine_config.max_prefill_token_num is not None \
-            and tm_cfg.engine_config.num_tokens_per_iter == 0:
-        tm_cfg.engine_config.num_tokens_per_iter = \
-            tm_cfg.engine_config.max_prefill_token_num
-        tm_cfg.engine_config.max_prefill_iters = (
-            tm_cfg.session_len + tm_cfg.engine_config.max_prefill_token_num -
-            1) // tm_cfg.engine_config.max_prefill_token_num
+    tm_cfg.model_config.tp = engine_config.tp
 
     output_model = OUTPUT_MODELS.get(output_model_name)(
         input_model=input_model,
@@ -345,11 +337,7 @@ def main(model_name: str,
 
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
-
-    engine_config = init_config_from_dict(InternalEngineConfig,
-                                          dict(tensor_para_size=tp,
-                                               model_format=model_format),
-                                          allow_none=True)
+    engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format)
     tm_model = get_tm_model(model_path, model_name, chat_template,
                             engine_config, group_size, tm_weight_path)
     tm_model.export()

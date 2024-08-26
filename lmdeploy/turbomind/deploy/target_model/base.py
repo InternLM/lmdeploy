@@ -52,8 +52,7 @@ class BaseOutputModel(ABC):
         self.model_config = cfg.model_config
         self.attention_config = cfg.attention_config
         self.lora_config = cfg.lora_config
-        self.engine_config = cfg.engine_config
-        self.tensor_para_size = self.engine_config.tensor_para_size
+        self.tensor_para_size = self.model_config.tp
         self.out_dir = out_dir
         self.to_file = True if out_dir else False
         self.tm_params = {}
@@ -255,5 +254,4 @@ class BaseOutputModel(ABC):
     def tm_config(self):
         return TurbomindModelConfig(model_config=self.model_config,
                                     attention_config=self.attention_config,
-                                    lora_config=self.lora_config,
-                                    engine_config=self.engine_config)
+                                    lora_config=self.lora_config)

@@ -3,10 +3,11 @@
 import inspect
 import json
 from dataclasses import asdict
-from typing import Optional
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
+
+from lmdeploy.messages import TurbomindEngineConfig
 
 
 def init_config_from_dict(cls, env, allow_none=False):
@@ -41,6 +42,9 @@ class ModelConfig:
     size_per_head: int = 128
     group_size: int = 0
     weight_type: str = None
+    session_len: int = None
+    tp: int = 1
+    model_format: str = 'hf'
 
 
 @dataclass
@@ -69,44 +73,47 @@ class LoraConfig:
 
 
 @dataclass
-class InternalEngineConfig:
-    model_format: Optional[str] = None
-    tensor_para_size: int = 1
-    session_len: int = 0
-    max_batch_size: int = 64
-    max_prefill_token_num: int = 8192
-    max_context_token_num: int = 1
-    cache_max_entry_count: float = 0.8
-    cache_chunk_size: int = -1
-    enable_prefix_caching: bool = False
-    num_tokens_per_iter: int = 0
-    max_prefill_iters: int = 1
-    quant_policy: int = 0
-    rope_scaling_factor: float = 0.0
-
-
-@dataclass
 class TurbomindModelConfig:
     """Config for turbomind model."""
     model_config: ModelConfig = None
     attention_config: AttentionConfig = None
-    engine_config: InternalEngineConfig = None
     lora_config: LoraConfig = None
+
+    def update_from_engine_config(self, config: TurbomindEngineConfig):
+        """Update the attributes of this instance with the attributes from
+        TurbomindEngineConfig.
+
+        Args:
+            config (TurbomindEngineConfig): The turbomind engine config
+        """
+        if config is None:
+            return
+        for key, value in asdict(config).items():
+            if not value:
+                continue
+
+            if hasattr(self.model_config, key):
+                setattr(self.model_config, key, value)
+            if hasattr(self.attention_config, key):
+                setattr(self.attention_config, key, value)
 
     def to_dict(self):
         # TODO(lvhan) make the sequence of dict is the same as the config attrs
         return dict(model_config=asdict(self.model_config),
                     attention_config=asdict(self.attention_config),
-                    lora_config=asdict(self.lora_config),
-                    engine_config=asdict(self.engine_config))
+                    lora_config=asdict(self.lora_config))
 
     @property
     def session_len(self):
-        return self.engine_config.session_len
+        return self.model_config.session_len
 
     @property
     def tensor_para_size(self):
-        return self.engine_config.tensor_para_size
+        return self.model_config.tp
+
+    @property
+    def weight_type(self):
+        return self.model_config.weight_type
 
     def __str__(self):
-        return json.dumps(self.__dict__, indent=2)
+        return json.dumps(self.to_dict(), indent=2)
