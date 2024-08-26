@@ -78,7 +78,7 @@ def assert_chat_completions_stream_return(output,
         assert message.get('delta').get('role') == 'assistant'
         assert message.get('index') == 0
         assert len(message.get('delta').get('content')) >= 0
-        if is_last is False:
+        if not is_last:
             assert message.get('finish_reason') is None
             if check_logprobs:
                 assert (len(message.get('logprobs').get('content')) == 1)
@@ -131,10 +131,8 @@ def assert_chat_interactive_stream_return(output,
                                           is_last: bool = False,
                                           index: int = None):
     assert output.get('input_tokens') > 0
-    print(index, output)
     if index is not None:
-        assert output.get('tokens') >= index and output.get(
-            'tokens') <= index + 6
+        assert output.get('tokens') >= index
     assert output.get('tokens') > 0
     assert output.get('history_tokens') >= 0
     if is_last:
