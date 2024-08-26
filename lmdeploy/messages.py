@@ -23,6 +23,8 @@ class GenerationConfig:
             input message. **Only 1** is supported now.
         max_new_tokens (int): The maximum number of tokens that can be
             generated in the chat completion
+        do_sample (bool):  Whether or not to use sampling, use greedy
+            decoding otherwise. Default to be False.
         top_p (float): An alternative to sampling with temperature, called
             nucleus sampling, where the model considers the results of the
             tokens with top_p probability mass
@@ -45,6 +47,7 @@ class GenerationConfig:
 
     n: int = 1
     max_new_tokens: int = 512
+    do_sample: bool = False
     top_p: float = 1.0
     top_k: int = 1
     temperature: float = 0.8
@@ -98,6 +101,7 @@ class EngineGenerationConfig(GenerationConfig):
             logprobs=gen_config.logprobs,
             max_new_tokens=gen_config.max_new_tokens,
             min_new_tokens=gen_config.min_new_tokens,
+            do_sample=gen_config.do_sample,
             top_p=gen_config.top_p,
             top_k=gen_config.top_k,
             temperature=gen_config.temperature,
@@ -116,6 +120,10 @@ class EngineGenerationConfig(GenerationConfig):
         assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
+        if self.do_sample is False:
+            self.top_k = 1
+            self.temperature = 1.0
+            self.repetition_penalty = 1.0
 
 
 @pydantic_dataclass
