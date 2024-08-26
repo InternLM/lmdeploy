@@ -8,16 +8,14 @@ from utils.quantization_utils import quantization
 
 
 @pytest.mark.order(3)
-@pytest.mark.quantization_w4a16
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize('model', get_quantization_model_list('w4a16'))
-def test_quantization_w4a16(config, model, worker_id):
-    quantization_w4a16(config, model + '-inner-4bits', model,
-                       get_cuda_prefix_by_workerid(worker_id))
+@pytest.mark.parametrize('model', get_quantization_model_list('awq'))
+def test_quantization_awq(config, model, worker_id):
+    quantization_awq(config, model + '-inner-4bits', model,
+                     get_cuda_prefix_by_workerid(worker_id))
 
 
 @pytest.mark.order(3)
-@pytest.mark.quantization_w4a16
 @pytest.mark.pr_test
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
@@ -25,13 +23,13 @@ def test_quantization_w4a16(config, model, worker_id):
 @pytest.mark.parametrize(
     'model, prefix',
     [('internlm/internlm2-chat-20b', 'CUDA_VISIBLE_DEVICES=5')])
-def test_quantization_w4a16_pr(config, model, prefix):
-    quantization_w4a16(config, model + '-inner-4bits', model, prefix)
+def test_quantization_awq_pr(config, model, prefix):
+    quantization_awq(config, model + '-inner-4bits', model, prefix)
 
 
-def quantization_w4a16(config, quantization_model_name, origin_model_name,
-                       cuda_prefix):
-    quantization_type = 'w4a16'
+def quantization_awq(config, quantization_model_name, origin_model_name,
+                     cuda_prefix):
+    quantization_type = 'awq'
     result, msg = quantization(config, quantization_model_name,
                                origin_model_name, quantization_type,
                                cuda_prefix)

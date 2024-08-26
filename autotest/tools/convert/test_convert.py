@@ -46,6 +46,15 @@ def convert(config, model_case, cuda_prefix):
                                      model_case,
                                      True,
                                      cuda_prefix=cuda_prefix)
+    elif 'gptq' in model_case.lower():
+        cmd = get_command_with_extra(' '.join([
+            'lmdeploy convert', model_name, origin_model_path, '--dst-path',
+            dst_path, '--model-format gptq --group-size 128'
+        ]),
+                                     config,
+                                     model_case,
+                                     True,
+                                     cuda_prefix=cuda_prefix)
     else:
         cmd = get_command_with_extra(' '.join([
             'lmdeploy convert', model_name, origin_model_path, '--dst-path',
