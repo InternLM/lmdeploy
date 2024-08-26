@@ -150,12 +150,10 @@ MAX_SESSION_LEN = 2048
 MAX_NEW_TOKENS = 1024
 
 tb_engine_config_template_max_bs_128 = dict(session_len=MAX_SESSION_LEN,
-                                            max_batch_size=128,
-                                            rope_scaling_factor=1.0)
+                                            max_batch_size=128)
 tb_engine_config_template_max_bs_128_tp2 = dict(session_len=MAX_SESSION_LEN,
                                                 max_batch_size=128,
-                                                tp=2,
-                                                rope_scaling_factor=1.0)
+                                                tp=2)
 
 pt_engine_config_template_max_bs_16 = dict(session_len=MAX_SESSION_LEN,
                                            max_batch_size=16)
@@ -192,12 +190,10 @@ pt_engine_config_template_max_bs_8_prefill_tp2 = dict(
     tp=2)
 tb_awq_engine_config_template_max_bs_8 = dict(session_len=MAX_SESSION_LEN,
                                               max_batch_size=8,
-                                              model_format='awq',
-                                              rope_scaling_factor=1.0)
+                                              model_format='awq')
 tb_awq_engine_config_template_max_bs_32 = dict(session_len=MAX_SESSION_LEN,
                                                max_batch_size=32,
-                                               model_format='awq',
-                                               rope_scaling_factor=1.0)
+                                               model_format='awq')
 
 gen_config_template = dict(top_k=1,
                            top_p=0.8,

@@ -53,9 +53,7 @@ def stream_infer_basic(config, model, log_name):
     tp_num = get_tp_num(config, model)
     model_path = '/'.join([config.get('model_path'), model])
 
-    backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
-                                           session_len=SESSION_LEN,
-                                           tp=tp_num)
+    backend_config = TurbomindEngineConfig(session_len=SESSION_LEN, tp=tp_num)
     pipe = pipeline(model_path, backend_config=backend_config)
     prompt = '今 天 心 ' * int(SESSION_LEN / 6)
 
@@ -143,14 +141,12 @@ def passkey_retrival(config,
         session_len = 128000
     if backend == 'turbomind':
         if 'internlm2_5' in model and '-1m' in model:
-            backend_config = TurbomindEngineConfig(rope_scaling_factor=2.5,
-                                                   session_len=session_len,
+            backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    max_batch_size=1,
                                                    cache_max_entry_count=0.7,
                                                    tp=tp_num)
         else:
-            backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
-                                                   session_len=session_len,
+            backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    use_logn_attn=True,
                                                    tp=tp_num)
     else:

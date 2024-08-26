@@ -40,8 +40,6 @@ def generation_test(config,
     if backend == 'pytorch':
         command += ' --backend pytorch'
     else:
-        if is_longtext:
-            run_config = '--rope-scaling-factor 1.0'
         if '4bit' in model:
             command += ' --model-format awq'
 
