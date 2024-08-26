@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.messages import EngineGenerationConfig, LogitsProcessor
+from lmdeploy.messages import GenerationConfig, LogitsProcessor
 from lmdeploy.utils import get_logger
 
 from .block import LogicalTokenBlocks
@@ -49,12 +49,12 @@ class SamplingParam:
     logits_processors: Optional[List[LogitsProcessor]] = None
 
     @classmethod
-    def from_gen_config(self, gen_config: EngineGenerationConfig):
+    def from_gen_config(self, gen_config: GenerationConfig):
         """from gen config."""
         min_new_tokens = gen_config.min_new_tokens or 0
 
-        stop_words = gen_config.stop_words or []
-        bad_words = gen_config.bad_words or []
+        stop_words = gen_config.stop_words_ids or []
+        bad_words = gen_config.bad_words_ids or []
         if gen_config.ignore_eos:
             bad_words += stop_words
             stop_words = []

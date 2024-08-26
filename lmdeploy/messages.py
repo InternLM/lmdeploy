@@ -56,34 +56,16 @@ class GenerationConfig:
     random_seed: int = None
     stop_words: List[str] = None
     bad_words: List[str] = None
+    stop_words_ids: List[int] = None
+    bad_words_ids: List[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
     logprobs: int = None
     logits_processors: Optional[List[LogitsProcessor]] = None
 
-
-@dataclass
-class EngineGenerationConfig(GenerationConfig):
-    """generation parameter used by the inference engines."""
-    stop_words: List[int] = None
-    bad_words: List[int] = None
-
-    @staticmethod
-    def From(gen_config: GenerationConfig, tokenizer: Tokenizer):
-        """convert `GenerationConfig` to `EngineGenerationConfig`
-        Args:
-            gen_config (GenerationConfig): an instance of class `GenerationConfig`
-            tokenizer (Tokenizer): a tokenizer to encode the `stop_words` and `bad_words` in `gen_config`
-
-        Returns:
-            EngineGenerationConfig: the generation config used by inference engines
-
-        Examples:
-            >>> from lmdeploy import Tokenizer, GenerationConfig, EngineGenerationConfig
-            >>> tokenizer = Tokenizer('internlm/internlm-chat-7b')
-            >>> gen_config = GenerationConfig(stop_words=['<eoa>'])
-            >>> gen_config = EngineGenerationConfig.From(gen_config, tokenizer)
-        """  # noqa E501
+    def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
+        """convert stop_words/bad_sords to ids and append the ids to
+        stop_words_ids/bad_words_ids."""
 
         def special_word_token_ids(words):
             if words is not None:
@@ -96,22 +78,12 @@ class EngineGenerationConfig(GenerationConfig):
                 return indexes
             return None
 
-        return EngineGenerationConfig(
-            n=gen_config.n,
-            logprobs=gen_config.logprobs,
-            max_new_tokens=gen_config.max_new_tokens,
-            min_new_tokens=gen_config.min_new_tokens,
-            do_sample=gen_config.do_sample,
-            top_p=gen_config.top_p,
-            top_k=gen_config.top_k,
-            temperature=gen_config.temperature,
-            repetition_penalty=gen_config.repetition_penalty,
-            ignore_eos=gen_config.ignore_eos,
-            random_seed=gen_config.random_seed,
-            skip_special_tokens=gen_config.skip_special_tokens,
-            stop_words=special_word_token_ids(gen_config.stop_words),
-            bad_words=special_word_token_ids(gen_config.bad_words),
-            logits_processors=gen_config.logits_processors)
+        stop_words = special_word_token_ids(self.stop_words) or []
+        bad_words = special_word_token_ids(self.bad_words) or []
+        stop_words.extend(self.stop_words_ids or [])
+        bad_words.extend(self.bad_words_ids or [])
+        self.stop_words_ids = list(set(stop_words)) or None
+        self.bad_words_ids = list(set(bad_words)) or None
 
     def __post_init__(self):
         """Check input validation."""
