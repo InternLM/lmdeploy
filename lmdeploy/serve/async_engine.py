@@ -5,6 +5,7 @@ import json
 import os
 import random
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from itertools import count
 from queue import Empty, Queue
 from threading import Thread
@@ -318,9 +319,6 @@ class AsyncEngine(LogitsMixin):
         assert isinstance(prompts, List), 'prompts should be a list'
         if gen_config is None:
             gen_config = GenerationConfig()
-        # set random if it is not set
-        if not isinstance(gen_config, List) and gen_config.random_seed is None:
-            gen_config.random_seed = random.getrandbits(64)
         if not isinstance(gen_config, List):
             gen_config = [gen_config] * len(prompts)
         assert len(prompts) == len(gen_config), \
@@ -397,9 +395,6 @@ class AsyncEngine(LogitsMixin):
         assert isinstance(prompts, List), 'prompts should be a list'
         if gen_config is None:
             gen_config = GenerationConfig()
-        # set random if it is not set
-        if not isinstance(gen_config, List) and gen_config.random_seed is None:
-            gen_config.random_seed = random.getrandbits(64)
         if not isinstance(gen_config, List):
             gen_config = [gen_config] * len(prompts)
         assert len(prompts) == len(gen_config), \
@@ -507,6 +502,7 @@ class AsyncEngine(LogitsMixin):
             gen_config.stop_words_ids = self.stop_words
         # set random if it is not set and sequence_start is True
         if gen_config.random_seed is None and sequence_start:
+            gen_config = deepcopy(gen_config)
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
             logger.warning(f"n({gen_config.n}) > 1 hasn't been supported yet. "
