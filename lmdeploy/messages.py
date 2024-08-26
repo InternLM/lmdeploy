@@ -94,6 +94,8 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         if self.do_sample is False:
             self.top_k = 1
+            # top_k = 1 will do greedy decoding, set other params to default
+            # value to avoid unnecessary compute.
             self.temperature = 1.0
             self.repetition_penalty = 1.0
 
