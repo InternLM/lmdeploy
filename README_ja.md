@@ -28,7 +28,7 @@ ______________________________________________________________________
 
 - \[2024/08\] 🔥🔥 LMDeployは[modelscope/swift](https://github.com/modelscope/swift)に統合され、VLMs推論のデフォルトアクセラレータとなりました
 - \[2024/07\] 🎉🎉 Llama3.1 8B、70Bおよびそのツールコールをサポート
-- \[2024/07\] [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e)全シリーズモデル、[InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md)およびInternLM2.5の[ファンクションコール](docs/en/serving/api_server_tools.md)をサポート
+- \[2024/07\] [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e)全シリーズモデル、[InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md)およびInternLM2.5の[ファンクションコール](docs/en/llm/api_server_tools.md)をサポート
 - \[2024/06\] PyTorchエンジンはDeepSeek-V2およびいくつかのVLMs、例えばCogVLM2、Mini-InternVL、LlaVA-Nextをサポート
 - \[2024/05\] 複数のGPUでVLMsをデプロイする際にビジョンモデルをバランスさせる
 - \[2024/05\] InternVL v1.5、LLaVa、InternLMXComposer2などのVLMsで4ビットの重みのみの量子化と推論をサポート
@@ -39,8 +39,8 @@ ______________________________________________________________________
 - \[2024/03\] DeepSeek-VLのオフライン推論パイプラインとサービングをサポート
 - \[2024/03\] VLMのオフライン推論パイプラインとサービングをサポート
 - \[2024/02\] Qwen 1.5、Gemma、Mistral、Mixtral、Deepseek-MOEなどをサポート
-- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE)が[LMDeployサービングサービス](./docs/en/serving/api_server.md)とシームレスに統合されました
-- \[2024/01\] 複数モデル、複数マシン、複数カードの推論サービスをサポート。使用方法は[こちら](./docs/en/serving/proxy_server.md)を参照してください
+- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE)が[LMDeployサービングサービス](./docs/en/llm/api_server.md)とシームレスに統合されました
+- \[2024/01\] 複数モデル、複数マシン、複数カードの推論サービスをサポート。使用方法は[こちら](./docs/en/llm/proxy_server.md)を参照してください
 - \[2024/01\] [PyTorch推論エンジン](./docs/en/inference/pytorch.md)をサポートし、完全にPythonで開発されており、開発者の障壁を下げ、新機能や技術の迅速な実験を可能にします
 
 </details>
@@ -53,7 +53,7 @@ ______________________________________________________________________
 - \[2023/11\] TurboMindの主要なアップグレード、包括的なPaged Attention、シーケンス長制限のない高速なアテンションカーネル、2倍速いKV8カーネル、Split-Kデコーディング（Flash Decoding）、およびsm_75のW4A16推論
 - \[2023/09\] TurboMindはQwen-14Bをサポート
 - \[2023/09\] TurboMindはInternLM-20Bをサポート
-- \[2023/09\] TurboMindはCode Llamaのすべての機能をサポート：コード補完、インフィリング、チャット/インストラクト、Pythonスペシャリスト。デプロイメントガイドは[こちら](./docs/en/supported_models/codellama.md)をクリックしてください
+- \[2023/09\] TurboMindはCode Llamaのすべての機能をサポート：コード補完、インフィリング、チャット/インストラクト、Pythonスペシャリスト。デプロイメントガイドは[こちら](./docs/en/llm/codellama.md)をクリックしてください
 - \[2023/09\] TurboMindはBaichuan2-7Bをサポート
 - \[2023/08\] TurboMindはflash-attention2をサポート
 - \[2023/08\] TurboMindはQwen-7B、動的NTK-RoPEスケーリング、動的logNスケーリングをサポート
@@ -137,6 +137,8 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Dbrx (132B)</li>
   <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
+  <li>Phi-3.5-mini (3.8B)</li>
+  <li>Phi-3.5-MoE (16x3.8B)</li>
 </ul>
 </td>
 <td>
@@ -152,7 +154,9 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
   <li>MiniCPM-Llama3-V-2_5</li>
+  <li>MiniCPM-V-2_6</li>
   <li>Phi-3-vision (4.2B)</li>
+  <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
 </ul>
 </td>
@@ -168,19 +172,16 @@ LMDeployは、[TurboMind](./docs/en/inference/turbomind.md)および[PyTorch](./
 
 ## インストール
 
-pip（python 3.8+）を使用してlmdeployをインストールするか、[ソースからインストール](./docs/en/build.md)します
+クリーンなconda環境（Python 3.8 - 3.12）でlmdeployをインストールすることをお勧めします。
 
 ```shell
+conda create -n lmdeploy python=3.8 -y
+conda activate lmdeploy
 pip install lmdeploy
 ```
 
-v0.3.0以降、デフォルトのプリビルドパッケージは**CUDA 12**でコンパイルされています。ただし、CUDA 11+が必要な場合は、次のコマンドでlmdeployをインストールできます：
-
-```shell
-export LMDEPLOY_VERSION=0.5.2
-export PYTHON_VERSION=38
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
-```
+v0.3.0から、デフォルトの事前構築済みパッケージはCUDA 12でコンパイルされています。
+CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/installation.md)参照してください。
 
 ## オフラインバッチ推論
 
@@ -196,7 +197,7 @@ print(response)
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
 
-推論パイプラインに関する詳細情報は[こちら](./docs/en/inference/pipeline.md)を参照してください。
+推論パイプラインに関する詳細情報は[こちら](./docs/en/llm/pipeline.md)を参照してください。
 
 # チュートリアル
 
@@ -205,10 +206,10 @@ LMDeployの基本的な使用方法については、[getting_started](./docs/en
 詳細なユーザーガイドと高度なガイドについては、[チュートリアル](https://lmdeploy.readthedocs.io/en/latest/)を参照してください：
 
 - ユーザーガイド
-  - [LLM推論パイプライン](./docs/en/inference/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
-  - [VLM推論パイプライン](./docs/en/inference/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
-  - [LLMサービング](docs/en/serving/api_server.md)
-  - [VLMサービング](docs/en/serving/api_server_vl.md)
+  - [LLM推論パイプライン](./docs/en/llm/pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
+  - [VLM推論パイプライン](./docs/en/multi_modal/vl_pipeline.md) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1nKLfnPeDA3p-FMNw2NhI-KOpk7-nlNjF?usp=sharing)
+  - [LLMサービング](docs/en/llm/api_server.md)
+  - [VLMサービング](docs/en/multi_modal/api_server_vl.md)
   - [量子化](docs/en/quantization)
 - 高度なガイド
   - [推論エンジン - TurboMind](docs/en/inference/turbomind.md)
@@ -217,7 +218,7 @@ LMDeployの基本的な使用方法については、[getting_started](./docs/en
   - [新しいモデルの追加](docs/en/advance/pytorch_new_model.md)
   - gemmチューニング
   - [長文推論](docs/en/advance/long_context.md)
-  - [マルチモデル推論サービス](docs/en/serving/proxy_server.md)
+  - [マルチモデル推論サービス](docs/en/llm/proxy_server.md)
 
 # サードパーティプロジェクト
 

@@ -16,7 +16,7 @@
 
 namespace turbomind {
 
-CmpMode compare_mode = kCmpNone;
+CmpMode compare_mode = kCmpRead;
 
 template<typename T>
 struct abs_diff_t {

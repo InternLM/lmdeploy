@@ -78,14 +78,12 @@ def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int,
         return
 
     print('start to warmup ...')
-    output_seqlen = gen_config.max_new_tokens
 
     def _infer(model, session_id):
         chatbot = model.create_instance()
         for _ in range(warmup_round):
             for _ in chatbot.stream_infer(session_id,
                                           input_ids=input_ids,
-                                          request_output_len=output_seqlen,
                                           sequence_start=True,
                                           sequence_end=True,
                                           ignore_eos=True,
@@ -197,7 +195,7 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
           f'token_latency percentiles(50%,75%,95%,99%)(s): {percentiles}\n'
           f'throughput(output): {out_token_throughput} token/s\n'
           f'throughput(total): {total_token_throughput} token/s\n{"-" * 50}')
-    return tm_model.model_name, \
+    return model_path, \
         [first_token_latency_min, first_token_latency_max,
          first_token_latency_ave], \
         percentiles, out_token_throughput, total_token_throughput, \

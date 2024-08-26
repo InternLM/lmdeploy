@@ -5,8 +5,9 @@ from typing import Dict, List, Tuple, Union
 import PIL
 import PIL.Image
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.model import BaseModel
-from lmdeploy.utils import get_hf_config_content, get_logger
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64, load_image
 
@@ -69,9 +70,9 @@ class VLChatTemplateWrapper:
         return [messages]
 
     async def async_collect_pil_images(
-            self, messages: Dict) -> List[PIL.Image.Image]:
+            self, messages: Dict) -> List[Tuple[PIL.Image.Image, Dict]]:
         """collect image from messages."""
-        images = []
+        images_with_kwargs = []
         for message in messages:
             role = message['role']
             content = message['content']
@@ -81,22 +82,31 @@ class VLChatTemplateWrapper:
                 # 'image_url': means url or local path to image.
                 # 'image_data': means PIL.Image.Image object.
                 if item['type'] == 'image_url':
-                    url = item['image_url']['url']
-                    images.append(url)
+                    item_copy = item['image_url'].copy()
+                    try:
+                        url = item_copy.pop('url')
+                        images_with_kwargs.append([url, item_copy])
+                    except KeyError:
+                        logger.error(f'invalid format {message}')
                 elif item['type'] == 'image_data':
-                    data = item['image_data']['data']
-                    images.append(data)
+                    item_copy = item['image_data'].copy()
+                    try:
+                        data = item_copy.pop('data')
+                        images_with_kwargs.append([data, item_copy])
+                    except KeyError:
+                        logger.error(f'invalid format {message}')
 
         def _inner_call(i, images):
-            url_or_data = images[i]
-            images[i] = load_image(url_or_data)
+            url_or_data = images[i][0]
+            images[i][0] = load_image(url_or_data)
 
         await asyncio.gather(*[
-            asyncio.get_event_loop().run_in_executor(
-                None, _inner_call, i, images) for i in range(len(images))
+            asyncio.get_event_loop().run_in_executor(None, _inner_call, i,
+                                                     images_with_kwargs)
+            for i in range(len(images_with_kwargs))
         ])
 
-        return images
+        return images_with_kwargs
 
     def append_image_token(self, prompt, num_images: int):
         """append image token to user prompt."""
@@ -269,7 +279,7 @@ class MiniGeminiLlamaTempateWrapper(VLChatTemplateWrapper):
 
 
 class MiniCPMVTempateWrapper(VLChatTemplateWrapper):
-    """MiniCPMV chat template."""
+    """MiniCPM-Llama3-V-2_5 chat template."""
 
     def append_image_token(self, prompt, num_images: int):
         return f'<image>{IMAGE_TOKEN}</image>\n' * num_images + prompt
@@ -297,6 +307,37 @@ class MiniCPMVTempateWrapper(VLChatTemplateWrapper):
         return _prompt, _features
 
 
+class MiniCPMV26TempateWrapper(MiniCPMVTempateWrapper):
+    """MiniCPM-V-2_6 chat template."""
+
+    def update_image_token(self, prompt, features):
+        _features = []
+        _prompt = []
+        segs = prompt.split(f'<image>{IMAGE_TOKEN}</image>\n')
+        idx = 0
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(features):
+                _feat = features[i - 1]['embeddings'].split(1)
+                _feat = [x.squeeze() for x in _feat]
+                _features.extend(_feat)
+                _seg = f'<image>{IMAGE_TOKEN}</image>'
+                if features[i - 1].get('use_image_id', False):
+                    _seg = f'<image_id>{idx}</image_id>' + _seg
+                    idx += 1
+                if len(_feat) > 1:
+                    grid = features[i - 1]['grid']
+                    if grid is not None:
+                        _slice = '\n'.join(
+                            [f'<slice>{IMAGE_TOKEN}</slice>' * grid[0]] *
+                            grid[1])
+                        _seg = _seg + _slice
+                _seg += '\n'
+                _prompt.append(_seg)
+            _prompt.append(seg)
+        _prompt = ''.join(_prompt)
+        return _prompt, _features
+
+
 class GLM4VChatTemplateWrapper(VLChatTemplateWrapper):
     """glm-4v chat template."""
     pass
@@ -306,12 +347,10 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
     assert type(chat_template) != type(BaseModel()), 'failed to match ' \
-        'chat template, please explicit set chat_template_config' # noqa E721
+        'chat template, please explicit set chat_template_config'  # noqa E721
     if model_name == 'yi-vl':
         return YiVLChatTemplateWrapper(chat_template)
-
-    config = get_hf_config_content(model_path)
-    arch = config['architectures'][0]
+    arch, cfg = get_model_arch(model_path)
     if arch == 'QWenLMHeadModel':
         return QwenVLChatTemplateWrapper(chat_template)
     elif arch in [
@@ -331,7 +370,12 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
     elif arch in ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']:
         return MiniGeminiLlamaTempateWrapper(chat_template)
     elif arch == 'MiniCPMV':
-        return MiniCPMVTempateWrapper(chat_template)
+        version_map = {
+            '2.5': MiniCPMVTempateWrapper,
+            '2.6': MiniCPMV26TempateWrapper
+        }
+        version = str(getattr(cfg, 'version', '2.5'))
+        return version_map[version](chat_template)
     elif arch == 'ChatGLMModel':
         return GLM4VChatTemplateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')

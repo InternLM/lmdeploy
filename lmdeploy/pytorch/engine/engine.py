@@ -86,6 +86,21 @@ def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
     return adapter_ids
 
 
+def _check_finish(scheduler: Scheduler, current_iter: int):
+    """dynamic prefill interval."""
+    if not scheduler.has_waiting():
+        return False
+    scheduler_config = scheduler.scheduler_config
+    max_prefill_interval = scheduler_config.prefill_interval
+    max_batches = scheduler_config.max_batches
+    num_batches = len(scheduler.running)
+    ratio = num_batches / max_batches
+    min_iter = max_prefill_interval * ratio
+    if current_iter >= min_iter:
+        return True
+    return False
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -99,19 +114,17 @@ class Engine:
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
-        check_env(engine_config.device_type)
-        check_model(model_path, trust_remote_code)
         if engine_config is None:
             engine_config = PytorchEngineConfig()
+        check_env(engine_config.device_type)
+        check_model(model_path, trust_remote_code)
         if engine_config.adapters is not None:
             check_adapters(list(engine_config.adapters.values()))
 
         self.engine_config = engine_config
-        model_name = engine_config.model_name
         tp = engine_config.tp
 
         self.tp = tp
-        self.model_name = model_name
 
         self.device_context = DeviceContext(
             device_type=engine_config.device_type)
@@ -119,7 +132,6 @@ class Engine:
         scheduler_config = SchedulerConfig(
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
-            eviction_type=engine_config.eviction_type,
             prefill_interval=engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
@@ -248,31 +260,37 @@ class Engine:
         """on add session callback."""
         for req in reqs:
             session_id = req.data['session_id']
+            resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_REPEAT
             if session_id not in self.scheduler.sessions:
                 self.scheduler.add_session(session_id)
                 resp_type = ResponseType.SUCCESS
-            self._response(resp_type, req.sender_id, req.req_id)
+            if resp:
+                self._response(resp_type, req.sender_id, req.req_id)
 
     def _on_stop_session(self, reqs: Request, **kwargs):
         """on stop session callback."""
         for req in reqs:
             session_id = req.data['session_id']
+            resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
                 self.scheduler.stop_session(session_id)
                 resp_type = ResponseType.SUCCESS
-            self._response(resp_type, req.sender_id, req.req_id)
+            if resp:
+                self._response(resp_type, req.sender_id, req.req_id)
 
     def _on_end_session(self, reqs: Request, **kwargs):
         """on end session callback."""
         for req in reqs:
             session_id = req.data['session_id']
+            resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
                 self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
-            self._response(resp_type, req.sender_id, req.req_id)
+            if resp:
+                self._response(resp_type, req.sender_id, req.req_id)
 
     def _on_add_message(self, reqs: Request, **kwargs):
         """on add message callback."""
@@ -481,23 +499,23 @@ class Engine:
 
     @logging_timer('SamplingLogits', logger)
     def async_sampling_logits(self, logits: torch.Tensor,
-                              history_ids: torch.Tensor,
+                              all_ids: torch.Tensor,
                               sampling_inputs: SamplingInputs,
                               inputs: ModelInputs, ignore_eos: torch.Tensor):
         """sampling logits."""
 
         def __get_last_logits():
             """get last logits."""
-            if inputs.is_decoding:
+            seq_length = inputs.seq_length
+            if len(seq_length) == logits.size(0):
                 return logits
 
-            seq_length = inputs.seq_length
             last_idx = seq_length.cumsum(-1) - 1
             return logits[last_idx, :]
 
         split_logits = __get_last_logits().cuda()
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos)
-        logits = logits_processor(history_ids, split_logits)
+        logits = logits_processor(split_logits, all_ids)
         next_token_ids = logits_processor.sampling(logits)
 
         return next_token_ids
@@ -523,7 +541,8 @@ class Engine:
 
     @logging_timer('ModelForward', logger)
     async def _async_model_forward(self, inputs: ModelInputs,
-                                   swap_in_map: Dict, swap_out_map: Dict):
+                                   swap_in_map: Dict, swap_out_map: Dict,
+                                   return_logits: bool):
         """model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
@@ -539,6 +558,11 @@ class Engine:
             def gather(self, output):
                 """gather."""
                 logits = output['logits']
+
+                if not return_logits:
+                    self._out_logits = logits
+                    return
+
                 out_logits = self._out_logits
                 start = self._start
                 seq_len = logits.size(-2)
@@ -554,6 +578,8 @@ class Engine:
 
             def get_logits(self):
                 """get logits."""
+                if not return_logits:
+                    return self._out_logits[:, -1:]
                 torch.cuda.synchronize()
                 return self._out_logits
 
@@ -587,7 +613,11 @@ class Engine:
             return tmp_out
 
         if inputs.input_ids.numel() <= max_prefill_token_num:
-            return await __forward(inputs)
+            ret = await __forward(inputs)
+            if not return_logits and not inputs.is_decoding:
+                last_token_loc = inputs.seq_length.cumsum(0) - 1
+                ret['logits'] = ret['logits'][:, last_token_loc]
+            return ret
         else:
             return await __long_context_single_forward(inputs)
 
@@ -649,19 +679,19 @@ class Engine:
 
     async def _async_step_background(
             self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-            history_ids: torch.Tensor, sampling_inputs: SamplingInputs,
+            all_ids: torch.Tensor, sampling_inputs: SamplingInputs,
             num_appendable_ids: torch.LongTensor,
-            num_ignore_eos: torch.LongTensor, output_que: asyncio.Queue):
+            num_ignore_eos: torch.LongTensor, return_logits: bool,
+            output_que: asyncio.Queue):
         """asyc forward task."""
 
         def __update_inputs(next_token_ids):
             """update inputs."""
-            nonlocal history_ids
+            nonlocal all_ids
             inputs.update(next_token_ids)
-            if history_ids is not None:
-                history_ids = torch.cat([
-                    history_ids, next_token_ids[:, None].to(history_ids.device)
-                ], 1)
+            if all_ids is not None:
+                all_ids = torch.cat(
+                    [all_ids, next_token_ids[:, None].to(all_ids.device)], 1)
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
@@ -669,8 +699,8 @@ class Engine:
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)}')
         is_decoding = inputs.is_decoding
-        if history_ids is not None:
-            history_ids = history_ids.cuda()
+        if all_ids is not None:
+            all_ids = all_ids.cuda()
         sampling_inputs = sampling_inputs.to_device('cuda')
         num_appendable_ids = num_appendable_ids.cuda()
         num_ignore_eos = num_ignore_eos.cuda()
@@ -680,16 +710,17 @@ class Engine:
 
         for idx in range(loop_count):
             # inference
-            output = await self._async_model_forward(inputs,
-                                                     swap_in_map=swap_in_map,
-                                                     swap_out_map=swap_out_map)
+            output = await self._async_model_forward(
+                inputs,
+                swap_in_map=swap_in_map,
+                swap_out_map=swap_out_map,
+                return_logits=return_logits)
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
             # sampling
             next_token_ids = self.async_sampling_logits(
-                logits, history_ids, sampling_inputs, inputs,
-                num_ignore_eos > 0)
+                logits, all_ids, sampling_inputs, inputs, num_ignore_eos > 0)
             num_ignore_eos = num_ignore_eos - 1
 
             # stopping criteria
@@ -699,6 +730,7 @@ class Engine:
             # send output
             stopped = stopped.cpu()
             finish = stopped.all().item() or (idx == loop_count - 1)
+            finish = finish or _check_finish(self.scheduler, idx)
             output = (next_token_ids.cpu(), logits, stopped)
             output_que.put_nowait((finish, output))
 
@@ -716,20 +748,21 @@ class Engine:
                                      out_que: asyncio.Queue):
         """async loop background."""
 
-        def __gather_history(seqs: SeqList, sampling_inputs: SamplingInputs):
+        def __gather_all_ids(seqs: SeqList, sampling_inputs: SamplingInputs):
             """gather history."""
-            if sampling_inputs.repetition_penalty is None:
+            if sampling_inputs.repetition_penalty is None and not any(
+                    sampling_inputs.logits_processors):
                 return None
             batch = len(seqs)
-            max_len = max(seq.history_len for seq in seqs)
+            max_len = max(seq.num_all_ids for seq in seqs)
             pad_id = self.model_config.bos_token_id
             pad_id = 0 if pad_id is None else pad_id
             output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
             for idx, seq in enumerate(seqs):
-                h_len = seq.history_len
+                h_len = seq.num_all_ids
                 if h_len == 0:
                     continue
-                h_ids = torch.from_numpy(seq.history_ids)
+                h_ids = torch.from_numpy(seq.all_ids)
                 output[idx, -h_len:] = h_ids
             return output
 
@@ -749,6 +782,10 @@ class Engine:
             ]
             return torch.tensor(ret)
 
+        def __need_logits(seqs: SeqList):
+            """need logits."""
+            return any(seq.return_logits for seq in seqs)
+
         while True:
             is_prefill = await in_que.get()
             try:
@@ -764,9 +801,10 @@ class Engine:
                 inputs = self.create_model_inputs(running, adapters,
                                                   is_prefill)
                 sampling_inputs = SamplingInputs.from_sampling_params(running)
-                history_ids = __gather_history(running, sampling_inputs)
+                all_ids = __gather_all_ids(running, sampling_inputs)
                 num_appendable_ids = __get_num_appendable_ids(running)
                 num_ignore_eos = __get_num_ignore_eos(running)
+                return_logits = __need_logits(running)
 
                 self._running = running
                 self._inputs = inputs
@@ -775,10 +813,11 @@ class Engine:
                     inputs=inputs,
                     swap_in_map=schedule_output.swap_in_map,
                     swap_out_map=schedule_output.swap_out_map,
-                    history_ids=history_ids,
+                    all_ids=all_ids,
                     sampling_inputs=sampling_inputs,
                     num_appendable_ids=num_appendable_ids,
                     num_ignore_eos=num_ignore_eos,
+                    return_logits=return_logits,
                     output_que=out_que,
                 )
             except Exception as e:
@@ -819,6 +858,8 @@ class Engine:
             in_que.put_nowait(prefill)
             finish = False
             while not finish:
+                if self.req_manager.has_requests():
+                    self.req_manager.step()
                 finish, out = await out_que.get()
                 try:
                     if isinstance(out, Exception):

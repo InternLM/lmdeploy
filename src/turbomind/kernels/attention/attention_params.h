@@ -20,6 +20,7 @@ struct BlockIteratorParams {
     int        block_len;
 };
 
+/// TODO: Rename to attention::Param
 template<typename T>
 struct AttentionParams {
     // token-level buffers, [B, qH + 2kvH, D] or [B, kvH, D]

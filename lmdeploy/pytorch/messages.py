@@ -2,12 +2,12 @@
 import enum
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, LogitsProcessor
 from lmdeploy.utils import get_logger
 
 from .block import LogicalTokenBlocks
@@ -46,6 +46,7 @@ class SamplingParam:
     bad_words: List[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
+    logits_processors: Optional[List[LogitsProcessor]] = None
 
     @classmethod
     def from_gen_config(self, gen_config: EngineGenerationConfig):
@@ -97,7 +98,8 @@ class SamplingParam:
                              stop_words=stop_words,
                              bad_words=bad_words,
                              max_new_tokens=max_new_tokens,
-                             min_new_tokens=min_new_tokens)
+                             min_new_tokens=min_new_tokens,
+                             logits_processors=gen_config.logits_processors)
 
 
 class MessageStatus(enum.Enum):
