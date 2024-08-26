@@ -36,7 +36,6 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
                             WeightType weight_type,
                             int        group_size,
                             LoraParam  lora_param,
-                            bool       tie_word_embeddings,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank):
     hidden_units_(hidden_units),
@@ -45,7 +44,6 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
     vocab_size_padded_(vocab_size),
     num_layer_(num_layer),
     weight_type_(weight_type),
-    tie_word_embeddings_(tie_word_embeddings),
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank)
 {
@@ -77,9 +75,7 @@ LlamaWeight<T>::~LlamaWeight()
 {
     cudaFree((void*)pre_decoder_embedding_table);
     cudaFree((void*)output_norm_weight);
-    if (pre_decoder_embedding_table != post_decoder_embedding_kernel) {
-        cudaFree((void*)post_decoder_embedding_kernel);
-    }
+    cudaFree((void*)post_decoder_embedding_kernel);
 
     pre_decoder_embedding_table   = nullptr;
     post_decoder_embedding_kernel = nullptr;
@@ -98,12 +94,7 @@ void LlamaWeight<T>::mallocWeights()
                                       vocab_size_padded_ * hidden_units_;
     deviceMalloc((T**)&pre_decoder_embedding_table, embedding_table_size);
     deviceMalloc((T**)&output_norm_weight, hidden_units_);
-    if (!tie_word_embeddings_) {
-        deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_padded_ / tensor_para_size_);
-    }
-    else {
-        post_decoder_embedding_kernel = pre_decoder_embedding_table;
-    }
+    deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_padded_ / tensor_para_size_);
 }
 
 template<typename T>

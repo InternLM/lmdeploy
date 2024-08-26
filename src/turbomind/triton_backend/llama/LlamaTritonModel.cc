@@ -213,20 +213,19 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
         }
     }
 
-    model_name_                      = reader.Get("llama", "model_name");
-    model_param_.head_num            = reader.GetInteger("llama", "head_num");
-    model_param_.head_dim            = reader.GetInteger("llama", "size_per_head");
-    model_param_.kv_head_num         = reader.GetInteger("llama", "kv_head_num", 0);
-    model_param_.hidden_units        = reader.GetInteger("llama", "hidden_units");
-    model_param_.layer_num           = reader.GetInteger("llama", "num_layer");
-    model_param_.inter_size          = reader.GetInteger("llama", "inter_size");
-    model_param_.vocab_size          = reader.GetInteger("llama", "vocab_size");
-    model_param_.norm_eps            = reader.GetFloat("llama", "norm_eps");
-    model_param_.start_id            = reader.GetInteger("llama", "start_id");
-    model_param_.end_id              = reader.GetInteger("llama", "end_id");
-    attn_param_.cache_block_seq_len  = reader.GetInteger("llama", "cache_block_seq_len", 0);
-    model_param_.quant_policy        = reader.GetInteger("llama", "quant_policy", 0);
-    model_param_.tie_word_embeddings = reader.GetBoolean("llama", "tie_word_embeddings", false);
+    model_name_                     = reader.Get("llama", "model_name");
+    model_param_.head_num           = reader.GetInteger("llama", "head_num");
+    model_param_.head_dim           = reader.GetInteger("llama", "size_per_head");
+    model_param_.kv_head_num        = reader.GetInteger("llama", "kv_head_num", 0);
+    model_param_.hidden_units       = reader.GetInteger("llama", "hidden_units");
+    model_param_.layer_num          = reader.GetInteger("llama", "num_layer");
+    model_param_.inter_size         = reader.GetInteger("llama", "inter_size");
+    model_param_.vocab_size         = reader.GetInteger("llama", "vocab_size");
+    model_param_.norm_eps           = reader.GetFloat("llama", "norm_eps");
+    model_param_.start_id           = reader.GetInteger("llama", "start_id");
+    model_param_.end_id             = reader.GetInteger("llama", "end_id");
+    attn_param_.cache_block_seq_len = reader.GetInteger("llama", "cache_block_seq_len", 0);
+    model_param_.quant_policy       = reader.GetInteger("llama", "quant_policy", 0);
 
     // Only weight classes need these
     attn_bias_  = reader.GetInteger("llama", "attn_bias", 0);
@@ -413,7 +412,6 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                weight_type_,
                                                                group_size_,
                                                                lora_param_,
-                                                               model_param_.tie_word_embeddings,
                                                                tensor_para_size_,
                                                                tensor_para_rank);
     // model inited with model_dir
