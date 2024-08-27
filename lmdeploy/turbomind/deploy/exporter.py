@@ -156,7 +156,7 @@ class QuantWeightExporter(BaseExporter):
     def __init__(self, model: BaseOutputModel, pack_fn):
         super().__init__(model)
         self.pack_fn = pack_fn
-        self.group_size = model.cfg.group_size
+        self.group_size = model.tm_config.group_size
 
     def export(self, r: BaseReader, i: int):
 

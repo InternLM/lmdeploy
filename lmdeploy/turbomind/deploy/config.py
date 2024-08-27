@@ -115,5 +115,9 @@ class TurbomindModelConfig:
     def weight_type(self):
         return self.model_config.weight_type
 
+    @property
+    def group_size(self):
+        return self.model_config.group_size
+
     def __str__(self):
         return json.dumps(self.to_dict(), indent=2)
