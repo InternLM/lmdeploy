@@ -481,7 +481,7 @@ jobs:
         if: always()
         run: |
           chmod -R 777 $REPORT_DIR
-          chmod -R 777 /nvme/qa_test_models/benchmark_reports/${{ github.run_id }}
+          chmod -R 777 /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -495,7 +495,7 @@ jobs:
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     env:
-      BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark_reports/${{ github.run_id }}
+      BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
     steps:
       - name: Clone repository
         uses: actions/checkout@v3
