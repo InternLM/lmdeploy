@@ -237,8 +237,6 @@ class TurboMind:
             attention_config=init_config_from_dict(AttentionConfig,
                                                    _cfg['attention_config']),
             lora_config=init_config_from_dict(LoraConfig, _cfg['lora_config']),
-            # engine_config=init_config_from_dict(InternalEngineConfig,
-            #                                     _cfg['engine_config'])
         )
 
         # check whether input tp is valid
@@ -262,7 +260,7 @@ class TurboMind:
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir=weight_dir,
-            config=yaml.safe_dump(asdict(cfg)),
+            config=yaml.safe_dump(config_dict),
             tensor_para_size=self.gpu_count,
             data_type=self.config.weight_type)
 

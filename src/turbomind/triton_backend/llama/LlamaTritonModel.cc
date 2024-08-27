@@ -213,56 +213,56 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
         ft::FT_CHECK(false);
     }
 
-    model_name_                     = reader["model_name"].as<std::string>();
-    model_param_.head_num           = reader["head_num"].as<int>();
-    model_param_.head_dim           = reader["size_per_head"].as<int>();
-    model_param_.kv_head_num        = reader["kv_head_num"].as<int>(0);
-    model_param_.hidden_units       = reader["hidden_units"].as<int>();
-    model_param_.layer_num          = reader["num_layer"].as<int>();
-    model_param_.inter_size         = reader["inter_size"].as<int>();
-    model_param_.vocab_size         = reader["vocab_size"].as<int>();
-    model_param_.norm_eps           = reader["norm_eps"].as<float>();
-    model_param_.start_id           = reader["start_id"].as<int>();
-    model_param_.end_id             = reader["end_id"].as<int>();
-    attn_param_.cache_block_seq_len = reader["cache_block_seq_len"].as<int>(0);
-    model_param_.quant_policy       = reader["quant_policy"].as<int>(0);
+    model_name_                     = reader["model_config"]["model_name"].as<std::string>();
+    model_param_.head_num           = reader["model_config"]["head_num"].as<int>();
+    model_param_.head_dim           = reader["model_config"]["size_per_head"].as<int>();
+    model_param_.kv_head_num        = reader["model_config"]["kv_head_num"].as<int>(0);
+    model_param_.hidden_units       = reader["model_config"]["hidden_units"].as<int>();
+    model_param_.layer_num          = reader["model_config"]["num_layer"].as<int>();
+    model_param_.inter_size         = reader["model_config"]["inter_size"].as<int>();
+    model_param_.vocab_size         = reader["model_config"]["vocab_size"].as<int>();
+    model_param_.norm_eps           = reader["model_config"]["norm_eps"].as<float>();
+    model_param_.start_id           = reader["model_config"]["start_id"].as<int>();
+    model_param_.end_id             = reader["model_config"]["end_id"].as<int>();
+    attn_param_.cache_block_seq_len = reader["attention_config"]["cache_block_seq_len"].as<int>(0);
+    model_param_.quant_policy       = reader["engine_config"]["quant_policy"].as<int>(0);
 
     // Only weight classes need these
-    attn_bias_  = reader["attn_bias"].as<int>(0);
-    group_size_ = reader["group_size"].as<int>(0);
+    attn_bias_  = reader["model_config"]["attn_bias"].as<int>(0);
+    group_size_ = reader["model_config"]["group_size"].as<int>(0);
 
     // rotary embedding parameters
-    attn_param_.rotary_embedding_dim    = reader["rotary_embedding"].as<int>();
-    attn_param_.rotary_embedding_base   = reader["rope_theta"].as<float>(10000.0f);
-    attn_param_.rope_scaling_type       = reader["rope_scaling_type"].as<std::string>("");
-    attn_param_.rope_scaling_factor     = reader["rope_scaling_factor"].as<float>(0.f);
-    attn_param_.low_freq_factor         = reader["low_freq_factor"].as<float>(1.0);
-    attn_param_.high_freq_factor        = reader["high_freq_factor"].as<float>(1.0);
-    attn_param_.max_position_embeddings = reader["max_position_embeddings"].as<int>(0);
-    attn_param_.use_dynamic_ntk         = reader["use_dynamic_ntk"].as<int>(0);
-    attn_param_.use_logn_attn           = reader["use_logn_attn"].as<int>(0);
+    attn_param_.rotary_embedding_dim    = reader["attention_config"]["rotary_embedding"].as<int>();
+    attn_param_.rotary_embedding_base   = reader["attention_config"]["rope_theta"].as<float>(10000.0f);
+    attn_param_.rope_scaling_type       = reader["attention_config"]["rope_scaling_type"].as<std::string>("");
+    attn_param_.rope_scaling_factor     = reader["attention_config"]["rope_scaling_factor"].as<float>(0.f);
+    attn_param_.low_freq_factor         = reader["attention_config"]["low_freq_factor"].as<float>(1.0);
+    attn_param_.high_freq_factor        = reader["attention_config"]["high_freq_factor"].as<float>(1.0);
+    attn_param_.max_position_embeddings = reader["attention_config"]["max_position_embeddings"].as<int>(0);
+    attn_param_.use_dynamic_ntk         = reader["attention_config"]["use_dynamic_ntk"].as<int>(0);
+    attn_param_.use_logn_attn           = reader["attention_config"]["use_logn_attn"].as<int>(0);
 
-    attn_param_.original_max_position_embeddings = reader["original_max_position_embeddings"].as<int>(0);
+    attn_param_.original_max_position_embeddings = reader["attention_config"]["original_max_position_embeddings"].as<int>(0);
 
-    engine_param_.max_batch_size        = reader["max_batch_size"].as<int>(0);
-    engine_param_.max_prefill_token_num = reader["max_prefill_token_num"].as<int>(0);
-    engine_param_.max_context_token_num = reader["max_context_token_num"].as<int>(0);
-    engine_param_.session_len           = reader["session_len"].as<int>(0);
+    engine_param_.max_batch_size        = reader["engine_config"]["max_batch_size"].as<int>(0);
+    engine_param_.max_prefill_token_num = reader["engine_config"]["max_prefill_token_num"].as<int>(0);
+    engine_param_.max_context_token_num = reader["engine_config"]["max_context_token_num"].as<int>(0);
+    engine_param_.session_len           = reader["model_config"]["session_len"].as<int>(0);
 
-    engine_param_.cache_max_block_count = reader["cache_max_entry_count"].as<float>(0);
-    engine_param_.cache_chunk_size      = reader["cache_chunk_size"].as<int>(0);
-    engine_param_.enable_prefix_caching = reader["enable_prefix_caching"].as<bool>(false);
+    engine_param_.cache_max_block_count = reader["engine_config"]["cache_max_entry_count"].as<float>(0);
+    engine_param_.cache_chunk_size      = reader["engine_config"]["cache_chunk_size"].as<int>(0);
+    engine_param_.enable_prefix_caching = reader["engine_config"]["enable_prefix_caching"].as<bool>(false);
 
-    engine_param_.num_tokens_per_iter = reader["num_tokens_per_iter"].as<int>(0);
-    engine_param_.max_prefill_iters   = reader["max_prefill_iters"].as<int>(1);
+    engine_param_.num_tokens_per_iter = reader["engine_config"]["num_tokens_per_iter"].as<int>(0);
+    engine_param_.max_prefill_iters   = reader["engine_config"]["max_prefill_iters"].as<int>(1);
 
-    lora_param_.policy        = ft::getLoraPolicy(reader["lora_policy"].as<std::string>(""));
-    lora_param_.r             = reader["lora_r"].as<int>(0);
-    lora_param_.scale         = reader["lora_scale"].as<float>(0);
-    lora_param_.max_wo_r      = reader["lora_max_wo_r"].as<int>(0);
-    lora_param_.rank_pattern  = getLoraPattern<int>(reader["lora_rank_pattern"].as<std::string>(""),
+    lora_param_.policy        = ft::getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
+    lora_param_.r             = reader["lora_config"]["lora_r"].as<int>(0);
+    lora_param_.scale         = reader["lora_config"]["lora_scale"].as<float>(0);
+    lora_param_.max_wo_r      = reader["lora_config"]["lora_max_wo_r"].as<int>(0);
+    lora_param_.rank_pattern  = getLoraPattern<int>(reader["lora_config"]["lora_rank_pattern"].as<std::string>(""),
                                                    [](const std::string& s) { return std::stoi(s); });
-    lora_param_.scale_pattern = getLoraPattern<float>(reader["lora_scale_pattern"].as<std::string>(""),
+    lora_param_.scale_pattern = getLoraPattern<float>(reader["lora_config"]["lora_scale_pattern"].as<std::string>(""),
                                                       [](const std::string& s) { return std::stof(s); });
     handleMissingParams();
 
@@ -272,7 +272,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     const auto device_count = ft::getDeviceCount();
     engines_.resize(device_count);
 
-    const std::string weight_type_str = reader["weight_type"].as<std::string>();
+    const std::string weight_type_str = reader["model_config"]["weight_type"].as<std::string>();
     if (weight_type_str == "fp16") {
         weight_type_ = ft::WeightType::kFP16;
     }
