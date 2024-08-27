@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Iterable, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -9,44 +9,48 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
                                  RMSNorm, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
-                                        build_merged_colwise_linear,
-                                        build_rowwise_linear)
-from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_moe_from_mlp
+from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
+from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
-
-from ..weight_loader.dist_utils import (colwise_parallelize_linear,
-                                        rowwise_parallelize_linear)
 
 
 class MixtralAttention(nn.Module):
     """mixtral attention."""
 
-    def __init__(self, origin: nn.Module, ctx_mgr: StepContextManager):
+    def __init__(self,
+                 config: Any,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
         super().__init__()
         world_size = 1
         if dist.is_initialized():
             world_size = dist.get_world_size()
-        is_tp = world_size > 1
-        self.ctx_mgr = ctx_mgr
-        self.num_heads = origin.num_heads // world_size
-        self.num_kv_heads = origin.num_key_value_heads // world_size
-        self.head_dim = origin.head_dim
+        quantization_config = None
+
+        num_heads = config.num_attention_heads
+        num_key_value_heads = config.num_key_value_heads
+        hidden_size = config.hidden_size
+        head_dim = hidden_size // num_heads
+        self.num_heads = num_heads // world_size
+        self.num_kv_heads = num_key_value_heads // world_size
+        self.head_dim = head_dim
 
         # qkv
-        self.qkv_proj = build_merged_colwise_linear(
-            origin.q_proj,
-            origin.k_proj,
-            origin.v_proj,
-            ctx_mgr=ctx_mgr,
-            is_tp=is_tp,
+        self.qkv_proj = build_qkv_proj(
+            hidden_size,
+            num_q_heads=num_heads,
+            num_kv_heads=num_key_value_heads,
+            head_size=head_dim,
+            bias=False,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
         )
-        del origin.q_proj, origin.k_proj, origin.v_proj
 
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
 
         # attention
-        self.window_size = origin.config.sliding_window or -1
+        self.window_size = config.sliding_window or -1
         self.attn_fwd = Attention(
             self.num_heads,
             self.head_dim,
@@ -55,27 +59,14 @@ class MixtralAttention(nn.Module):
             sliding_window=self.window_size,
         )
 
-        self.o_proj = build_rowwise_linear(
-            origin.o_proj,
-            ctx_mgr=ctx_mgr,
-            is_tp=is_tp,
-        )
-
-    @staticmethod
-    def _load_weights(mod, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
-        for mod_name in ['q_proj', 'k_proj', 'v_proj']:
-            colwise_parallelize_linear(getattr(mod, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
-        rowwise_parallelize_linear(mod.o_proj,
-                                   loader,
-                                   rank=rank,
-                                   world_size=world_size,
-                                   prefix='o_proj')
+        # o_proj
+        self.o_proj = build_rowwise_linear(num_heads * head_dim,
+                                           hidden_size,
+                                           bias=False,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=True)
 
     def forward(
         self,
@@ -123,50 +114,46 @@ class MixtralAttention(nn.Module):
         return attn_output
 
 
-class MixtralBLockSparseTop2MLP(nn.Module):
-
-    def _load_weights(self, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
-        for mod_name in ['w1', 'w3']:
-            colwise_parallelize_linear(getattr(self, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
-        rowwise_parallelize_linear(self.w2,
-                                   loader,
-                                   rank=rank,
-                                   world_size=world_size,
-                                   prefix='w2')
-
-
 class MixtralSparseMoeBlock(nn.Module):
     """mixtral sparse moe block."""
 
-    def __init__(self, origin: nn.Module, ctx_mgr: StepContextManager):
+    def __init__(self,
+                 config: Any,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
         super().__init__()
         world_size = 1
         if dist.is_initialized():
             world_size = dist.get_world_size()
         is_tp = world_size > 1
         self.is_tp = is_tp
-        self.top_k = origin.top_k
-        self.gate = build_colwise_linear(
-            origin.gate,
-            ctx_mgr=ctx_mgr,
-            is_tp=is_tp,
+
+        self.hidden_dim = config.hidden_size
+        self.ffn_dim = config.intermediate_size
+        self.num_experts = config.num_local_experts
+        self.top_k = config.num_experts_per_tok
+
+        self.gate = build_rowwise_linear(
+            self.hidden_dim,
+            self.num_experts,
+            bias=False,
+            dtype=dtype,
+            device=device,
+            is_tp=False,
         )
+
         self.softmax_topk = SoftmaxTopK(self.top_k)
 
-        gates = [exp.w1 for exp in origin.experts]
-        ups = [exp.w3 for exp in origin.experts]
-        downs = [exp.w2 for exp in origin.experts]
-        self.fused_moe = build_moe_from_mlp(gates,
-                                            ups,
-                                            downs,
-                                            top_k=self.top_k,
-                                            renormalize=True)
+        self.experts = FusedMoE(
+            self.hidden_dim,
+            self.ffn_dim,
+            self.num_experts,
+            top_k=self.top_k,
+            renormalize=True,
+            dtype=dtype,
+            device=device,
+            is_tp=False,
+        )
 
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
@@ -175,7 +162,7 @@ class MixtralSparseMoeBlock(nn.Module):
         router_logits = self.gate(hidden_states)
 
         topk_weights, topk_ids = self.softmax_topk(router_logits)
-        out_states = self.fused_moe(
+        out_states = self.experts(
             hidden_states,
             topk_weights,
             topk_ids,
@@ -191,36 +178,35 @@ class MixtralSparseMoeBlock(nn.Module):
 class MixtralDecoderLayer(nn.Module):
     """mixtral decoder layer."""
 
-    def __init__(self, origin: nn.Module, layer_idx: int,
-                 ctx_mgr: StepContextManager):
+    def __init__(self,
+                 config: Any,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
         super().__init__()
         self.layer_idx = layer_idx
-        self.self_attn = MixtralAttention(origin.self_attn, ctx_mgr)
-        self.block_sparse_moe = MixtralSparseMoeBlock(origin.block_sparse_moe,
-                                                      ctx_mgr)
+        quantization_config = None
 
-        # norm
-        input_layernorm = origin.input_layernorm
-        is_w8a8 = hasattr(input_layernorm, 'from_float')
-        self.input_layernorm = RMSNorm(
-            input_layernorm.weight.size(0),
-            input_layernorm.variance_epsilon,
-            dtype=input_layernorm.weight.dtype,
-            device=input_layernorm.weight.device,
-            is_w8a8=is_w8a8,
-        )
-        load_weight(self.input_layernorm.weight, input_layernorm.weight)
-        post_attention_layernorm = origin.post_attention_layernorm
-        is_w8a8 = hasattr(post_attention_layernorm, 'from_float')
+        # build attention layer
+        self.self_attn = MixtralAttention(config, dtype=dtype, device=device)
+        self.block_sparse_moe = MixtralSparseMoeBlock(config,
+                                                      dtype=dtype,
+                                                      device=device)
+
+        # build input layer norm
+        self.input_layernorm = RMSNorm(config.hidden_size,
+                                       config.rms_norm_eps,
+                                       quant_config=quantization_config,
+                                       dtype=dtype,
+                                       device=device)
+
+        # build attention layer norm
         self.post_attention_layernorm = RMSNorm(
-            post_attention_layernorm.weight.size(0),
-            post_attention_layernorm.variance_epsilon,
-            dtype=post_attention_layernorm.weight.dtype,
-            device=post_attention_layernorm.weight.device,
-            is_w8a8=is_w8a8,
-        )
-        load_weight(self.post_attention_layernorm.weight,
-                    post_attention_layernorm.weight)
+            config.hidden_size,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device)
 
     def forward(
         self,
@@ -258,25 +244,31 @@ class MixtralDecoderLayer(nn.Module):
 class MixtralModel(nn.Module):
     """mixtral model."""
 
-    def __init__(self, origin: nn.Module, ctx_mgr: StepContextManager):
+    def __init__(self,
+                 config: Any,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
         super().__init__()
-        self.ctx_mgr = ctx_mgr
-        self.embed_tokens = origin.embed_tokens
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+        self.embed_tokens = nn.Embedding(config.vocab_size,
+                                         config.hidden_size,
+                                         self.padding_idx,
+                                         dtype=dtype,
+                                         device=device)
         self.layers = nn.ModuleList([
-            MixtralDecoderLayer(layer, idx, ctx_mgr)
-            for idx, layer in enumerate(origin.layers)
+            MixtralDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            for layer_idx in range(config.num_hidden_layers)
         ])
-        norm = origin.norm
-        is_w8a8 = hasattr(norm, 'from_float')
-        self.norm = RMSNorm(norm.weight.size(0),
-                            norm.variance_epsilon,
-                            dtype=norm.weight.dtype,
-                            device=norm.weight.device,
-                            is_w8a8=is_w8a8)
-        load_weight(self.norm.weight, norm.weight)
+
+        # build norm
+        self.norm = RMSNorm(config.hidden_size,
+                            config.rms_norm_eps,
+                            quant_config=None,
+                            dtype=dtype,
+                            device=device)
 
         emb_type = EmbeddingType.LinearScaling
-        config = origin.config
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
@@ -286,7 +278,7 @@ class MixtralModel(nn.Module):
             rope_max_pos_emb,
             rope_base,
             scaling_factor,
-            emb_type,
+            emb_type=emb_type,
         )
 
     def forward(
@@ -331,11 +323,21 @@ class MixtralForCausalLM(nn.Module):
 
     support_cuda_graph = True
 
-    def __init__(self, origin: nn.Module, ctx_mgr: StepContextManager):
+    def __init__(self,
+                 config: Any,
+                 ctx_mgr: StepContextManager,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
         super().__init__()
+        self.config = config
         self.ctx_mgr = ctx_mgr
-        self.model = MixtralModel(origin.model, ctx_mgr)
-        self.lm_head = build_rowwise_linear(origin.lm_head)
+        self.model = MixtralModel(config, dtype=dtype, device=device)
+        # build lm_head
+        self.lm_head = build_rowwise_linear(config.hidden_size,
+                                            config.vocab_size,
+                                            bias=False,
+                                            dtype=dtype,
+                                            device=device)
 
     def forward(
         self,
@@ -380,3 +382,57 @@ class MixtralForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        """load weights."""
+        # modify from vllm
+        stacked_params_mapping = [
+            # (param_name, shard_name, shard_id)
+            ('.qkv_proj', '.q_proj', 'q'),
+            ('.qkv_proj', '.k_proj', 'k'),
+            ('.qkv_proj', '.v_proj', 'v'),
+        ]
+
+        num_experts = self.config.num_local_experts
+        expert_params_mapping = []
+        for exp_id in range(num_experts):
+            gate_param = ('.experts.gate_up_weights',
+                          f'.experts.{exp_id}.w1.weight', exp_id, 'gate')
+            up_param = ('.experts.gate_up_weights',
+                        f'.experts.{exp_id}.w3.weight', exp_id, 'up')
+            down_param = ('.experts.down_weights',
+                          f'.experts.{exp_id}.w2.weight', exp_id, 'down')
+            expert_params_mapping += [gate_param, up_param, down_param]
+
+        params_dict = dict(self.named_parameters())
+        for name, loaded_weight in weights:
+            if 'rotary_emb.inv_freq' in name:
+                continue
+            if ('rotary_emb.cos_cached' in name
+                    or 'rotary_emb.sin_cached' in name):
+                continue
+            if self.config.tie_word_embeddings and 'lm_head.weight' in name:
+                continue
+            for (param_name, weight_name, expert_id,
+                 shard_id) in expert_params_mapping:
+                if weight_name not in name:
+                    continue
+                name = name.replace(weight_name, param_name)
+                param = params_dict[name]
+                load_weight(param,
+                            loaded_weight,
+                            expert_id=expert_id,
+                            shard_id=shard_id)
+                break
+            else:
+                for (param_name, weight_name,
+                     shard_id) in stacked_params_mapping:
+                    if weight_name not in name:
+                        continue
+                    name = name.replace(weight_name, param_name)
+                    param = params_dict[name]
+                    load_weight(param, loaded_weight, shard_id=shard_id)
+                    break
+                else:
+                    param = params_dict[name]
+                    load_weight(param, loaded_weight)

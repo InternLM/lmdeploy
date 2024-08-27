@@ -4,20 +4,7 @@ LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch.models'
 
 # llama
 MODULE_MAP = {
-    'transformers.models.llama.modeling_llama.LlamaFlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
-    'transformers.models.llama.modeling_llama.LlamaSdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
-    'transformers.models.llama.modeling_llama.LlamaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
-    'transformers.models.llama.modeling_llama.LlamaMLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
-    # support modeling rewritten in lmdeploy
-    'modeling_llama.LlamaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
-    'modeling_llama.LlamaMLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
-    'modeling_llama.LlamaForCausalLM':
+    'LlamaForCausalLM':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
 }
 
@@ -224,17 +211,7 @@ MODULE_MAP.update({
 
 # mixtral
 MODULE_MAP.update({
-    'transformers.models.mixtral.modeling_mixtral.MixtralAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralAttention',
-    'transformers.models.mixtral.modeling_mixtral.MixtralFlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralAttention',
-    'transformers.models.mixtral.modeling_mixtral.MixtralSdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralAttention',
-    'transformers.models.mixtral.modeling_mixtral.MixtralBLockSparseTop2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralBLockSparseTop2MLP',
-    'transformers.models.mixtral.modeling_mixtral.MixtralBlockSparseTop2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralBLockSparseTop2MLP',
-    'transformers.models.mixtral.modeling_mixtral.MixtralForCausalLM':
+    'MixtralForCausalLM':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralForCausalLM',
 })
 

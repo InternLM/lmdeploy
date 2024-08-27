@@ -234,11 +234,11 @@ class Engine:
 
     def _build_adapter_manager(self, adapters):
         if adapters is not None and len(adapters) > 0:
-            linear_info = self.model_agent.get_loralinear_info()
+            linear_infos = self.model_agent.get_lora_target_info()
         else:
-            linear_info = dict()
+            linear_infos = dict()
         block_numel = self.model_agent.get_block_numel()
-        return AdapterManager(linear_info, block_numel)
+        return AdapterManager(adapters, linear_infos, block_numel)
 
     def _bind_request_manager(self):
         """bind request manager."""

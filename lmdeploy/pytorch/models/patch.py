@@ -4,13 +4,13 @@ import inspect
 import os.path as osp
 import re
 import sys
-from copy import copy
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import torch
 
 from lmdeploy.utils import get_logger
 
+from ..config import ModelConfig
 from ..devices import get_device_manager
 from .module_map import (CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP,
                          MODULE_MAP)
@@ -91,29 +91,6 @@ def _find_rewrite_module_qualname(model, module_map: Dict[str, str]):
     return rewrite_qualname
 
 
-def _update_module_type(model: Any, cls_type: type, custom_attrs: dict = None):
-    """Update class type of model."""
-    # directly return origin model is not cool
-    # origin model would be registered as a submodule
-    old_type = type(model)
-
-    @property
-    def get_origin_mod(self):
-        origin_mod = copy(self)
-        origin_mod.__class__ = old_type
-        return origin_mod
-
-    attrs = dict(cls_type.__dict__)
-    custom_attrs = custom_attrs or dict()
-    custom_attrs['origin_mod'] = get_origin_mod
-    attrs.update(custom_attrs)
-    new_type = type(cls_type.__name__, (type(model), ), attrs)
-    model = copy(model)
-    model.__class__ = new_type
-
-    return model
-
-
 def get_rewrite_cls(model: torch.nn.Module, module_map: Dict[str, str] = None):
     """get rewrite cls."""
     if module_map is None:
@@ -123,34 +100,6 @@ def get_rewrite_cls(model: torch.nn.Module, module_map: Dict[str, str] = None):
     if rewrite_qualname is None:
         return None
     return _class_from_qualname(rewrite_qualname)
-
-
-def _patch(model: torch.nn.Module, module_map: Dict[str,
-                                                    str]) -> torch.nn.Module:
-    """patch the model with rewrite module.
-
-    Args:
-        model (Module): model to be patched.
-
-    Returns:
-        Module: The patched model
-    """
-
-    def _recursive_children(named_children):
-        """recursive children."""
-        for name, child in named_children:
-            _patch(child, module_map=module_map)
-
-    _recursive_children(model.named_children())
-    rewrite_qualname = _find_rewrite_module_qualname(model,
-                                                     module_map=module_map)
-
-    if rewrite_qualname is not None:
-        cls_type = _class_from_qualname(rewrite_qualname)
-        if hasattr(cls_type, '_load_weights'):
-            setattr(model, '_load_weights', cls_type._load_weights)
-
-    return model
 
 
 def _get_module_map():
@@ -163,39 +112,6 @@ def _get_module_map():
     # add custom module map
     module_map.update(CUSTOM_MODULE_MAP)
     return module_map
-
-
-@torch.inference_mode()
-def patch(model: torch.nn.Module, ):
-    """Patch the model with rewrite modules.
-
-    Extra arguments will be patched in forward of model, weights on each rank
-    will be partitioned.
-
-    Args:
-        model (Module): Model to be patched.
-
-    Returns:
-        Module: The patched model.
-    """
-    module_map = _get_module_map()
-    model = _patch(model, module_map=module_map)
-    return model
-
-
-def update_model(model: torch.nn.Module):
-    """build model."""
-    from lmdeploy.pytorch.model_inputs import StepContextManager
-    ctx_mgr = StepContextManager()
-    module_map = _get_module_map()
-
-    rewrite_qualname = _find_rewrite_module_qualname(model,
-                                                     module_map=module_map)
-
-    if rewrite_qualname is not None:
-        model_cls = _class_from_qualname(rewrite_qualname)
-
-    return model_cls(model, ctx_mgr)
 
 
 def update_custom_module_map(module_map_path: str):
@@ -235,3 +151,137 @@ def update_custom_module_map(module_map_path: str):
             new_mod_map[k] = v
 
     CUSTOM_MODULE_MAP.update(new_mod_map)
+
+
+def _get_model_class(config, module_map):
+    architectures = getattr(config, 'architectures', [])
+    for arch in architectures:
+        if arch in module_map:
+            qualname = module_map[arch]
+            module_cls = _class_from_qualname(qualname)
+            return module_cls
+
+    raise RuntimeError(
+        f'Can not found rewrite for architectures: {architectures}')
+
+
+@torch.inference_mode()
+def build_patched_model(config: ModelConfig, device: torch.device = None):
+    """build patched model."""
+    from lmdeploy.pytorch.model_inputs import StepContextManager
+    ctx_mgr = StepContextManager()
+    module_map = _get_module_map()
+    model_config = config.hf_config
+    if device is None:
+        device = torch.device('cuda')
+    model_cls = _get_model_class(model_config, module_map)
+    model = model_cls(model_config, ctx_mgr, dtype=config.dtype, device=device)
+    return model.eval()
+
+
+@torch.inference_mode()
+def add_adapters(model: torch.nn.Module,
+                 kv_caches: List[List[torch.Tensor]],
+                 adapters: Dict[str, str],
+                 device: torch.device = None):
+    """add adapters."""
+    from peft import PeftConfig
+    from peft.tuners.lora import LoraConfig
+
+    from lmdeploy.pytorch.adapter.adapter import (LoRATargetInfo,
+                                                  find_all_target,
+                                                  get_layer_index,
+                                                  get_ranks_and_scalings)
+    from lmdeploy.pytorch.nn.linear import SLoRA
+    num_adapters = len(adapters)
+    if num_adapters == 0:
+        return
+
+    if device is None:
+        device = torch.device('cuda')
+
+    # model could be graph runner
+    origin_model = model
+    if hasattr(model, 'get_model'):
+        model = model.get_model()
+    ctx_mgr = model.ctx_mgr
+
+    adapter_cfgs = [
+        PeftConfig.from_pretrained(path) for path in adapters.values()
+    ]
+    # get layer pattern (should be same between different adapter)
+    config = next(iter(adapter_cfgs))
+    layers_pattern = getattr(config, 'layers_pattern', None)
+
+    # insert one for no adapter
+    adapter_cfgs = [LoraConfig(r=0, target_modules=[])] + adapter_cfgs
+
+    # target layer name to add adapter
+    target_names = set()
+    max_rank = 0
+    for cfg in adapter_cfgs:
+        target_names = target_names.union(cfg.target_modules)
+        max_rank = max(max_rank, cfg.r)
+    target_names = list(target_names)
+    target_names = sorted(target_names)
+    num_targets = len(target_names)
+
+    # get rank offsets
+    # add 1 for none adapter
+    rank_offsets = torch.zeros(num_adapters + 1,
+                               num_targets * max_rank,
+                               dtype=torch.int64,
+                               device=device)
+
+    target_infos = dict()
+    for target_idx, target_name in enumerate(target_names):
+        # get ranks and scalings
+        ranks, scalings = get_ranks_and_scalings(target_name,
+                                                 adapter_cfgs,
+                                                 device=device)
+        found_mods, pack_idx = find_all_target(model, target_name)
+        r_start = target_idx * max_rank
+        r_end = r_start + max_rank
+        r_offs = rank_offsets[:, r_start:r_end]
+
+        in_features = 0
+        out_features = 0
+        colwise = True
+        for name, mod in found_mods:
+            assert hasattr(mod, 'lora_adapters')
+            layer_idx = get_layer_index(name, layers_pattern)
+            k_cache, v_cache = kv_caches[layer_idx]
+            in_features = mod.in_features
+            colwise = mod.colwise
+            if pack_idx is None:
+                base_slice = slice(0, mod.out_features)
+                out_features = mod.out_features
+            else:
+                prev_feats = sum(mod.all_out_features[:pack_idx])
+                out_features = mod.all_out_features[pack_idx]
+                base_slice = slice(prev_feats, prev_feats + out_features)
+
+            slora = SLoRA(
+                in_features,
+                out_features,
+                ranks=ranks,
+                scalings=scalings,
+                rank_offsets=r_offs,
+                a_cache=k_cache,
+                b_cache=v_cache,
+                base_slice=base_slice,
+                max_rank=max_rank,
+                ctx_mgr=ctx_mgr,
+                colwise=colwise,
+                is_tp=mod.is_tp,
+            )
+            mod.lora_adapters.append(slora)
+
+        target_info = LoRATargetInfo(in_features=in_features,
+                                     out_features=out_features,
+                                     colwise=colwise)
+        target_infos[target_name] = target_info
+
+    # add rank_offsets
+    setattr(origin_model, 'rank_offsets', rank_offsets)
+    return target_infos

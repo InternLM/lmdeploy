@@ -1,8 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Any
+
 import torch
 from torch import nn
 
 from ..backends import LayerType, get_backend
+
+
+def _is_w8a8(quant_config: Any):
+    """is w8a8."""
+    return False
 
 
 class RMSNorm(nn.Module):
@@ -13,10 +20,10 @@ class RMSNorm(nn.Module):
                  eps: float = 1e-6,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 is_w8a8: bool = False):
+                 quant_config: Any = None):
         super().__init__()
         backend = get_backend()
-        if is_w8a8:
+        if _is_w8a8(quant_config):
             builder = backend.get_layer_impl_builder(LayerType.RMSNormW8A8)
         else:
             builder = backend.get_layer_impl_builder(LayerType.RMSNorm)

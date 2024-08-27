@@ -3,7 +3,6 @@ from typing import Optional
 
 import torch
 import torch.distributed as dist
-from torch import nn
 
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import (
     matmul_kernel_dynamic_quant, per_token_quant_int8, rms_norm_dynamic_quant)
@@ -46,7 +45,7 @@ class TritonRMSNormBuilder(RMSNormW8A8Builder):
         return TritonRMSNormW8A8Impl(hidden_size, eps)
 
 
-class TritonLinearW8A8Impl(LinearW8A8Impl, nn.Module):
+class TritonLinearW8A8Impl(LinearW8A8Impl):
     """triton linear w8a8 implementation."""
 
     def __init__(self, in_features: int, out_features: int):

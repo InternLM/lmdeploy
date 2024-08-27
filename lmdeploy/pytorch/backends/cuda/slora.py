@@ -26,35 +26,10 @@ class PackedLoRAInput:
 class TritonSLoRAImpl(SLoRAImpl):
     """triton slora implementation."""
 
-    def __init__(self,
-                 adapter_info: AdapterInfo,
-                 ctx_mgr: StepContextManager,
-                 colwise: bool = True):
-        super().__init__()
-        self.base_slice = adapter_info.base_slice
-        self.ctx_mgr = ctx_mgr
-        self.colwise = colwise
-
-    def post_init(
-        self,
-        ranks: torch.Tensor,
-        scalings: torch.Tensor,
-        rank_offsets: torch.Tensor,
-        a_cache: torch.Tensor,
-        b_cache: torch.Tensor,
-        max_rank: int,
-    ):
-        """post init."""
-        self.ranks = ranks
-        self.scalings = scalings
-        self.rank_offsets = rank_offsets
-        self.a_cache = a_cache
-        self.b_cache = b_cache
-        self.max_rank = max_rank
-
-    def _make_packed_lora_input(self, x):
+    @staticmethod
+    def _make_packed_lora_input(x, ctx_mgr):
         """make PackedLoRAInput."""
-        context = self.ctx_mgr.current_context()
+        context = ctx_mgr.current_context()
 
         # adapter cache
         max_q_seq_length = x.numel() // x.size(-1)
@@ -69,9 +44,10 @@ class TritonSLoRAImpl(SLoRAImpl):
     def _forward_rowwise(self,
                          lora_input: PackedLoRAInput,
                          base_output: torch.Tensor,
+                         adapter_info: AdapterInfo,
                          is_tp: bool = True):
         """forward_rowwise."""
-        sliced_base = base_output[..., self.base_slice]
+        sliced_base = base_output[..., adapter_info.base_slice]
         out_size = sliced_base.size(-1)
         if is_tp:
             rank = dist.get_rank()
@@ -79,45 +55,45 @@ class TritonSLoRAImpl(SLoRAImpl):
             out_size //= world_size
         if not lora_input.is_decoding:
             xa = mbgmm_a(lora_input.x,
-                         self.a_cache,
+                         adapter_info.a_cache,
                          q_start_loc=lora_input.q_start_loc,
                          q_seqlens=lora_input.q_seqlens,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_offset=self.rank_offsets,
-                         ranks=self.ranks,
+                         rank_offset=adapter_info.rank_offsets,
+                         ranks=adapter_info.ranks,
                          max_seq_len=lora_input.max_seq_len,
-                         max_rank=self.max_rank)
+                         max_rank=adapter_info.max_rank)
             lora_out = mbgmm_b(xa,
-                               self.b_cache,
+                               adapter_info.b_cache,
                                q_start_loc=lora_input.q_start_loc,
                                q_seqlens=lora_input.q_seqlens,
                                adapter_ids=lora_input.adapter_ids,
-                               scaling=self.scalings,
-                               rank_offset=self.rank_offsets,
-                               ranks=self.ranks,
+                               scaling=adapter_info.scalings,
+                               rank_offset=adapter_info.rank_offsets,
+                               ranks=adapter_info.ranks,
                                max_seq_len=lora_input.max_seq_len,
-                               max_rank=self.max_rank,
+                               max_rank=adapter_info.max_rank,
                                out_size=out_size)
         else:
             xa = mbgmv_a(lora_input.x,
-                         self.a_cache,
+                         adapter_info.a_cache,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_offset=self.rank_offsets,
-                         ranks=self.ranks,
-                         max_rank=self.max_rank)
+                         rank_offset=adapter_info.rank_offsets,
+                         ranks=adapter_info.ranks,
+                         max_rank=adapter_info.max_rank)
             lora_out = mbgmv_b(xa,
-                               self.b_cache,
+                               adapter_info.b_cache,
                                adapter_ids=lora_input.adapter_ids,
-                               scaling=self.scalings,
-                               rank_offset=self.rank_offsets,
-                               ranks=self.ranks,
-                               max_rank=self.max_rank,
+                               scaling=adapter_info.scalings,
+                               rank_offset=adapter_info.rank_offsets,
+                               ranks=adapter_info.ranks,
+                               max_rank=adapter_info.max_rank,
                                out_size=out_size)
 
         if is_tp:
             out_shape = base_output.shape
             out = base_output.flatten(0, -2)
-            slice_off = self.base_slice.start
+            slice_off = adapter_info.base_slice.start
             slice_off = 0 if slice_off is None else slice_off
             slice_start = slice_off + rank * out_size
             slice_end = slice_start + out_size
@@ -130,8 +106,12 @@ class TritonSLoRAImpl(SLoRAImpl):
 
         return out
 
-    def _forward_colwise(self, lora_input: PackedLoRAInput,
-                         base_output: torch.Tensor):
+    def _forward_colwise(
+        self,
+        lora_input: PackedLoRAInput,
+        base_output: torch.Tensor,
+        adapter_info: AdapterInfo,
+    ):
         """forward_colwise."""
 
         def __gather_xa(xa):
@@ -142,69 +122,76 @@ class TritonSLoRAImpl(SLoRAImpl):
             gathered_xa = gathered_xa.permute(1, 0, 2).flatten(-2, -1)
             return gathered_xa
 
-        sliced_base = base_output[..., self.base_slice]
+        base_slice = adapter_info.base_slice
+        a_cache = adapter_info.a_cache
+        b_cache = adapter_info.b_cache
+        rank_offsets = adapter_info.rank_offsets
+        ranks = adapter_info.ranks
+        max_rank = adapter_info.max_rank
+        scalings = adapter_info.scalings
+        sliced_base = base_output[..., base_slice]
         out_size = sliced_base.size(-1)
         world_size = dist.get_world_size()
 
         if not lora_input.is_decoding:
             xa = mbgmm_a(lora_input.x,
-                         self.a_cache,
+                         a_cache,
                          q_start_loc=lora_input.q_start_loc,
                          q_seqlens=lora_input.q_seqlens,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_offset=self.rank_offsets,
-                         ranks=self.ranks,
+                         rank_offset=rank_offsets,
+                         ranks=ranks,
                          max_seq_len=lora_input.max_seq_len,
-                         max_rank=self.max_rank,
+                         max_rank=max_rank,
                          rank_step=world_size)
             gathered_xa = __gather_xa(xa)
-            if len(self.ranks) > 1:
+            if len(ranks) > 1:
                 gathered_xa = rearange_all_gather(
                     gathered_xa,
                     b_start_loc=lora_input.q_start_loc,
                     b_seq_lens=lora_input.q_seqlens,
                     adapter_ids=lora_input.adapter_ids,
-                    ranks=self.ranks,
+                    ranks=ranks,
                     world_size=world_size,
                     max_seq_len=lora_input.max_seq_len,
                     output=gathered_xa)
             lora_out = mbgmm_b(gathered_xa,
-                               self.b_cache,
+                               b_cache,
                                q_start_loc=lora_input.q_start_loc,
                                q_seqlens=lora_input.q_seqlens,
                                adapter_ids=lora_input.adapter_ids,
-                               scaling=self.scalings,
-                               rank_offset=self.rank_offsets,
-                               ranks=self.ranks,
+                               scaling=scalings,
+                               rank_offset=rank_offsets,
+                               ranks=ranks,
                                max_seq_len=lora_input.max_seq_len,
-                               max_rank=self.max_rank,
+                               max_rank=max_rank,
                                out_size=out_size)
         else:
             xa = mbgmv_a(lora_input.x,
-                         self.a_cache,
+                         a_cache,
                          adapter_ids=lora_input.adapter_ids,
-                         rank_offset=self.rank_offsets,
-                         ranks=self.ranks,
-                         max_rank=self.max_rank,
+                         rank_offset=rank_offsets,
+                         ranks=ranks,
+                         max_rank=max_rank,
                          rank_step=world_size)
             gathered_xa = __gather_xa(xa)
-            if len(self.ranks) > 1:
+            if len(ranks) > 1:
                 gathered_xa = rearange_all_gather(
                     gathered_xa,
                     b_start_loc=lora_input.q_start_loc,
                     b_seq_lens=lora_input.q_seqlens,
                     adapter_ids=lora_input.adapter_ids,
-                    ranks=self.ranks,
+                    ranks=ranks,
                     world_size=world_size,
                     max_seq_len=lora_input.max_seq_len,
                     output=gathered_xa)
             lora_out = mbgmv_b(gathered_xa,
-                               self.b_cache,
+                               b_cache,
                                adapter_ids=lora_input.adapter_ids,
-                               scaling=self.scalings,
-                               rank_offset=self.rank_offsets,
-                               ranks=self.ranks,
-                               max_rank=self.max_rank,
+                               scaling=scalings,
+                               rank_offset=rank_offsets,
+                               ranks=ranks,
+                               max_rank=max_rank,
                                out_size=out_size)
 
         lora_out = lora_out.reshape(sliced_base.shape)
@@ -215,23 +202,23 @@ class TritonSLoRAImpl(SLoRAImpl):
     def forward(self,
                 x: torch.Tensor,
                 base_output: torch.Tensor,
-                target_name: str,
-                layer_idx: int,
+                adapter_info: AdapterInfo,
+                ctx_mgr: StepContextManager,
+                colwise: bool,
                 is_tp: bool = True):
         """forward."""
-        lora_input = self._make_packed_lora_input(x)
-        if self.colwise and is_tp:
-            return self._forward_colwise(lora_input, base_output)
+        lora_input = self._make_packed_lora_input(x, ctx_mgr)
+        if colwise and is_tp:
+            return self._forward_colwise(lora_input, base_output, adapter_info)
         else:
-            return self._forward_rowwise(lora_input, base_output, is_tp)
+            return self._forward_rowwise(lora_input, base_output, adapter_info,
+                                         is_tp)
 
 
 class TritonSLoRABuilder(SLoRABuilder):
     """triton slora layer builder."""
 
     @staticmethod
-    def build(adapter_info: AdapterInfo,
-              ctx_mgr: StepContextManager,
-              colwise: bool = True):
+    def build():
         """build."""
-        return TritonSLoRAImpl(adapter_info, ctx_mgr, colwise)
+        return TritonSLoRAImpl()
