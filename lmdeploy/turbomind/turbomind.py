@@ -166,15 +166,31 @@ class TurboMind:
                     tm_params[k] = []
                 tm_params[k].append(v)
 
-    def _update_engine_config(self, engine_config):
+    def _postprocess_config(self, tm_config, engine_config):
+        """postprocess turbomind config by."""
+        import copy
+        self.config = copy.deepcopy(tm_config)
+        # Update the attribute values in `self.config` with the valid values
+        # from the corresponding attributes in `engine_config`, such as
+        # `session_len`, `quant_policy`, `rope_scaling_factor`, etc.
+        self.config.update_from_engine_config(engine_config)
+
+        # update some attributes of `engine_config` which depends on
+        # `session_len`
+        self.engine_config = engine_config
         if engine_config.max_prefill_token_num is not None \
                 and engine_config.num_tokens_per_iter == 0:
-            engine_config.num_tokens_per_iter = \
+            self.engine_config.num_tokens_per_iter = \
                 engine_config.max_prefill_token_num
-            engine_config.max_prefill_iters = (
+            self.engine_config.max_prefill_iters = (
                 self.config.session_len + engine_config.max_prefill_token_num -
                 1) // engine_config.max_prefill_token_num
-        return engine_config
+
+        # pack `self.config` and `self.engine_config` into a dict
+        self.config_dict = self.config.to_dict()
+        self.config_dict.update(dict(engine_config=asdict(self.engine_config)))
+        logger.info(f'turbomind model config:\n\n'
+                    f'{json.dumps(self.config_dict, indent=2)}')
 
     def _from_hf(self, model_source: ModelSource, model_path: str,
                  engine_config: TurbomindEngineConfig):
@@ -189,20 +205,12 @@ class TurboMind:
         from .deploy.converter import get_tm_model
         tm_model = get_tm_model(model_path, self.model_name,
                                 self.chat_template_name, engine_config)
-        self.config = tm_model.tm_config
-        # Turbomind config must be updated before
-        self.config.update_from_engine_config(engine_config)
-        self.engine_config = self._update_engine_config(engine_config)
 
-        # pack `self.config` and `self.engine_config` into a dict
-        config_dict = self.config.to_dict()
-        config_dict.update(dict(engine_config=asdict(self.engine_config)))
-        logger.info(
-            f'turbomind model config:\n\n{json.dumps(config_dict, indent=2)}')
+        self._postprocess_config(tm_model.tm_config, engine_config)
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir='',
-            config=yaml.safe_dump(config_dict),
+            config=yaml.safe_dump(self.config_dict),
             tensor_para_size=self.gpu_count,
             data_type=self.config.model_config.weight_type)
 
@@ -248,21 +256,12 @@ class TurboMind:
             self.gpu_count = cfg.tensor_para_size
         engine_config.tp = self.gpu_count
 
-        # update cfg
-        self.config = cfg
-        self.config.update_from_engine_config(engine_config)
-        self.engine_config = self._update_engine_config(engine_config)
-
-        # pack `self.config` and `self.engine_config` into a dict
-        config_dict = self.config.to_dict()
-        config_dict.update(dict(engine_config=asdict(self.engine_config)))
-        logger.warning(
-            f'turbomind_model_config:\n\n{json.dumps(config_dict, indent=2)}')
+        self._postprocess_config(cfg, engine_config)
 
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir=weight_dir,
-            config=yaml.safe_dump(config_dict),
+            config=yaml.safe_dump(self.config_dict),
             tensor_para_size=self.gpu_count,
             data_type=self.config.weight_type)
 
