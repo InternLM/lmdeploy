@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import json
 import os.path as osp
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -187,17 +188,17 @@ class TurboMind:
         # convert transformers model into turbomind model
         from .deploy.converter import get_tm_model
         tm_model = get_tm_model(model_path, self.model_name,
-                                self.chat_template_name,
-                                engine_config.model_format)
+                                self.chat_template_name, engine_config)
         self.config = tm_model.tm_config
         # Turbomind config must be updated before
         self.config.update_from_engine_config(engine_config)
-        logger.info(f'turbomind model config:\n\n{self.config}')
         self.engine_config = self._update_engine_config(engine_config)
 
         # pack `self.config` and `self.engine_config` into a dict
-        config_dict = self.config.dict()
+        config_dict = self.config.to_dict()
         config_dict.update(dict(engine_config=asdict(self.engine_config)))
+        logger.info(
+            f'turbomind model config:\n\n{json.dumps(config_dict, indent=2)}')
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir='',
@@ -250,12 +251,13 @@ class TurboMind:
         # update cfg
         self.config = cfg
         self.config.update_from_engine_config(engine_config)
-        logger.warning(f'turbomind_model_config:\n\n{cfg}')
         self.engine_config = self._update_engine_config(engine_config)
 
         # pack `self.config` and `self.engine_config` into a dict
         config_dict = self.config.to_dict()
         config_dict.update(dict(engine_config=asdict(self.engine_config)))
+        logger.warning(
+            f'turbomind_model_config:\n\n{json.dumps(config_dict, indent=2)}')
 
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
