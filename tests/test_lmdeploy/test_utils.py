@@ -1,6 +1,8 @@
 from transformers import AutoConfig
 
-from lmdeploy.turbomind.deploy.target_model.base import TurbomindModelConfig
+from lmdeploy.turbomind.deploy.config import (ModelConfig,
+                                              TurbomindModelConfig,
+                                              init_config_from_dict)
 from lmdeploy.utils import _get_and_verify_max_len
 
 
@@ -20,7 +22,9 @@ def test_get_and_verify_max_len():
     assert (_get_and_verify_max_len(config, 102400) == 102400)
 
     # with TurbomindModelConfig
-    config = TurbomindModelConfig.from_dict({}, allow_none=True)
-    config.session_len = 4096
+    config = init_config_from_dict(TurbomindModelConfig, {}, allow_none=True)
+    config.model_config = init_config_from_dict(ModelConfig,
+                                                dict(session_len=4096),
+                                                allow_none=True)
     assert (_get_and_verify_max_len(config, None) == config.session_len)
     assert (_get_and_verify_max_len(config, 1024) == 1024)
