@@ -20,6 +20,7 @@
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include "src/turbomind/utils/logger.h"
 
+#include <algorithm>
 #include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -27,7 +28,6 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <algorithm>
 #ifdef SPARSITY_ENABLED
 #include <cusparseLt.h>
 #endif
