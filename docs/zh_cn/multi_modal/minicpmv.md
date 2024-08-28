@@ -11,7 +11,7 @@ LMDeploy 支持 MiniCPM-V 系列模型，具体如下：
 
 ## 安装
 
-请参考[安装文档](../installation.md)安装 LMDeploy。
+请参考[安装文档](../get_started/installation.md)安装 LMDeploy。
 
 ## 离线推理
 
