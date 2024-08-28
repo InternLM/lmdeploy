@@ -17,7 +17,7 @@ class Attention(nn.Module):
         scale: float = None,
         num_kv_heads: int = None,
         v_head_size: int = None,
-        alibi_scale: float = None,
+        alibi: bool = False,
         sliding_window: int = None,
         logit_softcapping: float = None,
         replicate_kv: bool = False,
@@ -32,14 +32,14 @@ class Attention(nn.Module):
             LayerType.Attention)
 
         self.impl = impl_builder.build(
-            num_heads,
-            head_size,
-            scale,
-            num_kv_heads,
-            v_head_size,
-            alibi_scale,
-            sliding_window,
-            logit_softcapping,
+            num_heads=num_heads,
+            head_size=head_size,
+            scale=scale,
+            num_kv_heads=num_kv_heads,
+            v_head_size=v_head_size,
+            alibi=alibi,
+            sliding_window=sliding_window,
+            logit_softcapping=logit_softcapping,
             **kwargs,
         )
 

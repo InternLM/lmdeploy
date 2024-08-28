@@ -31,18 +31,8 @@ MODULE_MAP.update({
 
 # baichuan
 MODULE_MAP.update({
-    'modeling_baichuan.Model':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',  # noqa
-    'modeling_baichuan.BaichuanModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanModel',  # noqa
-    'modeling_baichuan.Attention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.Attention',  # noqa
-    'modeling_baichuan.BaichuanAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanAttention',  # noqa
-    'modeling_baichuan.MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',  # noqa
-    'modeling_baichuan.RMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.PatchedRMSNorm',
+    'BaichuanForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanForCausalLM',
 })
 
 # chatglm2

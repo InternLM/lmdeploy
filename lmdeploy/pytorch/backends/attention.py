@@ -29,7 +29,7 @@ class AttentionImpl(ABC, Generic[T]):
         scale: float = None,
         num_kv_heads: int = None,
         v_head_size: int = None,
-        alibi_scale: float = None,
+        alibi: bool = None,
         sliding_window: int = None,
         logit_softcapping: float = None,
         **kwargs,
@@ -48,7 +48,7 @@ class AttentionImpl(ABC, Generic[T]):
         self.scale = scale
         self.num_kv_heads = num_kv_heads
         self.v_head_size = v_head_size
-        self.alibi_scale = alibi_scale
+        self.alibi = alibi
         self.sliding_window = sliding_window
         self.logit_softcapping = logit_softcapping
 
@@ -77,7 +77,7 @@ class AttentionBuilder(ABC, Generic[T]):
         scale: float = None,
         num_kv_heads: int = None,
         v_head_size: int = None,
-        alibi_scale: float = None,
+        alibi: bool = False,
         sliding_window: int = None,
         logical_softcapping: float = None,
         **kwargs,
