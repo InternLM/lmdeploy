@@ -88,25 +88,19 @@ class BaseOutputModel(ABC):
                 _vocab_size, _ = emb.shape
                 break
         final_cfg.update(dict(vocab_size=_vocab_size))
-        self.model_config = config_from_dict(ModelConfig,
-                                             final_cfg,
-                                             allow_none=True)
+        self.model_config = config_from_dict(ModelConfig, final_cfg)
 
     def update_attention_config(self):
         """update attention config according to input model's model info."""
         final_cfg = config_to_dict(self.attention_config)
         final_cfg.update(self.input_model_info)
-        self.attention_config = config_from_dict(AttentionConfig,
-                                                 final_cfg,
-                                                 allow_none=True)
+        self.attention_config = config_from_dict(AttentionConfig, final_cfg)
 
     def update_lora_config(self):
         """update lora config according to input model's model info."""
         final_cfg = config_to_dict(self.lora_config)
         final_cfg.update(self.input_model_info)
-        self.lora_config = config_from_dict(LoraConfig,
-                                            final_cfg,
-                                            allow_none=True)
+        self.lora_config = config_from_dict(LoraConfig, final_cfg)
 
     def export_config(self) -> None:
         """export turbomind config."""

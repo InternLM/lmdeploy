@@ -138,6 +138,7 @@ class TurbomindEngineConfig:
         enable_prefix_caching (bool): enable cache prompts for block reuse, default to False
         quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
         rope_scaling_factor (float): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
+        use_logn_attn (bool): whether or not to use log attn: default to False
         download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
         revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
         max_prefill_token_num(int): the number of tokens each iteration during prefill, default to 8192

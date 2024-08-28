@@ -22,9 +22,7 @@ def test_get_and_verify_max_len():
     assert (_get_and_verify_max_len(config, 102400) == 102400)
 
     # with TurbomindModelConfig
-    config = config_from_dict(TurbomindModelConfig, {}, allow_none=True)
-    config.model_config = config_from_dict(ModelConfig,
-                                           dict(session_len=4096),
-                                           allow_none=True)
+    config = config_from_dict(TurbomindModelConfig, {})
+    config.model_config = config_from_dict(ModelConfig, dict(session_len=4096))
     assert (_get_and_verify_max_len(config, None) == config.session_len)
     assert (_get_and_verify_max_len(config, 1024) == 1024)

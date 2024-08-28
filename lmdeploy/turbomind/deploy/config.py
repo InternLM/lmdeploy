@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# from dataclasses import dataclass
 import inspect
 import json
 from dataclasses import asdict, fields
@@ -10,19 +9,11 @@ from pydantic.dataclasses import dataclass
 from lmdeploy.messages import TurbomindEngineConfig
 
 
-def config_from_dict(cls, env, allow_none=False):
+def config_from_dict(cls, env):
     """initiate an instance of a config class from a dict."""
     params = inspect.signature(cls).parameters
     used = {k: v for k, v in env.items() if k in params and v is not None}
-    if not allow_none:
-        return cls(**used)
-    else:
-        default = {
-            k: None
-            for k in params.keys() if params[k].default is inspect._empty
-        }
-        default.update(used)
-        return cls(**default)
+    return cls(**used)
 
 
 def config_to_dict(config):
