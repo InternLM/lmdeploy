@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from ..config import ModelConfig, init_config_from_dict
+from ..config import ModelConfig, config_from_dict
 from .base import OUTPUT_MODELS, BaseOutputModel
 
 
@@ -33,7 +33,7 @@ class TurbomindModel(BaseOutputModel):
                 break
         inter_size = self._pad_inter_size(inter_size)
         final_cfg.update(dict(attn_bias=attn_bias, inter_size=inter_size))
-        self.model_config = init_config_from_dict(ModelConfig, final_cfg)
+        self.model_config = config_from_dict(ModelConfig, final_cfg)
 
     def _pad_inter_size(self, inter_size: int):
         group_size = max(1, self.model_config.group_size)

@@ -93,7 +93,8 @@ def get_output_model_registered_name_and_config(model_path: str,
 
     Args:
         model_path (str): the path of the input model
-        model_format (str):
+        model_format (str): the format of the model, which can be one of
+            ['meta_llama',  'hf', 'awq', 'gptq']
         group_size (int): the size of group used by awq model
     """
     register_name = 'tm'
@@ -194,7 +195,7 @@ def get_tm_model(model_path,
         model_name (str): user customized model name
         chat_template_name (str): the name of the chat template of
             the input model
-        engine_config(InternalEngineConfig): user input engine config
+        engine_config(TurbomindEngineConfig): user input engine config
         group_size(int): refers to the group_size if the input model
             is a w4a16(awq or gptq) quantized model
         out_dir(str): the output directory where to save to turbomind model.

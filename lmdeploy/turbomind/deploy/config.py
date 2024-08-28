@@ -10,7 +10,8 @@ from pydantic.dataclasses import dataclass
 from lmdeploy.messages import TurbomindEngineConfig
 
 
-def init_config_from_dict(cls, env, allow_none=False):
+def config_from_dict(cls, env, allow_none=False):
+    """initiate an instance of a config class from a dict."""
     params = inspect.signature(cls).parameters
     used = {k: v for k, v in env.items() if k in params and v is not None}
     if not allow_none:
@@ -22,6 +23,16 @@ def init_config_from_dict(cls, env, allow_none=False):
         }
         default.update(used)
         return cls(**default)
+
+
+def config_to_dict(config):
+    """export config to a dict."""
+    if not config:
+        return dict()
+    assert isinstance(config, dataclass), \
+        f'A dataclass is expected, but got {type(config)}'
+
+    return asdict(config)
 
 
 @dataclass
@@ -106,17 +117,16 @@ class TurbomindModelConfig:
         }
 
         return TurbomindModelConfig(
-            model_config=init_config_from_dict(ModelConfig,
-                                               _cfg['model_config']),
-            attention_config=init_config_from_dict(AttentionConfig,
-                                                   _cfg['attention_config']),
-            lora_config=init_config_from_dict(LoraConfig, _cfg['lora_config']))
+            model_config=config_from_dict(ModelConfig, _cfg['model_config']),
+            attention_config=config_from_dict(AttentionConfig,
+                                              _cfg['attention_config']),
+            lora_config=config_from_dict(LoraConfig, _cfg['lora_config']))
 
     def to_dict(self):
         # TODO(lvhan) make the sequence of dict is the same as the config attrs
-        return dict(model_config=asdict(self.model_config),
-                    attention_config=asdict(self.attention_config),
-                    lora_config=asdict(self.lora_config))
+        return dict(model_config=config_to_dict(self.model_config),
+                    attention_config=config_to_dict(self.attention_config),
+                    lora_config=config_to_dict(self.lora_config))
 
     @property
     def session_len(self):

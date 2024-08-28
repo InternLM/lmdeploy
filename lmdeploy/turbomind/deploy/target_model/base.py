@@ -8,7 +8,7 @@ import yaml
 from mmengine import Registry
 
 from ..config import (AttentionConfig, LoraConfig, ModelConfig,
-                      TurbomindModelConfig, init_config_from_dict)
+                      TurbomindModelConfig, config_from_dict, config_to_dict)
 from ..source_model.base import BaseInputModel, BaseReader
 
 OUTPUT_MODELS = Registry(
@@ -77,7 +77,7 @@ class BaseOutputModel(ABC):
         `tokenizer_info` and `model_info`"""
         _, bos_id, eos_id = self.input_model_tokenizer_info
 
-        final_cfg = self.model_config.__dict__
+        final_cfg = config_to_dict(self.model_config)
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model_info)
 
@@ -88,26 +88,25 @@ class BaseOutputModel(ABC):
                 _vocab_size, _ = emb.shape
                 break
         final_cfg.update(dict(vocab_size=_vocab_size))
-        self.model_config = init_config_from_dict(ModelConfig,
-                                                  final_cfg,
-                                                  allow_none=True)
+        self.model_config = config_from_dict(ModelConfig,
+                                             final_cfg,
+                                             allow_none=True)
 
     def update_attention_config(self):
         """update attention config according to input model's model info."""
-        final_cfg = self.attention_config.__dict__ \
-            if self.attention_config else dict()
+        final_cfg = config_to_dict(self.attention_config)
         final_cfg.update(self.input_model_info)
-        self.attention_config = init_config_from_dict(AttentionConfig,
-                                                      final_cfg,
-                                                      allow_none=True)
+        self.attention_config = config_from_dict(AttentionConfig,
+                                                 final_cfg,
+                                                 allow_none=True)
 
     def update_lora_config(self):
         """update lora config according to input model's model info."""
-        final_cfg = self.lora_config.__dict__ if self.lora_config else dict()
+        final_cfg = config_to_dict(self.lora_config)
         final_cfg.update(self.input_model_info)
-        self.lora_config = init_config_from_dict(LoraConfig,
-                                                 final_cfg,
-                                                 allow_none=True)
+        self.lora_config = config_from_dict(LoraConfig,
+                                            final_cfg,
+                                            allow_none=True)
 
     def export_config(self) -> None:
         """export turbomind config."""
