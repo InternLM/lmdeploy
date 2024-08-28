@@ -90,6 +90,8 @@ def rms_norm(hidden_states: Tensor,
              out: Tensor = None,
              out_residual: Tensor = None):
     """rms norm."""
+    if not hidden_states.is_contiguous():
+        hidden_states = hidden_states.contiguous()
 
     feat_size = weight.shape[0]
     seq_len = hidden_states.numel() // hidden_states.size(-1)

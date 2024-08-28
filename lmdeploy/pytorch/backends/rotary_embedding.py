@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum, auto
 
 
@@ -9,6 +10,16 @@ class EmbeddingType(Enum):
     LinearScaling = auto()
     DynamicNTKScaling = auto()
     Llama3 = auto()
+    Yarn = auto()
+
+
+@dataclass
+class YarnParameters:
+    """Yarn parameters."""
+    beta_fast: int = 32
+    beta_slow: float = 1
+    mscale: int = 1
+    mscale_all_dim: int = 0
 
 
 class RotaryEmbeddingImpl(ABC):

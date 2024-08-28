@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Iterable, List, Optional, Tuple, Union
+from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
-from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
@@ -67,8 +66,7 @@ class MixtralAttention(nn.Module):
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         attn_metadata: Any = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
+    ):
         """Rewrite of LlamaAttention.forward."""
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
@@ -192,7 +190,7 @@ class MixtralDecoderLayer(nn.Module):
         past_key_value: Optional[List[torch.FloatTensor]],
         residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+    ):
 
         if residual is None:
             residual = hidden_states
@@ -265,8 +263,8 @@ class MixtralModel(nn.Module):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
-        """Rewrite of LlamaModel.forward."""
+    ):
+        """forward."""
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 

@@ -2,7 +2,7 @@
 from torch import Tensor, nn
 
 from ..backends import LayerType, get_backend
-from ..backends.rotary_embedding import EmbeddingType
+from ..backends.rotary_embedding import EmbeddingType, YarnParameters
 
 
 def build_rotary_embedding(
@@ -12,6 +12,7 @@ def build_rotary_embedding(
         scaling_factor: float = 1.0,
         low_freq_factor: float = 1.0,
         high_freq_factor: float = 4.0,
+        yarn_params: YarnParameters = None,
         emb_type: EmbeddingType = EmbeddingType.Default) -> nn.Module:
     """build rotary embedding op."""
     backend = get_backend()
@@ -23,6 +24,7 @@ def build_rotary_embedding(
                          scaling_factor,
                          low_freq_factor=low_freq_factor,
                          high_freq_factor=high_freq_factor,
+                         yarn_params=yarn_params,
                          emb_type=emb_type)
 
 
