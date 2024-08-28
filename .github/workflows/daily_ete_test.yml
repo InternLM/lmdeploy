@@ -585,6 +585,7 @@ jobs:
           coverage combine ${{env.REPORT_DIR}}
           coverage xml -o ${{env.REPORT_DIR}}/coverage.xml
           coverage report -m
+          mv .coverage ${{env.REPORT_DIR}}/.coverage
       - name: Clear workfile
         if: always()
         run: |
