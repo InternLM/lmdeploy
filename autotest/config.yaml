@@ -87,7 +87,6 @@ pytorch_chat_model:
     - google/gemma-2-9b-it
     - deepseek-ai/deepseek-moe-16b-chat
     - deepseek-ai/deepseek-coder-1.3b-instruct
-    - deepseek-ai/DeepSeek-V2-Lite
     - THUDM/chatglm2-6b
     - THUDM/cogvlm2-llama3-chinese-chat-19B
     - THUDM/glm-4v-9b
