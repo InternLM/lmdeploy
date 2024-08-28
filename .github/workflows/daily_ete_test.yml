@@ -598,15 +598,11 @@ jobs:
 
   notify_to_feishu:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
-    needs: [test_tools, test_restful, test_pipeline, get_benchmark_result]
+    needs: [get_benchmark_result, get_coverage_report]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     steps:
-      - name: fail notify
+      - name: notify
         if: contains(needs.*.result, 'failure')
         run: |
-          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test failed！！！","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.FEISHU_USER_ID }}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}
-      - name: success notify
-        if: needs.test_tools.result=='success' && needs.test_restful.result=='success' && needs.test_pipeline.result=='success'
-        run: |
-          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test success","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}
+          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test finished！！！","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.FEISHU_USER_ID }}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}

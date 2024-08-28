@@ -16,13 +16,21 @@ def test_quantization_awq(config, model, worker_id):
 
 
 @pytest.mark.order(3)
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize('model', get_quantization_model_list('gptq'))
+def test_quantization_gptq(config, model, worker_id):
+    quantization_awq(config, model + '-inner-gptq', model,
+                     get_cuda_prefix_by_workerid(worker_id))
+
+
+@pytest.mark.order(3)
 @pytest.mark.pr_test
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     'model, prefix',
-    [('internlm/internlm2-chat-20b', 'CUDA_VISIBLE_DEVICES=5')])
+    [('internlm/internlm2_5-20b-chat', 'CUDA_VISIBLE_DEVICES=5')])
 def test_quantization_awq_pr(config, model, prefix):
     quantization_awq(config, model + '-inner-4bits', model, prefix)
 

@@ -117,11 +117,11 @@ def test_generation_longtext_tp4(config, run_id, run_config, worker_id):
 @pytest.mark.function
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', [{
-    'model': 'internlm/internlm2-chat-20b',
+    'model': 'internlm/internlm2_5-20b-chat',
     'backend': 'pytorch',
     'tp_num': 2
 }, {
-    'model': 'internlm/internlm2-chat-20b-inner-4bits',
+    'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
     'backend': 'turbomind',
     'quant_policy': 0,
     'tp_num': 2

@@ -78,7 +78,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: ['internlm/internlm2-chat-20b']
+        model: ['internlm/internlm2_5-20b-chat']
     container:
       image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 -e NO_PROXY=localhost,127.0.0.1 -e no_proxy=localhost,127.0.0.1 --pull never"

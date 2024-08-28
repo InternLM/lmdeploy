@@ -44,6 +44,7 @@ turbomind_chat_model:
     - Qwen/Qwen1.5-7B-Chat
     - Qwen/Qwen1.5-4B-Chat-AWQ
     - Qwen/Qwen-VL-Chat
+    - Qwen/Qwen2-7B-Instruct-GPTQ-Int4
     - mistralai/Mistral-7B-Instruct-v0.1
     - mistralai/Mistral-7B-Instruct-v0.2
     - mistralai/Mistral-7B-Instruct-v0.3
@@ -103,6 +104,7 @@ turbomind_base_model:
 
 pytorch_base_model:
     - tiiuae/falcon-7b
+    - internlm/internlm2_5-7b
     - internlm/internlm2_5-1_8b
     - internlm/internlm2-20b
 
@@ -161,7 +163,7 @@ turbomind_quatization:
         - openbmb/MiniCPM-Llama3-V-2_5
         - THUDM/glm-4-9b-chat
     gptq:
-        - Qwen/Qwen2-7B-Instruct-GPTQ-Int4
+        - internlm/internlm2_5-7b-chat
     kvint:
         - meta-llama/Meta-Llama-3-1-8B-Instruct
         - meta-llama/Meta-Llama-3-8B-Instruct
