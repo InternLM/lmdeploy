@@ -127,7 +127,7 @@ class SubCliLite(object):
 
     @staticmethod
     def auto_gptq(args):
-        """Perform weight quantization using AWQ algorithm."""
+        """Perform weight quantization using GPTQ algorithm."""
         from lmdeploy.lite.apis.gptq import auto_gptq
         kwargs = convert_args(args)
         auto_gptq(**kwargs)
