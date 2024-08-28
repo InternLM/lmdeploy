@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import random
 from threading import Lock
 from typing import Literal, Optional, Sequence, Union
@@ -77,9 +78,12 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
         session_id (int): the session id
     """
     state_chatbot = []
-    # end the session
-    await InterFace.async_engine.end_session(session_id)
-    return (state_chatbot, state_chatbot, instruction_txtbox)
+    # renew a session
+    with InterFace.lock:
+        InterFace.global_session_id += 1
+    session_id = InterFace.global_session_id
+    await asyncio.sleep(0)
+    return (state_chatbot, state_chatbot, instruction_txtbox, session_id)
 
 
 async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
@@ -210,9 +214,10 @@ def run_local(model_path: str,
             [state_chatbot, cancel_btn, reset_btn, state_session_id],
             [state_chatbot, cancel_btn, reset_btn])
 
-        reset_btn.click(reset_local_func,
-                        [instruction_txtbox, state_chatbot, state_session_id],
-                        [state_chatbot, chatbot, instruction_txtbox])
+        reset_btn.click(
+            reset_local_func,
+            [instruction_txtbox, state_chatbot, state_session_id],
+            [state_chatbot, chatbot, instruction_txtbox, state_session_id])
 
         def init():
             with InterFace.lock:
