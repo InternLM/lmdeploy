@@ -29,7 +29,7 @@ def config_to_dict(config):
     """export config to a dict."""
     if not config:
         return dict()
-    assert isinstance(config, dataclass), \
+    assert isinstance(config, (ModelConfig, AttentionConfig, LoraConfig)), \
         f'A dataclass is expected, but got {type(config)}'
 
     return asdict(config)
@@ -123,7 +123,7 @@ class TurbomindModelConfig:
             lora_config=config_from_dict(LoraConfig, _cfg['lora_config']))
 
     def to_dict(self):
-        # TODO(lvhan) make the sequence of dict is the same as the config attrs
+        """export to a dict."""
         return dict(model_config=config_to_dict(self.model_config),
                     attention_config=config_to_dict(self.attention_config),
                     lora_config=config_to_dict(self.lora_config))

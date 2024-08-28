@@ -217,9 +217,6 @@ def get_tm_model(model_path,
             f'mismatched quant group size: user input "{group_size}" ' \
             f'vs model quant_config "{_group_size}"'
 
-        engine_config.model_format = quant_method
-        group_size = _group_size
-
         if quant_method == 'awq':
             assert version == 'gemm', \
                 f'unsupported quant config: {quant_config}'
@@ -229,6 +226,9 @@ def get_tm_model(model_path,
                 f'unsupported quant config: {quant_config}'
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
+
+        engine_config.model_format = quant_method
+        group_size = _group_size
 
     # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
     if not group_size:
