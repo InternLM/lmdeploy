@@ -550,7 +550,8 @@ jobs:
         run: |
           pip install coverage
           coverage combine ${{env.REPORT_DIR}}
-          coverage report
+          coverage xml
+          coverage report -m
 
   notify_to_feishu:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
