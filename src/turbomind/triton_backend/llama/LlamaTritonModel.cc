@@ -247,8 +247,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     attn_param_.use_dynamic_ntk         = attention_reader["use_dynamic_ntk"].as<int>(0);
     attn_param_.use_logn_attn           = attention_reader["use_logn_attn"].as<int>(0);
 
-    attn_param_.original_max_position_embeddings =
-        attention_reader["original_max_position_embeddings"].as<int>(0);
+    attn_param_.original_max_position_embeddings = attention_reader["original_max_position_embeddings"].as<int>(0);
 
     engine_param_.max_batch_size        = engine_reader["max_batch_size"].as<int>(0);
     engine_param_.max_prefill_token_num = engine_reader["max_prefill_token_num"].as<int>(0);
