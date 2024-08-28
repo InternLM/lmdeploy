@@ -6,18 +6,7 @@ import torch.distributed as dist
 from torch import nn
 
 from ..backends import LayerType, get_backend
-
-
-def _get_world_rank():
-    """get current world size and rank."""
-    world_size = 1
-    rank = 0
-
-    if dist.is_initialized():
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-
-    return world_size, rank
+from .utils import get_world_rank
 
 
 class SoftmaxTopK(nn.Module):
@@ -46,7 +35,7 @@ class FusedMoE(nn.Module):
                  renormalize: bool = False,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
-                 is_tp: bool = False):
+                 all_reduce: bool = True):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -77,11 +66,14 @@ class FusedMoE(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        self.is_tp = is_tp
+        world_size, _ = get_world_rank()
+        if world_size == 1:
+            all_reduce = False
+        self.all_reduce = all_reduce
 
     def _update_args(self, hidden_dim: int, ffn_dim: int):
         """update args."""
-        world_size, _ = _get_world_rank()
+        world_size, _ = get_world_rank()
         assert ffn_dim % world_size == 0
         ffn_dim = ffn_dim // world_size
         return hidden_dim, ffn_dim
@@ -115,7 +107,7 @@ class FusedMoE(nn.Module):
                       loaded_weight: torch.Tensor, expert_id: int,
                       shard_id: str):
         """weight loader."""
-        world_size, rank = _get_world_rank()
+        world_size, rank = get_world_rank()
         if shard_id == 'gate':
             param_data = param.data[expert_id, :self.ffn_dim]
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
@@ -131,5 +123,8 @@ class FusedMoE(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor,
                 topk_ids: torch.LongTensor):
-        return self.impl.forward(hidden_states, topk_weights, topk_ids,
-                                 self.gate_up_weights, self.down_weights)
+        ret = self.impl.forward(hidden_states, topk_weights, topk_ids,
+                                self.gate_up_weights, self.down_weights)
+        if self.all_reduce:
+            dist.all_reduce(ret)
+        return ret

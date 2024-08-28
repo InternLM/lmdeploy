@@ -2,7 +2,6 @@
 from typing import Any, Iterable, List, Optional, Tuple, Union
 
 import torch
-import torch.distributed as dist
 from torch import nn
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
@@ -22,18 +21,12 @@ class MixtralAttention(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
         quantization_config = None
 
         num_heads = config.num_attention_heads
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = hidden_size // num_heads
-        self.num_heads = num_heads // world_size
-        self.num_kv_heads = num_key_value_heads // world_size
-        self.head_dim = head_dim
 
         # qkv
         self.qkv_proj = build_qkv_proj(
@@ -52,10 +45,10 @@ class MixtralAttention(nn.Module):
         # attention
         self.window_size = config.sliding_window or -1
         self.attn_fwd = Attention(
-            self.num_heads,
-            self.head_dim,
-            num_kv_heads=self.num_kv_heads,
-            v_head_size=self.head_dim,
+            num_heads,
+            head_dim,
+            num_kv_heads=num_key_value_heads,
+            v_head_size=head_dim,
             sliding_window=self.window_size,
         )
 
@@ -80,15 +73,8 @@ class MixtralAttention(nn.Module):
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        qkv_states = qkv_states.unflatten(-1, (-1, self.head_dim))
-        query_states, key_states, value_states = qkv_states.split(
-            (
-                self.num_heads,
-                self.num_kv_heads,
-                self.num_kv_heads,
-            ),
-            dim=1,
-        )
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(
+            qkv_states)
 
         cos, sin = rotary_pos_emb
         query_states, key_states = self.apply_rotary_pos_emb(
@@ -122,12 +108,6 @@ class MixtralSparseMoeBlock(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
-        is_tp = world_size > 1
-        self.is_tp = is_tp
-
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.intermediate_size
         self.num_experts = config.num_local_experts
@@ -152,7 +132,7 @@ class MixtralSparseMoeBlock(nn.Module):
             renormalize=True,
             dtype=dtype,
             device=device,
-            is_tp=False,
+            all_reduce=True,
         )
 
     def forward(self, hidden_states: torch.Tensor):
@@ -169,9 +149,6 @@ class MixtralSparseMoeBlock(nn.Module):
         )
 
         out_states = out_states.reshape(batch_size, sequence_length, -1)
-
-        if self.is_tp:
-            dist.all_reduce(out_states)
         return out_states, router_logits
 
 
