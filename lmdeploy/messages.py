@@ -123,15 +123,17 @@ class TurbomindEngineConfig:
     """TurboMind Engine config.
 
     Args:
-        model_format (str): the layout of the deployed model. It can be one of the following values [hf, meta_llama, awq],
-            `hf` meaning huggingface model(.bin, .safetensors), `meta_llama` being meta llama's format(.pth), awq` meaning the quantized model by AWQ.
+        model_format (str): the layout of the deployed model. It can be one of the following values [hf, meta_llama, awq, gptq],
+            `hf` meaning huggingface model(.bin, .safetensors), `meta_llama` being meta llama's format(.pth),
+            `awq` and `gptq` meaning the quantized model by AWQ and GPTQ, respectively.
+            If it is not specified, i.e. None, it will be extracted from the input model
         tp (int): the number of GPU cards used in tensor parallelism, default to 1
         session_len (int): the max session length of a sequence, default to None
         max_batch_size (int): the max batch size during inference, default to 128
         cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
             For versions of lmdeploy between `v0.2.0` and `v0.2.1`, it defaults to 0.5, depicting the percentage of TOTAL GPU memory to be allocated to the k/v cache.
             For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8, signifying the percentage of FREE GPU memory to be reserved for the k/v cache
-        cache_block_size (int):
+        cache_block_size (int): The policy to apply for KV block from the block manager, default to -1.
         cache_block_seq_len (int): the length of the token sequence in a k/v block, default to 64
         enable_prefix_caching (bool): enable cache prompts for block reuse, default to False
         quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
@@ -153,6 +155,7 @@ class TurbomindEngineConfig:
     enable_prefix_caching: bool = False
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
+    use_logn_attn: bool = False
     download_dir: Optional[str] = None
     revision: Optional[str] = None
     max_prefill_token_num: int = 8192

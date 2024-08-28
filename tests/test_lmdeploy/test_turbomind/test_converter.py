@@ -71,6 +71,7 @@ def test_update_from_engine_config():
                                           cache_max_entry_count=0.5,
                                           quant_policy=8,
                                           rope_scaling_factor=3.0,
+                                          use_logn_attn=True,
                                           max_prefill_iters=64,
                                           num_tokens_per_iter=256)
 
@@ -82,3 +83,5 @@ def test_update_from_engine_config():
             engine_config.rope_scaling_factor)
     assert (config.attention_config.rope_scaling_factor ==
             engine_config.rope_scaling_factor)
+    assert (
+        config.attention_config.use_logn_attn == engine_config.use_logn_attn)

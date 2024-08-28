@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from ..config import ModelConfig, config_from_dict
+from ..config import ModelConfig, config_from_dict, config_to_dict
 from .base import OUTPUT_MODELS, BaseOutputModel
 
 
@@ -16,7 +16,7 @@ class TurbomindModel(BaseOutputModel):
         weight files
         """
         super().update_model_config()
-        final_cfg = self.model_config.__dict__
+        final_cfg = config_to_dict(self.model_config)
         # get attn_bias, inter_size
         visit = False
         attn_bias = 0
