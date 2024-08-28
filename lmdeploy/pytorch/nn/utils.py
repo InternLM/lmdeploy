@@ -21,9 +21,9 @@ def get_world_rank():
 
 
 def get_distribute_size(feature_size: int,
-                         world_size: int,
-                         rank: int,
-                         align: int = 1):
+                        world_size: int,
+                        rank: int,
+                        align: int = 1):
     """update feature size."""
     assert feature_size % align == 0
     aligned_size = feature_size // align

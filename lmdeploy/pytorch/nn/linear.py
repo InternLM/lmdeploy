@@ -31,6 +31,7 @@ def _chunk_align(weight: torch.Tensor, chunks: int, dim: int, align: int):
 
 
 class QKVMixin:
+    """qkv mixin."""
 
     def _get_qkv_out_features(self, num_q_heads: int, num_kv_heads: int,
                               head_size: int, head_size_v: int):
@@ -408,8 +409,6 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
                  bias: bool = False,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True):
-        if device is None:
-            device = torch.device('cpus')
         num_q_heads, num_kv_heads = self._update_num_heads(
             num_q_heads, num_kv_heads, replicate_kv)
         all_out_features = self._get_qkv_out_features(num_q_heads,
@@ -647,10 +646,6 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True):
-        if device is None:
-            device = torch.device('cpus')
-        if dtype is None:
-            dtype = torch.float16
         num_q_heads, num_kv_heads = self._update_num_heads(
             num_q_heads, num_kv_heads, replicate_kv)
         all_out_features = self._get_qkv_out_features(num_q_heads,
@@ -873,10 +868,6 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True):
-        if device is None:
-            device = torch.device('cpus')
-        if dtype is None:
-            dtype = torch.float16
         num_q_heads, num_kv_heads = self._update_num_heads(
             num_q_heads, num_kv_heads, replicate_kv)
         all_out_features = self._get_qkv_out_features(num_q_heads,
