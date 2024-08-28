@@ -18,13 +18,12 @@ BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 
 
-def start_restful_api(config, param, model, model_path, backend_tpye,
+def start_restful_api(config, param, model, model_path, backend_type,
                       worker_id):
     log_path = config.get('log_path')
 
     cuda_prefix = param['cuda_prefix']
     tp_num = param['tp_num']
-    print(param)
     if 'extra' in param.keys():
         extra = param['extra']
     else:
@@ -46,23 +45,29 @@ def start_restful_api(config, param, model, model_path, backend_tpye,
         port = DEFAULT_PORT + worker_num
 
     cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path +
-                                 ' --server-port ' + str(port),
+                                 ' --session-len 8096 --server-port ' +
+                                 str(port),
                                  config,
                                  model,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix,
                                  extra=extra)
 
-    if backend_tpye == 'turbomind' and ('w4' in model or '4bits' in model
-                                        or 'awq' in model.lower()):
-        cmd += ' --model-format awq'
-    if backend_tpye == 'pytorch':
+    if backend_type == 'turbomind':
+        if ('w4' in model or '4bits' in model or 'awq' in model.lower()):
+            cmd += ' --model-format awq'
+        elif 'gptq' in model.lower():
+            cmd += ' --model-format gptq'
+    if backend_type == 'pytorch':
         cmd += ' --backend pytorch'
     if 'llava' in model:
         cmd += ' --model-name vicuna'
+    if backend_type == 'turbomind' and 'quant_policy' in param.keys():
+        quant_policy = param['quant_policy']
+        cmd += f' --quant-policy {quant_policy}'
 
-    start_log = os.path.join(log_path,
-                             'start_restful_' + model.split('/')[1] + '.log')
+    start_log = os.path.join(
+        log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
 
     print('reproduce command restful: ' + cmd)
 
@@ -79,14 +84,17 @@ def start_restful_api(config, param, model, model_path, backend_tpye,
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
 
     http_url = BASE_HTTP_URL + ':' + str(port)
+    with open(start_log, 'r') as file:
+        content = file.read()
+        print(content)
     start_time = int(time())
     sleep(5)
-    for i in range(180):
+    for i in range(300):
         sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
-        if result or total_time >= 180:
+        if result or total_time >= 300:
             break
     return pid, startRes
 
@@ -114,7 +122,8 @@ def run_all_step(config,
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
-        if ('coder' in model or 'codellama' in model) and 'code' not in case:
+        if ('coder' in model.lower()
+                or 'codellama' in model.lower()) and 'code' not in case:
             continue
 
         case_info = cases_info.get(case)
@@ -162,7 +171,7 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
     messages = []
     msg = ''
     for prompt_detail in case_info:
-        if result is False:
+        if not result:
             break
         prompt = list(prompt_detail.keys())[0]
         messages.append({'role': 'user', 'content': prompt})
@@ -183,7 +192,7 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
                                                 model_name)
             file.writelines('result:' + str(case_result) + ',reason:' +
                             reason + '\n')
-            if case_result is False:
+            if not case_result:
                 msg += reason
             result = result & case_result
     file.close()
@@ -228,7 +237,7 @@ def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
                                                 prompt_detail.values(), model)
             file.writelines('result:' + str(case_result) + ',reason:' +
                             reason + '\n')
-            if case_result is False:
+            if not case_result:
                 msg += reason
             result = result & case_result
     file.close()

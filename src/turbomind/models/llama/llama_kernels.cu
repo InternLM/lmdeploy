@@ -1,7 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/attention/array_ops.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
+#include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_kernels.h"

@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
@@ -33,9 +34,6 @@
 namespace ft = turbomind;
 
 template<typename T>
-struct LlamaTritonSharedModelInstance;
-
-template<typename T>
 struct LlamaTritonModel: public AbstractTransformerModel {
     LlamaTritonModel(size_t      tensor_para_size,
                      size_t      pipeline_para_size,
@@ -43,7 +41,7 @@ struct LlamaTritonModel: public AbstractTransformerModel {
                      std::string model_dir,
                      std::string config = "");
 
-    ~LlamaTritonModel() = default;
+    ~LlamaTritonModel() override;
 
     std::unique_ptr<AbstractTransformerModelInstance>
     createModelInstance(int                                                               deviceId,
@@ -56,17 +54,21 @@ struct LlamaTritonModel: public AbstractTransformerModel {
 
     TensorMap getParams(int deviceId, int rank) override;
 
+    void processWeights(int deviceId, int rank) override;
+
+    void createEngine(int                                                               device_id,
+                      int                                                               rank,
+                      std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
+                      std::shared_ptr<ft::AbstractCustomComm>) override;
+
     void createCustomComms(std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms,
                            int                                                   world_size) override;
-
-    std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>
-    createNcclParams(const int node_id, const int device_id_start, const bool multi_node) override;
 
     std::unique_ptr<ft::AbstractInstanceComm> createInstanceComm(int size) override;
 
     void handleMissingParams();
 
-    void setFfiLock(ffi_api_lock_ctrl_t func)
+    void set_ffi_lock(ffi_api_lock_ctrl_t func)
     {
         ffi_lock_ = func;
     }
@@ -76,40 +78,26 @@ struct LlamaTritonModel: public AbstractTransformerModel {
     int         getPipelineParaSize() override;
 
 private:
-    std::unique_ptr<LlamaTritonSharedModelInstance<T>>
+    std::unique_ptr<ft::Engine<T>>
     createSharedModelInstance(int                                                               deviceId,
                               int                                                               rank,
                               std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
                               std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr);
 
-    size_t                          head_num_;
-    size_t                          kv_head_num_;
-    size_t                          size_per_head_;
-    size_t                          inter_size_;
-    size_t                          num_layer_;
-    size_t                          vocab_size_;
-    turbomind::LlamaAttentionParams attn_params_;
-    turbomind::EngineParams         engine_params_;
-    float                           norm_eps_;
-    int                             start_id_;
-    int                             end_id_;
-    int                             cache_block_seq_len_;
-    int                             use_context_fmha_;
-    size_t                          tensor_para_size_;
-    size_t                          pipeline_para_size_;
-    ft::WeightType                  weight_type_;
-    bool                            attn_bias_;
-    int                             quant_policy_;
-    int                             group_size_;
-    turbomind::LoraParams           lora_params_;
+    ft::ModelParam     model_param_;
+    ft::AttentionParam attn_param_;
+    ft::LoraParam      lora_param_;
+    ft::EngineParam    engine_param_;
+    size_t             tensor_para_size_;
+    size_t             pipeline_para_size_;
+    ft::WeightType     weight_type_;
+    bool               attn_bias_;
+    int                group_size_;
 
-    // shared weights for each device
-    std::vector<std::shared_ptr<ft::LlamaWeight<T>>> shared_weights_;
-
-    std::shared_ptr<typename ft::LlamaV2<T>::SharedState> shared_state_;
-
-    std::vector<std::shared_ptr<LlamaTritonSharedModelInstance<T>>> shared_instances_;
-    std::deque<std::mutex>                                          shared_mutexes_;  // is locking really needed?
+    std::shared_ptr<ft::SharedState> shared_state_;
+    // Weights & engine instances for the ranks
+    std::vector<std::shared_ptr<ft::LlamaWeight<T>>> weights_;
+    std::vector<std::shared_ptr<ft::Engine<T>>>      engines_;
 
     bool is_fp16_;
     int  enable_custom_all_reduce_ = 0;

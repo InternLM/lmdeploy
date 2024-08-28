@@ -306,6 +306,8 @@ using TensorMap = std::unordered_map<std::string, triton::Tensor>;
 struct AbstractTransformerModel {
     static std::shared_ptr<AbstractTransformerModel> createLlamaModel(std::string model_dir);
 
+    virtual ~AbstractTransformerModel() = default;
+
     virtual std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>
     createNcclParams(const int node_id, const int device_id_start = 0, const bool multi_node = false);
 
@@ -327,6 +329,13 @@ struct AbstractTransformerModel {
     virtual void createSharedWeights(int deviceId, int rank) = 0;
 
     virtual TensorMap getParams(int deviceId, int rank) = 0;
+
+    virtual void processWeights(int deviceId, int rank) = 0;
+
+    virtual void createEngine(int                                                               device_id,
+                              int                                                               rank,
+                              std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
+                              std::shared_ptr<ft::AbstractCustomComm>) = 0;
 
     virtual std::string toString()            = 0;
     virtual int         getTensorParaSize()   = 0;

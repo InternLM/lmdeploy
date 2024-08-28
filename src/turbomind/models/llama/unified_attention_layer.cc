@@ -37,8 +37,41 @@
 
 namespace turbomind {
 
-template<typename T>
+template<class T>
+UnifiedAttentionLayer<T>::UnifiedAttentionLayer(const ModelParam&     model,
+                                                const AttentionParam& attn,
+                                                const LoraParam&      lora,
+                                                const NcclParam&      tp,
+                                                const Context<T>&     ctx):
+    head_num_(model.head_num),
+    kv_head_num_(model.kv_head_num),
+    size_per_head_(model.head_dim),
+    hidden_units_(model.hidden_units),
+    local_head_num_(head_num_ / tp.world_size_),
+    local_kv_head_num_(model.kv_head_num / tp.world_size_),
+    param_(attn),
+    model_param_(model),
+    lora_param_(lora),
+    tensor_para_(tp),
+    context_(ctx),
+    stream_(ctx.stream),
+    linear_(ctx.linear.get()),
+    allocator_(ctx.allocator.get()),
+    arch_(getSMVersion())
+{
+    FT_CHECK(head_num_ % kv_head_num_ == 0);
 
+    check_cuda_error(cudaStreamCreateWithFlags(&aux_stream_, cudaStreamNonBlocking));
+    check_cuda_error(cudaEventCreateWithFlags(&qkv_event_, cudaEventDisableTiming));
+    check_cuda_error(cudaEventCreateWithFlags(&aux_event_, cudaEventDisableTiming));
+
+    streams_[0] = stream_;
+    streams_[1] = aux_stream_;
+
+    allocateWorkspace();
+}
+
+template<typename T>
 void UnifiedAttentionLayer<T>::allocateBuffer(size_t            q_count,
                                               size_t            k_count,
                                               size_t            batch_size,
@@ -168,25 +201,50 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
                    weights);
 
     // [L, 2, H, s, D]
-    const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
+    const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * param_.cache_block_seq_len * size_per_head_;
 
-    // static int count = 0;
+    static int count = 0;
 
     // if (layer_id == 0 && count == 0) {
-    //     Compare(attention_input, num_token * weights->qkv.input_dims, "qkv_input", kCmpRead, stream_);
+    //     Compare(attention_input, token_num * weights->qkv.input_dims, "qkv_input", compare_mode, stream_);
     // }
 
     int* lora_mask = inputs->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
     //////////////////////////////////////////////
     /// qkv gemm
     // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
-    linear_.forward(qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
+    linear_->forward(qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
+    sync_check_cuda_error();
 
     count_and_fix(qkv_buf_, token_num * weights->qkv.output_dims, Concat("qkv", layer_id), 3);
 
     // if (layer_id == 0 && count == 0) {
-    //     Compare(qkv_buf_, num_token * weights->qkv.output_dims, "qkv_buf", kCmpRead, stream_);
+    //     Compare(qkv_buf_, token_num * weights->qkv.output_dims, "qkv_buf", compare_mode, stream_);
     // }
+
+    if constexpr (0) {
+        std::vector<T> tmp(token_num * weights->qkv.output_dims);
+        cudaMemcpyAsync(tmp.data(), qkv_buf_, sizeof(T) * tmp.size(), cudaMemcpyDefault, stream_);
+        cudaStreamSynchronize(stream_);
+        int i = 0;
+        for (auto& x : tmp) {
+            std::cout << (float)x << " ";
+            if (++i == 256) {
+                break;
+            }
+        }
+        std::cout << "\n";
+        i = 0;
+        for (auto it = tmp.rbegin(); it != tmp.rend(); ++it) {
+            std::cout << (float)*it << " ";
+            if (++i == 256) {
+                break;
+            }
+        }
+        std::cout << "\n";
+    }
+
+    // FT_CHECK(0);
 
     auto stream_ptr = streams_.data();
 
@@ -216,7 +274,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.block_iter_params = BlockIteratorParams{(char**)block_ptrs,  //
                                                        (int*)cu_block_count + offset,
                                                        layer_id,
-                                                       (int)kv_cache_block_len_};
+                                                       (int)param_.cache_block_seq_len};
 
         // Prefilling use only
         const int sum_k_len       = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
@@ -235,22 +293,22 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         // MSVC does not have M_LOG2E
         params.inv_sqrt_dh = (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
 
-        params.rotary_embedding_dim    = params_.rotary_embedding_dim;
-        params.rotary_embedding_base   = params_.rotary_embedding_base;
-        params.max_position_embeddings = params_.max_position_embeddings;
+        params.rotary_embedding_dim    = param_.rotary_embedding_dim;
+        params.rotary_embedding_base   = param_.rotary_embedding_base;
+        params.max_position_embeddings = param_.max_position_embeddings;
         params.rope_ti_scale           = 1.f;
-        if (params_.rope_scaling_type == "linear") {
-            params.rope_ti_scale /= params_.rope_scaling_factor;
+        if (param_.rope_scaling_type == "linear") {
+            params.rope_ti_scale /= param_.rope_scaling_factor;
         }
-        if (params_.rope_scaling_type == "llama3") {
+        if (param_.rope_scaling_type == "llama3") {
             const double PI                   = 3.14159265358979323846;
-            float        inv_diff_freq_factor = 1.0 / (params_.high_freq_factor - params_.low_freq_factor);
-            params.llama3_inv_scaling_factor  = 1.0 / params_.rope_scaling_factor;
-            params.llama3_alpha = params_.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
-            params.llama3_beta  = params_.low_freq_factor * inv_diff_freq_factor;
+            float        inv_diff_freq_factor = 1.0 / (param_.high_freq_factor - param_.low_freq_factor);
+            params.llama3_inv_scaling_factor  = 1.0 / param_.rope_scaling_factor;
+            params.llama3_alpha = param_.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
+            params.llama3_beta  = param_.low_freq_factor * inv_diff_freq_factor;
         }
 
-        params.use_logn_attn = params_.use_logn_attn;
+        params.use_logn_attn = param_.use_logn_attn;
 
         // Decoding use only for now
         FT_CHECK(barriers_);
@@ -264,8 +322,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.arch   = arch_;
         params.stream = stream;
 
-        params.quant_policy = quant_policy_;
-
+        params.quant_policy = model_param_.quant_policy;
         return params;
     };
 
@@ -320,7 +377,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    linear_.forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
+    linear_->forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
+    sync_check_cuda_error();
 
     // ++count;
 

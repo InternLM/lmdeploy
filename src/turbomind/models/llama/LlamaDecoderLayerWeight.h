@@ -34,10 +34,11 @@ public:
                             size_t     head_num,
                             size_t     kv_head_num,
                             size_t     size_per_head,
+                            size_t     hidden_units,
                             size_t     inter_size,
                             WeightType weight_type,
                             int        group_size,
-                            LoraParams lora_params,
+                            LoraParam  lora_param,
                             bool       attn_bias,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank);
@@ -48,6 +49,10 @@ public:
     void loadModel(std::string dir_path, FtCudaDataType model_file_type);
 
     TensorMap getParams(std::string prefix);
+
+    void prepare(void* workspace, size_t size, const cudaDeviceProp& prop);
+
+    size_t workspace_size() const noexcept;
 
     T*                      self_attn_norm_weights{};
     T*                      ffn_norm_weights{};

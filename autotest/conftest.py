@@ -30,3 +30,15 @@ def common_case_config():
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
     return case_config
+
+
+def pytest_addoption(parser):
+    parser.addoption('--run_id',
+                     action='store',
+                     default='',
+                     help='github run_id')
+
+
+@pytest.fixture(scope='session')
+def run_id(request):
+    return request.config.getoption('--run_id')

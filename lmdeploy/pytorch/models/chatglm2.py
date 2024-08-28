@@ -213,15 +213,14 @@ class PatchedSelfAttention(nn.Module):
 
         return output, kv_cache
 
-    def forward(
-        self,
-        hidden_states,
-        attention_mask,
-        rotary_pos_emb,
-        kv_cache=None,
-        use_cache=True,
-        output_attentions=False,
-    ):
+    def forward(self,
+                hidden_states,
+                attention_mask,
+                rotary_pos_emb,
+                kv_cache=None,
+                use_cache=True,
+                output_attentions=False,
+                **kwargs):
         return self._contiguous_batching_forward(
             hidden_states,
             rotary_pos_emb,

@@ -215,16 +215,15 @@ class PatchedFalconAttention(nn.Module):
         else:
             return output_tensor, layer_past
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        alibi: Optional[torch.Tensor],
-        attention_mask: torch.Tensor,
-        layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        use_cache: bool = False,
-        output_attentions: bool = False,
-    ):
+    def forward(self,
+                hidden_states: torch.Tensor,
+                alibi: Optional[torch.Tensor],
+                attention_mask: torch.Tensor,
+                layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                head_mask: Optional[torch.Tensor] = None,
+                use_cache: bool = False,
+                output_attentions: bool = False,
+                **kwargs):
         return self._contiguous_batching_forward(hidden_states, alibi,
                                                  layer_past)
 

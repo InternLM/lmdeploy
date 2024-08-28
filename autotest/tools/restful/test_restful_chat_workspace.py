@@ -14,7 +14,7 @@ def prepare_environment(request, config, worker_id):
 
     pid, startRes = start_restful_api(config, param, model, model_path,
                                       'turbomind', worker_id)
-    yield
+    yield param
     stop_restful_api(pid, startRes, param)
 
 
@@ -34,7 +34,8 @@ def getModelList(tp_num):
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=1),
                          indirect=True)
-def test_restful_chat_tp1(request, config, common_case_config, worker_id):
+def test_restful_chat_tp1(config, common_case_config, prepare_environment,
+                          worker_id):
     if get_workerid(worker_id) is None:
         run_all_step(config, common_case_config)
     else:

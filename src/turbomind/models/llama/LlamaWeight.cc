@@ -19,6 +19,8 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptWeight.cc
 
 #include "src/turbomind/models/llama/LlamaWeight.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include <cuda_runtime.h>
 
 namespace turbomind {
 
@@ -26,16 +28,17 @@ template<typename T>
 LlamaWeight<T>::LlamaWeight(size_t     head_num,
                             size_t     kv_head_num,
                             size_t     size_per_head,
+                            size_t     hidden_units,
                             size_t     inter_size,
                             size_t     vocab_size,
                             size_t     num_layer,
                             bool       attn_bias,
                             WeightType weight_type,
                             int        group_size,
-                            LoraParams lora_params,
+                            LoraParam  lora_param,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank):
-    hidden_units_(head_num * size_per_head),
+    hidden_units_(hidden_units),
     inter_size_(inter_size),
     vocab_size_(vocab_size),
     vocab_size_padded_(vocab_size),
@@ -54,10 +57,11 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
                                                                        head_num,
                                                                        kv_head_num,
                                                                        size_per_head,
+                                                                       hidden_units_,
                                                                        inter_size_,
                                                                        weight_type_,
                                                                        group_size,
-                                                                       lora_params,
+                                                                       lora_param,
                                                                        attn_bias,
                                                                        tensor_para_size_,
                                                                        tensor_para_rank_));
@@ -145,6 +149,23 @@ TensorMap LlamaWeight<T>::getParams()
     }
 
     return output;
+}
+
+template<typename T>
+void LlamaWeight<T>::prepare(const cudaDeviceProp& prop)
+{
+    const auto workspace_size = decoder_layer_weights[0]->workspace_size();
+    char*      workspace{};
+
+    TM_LOG_INFO("[LlamaWeight<T>::prepare] workspace size: %d\n", workspace_size);
+
+    if (workspace_size) {
+        deviceMalloc((char**)&workspace, workspace_size);
+    }
+    for (auto& layer : decoder_layer_weights) {
+        layer->prepare(workspace, workspace_size, prop);
+    }
+    deviceFree(workspace);
 }
 
 #ifdef ENABLE_FP32

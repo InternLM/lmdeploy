@@ -32,13 +32,14 @@ struct LlamaWeight {
     LlamaWeight(size_t     head_num,
                 size_t     kv_head_num,
                 size_t     size_per_head,
+                size_t     hidden_units,
                 size_t     inter_size,
                 size_t     vocab_size,
                 size_t     num_layer,
                 bool       attn_bias,
                 WeightType weight_type,
                 int        group_size,
-                LoraParams lora_params,
+                LoraParam  lora_param,
                 size_t     tensor_para_size,
                 size_t     tensor_para_rank);
 
@@ -50,6 +51,8 @@ struct LlamaWeight {
     void loadModel(std::string dir_path);
 
     TensorMap getParams();
+
+    void prepare(const cudaDeviceProp& prop);
 
     std::vector<LlamaDecoderLayerWeight<T>*> decoder_layer_weights;
     const T*                                 pre_decoder_embedding_table{};

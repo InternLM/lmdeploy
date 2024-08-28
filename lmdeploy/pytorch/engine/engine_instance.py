@@ -42,10 +42,8 @@ async def async_try_add_session(req_sender: RequestSender, session_id: int):
 
 async def async_end(req_sender: RequestSender, session_id: int):
     """End the given session."""
-    resp = await req_sender.async_send(RequestType.END_SESSION,
-                                       dict(session_id=session_id))
-    _check_resp_success(resp, (f'Failed to end session: {session_id}. '
-                               f'Error: {resp.type}.'))
+    await req_sender.async_send_async(
+        RequestType.END_SESSION, dict(session_id=session_id, response=False))
 
 
 async def async_cancel(req_sender: RequestSender, session_id: int):
@@ -71,10 +69,8 @@ def try_add_session(req_sender: RequestSender, session_id: int):
 
 def end(req_sender: RequestSender, session_id: int):
     """End the given session."""
-    resp = req_sender.send(RequestType.END_SESSION,
-                           dict(session_id=session_id))
-    _check_resp_success(resp, (f'Failed to end session: {session_id}. '
-                               f'Error: {resp.type}.'))
+    req_sender.send_async(RequestType.END_SESSION,
+                          dict(session_id=session_id, response=False))
 
 
 def cancel(req_sender: RequestSender, session_id: int):
@@ -156,7 +152,9 @@ class EngineInstance:
             return
         gen_config = gen_config or EngineGenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
-        await async_try_add_session(self.req_sender, session_id)
+        await self.req_sender.async_send_async(
+            RequestType.ADD_SESSION, dict(session_id=session_id,
+                                          response=False))
         input_embeddings_new: List[InputEmbeddings] = None
         if input_embeddings is not None and len(input_embeddings) > 0:
             assert len(input_embeddings) == len(input_embedding_ranges)
@@ -272,7 +270,8 @@ class EngineInstance:
 
         gen_config = gen_config or EngineGenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
-        try_add_session(self.req_sender, session_id)
+        self.req_sender.send_async(RequestType.ADD_SESSION,
+                                   dict(session_id=session_id, response=False))
         input_embeddings_new: List[InputEmbeddings] = None
         if input_embeddings is not None and len(input_embeddings) > 0:
             assert len(input_embeddings) == len(input_embedding_ranges)

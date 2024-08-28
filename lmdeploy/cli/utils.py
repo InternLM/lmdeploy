@@ -106,9 +106,10 @@ class ArgumentHelper:
             '--model-format',
             type=str,
             default=default,
-            choices=['hf', 'llama', 'awq'],
-            help='The format of input model. `hf` meaning `hf_llama`, `llama` '
-            'meaning `meta_llama`, `awq` meaning the quantized model by awq')
+            choices=['hf', 'llama', 'awq', 'gptq'],
+            help='The format of input model. `hf` means `hf_llama`, `llama` '
+            'means `meta_llama`, `awq` represents the quantized model by AWQ,'
+            ' and `gptq` refers to the quantized model by GPTQ')
 
     @staticmethod
     def revision(parser, default: str = None):
@@ -349,14 +350,16 @@ class ArgumentHelper:
         )
 
     @staticmethod
-    def device(parser):
+    def device(parser,
+               default: str = 'cuda',
+               choices: List[str] = ['cuda', 'ascend']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',
                                    type=str,
-                                   default='cuda',
-                                   choices=['cuda', 'cpu'],
-                                   help='Device type of running')
+                                   default=default,
+                                   choices=choices,
+                                   help='The device type of running')
 
     @staticmethod
     def chat_template(parser):
@@ -445,6 +448,14 @@ class ArgumentHelper:
             type=int,
             default=1,
             help='the max number of forward passes in prefill stage')
+
+    @staticmethod
+    def max_prefill_token_num(parser):
+        return parser.add_argument(
+            '--max-prefill-token-num',
+            type=int,
+            default=8192,
+            help='the max number of tokens per iteration during prefill')
 
     @staticmethod
     def vision_max_batch_size(parser):
