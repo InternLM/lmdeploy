@@ -538,20 +538,62 @@ jobs:
           pip install pandas fire mmengine
           python3 .github/scripts/action_tools.py generate_benchmark_report $BENCHMARK_REPORT_DIR
 
+
   get_coverage_report:
-    if: ${{!cancelled() && (github.event_name == 'schedule')}}
+    if: ${{!cancelled()}}
+    runs-on: [self-hosted, linux-a100]
     needs: [test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
-    runs-on: [self-hosted, linux-a100]
-    env:
-      BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
+    container:
+      image: openmmlab/lmdeploy:latest-cu11
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/github-actions/packages:/root/packages
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
+      - name: Clone repository
+        uses: actions/checkout@v2
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Copy repository - offline
+        if: ${{inputs.offline_mode}}
+        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
+      - name: Download Artifacts
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}-py310
+      - name: Install lmdeploy
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        run: |
+          python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
+          python3 -m pip install -r requirements/test.txt
+      - name: Install lmdeploy - offline
+        if: ${{inputs.offline_mode}}
+        run: |
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install triton==2.1.0
+          python3 -m pip install -r requirements/test.txt
       - name: Get coverage report
         run: |
           pip install coverage
           coverage combine ${{env.REPORT_DIR}}
-          coverage xml
+          coverage xml -o ${{env.REPORT_DIR}}/coverage.xml
           coverage report -m
+      - name: Clear workfile
+        if: always()
+        run: |
+          chmod -R 777 $REPORT_DIR
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir
 
   notify_to_feishu:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
