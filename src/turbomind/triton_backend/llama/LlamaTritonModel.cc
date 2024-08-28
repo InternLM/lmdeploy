@@ -44,10 +44,10 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
         ft::FT_CHECK(false);
     }
 
-    auto ft_instance_hyperparameter    = reader["ft_instance_hyperparameter"];
-    const std::string data_type        = ft_instance_hyperparameter["data_type"].as<std::string>();
-    int               tensor_para_size = ft_instance_hyperparameter["tensor_para_size"].as<int>();
-    std::string       model_dir        = ft_instance_hyperparameter["model_dir"].as<std::string>();
+    auto              ft_instance_hyperparameter = reader["ft_instance_hyperparameter"];
+    const std::string data_type                  = ft_instance_hyperparameter["data_type"].as<std::string>();
+    int               tensor_para_size           = ft_instance_hyperparameter["tensor_para_size"].as<int>();
+    std::string       model_dir                  = ft_instance_hyperparameter["model_dir"].as<std::string>();
 
     if (data_type == "half" || data_type == "fp16") {
         return std::make_shared<LlamaTritonModel<half>>(
