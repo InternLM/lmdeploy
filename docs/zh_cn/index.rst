@@ -43,6 +43,7 @@ LMDeploy 工具箱提供以下核心功能：
 
    get_started/installation.md
    get_started/get_started.md
+   get_started/index.rst
 
 .. _支持的模型:
 .. toctree::

@@ -1,6 +1,6 @@
 # Quick Start
 
-This tutorial shows the usage of LMDeploy on:
+This tutorial shows the usage of LMDeploy on CUDA platform:
 
 - Offline inference of LLM model and VLM model
 - Serve a LLM or VLM model by the OpenAI compatible server
