@@ -44,7 +44,7 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
         ft::FT_CHECK(false);
     }
 
-    auto ft_instance_hyperparameter = reader["ft_instance_hyperparameter"];
+    auto ft_instance_hyperparameter    = reader["ft_instance_hyperparameter"];
     const std::string data_type        = ft_instance_hyperparameter["data_type"].as<std::string>();
     int               tensor_para_size = ft_instance_hyperparameter["tensor_para_size"].as<int>();
     std::string       model_dir        = ft_instance_hyperparameter["model_dir"].as<std::string>();
@@ -242,7 +242,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     attn_param_.use_dynamic_ntk         = reader["attention_config"]["use_dynamic_ntk"].as<int>(0);
     attn_param_.use_logn_attn           = reader["attention_config"]["use_logn_attn"].as<int>(0);
 
-    attn_param_.original_max_position_embeddings = reader["attention_config"]["original_max_position_embeddings"].as<int>(0);
+    attn_param_.original_max_position_embeddings =
+        reader["attention_config"]["original_max_position_embeddings"].as<int>(0);
 
     engine_param_.max_batch_size        = reader["engine_config"]["max_batch_size"].as<int>(0);
     engine_param_.max_prefill_token_num = reader["engine_config"]["max_prefill_token_num"].as<int>(0);
