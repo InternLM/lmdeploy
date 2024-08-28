@@ -13,8 +13,7 @@ from lmdeploy.utils import get_logger, get_model
 
 from ...utils import _get_and_verify_max_len
 from ..supported_models import SUPPORTED_ARCHS, is_supported
-from .config import (AttentionConfig, LoraConfig, ModelConfig,
-                     TurbomindModelConfig, init_config_from_dict)
+from .config import TurbomindModelConfig
 from .exporter import get_exporter_factory
 from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
@@ -101,11 +100,7 @@ def get_output_model_registered_name_and_config(model_path: str,
     turbomind_model_arch = 'llama'
     weight_type = 'fp16'
 
-    config = TurbomindModelConfig(
-        model_config=init_config_from_dict(ModelConfig, {}, allow_none=True),
-        attention_config=init_config_from_dict(AttentionConfig, {},
-                                               allow_none=True),
-        lora_config=init_config_from_dict(LoraConfig, {}, allow_none=True))
+    config = TurbomindModelConfig.from_dict()
 
     if model_format == 'meta_llama':
         session_len = 2048

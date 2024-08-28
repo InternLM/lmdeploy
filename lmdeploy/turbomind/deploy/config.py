@@ -2,7 +2,7 @@
 # from dataclasses import dataclass
 import inspect
 import json
-from dataclasses import asdict
+from dataclasses import asdict, fields
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
@@ -96,6 +96,21 @@ class TurbomindModelConfig:
                 setattr(self.model_config, key, value)
             if hasattr(self.attention_config, key):
                 setattr(self.attention_config, key, value)
+
+    @classmethod
+    def from_dict(cls, config: dict = {}):
+        """construct TurbomindModelConfig instance from config in a dict."""
+        _cfg = {
+            field.name: config.get(field.name, {})
+            for field in fields(TurbomindModelConfig)
+        }
+
+        return TurbomindModelConfig(
+            model_config=init_config_from_dict(ModelConfig,
+                                               _cfg['model_config']),
+            attention_config=init_config_from_dict(AttentionConfig,
+                                                   _cfg['attention_config']),
+            lora_config=init_config_from_dict(LoraConfig, _cfg['lora_config']))
 
     def to_dict(self):
         # TODO(lvhan) make the sequence of dict is the same as the config attrs

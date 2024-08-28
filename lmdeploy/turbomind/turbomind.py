@@ -20,8 +20,7 @@ from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model
 
-from .deploy.config import (AttentionConfig, LoraConfig, ModelConfig,
-                            TurbomindModelConfig, init_config_from_dict)
+from .deploy.config import TurbomindModelConfig
 from .supported_models import is_supported
 from .utils import ModelSource, get_model_source
 
@@ -236,17 +235,10 @@ class TurboMind:
         """Load model which is converted by `lmdeploy convert`"""
         config_path = osp.join(model_path, 'triton_models', 'weights',
                                'config.yaml')
-        # load TurboMindModelConfig from config file
+        # load TurbomindModelConfig from config file
         with open(config_path, 'r') as f:
             _cfg = yaml.safe_load(f)
-
-        cfg = TurbomindModelConfig(
-            model_config=init_config_from_dict(ModelConfig,
-                                               _cfg['model_config']),
-            attention_config=init_config_from_dict(AttentionConfig,
-                                                   _cfg['attention_config']),
-            lora_config=init_config_from_dict(LoraConfig, _cfg['lora_config']),
-        )
+        cfg = TurbomindModelConfig.from_dict(_cfg)
 
         # check whether input tp is valid
         self.gpu_count = engine_config.tp

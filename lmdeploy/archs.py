@@ -162,11 +162,11 @@ def get_model_arch(model_path: str):
                                    'config.yaml')
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
-        model_arch = config['model_arch']
-        from .turbomind.deploy.target_model.base import TurbomindModelConfig
+
+        from .turbomind.deploy.config import TurbomindModelConfig
         tm_config = TurbomindModelConfig.from_dict(config)
 
-        return model_arch, tm_config
+        return tm_config.model_config.model_arch, tm_config
     else:
         # transformers model
         try:
