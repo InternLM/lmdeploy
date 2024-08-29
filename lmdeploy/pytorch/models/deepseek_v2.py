@@ -293,6 +293,9 @@ class DeepseekV2MoE(nn.Module):
         self.norm_topk_prob = config.norm_topk_prob
         self.routed_scaling_factor = config.routed_scaling_factor
         self.renormalize = self.top_k > 1 and self.norm_topk_prob
+        self.topk_method = config.topk_method
+        self.n_group = config.n_group
+        self.topk_group = config.topk_group
 
         self.gate = build_rowwise_linear(
             self.hidden_dim,
@@ -340,7 +343,23 @@ class DeepseekV2MoE(nn.Module):
         hidden_states = hidden_states.view(-1, hidden_dim)
         router_logits = self.gate(hidden_states)
 
-        topk_weights, topk_ids = self.softmax_topk(router_logits)
+        if self.topk_method == 'greedy':
+            topk_weights, topk_ids = self.softmax_topk(router_logits)
+        elif self.topk_method == 'group_limited_greedy':
+            grouped_logits = router_logits.unflatten(-1, (self.n_group, -1))
+            group_scores = (grouped_logits.max(-1).values)
+            group_idx = torch.topk(group_scores,
+                                   k=self.topk_group,
+                                   dim=-1,
+                                   sorted=False)[1]  # [n, top_k_group]
+            group_mask = torch.zeros_like(group_scores)  # [n, n_group]
+            group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
+            group_mask = ~group_mask.bool()[..., None]
+            grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
+            router_logits = grouped_logits.flatten(1, 2)
+            topk_weights, topk_ids = self.softmax_topk(router_logits)
+        else:
+            raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
         if not self.renormalize:
             topk_weights = topk_weights * self.routed_scaling_factor
         out_states = self.experts(

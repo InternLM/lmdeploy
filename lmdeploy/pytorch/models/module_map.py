@@ -35,20 +35,10 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanForCausalLM',
 })
 
-# chatglm2
+# chatglm
 MODULE_MAP.update({
-    'modeling_chatglm.SelfAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedSelfAttention',
-    'modeling_chatglm.ChatGLMModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedChatGLMModel',
-    'modeling_chatglm.MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.MLP',
-    'modeling_chatglm.RMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedRMSNorm',
-    'modeling_chatglm.Embedding':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedEmbedding',
-    'modeling_chatglm.ChatGLMForConditionalGeneration':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedChatGLMForConditionalGeneration',  # noqa: E501
+    'ChatGLMForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.ChatGLMForConditionalGeneration',  # noqa: E501
 })
 
 # internlm
