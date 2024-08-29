@@ -12,7 +12,7 @@ from utils.quantization_utils import quantization
 @pytest.mark.parametrize('model', get_quantization_model_list('awq'))
 def test_quantization_awq(config, model, worker_id):
     quantization_type = 'awq'
-    quantization_awq(config, model + '-inner-4bits', model, quantization_type,
+    quantization_all(config, model + '-inner-4bits', model, quantization_type,
                      get_cuda_prefix_by_workerid(worker_id))
 
 
@@ -21,7 +21,7 @@ def test_quantization_awq(config, model, worker_id):
 @pytest.mark.parametrize('model', get_quantization_model_list('gptq'))
 def test_quantization_gptq(config, model, worker_id):
     quantization_type = 'gptq'
-    quantization_awq(config, model + '-inner-gptq', model, quantization_type,
+    quantization_all(config, model + '-inner-gptq', model, quantization_type,
                      get_cuda_prefix_by_workerid(worker_id))
 
 
@@ -35,11 +35,12 @@ def test_quantization_gptq(config, model, worker_id):
     [('internlm/internlm2_5-20b-chat', 'CUDA_VISIBLE_DEVICES=5')])
 def test_quantization_awq_pr(config, model, prefix):
     quantization_type = 'awq'
-    quantization_awq(config, model + '-inner-4bits', model, quantization_type, prefix)
+    quantization_all(config, model + '-inner-4bits', model, quantization_type,
+                     prefix)
 
 
-def quantization_awq(config, quantization_model_name, origin_model_name, quantization_type,
-                     cuda_prefix):
+def quantization_all(config, quantization_model_name, origin_model_name,
+                     quantization_type, cuda_prefix):
     result, msg = quantization(config, quantization_model_name,
                                origin_model_name, quantization_type,
                                cuda_prefix)

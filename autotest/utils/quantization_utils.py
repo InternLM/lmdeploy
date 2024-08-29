@@ -23,7 +23,7 @@ def quantization(config,
             cuda_prefix, 'lmdeploy lite auto_awq', origin_model_path,
             '--work-dir', quantization_model_path, '--batch-size 32'
         ])
-    if quantization_type == 'gptq':
+    elif quantization_type == 'gptq':
         quantization_cmd = ' '.join([
             cuda_prefix, 'lmdeploy lite auto_gptq', origin_model_path,
             '--work-dir', quantization_model_path, '--batch-size 32'
@@ -34,7 +34,7 @@ def quantization(config,
             '--work-dir', quantization_model_path, '--batch-size 32'
         ])
     else:
-        return False, 'quantization type should in [awq, w8a8], \
+        return False, 'quantization type should in [awq, gptq, w8a8], \
             now the type is ' + quantization_type
 
     if 'llama-3' in origin_model_name.lower():
