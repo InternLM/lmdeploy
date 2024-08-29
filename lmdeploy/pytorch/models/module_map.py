@@ -10,23 +10,8 @@ MODULE_MAP = {
 
 # Falcon Models in transformer / on hub
 MODULE_MAP.update({
-    'modeling_falcon.FalconAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconAttention',
-    'modeling_falcon.FalconModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconModel',
-    'modeling_falcon.FalconMLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconMLP',
-    'modeling_falcon.FalconForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconForCausalLM',
-    # for old implementations on hub
-    'modelling_RW.Attention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconAttention',
-    'modelling_RW.MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconMLP',
-    'modelling_RW.RWModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconModel',
-    'modelling_RW.RotaryEmbedding':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconRotaryEmbedding',
+    'FalconForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.FalconForCausalLM',
 })
 
 # baichuan
@@ -43,14 +28,8 @@ MODULE_MAP.update({
 
 # internlm
 MODULE_MAP.update({
-    'modeling_internlm.InternLMAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm.PatchedInternLMAttention',
-    'modeling_internlm.InternLMModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
-    'modeling_internlm.InternLMMLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
-    'modeling_internlm.InternLMRMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'InternLMForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
 })
 
 # internlm2

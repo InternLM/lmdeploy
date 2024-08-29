@@ -102,6 +102,7 @@ class LlamaAttention(nn.Module):
 
 
 class LlamaMLP(nn.Module):
+    """llama mlp."""
 
     def __init__(self,
                  config: LlamaConfig,
@@ -140,6 +141,7 @@ class LlamaMLP(nn.Module):
 
 
 class LlamaDecoderLayer(nn.Module):
+    """llama decoder layer."""
 
     def __init__(self,
                  config: LlamaConfig,
@@ -205,6 +207,7 @@ class LlamaDecoderLayer(nn.Module):
 
 
 class LlamaModel(nn.Module):
+    """llama model."""
 
     def __init__(self,
                  config: LlamaConfig,

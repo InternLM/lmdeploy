@@ -695,8 +695,10 @@ class BaseLinear(nn.Module):
         colwise: bool = True,
         is_tp: bool = False,
         all_reduce: bool = True,
+        tp_align_size: int = 1,
     ):
         super().__init__()
+        self.tp_align_size = tp_align_size
         if device is None:
             device = torch.device('cpu')
         if dtype is None:
@@ -731,16 +733,23 @@ class BaseLinear(nn.Module):
         """get io features."""
         world_size, rank = get_world_rank()
         if colwise:
-            out_features = get_distribute_size(out_features, world_size, rank)
+            out_features = get_distribute_size(out_features,
+                                               world_size,
+                                               rank,
+                                               align=self.tp_align_size)
         else:
-            in_features = get_distribute_size(in_features, world_size, rank)
+            in_features = get_distribute_size(in_features,
+                                              world_size,
+                                              rank,
+                                              align=self.tp_align_size)
         return in_features, out_features
 
     def _weight_loader_tp_colwise(self, param: torch.nn.Parameter,
                                   loaded_weight: torch.Tensor, rank: int,
                                   world_size: int):
         """weight loader for colwise linear."""
-        weight = loaded_weight.chunk(world_size, 0)[rank]
+        weight = _chunk_align(loaded_weight, world_size, 0,
+                              self.tp_align_size)[rank]
         return default_weight_loader(param, weight)
 
     def _weight_loader_tp_rowwise(self, param: torch.nn.Parameter,
@@ -748,7 +757,8 @@ class BaseLinear(nn.Module):
                                   world_size: int):
         """weight loader for rowwise linear."""
         if loaded_weight.dim() == 2:
-            weight = loaded_weight.chunk(world_size, 1)[rank]
+            weight = _chunk_align(loaded_weight, world_size, 1,
+                                  self.tp_align_size)[rank]
             return default_weight_loader(param, weight)
         else:
             # bias
@@ -908,6 +918,21 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
         """update all out features."""
         return all_out_features
 
+    def weight_loader(self, param: torch.nn.Parameter,
+                      loaded_weight: torch.Tensor, shard_id: Any):
+        """weight loader."""
+        world_size, rank = get_world_rank()
+        shard_idx = self.out_names_map[shard_id]
+        param_w = param.data.split(self.all_out_features, 0)[shard_idx]
+        if not self.replicate[shard_idx]:
+            if shard_idx in [0, 1]:
+                loaded_weight = _chunk_align(loaded_weight, world_size, 0,
+                                             self.head_size)[rank]
+            if shard_idx == 2:
+                loaded_weight = _chunk_align(loaded_weight, world_size, 0,
+                                             self.head_size_v)[rank]
+        param_w.copy_(loaded_weight)
+
 
 def build_linear(in_features: int,
                  out_features: int,
@@ -917,7 +942,8 @@ def build_linear(in_features: int,
                  colwise: bool = True,
                  is_tp: bool = False,
                  quant_config: Any = None,
-                 all_reduce: bool = True) -> nn.Module:
+                 all_reduce: bool = True,
+                 tp_align_size: int = 1) -> nn.Module:
     """build linear."""
     if is_tp:
         world_size, _ = get_world_rank()
@@ -933,6 +959,7 @@ def build_linear(in_features: int,
             colwise=colwise,
             is_tp=is_tp,
             all_reduce=all_reduce,
+            tp_align_size=tp_align_size,
         )
 
     quant_method = quant_config['quant_method']
@@ -971,6 +998,7 @@ def build_colwise_linear(in_features: int,
                          dtype: Optional[torch.dtype] = None,
                          device: Optional[torch.device] = None,
                          is_tp: bool = False,
+                         tp_align_size: int = 1,
                          quant_config: Any = None) -> nn.Module:
     """build columnwise parallel linear layer."""
     return build_linear(in_features=in_features,
@@ -981,7 +1009,8 @@ def build_colwise_linear(in_features: int,
                         colwise=True,
                         is_tp=is_tp,
                         quant_config=quant_config,
-                        all_reduce=False)
+                        all_reduce=False,
+                        tp_align_size=tp_align_size)
 
 
 def build_rowwise_linear(in_features: int,
@@ -990,6 +1019,7 @@ def build_rowwise_linear(in_features: int,
                          dtype: Optional[torch.dtype] = None,
                          device: Optional[torch.device] = None,
                          is_tp: bool = False,
+                         tp_align_size: int = 1,
                          quant_config: Any = None,
                          all_reduce: bool = True) -> nn.Module:
     """build rowwise parallel linear layer."""
@@ -1001,7 +1031,8 @@ def build_rowwise_linear(in_features: int,
                         colwise=False,
                         is_tp=is_tp,
                         quant_config=quant_config,
-                        all_reduce=all_reduce)
+                        all_reduce=all_reduce,
+                        tp_align_size=tp_align_size)
 
 
 def build_merged_colwise_linear(
