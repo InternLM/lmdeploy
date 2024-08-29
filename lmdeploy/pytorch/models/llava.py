@@ -1,24 +1,31 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, List
+from typing import Any, Iterable, List, Tuple
 
 import torch
 from torch import nn
+from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 
-from .patch import get_rewrite_cls
+from .patch import build_model_from_hf_config
 
 
-class PatchedLlavaForConditionalGeneration(nn.Module):
+class LlavaForConditionalGeneration(nn.Module):
 
     support_cuda_graph = True
 
-    def __init__(self, origin: nn.Module, ctx_mgr: StepContextManager):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 ctx_mgr: StepContextManager,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
         super().__init__()
+        self.config = config
         self.ctx_mgr = ctx_mgr
-        language_model_cls = get_rewrite_cls(origin.language_model)
-        self.language_model = language_model_cls(origin.language_model,
-                                                 ctx_mgr)
+        text_config = config.text_config
+        self.language_model = build_model_from_hf_config(text_config,
+                                                         dtype=dtype,
+                                                         device=device)
 
     def forward(
         self,
@@ -67,3 +74,16 @@ class PatchedLlavaForConditionalGeneration(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        """load weights."""
+
+        prefix_length = len('language_model.')
+        new_weights = dict()
+        for key, val in weights:
+            if not key.startswith('language_model.'):
+                continue
+            new_key = key[prefix_length:]
+            new_weights[new_key] = val
+
+        self.language_model.load_weights(new_weights.items())

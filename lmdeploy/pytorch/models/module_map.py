@@ -262,20 +262,17 @@ MODULE_MAP.update({
 })
 
 # llava
-MODULE_MAP.update({
-    'llava.model.language_model.llava_llama.LlavaLlamaForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
-    'llava.model.language_model.llava_llama.LlavaLlamaModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
-    'llava.model.language_model.llava_mistral.LlavaMistralForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaLlamaForCausalLM',
-    'llava.model.language_model.llava_mistral.LlavaMistralModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
-    'transformers.models.llava.modeling_llava.LlavaForConditionalGeneration':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaForConditionalGeneration',  # noqa: E501
-    'transformers.models.llava_next.modeling_llava_next.LlavaNextForConditionalGeneration':  # noqa: E501
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaForConditionalGeneration'
-})
+MODULE_MAP.update(
+    {
+        'LlavaLlamaForCausalLM':
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlavaLlamaForCausalLM',
+        'llava.model.language_model.llava_mistral.LlavaMistralForCausalLM':
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaLlamaForCausalLM',
+        'LlavaForConditionalGeneration':
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration',  # noqa: E501
+        'LlavaNextForConditionalGeneration':  # noqa: E501
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration'
+    })
 
 # internvl
 MODULE_MAP.update({

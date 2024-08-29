@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from lmdeploy.pytorch.config import ModelConfig
 
-from .builder import AutoModelConfigBuilder, ProxyAutoModel
+from .builder import AutoModelConfigBuilder
 
 
 class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
@@ -17,16 +17,6 @@ class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str = None):
         """build llava hf."""
-        arch = hf_config.architectures[0]
-        if arch == 'LlavaForConditionalGeneration':
-            from transformers import \
-                LlavaForConditionalGeneration as _LlavaModel
-        elif arch == 'LlavaNextForConditionalGeneration':
-            from transformers import \
-                LlavaNextForConditionalGeneration as _LlavaModel
-        else:
-            raise RuntimeError(f'Unsupported Llava model arch: {arch}')
-
         text_config = hf_config.text_config
         hidden_size = getattr(text_config, 'hidden_size', 4096)
         num_attention_heads = getattr(text_config, 'num_attention_heads', 32)
@@ -45,7 +35,5 @@ class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
             eos_token_id=eos_token_id,
             head_dim=head_dim,
             vocab_size=text_config.vocab_size,
-            unused_modules=['vision_tower', 'multi_modal_projector'],
             hf_config=hf_config,
-            auto_model_cls=ProxyAutoModel(_LlavaModel),
         )

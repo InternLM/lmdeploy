@@ -7,6 +7,7 @@ import sys
 from typing import Any, Dict, List
 
 import torch
+from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.utils import get_logger
 
@@ -177,18 +178,26 @@ def _get_model_class(config, module_map):
         f'Can not found rewrite for architectures: {architectures}')
 
 
-@torch.inference_mode()
-def build_patched_model(config: ModelConfig, device: torch.device = None):
-    """build patched model."""
+def build_model_from_hf_config(model_config: PretrainedConfig,
+                               dtype: torch.dtype = None,
+                               device: torch.device = None):
+    """build model from hf config."""
     from lmdeploy.pytorch.model_inputs import StepContextManager
     ctx_mgr = StepContextManager()
     module_map = _get_module_map()
-    model_config = config.hf_config
     if device is None:
         device = torch.device('cuda')
     model_cls = _get_model_class(model_config, module_map)
-    model = model_cls(model_config, ctx_mgr, dtype=config.dtype, device=device)
+    model = model_cls(model_config, ctx_mgr, dtype=dtype, device=device)
     return model.eval()
+
+
+@torch.inference_mode()
+def build_patched_model(config: ModelConfig, device: torch.device = None):
+    """build patched model."""
+    model_config = config.hf_config
+    dtype = config.dtype
+    return build_model_from_hf_config(model_config, dtype=dtype, device=device)
 
 
 @torch.inference_mode()

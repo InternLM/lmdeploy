@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from dataclasses import dataclass
+from typing import Any, List
 
 import torch
-from transformers import AutoModelForCausalLM
 
 
 def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
@@ -97,10 +96,6 @@ class ModelConfig:
     multi_query_attention: bool = False
     vocab_size: int = 40000
     hf_config: Any = None
-    init_kwargs: Dict[str, Any] = field(default_factory=dict)
-    model_arch: str = None
-    unused_modules: List[str] = None
-    auto_model_cls: Any = AutoModelForCausalLM
     cogvlm_style: bool = False
     custom_module_map: str = None
 
@@ -132,8 +127,6 @@ class ModelConfig:
             assert model_config.head_dim is not None
             model_config.v_head_dim = model_config.head_dim
 
-        model_arch = model_config.hf_config.architectures[0]
-        model_config.model_arch = model_arch
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config)
 

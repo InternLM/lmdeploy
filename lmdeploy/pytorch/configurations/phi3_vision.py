@@ -14,6 +14,5 @@ class Phi3VisionModelConfigBuilder(AutoModelConfigBuilder):
     def build(cls, hf_config, model_path: str = None):
         """build."""
         cfg = DefaultModelConfigBuilder.build(hf_config)
-        cfg.unused_modules = ['model.vision_embed_tokens']
-        cfg.init_kwargs = dict(_attn_implementation=None)
+        # cfg.unused_modules = ['model.vision_embed_tokens']
         return cfg

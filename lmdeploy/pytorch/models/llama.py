@@ -433,3 +433,22 @@ class LlamaForCausalLM(nn.Module):
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
+
+
+class LlavaLlamaForCausalLM(LlamaForCausalLM):
+    """llava llama for causallm."""
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        """load weights."""
+
+        new_weights = dict()
+        for key, val in weights:
+            if key.startswith('model.vision_tower'):
+                continue
+            if key.startswith('model.mm_projector'):
+                continue
+            if key.startswith('model.image_newline'):
+                continue
+            new_weights[key] = val
+
+        super().load_weights(new_weights.items())
