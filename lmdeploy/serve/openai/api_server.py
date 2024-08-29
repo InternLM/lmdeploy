@@ -299,9 +299,10 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
     - response_format (Dict | None): Only pytorch backend support formatting
-        response. Examples: `{"type": "json_object", "guide": {"properties":
-        {"name": {"type": "string"}}, "required": ["name"], "type": "object"}}`
-        or `{"type": "regex_object", "guide": "call me [A-Za-z]{1,10}"}`
+        response. Examples: `{"type": "json_schema", "json_schema": {"name":
+        "test","schema": {"properties": {"name": {"type": "string"}},
+        "required": ["name"], "type": "object"}}}`
+        or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
     - logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
     - tools (List): A list of tools the model may call. Currently, only
         internlm2 functions are supported as a tool. Use this to specify a
@@ -350,7 +351,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     if request.logprobs and request.top_logprobs:
         gen_logprobs = request.top_logprobs
     response_format = None
-    if request.response_format:
+    if request.response_format and request.response_format.type != 'text':
         if VariableInterface.async_engine.backend != 'pytorch':
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,

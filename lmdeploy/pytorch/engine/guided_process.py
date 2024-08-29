@@ -20,24 +20,13 @@ from functools import lru_cache
 from typing import DefaultDict, Dict, List, Union
 
 import torch
-from outlines.fsm.guide import Generate, RegexGuide, Write
+from outlines.fsm.guide import CFGGuide, Generate, RegexGuide, Write
 from outlines.fsm.json_schema import build_regex_from_schema
 from pydantic import BaseModel
 from transformers import PreTrainedTokenizerBase
 
 
-class RegexLogitsProcessor:
-
-    def __init__(self, regex_string: str, tokenizer):
-        """Compile the FSM that drives the regex-structured generation.
-
-        Args:
-            regex_string: A string that represents a regular expression
-            tokenizer: The model's tokenizer
-        """
-        tokenizer = self.adapt_tokenizer(copy.deepcopy(tokenizer))
-        fsm = RegexGuide(regex_string, tokenizer)
-        self.fsm = fsm
+class BaseLogitsProcessor:
 
     def init_state(self):
         """Initialize the FSM states."""
@@ -92,6 +81,20 @@ class RegexLogitsProcessor:
         return tokenizer
 
 
+class RegexLogitsProcessor(BaseLogitsProcessor):
+
+    def __init__(self, regex_string: str, tokenizer):
+        """Compile the FSM that drives the regex-structured generation.
+
+        Args:
+            regex_string: A string that represents a regular expression
+            tokenizer: The model's tokenizer
+        """
+        tokenizer = self.adapt_tokenizer(copy.deepcopy(tokenizer))
+        fsm = RegexGuide(regex_string, tokenizer)
+        self.fsm = fsm
+
+
 class JSONLogitsProcessor(RegexLogitsProcessor):
 
     def __init__(self, schema: Union[str, Dict, BaseModel], tokenizer):
@@ -106,14 +109,57 @@ class JSONLogitsProcessor(RegexLogitsProcessor):
         super().__init__(regex_string, tokenizer)
 
 
+class CFGLogitsProcessor(BaseLogitsProcessor):
+
+    def __init__(self, cfg: str, tokenizer: PreTrainedTokenizerBase):
+        """Compile the FSM that drives the context free grammar generation.
+
+        Parameters
+        ----------
+        cfg
+            A string that represents a context-free grammar
+        tokenizer
+            The model's tokenizer
+        """
+        tokenizer = self.adapt_tokenizer(tokenizer)
+        fsm = CFGGuide(cfg, tokenizer)
+        self.fsm = fsm
+
+
+# copied from https://github.com/vllm-project/vllm/blob/a7f65c2be93f491771aca31106f790bf381c0bad/vllm/model_executor/guided_decoding/outlines_decoding.py#L31  # noqa
+JSON_GRAMMAR = r"""
+?start: object | array
+
+?value: object
+| array
+| UNESCAPED_STRING
+| SIGNED_NUMBER      -> number
+| "true"             -> true
+| "false"            -> false
+| "null"             -> null
+
+array  : "[" [value ("," value)*] "]"
+object : "{" [pair ("," pair)*] "}"
+pair   : UNESCAPED_STRING ":" value
+
+%import common.UNESCAPED_STRING
+%import common.SIGNED_NUMBER
+%import common.WS
+
+%ignore WS
+"""
+
+
 @lru_cache(maxsize=32)
 def _get_guided_logits_processor(guide: str,
                                  tokenizer: PreTrainedTokenizerBase,
                                  type: str):
     try:
         if type == 'json_object':
+            return CFGLogitsProcessor(guide, tokenizer)
+        elif type == 'json_schema':
             return JSONLogitsProcessor(guide, tokenizer)
-        elif type == 'regex_object':
+        elif type == 'regex_schema':
             return RegexLogitsProcessor(guide, tokenizer)
         else:
             return None

@@ -104,20 +104,27 @@ def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor,
         return scores
     for i in range(len(response_formats)):
         _format = response_formats[i]
-        if isinstance(_format, Dict) and _format.get(
-                'guide', None) and _format.get('type', None):
-            schema = _format['guide']
-            if isinstance(schema, Dict):
-                schema_str = json.dumps(schema)
-            elif isinstance(schema, str):
-                schema_str = schema
+        if isinstance(_format, Dict) and _format.get('type', 'text') != 'text':
+            if _format['type'] == 'json_schema':
+                schema = _format['json_schema']
+                if isinstance(schema, Dict):
+                    for key in ['json_schema', 'schema']:
+                        if key in schema:
+                            schema = json.dumps(schema[key])
+                elif schema is None:
+                    from .guided_process import JSON_GRAMMAR
+                    schema = JSON_GRAMMAR
+                elif isinstance(schema, str):
+                    raise ValueError(
+                        f'Cannot parse schema {schema}. The schema must be '
+                        'either a dictionary or a string that contains the'
+                        ' JSON Schema specification')
+            elif _format['type'] == 'regex_schema':
+                schema = _format.get('regex_schema', '')
             else:
-                raise ValueError(
-                    f'Cannot parse schema {schema}. The schema must be '
-                    'either a dictionary or a string that contains the'
-                    ' JSON Schema specification')
+                raise ValueError(f"unsupported format type: {_format['type']}")
             from .guided_process import _get_guided_logits_processor
-            processor = _get_guided_logits_processor(schema_str, tokenizer,
+            processor = _get_guided_logits_processor(schema, tokenizer,
                                                      _format['type'])
             if processor:
                 scores[i] = processor(guided_input_ids[i].tolist(), scores[i])

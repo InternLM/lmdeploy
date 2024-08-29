@@ -43,7 +43,7 @@ guide = {
 }
 pipe = pipeline(model, backend_config=PytorchEngineConfig(), log_level='INFO')
 gen_config = GenerationConfig(
-    response_format=dict(type='json_object', guide=guide))
+    response_format=dict(type='json_schema', json_schema=dict(name='test', schema=guide)))
 response = pipe(['Make a self introduction please.'], gen_config=gen_config)
 print(response)
 ```
@@ -92,7 +92,7 @@ guide = {
     },
     'required': ['name', 'skills', 'work history']
 }
-response_format=dict(type='json_object',guide=guide)
+response_format=dict(type='json_schema',  json_schema=dict(name='test',schema=guide))
 messages = [{'role': 'user', 'content': 'Make a self-introduction please.'}]
 client = OpenAI(api_key='YOUR_API_KEY', base_url='http://0.0.0.0:23333/v1')
 model_name = client.models.list().data[0].id
