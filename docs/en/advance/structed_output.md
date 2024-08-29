@@ -101,7 +101,6 @@ response = client.chat.completions.create(
     messages=messages,
     temperature=0.8,
     response_format=response_format,
-    top_p=0.8,
-    stream=False)
+    top_p=0.8)
 print(response)
 ```
