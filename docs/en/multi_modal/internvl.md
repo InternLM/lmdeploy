@@ -13,7 +13,7 @@ The next chapter demonstrates how to deploy an InternVL model using LMDeploy, wi
 
 ## Installation
 
-Please install LMDeploy by following the [installation guide](../installation.md), and install other packages that InternVL2 needs
+Please install LMDeploy by following the [installation guide](../get_started/installation.md), and install other packages that InternVL2 needs
 
 ```shell
 pip install timm

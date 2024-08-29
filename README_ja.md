@@ -137,6 +137,8 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Dbrx (132B)</li>
   <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
+  <li>Phi-3.5-mini (3.8B)</li>
+  <li>Phi-3.5-MoE (16x3.8B)</li>
 </ul>
 </td>
 <td>
@@ -152,7 +154,9 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
   <li>MiniCPM-Llama3-V-2_5</li>
+  <li>MiniCPM-V-2_6</li>
   <li>Phi-3-vision (4.2B)</li>
+  <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
 </ul>
 </td>
@@ -177,7 +181,7 @@ pip install lmdeploy
 ```
 
 v0.3.0から、デフォルトの事前構築済みパッケージはCUDA 12でコンパイルされています。
-CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/installation.md)参照してください。
+CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/get_started/installation.md)参照してください。
 
 ## オフラインバッチ推論
 
@@ -197,7 +201,7 @@ print(response)
 
 # チュートリアル
 
-LMDeployの基本的な使用方法については、[getting_started](./docs/en/get_started.md)セクションを参照してください。
+LMDeployの基本的な使用方法については、[getting_started](docs/en/get_started/get_started.md)セクションを参照してください。
 
 詳細なユーザーガイドと高度なガイドについては、[チュートリアル](https://lmdeploy.readthedocs.io/en/latest/)を参照してください：
 

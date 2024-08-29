@@ -136,6 +136,8 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Dbrx (132B)</li>
   <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
+  <li>Phi-3.5-mini (3.8B)</li>
+  <li>Phi-3.5-MoE (16x3.8B)</li>
 </ul>
 </td>
 <td>
@@ -151,7 +153,9 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
   <li>MiniCPM-Llama3-V-2_5</li>
+  <li>MiniCPM-V-2_6</li>
   <li>Phi-3-vision (4.2B)</li>
+  <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
 </ul>
 </td>
@@ -176,7 +180,7 @@ pip install lmdeploy
 ```
 
 The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
-For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](./docs/en/installation.md).
+For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](docs/en/get_started/installation.md).
 
 ## Offline Batch Inference
 
@@ -196,7 +200,7 @@ For more information about inference pipeline, please refer to [here](docs/en/ll
 
 # Tutorials
 
-Please review [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
+Please review [getting_started](docs/en/get_started/get_started.md) section for the basic usage of LMDeploy.
 
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
