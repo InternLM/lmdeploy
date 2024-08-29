@@ -21,6 +21,14 @@ enum QuantPolicy
     kCacheKVInt4 = 0x04,
 };
 
+enum QuantMethod
+{
+    QNone,
+    AWQ,
+    GPTQ,
+    QQQ,
+};
+
 enum CmpMode
 {
     kCmpNone,

@@ -16,8 +16,12 @@ class TurbomindModel(BaseOutputModel):
         for bin in self.input_model.bins():
             for i in range(bin.start_layer_id, bin.end_layer_id):
                 visit = True
-                w1, w2, w3 = bin.ffn(i)
-                inter_size = w2.size(-1)
+                if final_cfg.get('quantization') == 'qqq':
+                    w1s, _, _ = bin.ffn_scale_channel(i)
+                    inter_size = w1s.shape[-1]
+                else:
+                    w1, w2, w3 = bin.ffn(i)
+                    inter_size = w2.size(-1)
                 qb, _, _, _ = bin.attn_bias(i)
                 if qb is not None:
                     attn_bias = 1

@@ -2,8 +2,12 @@
 
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/marlin_qqq_gemm/marlin_qqq_gemm.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
+#include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/allocator.h"
 #include <fstream>
 
 namespace turbomind {
@@ -11,7 +15,8 @@ namespace turbomind {
 template<class T>
 struct LlamaLinear<T>::Impl {
 
-    Impl(cublasMMWrapper* cublas_wrapper, cudaStream_t stream): cublas_wrapper_(cublas_wrapper), stream_(stream)
+    Impl(cublasMMWrapper* cublas_wrapper, cudaStream_t stream, IAllocator* allocator):
+        cublas_wrapper_(cublas_wrapper), stream_(stream), gemm_s4_s8_(allocator)
     {
         workspace_ = {};
 
@@ -31,6 +36,8 @@ struct LlamaLinear<T>::Impl {
 
     void forward(T*                         output_data,
                  Pitched                    input_data,
+                 int8_t*                    quant_input_data,
+                 float*                     quant_scale,
                  int                        batch_size,
                  const LlamaDenseWeight<T>& weight,
                  Type                       type      = kGemm,
@@ -75,13 +82,14 @@ struct LlamaLinear<T>::Impl {
 
             type = kFusedAdd;
         }
-        switch (weight.type) {
-            case WeightType::kFP16:
-            case WeightType::kFP32:
-            case WeightType::kBF16:
+        switch (weight.quantization) {
+            case QuantMethod::QNone:
                 return forwardFp(output_data, input_data, batch_size, weight, type);
-            case WeightType::kINT4:
+            case QuantMethod::AWQ:
+            case QuantMethod::GPTQ:
                 return forwardInt4(output_data, input_data, batch_size, weight, type);
+            case QuantMethod::QQQ:
+                return forwardQQQ(output_data, quant_input_data, quant_scale, batch_size, weight, type);
             default:
                 FT_CHECK(0);
         }
@@ -156,25 +164,61 @@ struct LlamaLinear<T>::Impl {
         }
     }
 
-    cublasMMWrapper*     cublas_wrapper_;
-    gemm::Gemm           gemm_;
-    gemm::DispatchPolicy dispatch_policy_{gemm::DispatchPolicy::kDefault};
-    cudaStream_t         stream_{};
+    // w4a8
+    void forwardQQQ(T*                         output_data,
+                    const int8_t*              input_data,
+                    const float*               act_scale,
+                    int                        batch_size,
+                    const LlamaDenseWeight<T>& weight,
+                    Type                       type)
+    {
+        // qqq only supports kGemm
+        FT_CHECK(type == kGemm);
+        if constexpr (std::is_same_v<T, half>) {
+            gemm_s4_s8_.Run(output_data,
+                            input_data,
+                            (const uint*)weight.kernel,
+                            act_scale,
+                            (const float*)weight.scales_channel,
+                            (const half*)weight.scales_zeros,
+                            batch_size,
+                            weight.output_dims,
+                            weight.input_dims,
+                            weight.group_size,
+                            stream_);
+            sync_check_cuda_error();
+        }
+        else {
+            FT_CHECK_WITH_INFO(0, "Not implemented");
+        }
+    }
+
+    cublasMMWrapper*          cublas_wrapper_;
+    gemm::Gemm                gemm_;
+    gemm::DispatchPolicy      dispatch_policy_{gemm::DispatchPolicy::kDefault};
+    marlin_qqq::MarlinQQQGemm gemm_s4_s8_;
+    cudaStream_t              stream_{};
 
     gemm::Workspace workspace_;
 };
 
 template<class T>
-LlamaLinear<T>::LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream):
-    impl_{std::make_shared<Impl>(cublas_wrapper, stream)}
+LlamaLinear<T>::LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream, IAllocator* allocator):
+    impl_{std::make_shared<Impl>(cublas_wrapper, stream, allocator)}
 {
 }
 
 template<class T>
-void LlamaLinear<T>::forward(
-    T* output_data, Pitched input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type, int* lora_mask)
+void LlamaLinear<T>::forward(T*                         output_data,
+                             Pitched                    input_data,
+                             int8_t*                    quant_input_data,
+                             float*                     quant_scale,
+                             int                        batch_size,
+                             const LlamaDenseWeight<T>& weight,
+                             Type                       type,
+                             int*                       lora_mask)
 {
-    impl_->forward(output_data, input_data, batch_size, weight, type, lora_mask);
+    impl_->forward(output_data, input_data, quant_input_data, quant_scale, batch_size, weight, type, lora_mask);
 }
 
 template<class T>
@@ -203,6 +247,18 @@ int LlamaLinear<T>::Import(std::istream& is)
         impl_->dispatch_policy_ = gemm::DispatchPolicy::kReuse;
     };
     return n_records;
+}
+
+template<class T>
+std::pair<int*, int*> LlamaLinear<T>::getQQQBuffer()
+{
+    return impl_->gemm_s4_s8_.getBuffer();
+}
+
+template<class T>
+void LlamaLinear<T>::setQQQBuffer(int* reduce_buf, int* workspace_buf)
+{
+    impl_->gemm_s4_s8_.setBuffer(reduce_buf, workspace_buf);
 }
 
 template<class T>

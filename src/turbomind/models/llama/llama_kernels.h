@@ -13,7 +13,15 @@
 namespace turbomind {
 
 template<typename T>
-void invokeRootMeanSquareNorm(T* out, const T* input, const T* scale, float eps, int m, int n, cudaStream_t stream);
+void invokeRootMeanSquareNorm(T*           out,
+                              const T*     input,
+                              const T*     scale,
+                              int8_t*      quant_out,
+                              float*       quant_scale,
+                              float        eps,
+                              int          m,
+                              int          n,
+                              cudaStream_t stream);
 
 template<typename T>
 void invokeAddResidual(T* out, const T* in, int m, int n, cudaStream_t stream);

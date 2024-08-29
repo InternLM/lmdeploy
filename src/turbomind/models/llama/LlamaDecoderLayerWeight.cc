@@ -22,6 +22,7 @@
 #include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/marlin_qqq_gemm/marlin_qqq_gemm_kernel.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
@@ -53,24 +54,26 @@ static bool is_fuse_silu_act()
 }
 
 template<typename T>
-LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
-                                                    size_t     head_num,
-                                                    size_t     kv_head_num,
-                                                    size_t     size_per_head,
-                                                    size_t     hidden_units,
-                                                    size_t     inter_size,
-                                                    WeightType weight_type,
-                                                    int        group_size,
-                                                    LoraParam  lora_param,
-                                                    bool       attn_bias,
-                                                    size_t     tensor_para_size,
-                                                    size_t     tensor_para_rank):
+LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int         layer_idx,
+                                                    size_t      head_num,
+                                                    size_t      kv_head_num,
+                                                    size_t      size_per_head,
+                                                    size_t      hidden_units,
+                                                    size_t      inter_size,
+                                                    WeightType  weight_type,
+                                                    int         group_size,
+                                                    QuantMethod quantization,
+                                                    LoraParam   lora_param,
+                                                    bool        attn_bias,
+                                                    size_t      tensor_para_size,
+                                                    size_t      tensor_para_rank):
     head_num_(head_num),
     kv_head_num_(kv_head_num),
     size_per_head_(size_per_head),
     hidden_units_(hidden_units),
     inter_size_(inter_size),
     weight_type_(weight_type),
+    quantization_(quantization),
     attn_bias_(attn_bias),
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank)
@@ -114,36 +117,43 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
 
     fused_up_and_gate_ = ffn_weights.gating.lora.policy != LoraPolicy::kPlora;
 
-    self_attn_weights.qkv.input_dims  = hidden_units_;
-    self_attn_weights.qkv.output_dims = (head_num + 2 * kv_head_num) * size_per_head / tensor_para_size_;
-    self_attn_weights.qkv.type        = weight_type;
-    self_attn_weights.qkv.group_size  = group_size;
+    self_attn_weights.qkv.input_dims   = hidden_units_;
+    self_attn_weights.qkv.output_dims  = (head_num + 2 * kv_head_num) * size_per_head / tensor_para_size_;
+    self_attn_weights.qkv.type         = weight_type;
+    self_attn_weights.qkv.group_size   = group_size;
+    self_attn_weights.qkv.quantization = quantization;
 
-    self_attn_weights.output.input_dims  = (head_num * size_per_head) / tensor_para_size_;
-    self_attn_weights.output.output_dims = hidden_units_;
-    self_attn_weights.output.type        = weight_type;
-    self_attn_weights.output.group_size  = group_size;
+    self_attn_weights.output.input_dims   = (head_num * size_per_head) / tensor_para_size_;
+    self_attn_weights.output.output_dims  = hidden_units_;
+    self_attn_weights.output.type         = weight_type;
+    self_attn_weights.output.group_size   = group_size;
+    self_attn_weights.output.quantization = quantization;
 
-    ffn_weights.gating.input_dims  = hidden_units_;
-    ffn_weights.gating.output_dims = inter_size_ / tensor_para_size_;
-    ffn_weights.gating.type        = weight_type;
-    ffn_weights.gating.group_size  = group_size;
+    ffn_weights.gating.input_dims   = hidden_units_;
+    ffn_weights.gating.output_dims  = inter_size_ / tensor_para_size_;
+    ffn_weights.gating.type         = weight_type;
+    ffn_weights.gating.group_size   = group_size;
+    ffn_weights.gating.quantization = quantization;
 
-    ffn_weights.intermediate.input_dims  = hidden_units_;
-    ffn_weights.intermediate.output_dims = inter_size_ / tensor_para_size_;
-    ffn_weights.intermediate.type        = weight_type;
-    ffn_weights.intermediate.group_size  = group_size;
+    ffn_weights.intermediate.input_dims   = hidden_units_;
+    ffn_weights.intermediate.output_dims  = inter_size_ / tensor_para_size_;
+    ffn_weights.intermediate.type         = weight_type;
+    ffn_weights.intermediate.group_size   = group_size;
+    ffn_weights.intermediate.quantization = quantization;
 
-    ffn_weights.fused_gating_intermediate.input_dims  = hidden_units_;
-    ffn_weights.fused_gating_intermediate.output_dims = inter_size_ / tensor_para_size_ * 2;
-    ffn_weights.fused_gating_intermediate.type        = weight_type;
-    ffn_weights.fused_gating_intermediate.group_size  = group_size;
-    ffn_weights.is_fused_silu                         = weight_type == WeightType::kINT4 && is_fuse_silu_act();
+    ffn_weights.fused_gating_intermediate.input_dims   = hidden_units_;
+    ffn_weights.fused_gating_intermediate.output_dims  = inter_size_ / tensor_para_size_ * 2;
+    ffn_weights.fused_gating_intermediate.type         = weight_type;
+    ffn_weights.fused_gating_intermediate.group_size   = group_size;
+    ffn_weights.fused_gating_intermediate.quantization = quantization;
+    ffn_weights.is_fused_silu =
+        (quantization == QuantMethod::AWQ || quantization == QuantMethod::GPTQ) && is_fuse_silu_act();
 
-    ffn_weights.output.input_dims  = inter_size_ / tensor_para_size_;
-    ffn_weights.output.output_dims = hidden_units_;
-    ffn_weights.output.type        = weight_type;
-    ffn_weights.output.group_size  = group_size;
+    ffn_weights.output.input_dims   = inter_size_ / tensor_para_size_;
+    ffn_weights.output.output_dims  = hidden_units_;
+    ffn_weights.output.type         = weight_type;
+    ffn_weights.output.group_size   = group_size;
+    ffn_weights.output.quantization = quantization;
 
     mallocWeights();
 }
@@ -151,7 +161,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
 template<typename T>
 size_t LlamaDecoderLayerWeight<T>::workspace_size() const noexcept
 {
-    if (weight_type_ != WeightType::kINT4) {
+    if (quantization_ != QuantMethod::AWQ && quantization_ != QuantMethod::GPTQ) {
         return 0;
     }
 
@@ -176,11 +186,15 @@ void freeWeights(LlamaDenseWeight<T>& weights)
     cudaFree(weights.bias);
     cudaFree(weights.scales);
     cudaFree(weights.zeros);
+    cudaFree(weights.scales_zeros);
+    cudaFree(weights.scales_channel);
 
-    weights.kernel = nullptr;
-    weights.bias   = nullptr;
-    weights.scales = nullptr;
-    weights.zeros  = nullptr;
+    weights.kernel         = nullptr;
+    weights.bias           = nullptr;
+    weights.scales         = nullptr;
+    weights.zeros          = nullptr;
+    weights.scales_zeros   = nullptr;
+    weights.scales_channel = nullptr;
 
     {
         cudaFree(weights.lora.a);
@@ -202,11 +216,33 @@ void mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
     }
     else {  // int8, int4
         const int factor = sizeof(float) * 8 / bit_size;
-        FT_CHECK(weights.input_dims % factor == 0);
+        // TODO(HandH1998): check if it should use `output_dims % factor`
+        // FT_CHECK(weights.input_dims % factor == 0);
+        FT_CHECK(weights.output_dims % factor == 0);
+        if (weights.group_size != -1)
+            FT_CHECK(weights.input_dims % weights.group_size == 0);
+        if (weights.quantization == QuantMethod::AWQ || weights.quantization == QuantMethod::GPTQ) {
+            // interleaved scales/zeros
+            deviceMalloc((T**)&weights.scales, weights.input_dims / weights.group_size * weights.output_dims);
+            deviceMalloc((T**)&weights.zeros, weights.input_dims / weights.group_size * weights.output_dims);
+        }
+        else if (weights.quantization == QuantMethod::QQQ) {
+            FT_CHECK(weights.input_dims % marlin_qqq::min_thread_k == 0);
+            FT_CHECK(weights.output_dims % marlin_qqq::min_thread_n == 0);
+            // QQQ employs sym quantization
+            if (weights.group_size == -1) {
+                deviceMalloc((float**)&weights.scales_channel, weights.output_dims);
+            }
+            else {
+                deviceMalloc((T**)&weights.scales_zeros, weights.input_dims / weights.group_size * weights.output_dims);
+                deviceMalloc((float**)&weights.scales_channel, weights.output_dims);
+            }
+        }
+        else {
+            FT_CHECK(0);
+        }
         deviceMalloc((int**)&weights.kernel, weights.input_dims * weights.output_dims / factor);
         deviceMemSetZero((int*)weights.kernel, weights.input_dims * weights.output_dims / factor);
-        deviceMalloc((T**)&weights.scales, weights.input_dims / weights.group_size * weights.output_dims);
-        deviceMalloc((T**)&weights.zeros, weights.input_dims / weights.group_size * weights.output_dims);
     }
 
     if (weights.lora.r > 0) {
@@ -249,16 +285,38 @@ void getWeightTensor(LlamaDenseWeight<T>& weights, bool bias, const std::string&
                              TYPE_INT32,
                              {weights.input_dims * weights.output_dims * sizeof(int) / factor},
                              weights.kernel});
-        output.insert(get_name("scales"),
-                      Tensor{MEMORY_GPU,
-                             getTensorType<T>(),
-                             {weights.input_dims / weights.group_size * weights.output_dims * sizeof(T)},
-                             weights.scales});
-        output.insert(get_name("zeros"),
-                      Tensor{MEMORY_GPU,
-                             getTensorType<T>(),
-                             {weights.input_dims / weights.group_size * weights.output_dims * sizeof(T)},
-                             weights.zeros});
+        if (weights.quantization == QuantMethod::AWQ || weights.quantization == QuantMethod::GPTQ) {
+            output.insert(get_name("scales"),
+                          Tensor{MEMORY_GPU,
+                                 getTensorType<T>(),
+                                 {weights.input_dims / weights.group_size * weights.output_dims * sizeof(T)},
+                                 weights.scales});
+            output.insert(get_name("zeros"),
+                          Tensor{MEMORY_GPU,
+                                 getTensorType<T>(),
+                                 {weights.input_dims / weights.group_size * weights.output_dims * sizeof(T)},
+                                 weights.zeros});
+        }
+        else if (weights.quantization == QuantMethod::QQQ) {
+            if (weights.group_size == -1) {
+                output.insert(
+                    get_name("scales_channel"),
+                    Tensor{MEMORY_GPU, TYPE_FP32, {weights.output_dims * sizeof(float)}, weights.scales_channel});
+            }
+            else {
+                output.insert(get_name("scales_zeros"),
+                              Tensor{MEMORY_GPU,
+                                     getTensorType<T>(),
+                                     {weights.input_dims / weights.group_size * weights.output_dims * sizeof(T)},
+                                     weights.scales_zeros});
+                output.insert(
+                    get_name("scales_channel"),
+                    Tensor{MEMORY_GPU, TYPE_FP32, {weights.output_dims * sizeof(float)}, weights.scales_channel});
+            }
+        }
+        else {
+            FT_CHECK(0);
+        }
     }
 
     if (weights.lora.r) {
@@ -376,16 +434,32 @@ void loadWeights(LlamaDenseWeight<T>& w,
     }
     else {  // int8, int4
         const int factor = sizeof(float) * 8 / bit_size;
-
         FT_CHECK(dim1 % factor == 0);
-
+        if (w.group_size != -1)
+            FT_CHECK(dim0 % w.group_size == 0);
+        const size_t group_count = w.group_size > 0 ? dim0 / w.group_size : 1;
+        if (w.quantization == QuantMethod::AWQ || w.quantization == QuantMethod::GPTQ) {
+            loadWeightFromBin((half*)w.scales, {group_count, dim1}, prefix + ".scales", type, {});
+            loadWeightFromBin((half*)w.zeros, {group_count, dim1}, prefix + ".zeros", type, {});
+        }
+        else if (w.quantization == QuantMethod::QQQ) {
+            FT_CHECK(dim0 % marlin_qqq::min_thread_k == 0);
+            FT_CHECK(dim1 % marlin_qqq::min_thread_n == 0);
+            if (w.group_size == -1) {
+                loadWeightFromBin(
+                    (float*)w.scales_channel, {1, dim1}, prefix + ".scales_channel", FtCudaDataType::FP32, {});
+            }
+            else {
+                loadWeightFromBin((half*)w.scales_zeros, {group_count, dim1}, prefix + ".scales_zeros", type, {});
+                loadWeightFromBin(
+                    (float*)w.scales_channel, {1, dim1}, prefix + ".scales_channel", FtCudaDataType::FP32, {});
+            }
+        }
+        else {
+            FT_CHECK(0);
+        }
         std::vector<size_t> w_shape{dim0, dim1 / factor * sizeof(uint32_t)};
         loadWeightFromBin((int8_t*)w.kernel, w_shape, prefix + ".qweight", FtCudaDataType::INT8, {});
-
-        const size_t group_count = w.group_size > 0 ? dim0 / w.group_size : 1;
-
-        loadWeightFromBin((half*)w.scales, {group_count, dim1}, prefix + ".scales", type, {});
-        loadWeightFromBin((half*)w.zeros, {group_count, dim1}, prefix + ".zeros", type, {});
     }
 }
 
@@ -481,7 +555,7 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
 template<class T>
 static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size, bool use_simt)
 {
-    if (weight.type != WeightType::kINT4) {
+    if (weight.quantization != QuantMethod::AWQ && weight.quantization != QuantMethod::GPTQ) {
         return;
     }
 
@@ -609,7 +683,7 @@ void interleave(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight
     FT_CHECK(c.group_size == a.group_size);
     FT_CHECK(c.group_size == b.group_size);
 
-    if (a.type == WeightType::kINT4) {
+    if (a.quantization == QuantMethod::AWQ || a.quantization == QuantMethod::GPTQ) {
         uint8_t* tmp_a = (uint8_t*)workspace;
         uint8_t* tmp_b = tmp_a + a.output_dims * a.input_dims;
         uint8_t* tmp_c = tmp_b + b.output_dims * b.input_dims;
@@ -651,10 +725,18 @@ void chunk(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& 
         check_cuda_error(cudaMemcpy2D((char*)c + width, width * 2, b, width, width, height, cudaMemcpyDefault));
     };
 
-    if (c.type == WeightType::kINT4) {
+    if (c.quantization == QuantMethod::AWQ || c.quantization == QuantMethod::GPTQ) {
         _chunks(c.kernel, a.kernel, b.kernel, a.input_dims, 4 * a.output_dims / 8);
         _chunks(c.scales, a.scales, b.scales, a.input_dims / a.group_size, sizeof(T) * a.output_dims);
         _chunks(c.zeros, a.zeros, b.zeros, a.input_dims / a.group_size, sizeof(T) * a.output_dims);
+    }
+    else if (c.quantization == QuantMethod::QQQ) {
+        _chunks(c.kernel, a.kernel, b.kernel, a.input_dims / 16, 4 * a.output_dims * 16 / 8);
+        _chunks(c.scales_channel, a.scales_channel, b.scales_channel, 1, sizeof(float) * a.output_dims);
+        if (c.group_size != -1) {
+            _chunks(
+                c.scales_zeros, a.scales_zeros, b.scales_zeros, a.input_dims / a.group_size, sizeof(T) * a.output_dims);
+        }
     }
     else {
         _chunks(c.kernel, a.kernel, b.kernel, a.input_dims, sizeof(T) * a.output_dims);

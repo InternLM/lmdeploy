@@ -81,6 +81,7 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
     tensor_para_(tp),
     local_head_num_(model.head_num / tp.world_size_),
     local_kv_head_num_(model.kv_head_num / tp.world_size_),
+    quantization_(model.quantization),
     weights_(std::move(weights)),
     stream_(ctx.stream),
     cublas_wrapper_(ctx.cublas_wrapper.get()),
@@ -197,6 +198,8 @@ template<typename T>
 void LlamaV2<T>::forwardUnified(T*               out,
                                 T*               decoder_output,
                                 T*               decoder_input,
+                                int8_t*          decoder_quant_output,
+                                float*           decoder_quant_scale,
                                 void**           block_ptrs,
                                 const int*       cu_block_cnts,
                                 const int*       input_ids,
@@ -258,7 +261,10 @@ void LlamaV2<T>::forwardUnified(T*               out,
     if (lora_mask != nullptr && have_embeddings) {
         inputs.insert({"lora_mask", {MEMORY_GPU, TYPE_INT32, {token_num}, lora_mask}});
     }
-
+    // decoder_quant_output and decoder_quant_scale may be non Tensor, so we use insert pair to avoid tensor validity
+    // check
+    outputs.insert({"decoder_quant_output", {MEMORY_GPU, TYPE_INT8, {token_num, hidden_units_}, decoder_quant_output}});
+    outputs.insert({"decoder_quant_scale", {MEMORY_GPU, TYPE_FP32, {token_num}, decoder_quant_scale}});
     unified_decoder_->forward(&outputs, &inputs, &weights_->decoder_layer_weights);
 }
 
@@ -466,7 +472,7 @@ void LlamaV2<T>::tune()
     for (auto bs : bss) {
         TM_LOG_INFO("[Gemm2] %d", bs);
         for (auto& w : weights) {
-            linear_->forward(out_data, in_data, bs, *w);
+            linear_->forward(out_data, in_data, nullptr, nullptr, bs, *w);
         }
     }
 

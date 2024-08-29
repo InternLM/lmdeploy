@@ -19,16 +19,18 @@ namespace turbomind {
 
 // fp16, bf16
 // n is divided by 2 for this impl
-template<typename T>
-__global__ void rootMeanSquareNorm(T* out, const T* input, const T* scale, float eps, int m, int n)
+template<typename T, bool enable_quant>
+__global__ typename std::enable_if<!std::is_same<T, float>::value>::type rootMeanSquareNorm(
+    T* out, const T* input, const T* scale, int8_t* quant_out, float* quant_scale, float eps, int m, int n)
 {
     using T2 = typename TypeConverter<T>::Type;
     __shared__ float s_inv_mean;
     float            mean = 0.f;
 
-    T2*       out_ptr   = (T2*)out;
-    const T2* input_ptr = (const T2*)input;
-    const T2* scale_ptr = (const T2*)scale;
+    T2*       out_ptr       = (T2*)out;
+    const T2* input_ptr     = (const T2*)input;
+    const T2* scale_ptr     = (const T2*)scale;
+    uint16_t* quant_out_ptr = (uint16_t*)quant_out;
 
     for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
         float2 tmp2 = cuda_cast<float2>(input_ptr[blockIdx.x * n + idx]);
@@ -42,17 +44,42 @@ __global__ void rootMeanSquareNorm(T* out, const T* input, const T* scale, float
     }
     __syncthreads();
 
-    for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
-        float2 tmp2                   = cuda_cast<float2>(input_ptr[blockIdx.x * n + idx]);
-        float2 sca2                   = cuda_cast<float2>(scale_ptr[idx]);
-        tmp2.x                        = tmp2.x * s_inv_mean * sca2.x;
-        tmp2.y                        = tmp2.y * s_inv_mean * sca2.y;
-        out_ptr[blockIdx.x * n + idx] = cuda_cast<T2>(tmp2);
+    if constexpr (enable_quant) {
+        __shared__ float s_amax;
+        float            amax_val = 0.0f;
+        for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
+            float2 tmp2                   = cuda_cast<float2>(input_ptr[blockIdx.x * n + idx]);
+            float2 sca2                   = cuda_cast<float2>(scale_ptr[idx]);
+            tmp2                          = tmp2 * s_inv_mean * sca2;
+            out_ptr[blockIdx.x * n + idx] = cuda_cast<T2>(tmp2);
+            amax_val                      = cuda_max(amax_val, cuda_max(cuda_abs(tmp2.x), cuda_abs(tmp2.y)));
+        }
+        amax_val = blockReduceMax<float>(amax_val);
+        if (threadIdx.x == 0) {
+            s_amax                  = amax_val;
+            quant_scale[blockIdx.x] = amax_val / 127.0f;
+        }
+        __syncthreads();
+        const float tmp_scale = 127.0f / s_amax;
+        for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
+            float2 tmp2                         = cuda_cast<float2>(out_ptr[blockIdx.x * n + idx]);
+            tmp2                                = tmp2 * tmp_scale;
+            quant_out_ptr[blockIdx.x * n + idx] = cuda_cast<int16_t>(tmp2);
+        }
+    }
+    else {
+        for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
+            float2 tmp2                   = cuda_cast<float2>(input_ptr[blockIdx.x * n + idx]);
+            float2 sca2                   = cuda_cast<float2>(scale_ptr[idx]);
+            tmp2                          = tmp2 * s_inv_mean * sca2;
+            out_ptr[blockIdx.x * n + idx] = cuda_cast<T2>(tmp2);
+        }
     }
 }
 
-template<>
-__global__ void rootMeanSquareNorm(float* out, const float* input, const float* scale, float eps, int m, int n)
+template<typename T, bool enable_quant>
+__global__ typename std::enable_if<std::is_same<T, float>::value>::type rootMeanSquareNorm(
+    T* out, const T* input, const T* scale, int8_t* quant_out, float* quant_scale, float eps, int m, int n)
 {
     __shared__ float s_inv_mean;
     float            mean = 0.f;
@@ -68,14 +95,44 @@ __global__ void rootMeanSquareNorm(float* out, const float* input, const float* 
     }
     __syncthreads();
 
-    for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
-        float tmp                 = input[blockIdx.x * n + idx];
-        out[blockIdx.x * n + idx] = tmp * s_inv_mean * scale[idx];
+    if constexpr (enable_quant) {
+        __shared__ float s_amax;
+        float            amax_val = 0.0f;
+        for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
+            float tmp                 = input[blockIdx.x * n + idx] * s_inv_mean * scale[idx];
+            out[blockIdx.x * n + idx] = tmp;
+            amax_val                  = cuda_max(amax_val, cuda_abs(tmp));
+        }
+        amax_val = blockReduceMax<float>(amax_val);
+        if (threadIdx.x == 0) {
+            s_amax                  = amax_val;
+            quant_scale[blockIdx.x] = amax_val / 127.0f;
+        }
+        __syncthreads();
+        const float tmp_scale = 127.0f / s_amax;
+        for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
+            float tmp                       = out[blockIdx.x * n + idx];
+            quant_out[blockIdx.x * n + idx] = cuda_cast<int8_t>(tmp * tmp_scale);
+        }
+    }
+    else {
+        for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
+            float tmp                 = input[blockIdx.x * n + idx];
+            out[blockIdx.x * n + idx] = tmp * s_inv_mean * scale[idx];
+        }
     }
 }
 
 template<typename T>
-void invokeRootMeanSquareNorm(T* out, const T* input, const T* scale, float eps, int m, int n, cudaStream_t stream)
+void invokeRootMeanSquareNorm(T*           out,
+                              const T*     input,
+                              const T*     scale,
+                              int8_t*      quant_out,
+                              float*       quant_scale,
+                              float        eps,
+                              int          m,
+                              int          n,
+                              cudaStream_t stream)
 {
     if (sizeof(T) == 2) {
         FT_CHECK(n % 2 == 0);
@@ -83,21 +140,22 @@ void invokeRootMeanSquareNorm(T* out, const T* input, const T* scale, float eps,
     }
     dim3 grid(m);
     dim3 block(std::min(n, 1024));
-    rootMeanSquareNorm<<<grid, block, 0, stream>>>(out, input, scale, eps, m, n);
+    if (quant_out == nullptr) {
+        rootMeanSquareNorm<T, false><<<grid, block, 0, stream>>>(out, input, scale, quant_out, quant_scale, eps, m, n);
+    }
+    else {
+        rootMeanSquareNorm<T, true><<<grid, block, 0, stream>>>(out, input, scale, quant_out, quant_scale, eps, m, n);
+    }
+    sync_check_cuda_error();
 }
 
-template void invokeRootMeanSquareNorm(float*, const float*, const float*, float, int, int, cudaStream_t);
-template void invokeRootMeanSquareNorm(half*, const half*, const half*, float, int, int, cudaStream_t);
-#ifdef ENABLE_BF16
 template void
-invokeRootMeanSquareNorm(__nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
+invokeRootMeanSquareNorm(float*, const float*, const float*, int8_t*, float*, float, int, int, cudaStream_t);
+template void invokeRootMeanSquareNorm(half*, const half*, const half*, int8_t*, float*, float, int, int, cudaStream_t);
+#ifdef ENABLE_BF16
+template void invokeRootMeanSquareNorm(
+    __nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, int8_t*, float*, float, int, int, cudaStream_t);
 #endif
-
-// #ifdef ENABLE_BF16
-
-// template void invokeRootMeanSquareNorm(__nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
-
-// #endif
 
 template<typename T, typename T0>
 __device__ T saturate_cast(T0 x)

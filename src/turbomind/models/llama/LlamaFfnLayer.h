@@ -34,17 +34,19 @@ public:
     LlamaFfnLayer(const ModelParam& model, const NcclParam& tp, const Context<T>& ctx):
         inter_size_(model.inter_size / tp.world_size_),
         hidden_units_(model.hidden_units),
+        quantization_(model.quantization),
         tensor_para_(tp),
         stream_(ctx.stream),
         linear_(ctx.linear.get()),
         allocator_(ctx.allocator.get())
-
     {
+        allocateWorkspace();
     }
 
     ~LlamaFfnLayer()
     {
         freeBuffer();
+        freeWorkspace();
     }
 
     void forward(TensorMap* output_tensors, const TensorMap* input_tensors, const LlamaFfnWeight<T>* weights);
@@ -53,6 +55,10 @@ private:
     void allocateBuffer(size_t token_num, const LlamaDenseWeight<T>*, const LlamaDenseWeight<T>*);
 
     void freeBuffer();
+
+    void allocateWorkspace();
+
+    void freeWorkspace();
 
     void activation(int token_num, bool is_chunked);
 
@@ -63,11 +69,15 @@ private:
     LlamaLinear<T>* const linear_;
     IAllocator* const     allocator_;
     bool                  is_free_buffer_after_forward_{};
+    QuantMethod           quantization_;
 
-    T* gating_buf_{};
-    T* inter_buf_{};
+    T*      gating_buf_{};
+    T*      inter_buf_{};
+    int8_t* quant_buf_{};
+    float*  act_scale_buf_{};
 
     bool is_allocate_buffer_{};
+    bool is_allocate_workspace_{};
 };
 
 }  // namespace turbomind

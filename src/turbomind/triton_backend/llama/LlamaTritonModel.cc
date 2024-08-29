@@ -213,19 +213,32 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
         }
     }
 
-    model_name_                     = reader.Get("llama", "model_name");
-    model_param_.head_num           = reader.GetInteger("llama", "head_num");
-    model_param_.head_dim           = reader.GetInteger("llama", "size_per_head");
-    model_param_.kv_head_num        = reader.GetInteger("llama", "kv_head_num", 0);
-    model_param_.hidden_units       = reader.GetInteger("llama", "hidden_units");
-    model_param_.layer_num          = reader.GetInteger("llama", "num_layer");
-    model_param_.inter_size         = reader.GetInteger("llama", "inter_size");
-    model_param_.vocab_size         = reader.GetInteger("llama", "vocab_size");
-    model_param_.norm_eps           = reader.GetFloat("llama", "norm_eps");
-    model_param_.start_id           = reader.GetInteger("llama", "start_id");
-    model_param_.end_id             = reader.GetInteger("llama", "end_id");
-    attn_param_.cache_block_seq_len = reader.GetInteger("llama", "cache_block_seq_len", 0);
-    model_param_.quant_policy       = reader.GetInteger("llama", "quant_policy", 0);
+    model_name_                        = reader.Get("llama", "model_name");
+    model_param_.head_num              = reader.GetInteger("llama", "head_num");
+    model_param_.head_dim              = reader.GetInteger("llama", "size_per_head");
+    model_param_.kv_head_num           = reader.GetInteger("llama", "kv_head_num", 0);
+    model_param_.hidden_units          = reader.GetInteger("llama", "hidden_units");
+    model_param_.layer_num             = reader.GetInteger("llama", "num_layer");
+    model_param_.inter_size            = reader.GetInteger("llama", "inter_size");
+    model_param_.vocab_size            = reader.GetInteger("llama", "vocab_size");
+    model_param_.norm_eps              = reader.GetFloat("llama", "norm_eps");
+    model_param_.start_id              = reader.GetInteger("llama", "start_id");
+    model_param_.end_id                = reader.GetInteger("llama", "end_id");
+    attn_param_.cache_block_seq_len    = reader.GetInteger("llama", "cache_block_seq_len", 0);
+    model_param_.quant_policy          = reader.GetInteger("llama", "quant_policy", 0);
+    const std::string quantization_str = reader.Get("llama", "quantization");
+    if (quantization_str == "awq") {
+        model_param_.quantization = turbomind::QuantMethod::AWQ;
+    }
+    else if (quantization_str == "gptq") {
+        model_param_.quantization = turbomind::QuantMethod::GPTQ;
+    }
+    else if (quantization_str == "qqq") {
+        model_param_.quantization = turbomind::QuantMethod::QQQ;
+    }
+    else {
+        model_param_.quantization = turbomind::QuantMethod::QNone;
+    }
 
     // Only weight classes need these
     attn_bias_  = reader.GetInteger("llama", "attn_bias", 0);
@@ -332,7 +345,7 @@ std::unique_ptr<ft::Engine<T>> LlamaTritonModel<T>::createSharedModelInstance(
                                                                 ctx->cublas_algo_map.get(),
                                                                 ctx->cublas_wrapper_mutex.get(),
                                                                 ctx->allocator.get());
-    ctx->linear               = std::make_unique<ft::LlamaLinear<T>>(ctx->cublas_wrapper.get(), ctx->stream);
+    ctx->linear = std::make_unique<ft::LlamaLinear<T>>(ctx->cublas_wrapper.get(), ctx->stream, ctx->allocator.get());
 
     ft::check_cuda_error(cudaGetDeviceProperties(&ctx->cuda_device_prop, device_id));
 
@@ -411,6 +424,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                attn_bias_,
                                                                weight_type_,
                                                                group_size_,
+                                                               model_param_.quantization,
                                                                lora_param_,
                                                                tensor_para_size_,
                                                                tensor_para_rank);
@@ -458,7 +472,7 @@ void LlamaTritonModel<T>::createEngine(int                                      
     auto engine = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
     engine->set_ffi_lock(ffi_lock_);
 
-    if (weight_type_ == ft::WeightType::kINT4) {
+    if (model_param_.quantization == ft::QuantMethod::AWQ || model_param_.quantization == ft::QuantMethod::GPTQ) {
         engine->model().tune();
     }
 

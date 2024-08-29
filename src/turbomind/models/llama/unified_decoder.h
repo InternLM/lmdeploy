@@ -38,6 +38,8 @@ private:
     using WeightType = LlamaDecoderLayerWeight<T>;
 
     void forwardSelfAttn(T*                             attn_io,
+                         int8_t*                        attn_qi,
+                         float*                         attn_qs,
                          TensorMap*                     _outputs,
                          const TensorMap*               _inputs,
                          size_t                         token_num,
