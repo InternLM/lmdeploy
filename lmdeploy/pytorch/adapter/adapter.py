@@ -358,7 +358,6 @@ class AdapterManager:
 
     def __init__(self, adapters: Dict[str, str],
                  target_infos: Dict[str, LoRATargetInfo], block_numel: int):
-
         self.target_infos = target_infos
         self.block_numel = block_numel
         if adapters is None:
