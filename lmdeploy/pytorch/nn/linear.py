@@ -112,15 +112,18 @@ class SLoRA(nn.Module):
 class AwqLinear(nn.Module):
     """w4a16 linear."""
 
-    def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 w_bit: int,
-                 group_size: int,
-                 bias: bool,
-                 device: Optional[torch.device] = None,
-                 colwise: bool = True,
-                 is_tp: bool = False):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        w_bit: int,
+        group_size: int,
+        bias: bool,
+        device: Optional[torch.device] = None,
+        colwise: bool = True,
+        is_tp: bool = False,
+        all_reduce: bool = True,
+    ):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -164,6 +167,7 @@ class AwqLinear(nn.Module):
         self.lora_adapters = []
         self.is_tp = is_tp
         self.colwise = colwise
+        self.all_reduce = all_reduce
 
     def _get_io_features(self, in_features: int, out_features: int, w_bit: int,
                          group_size: int, colwise: bool):
@@ -283,17 +287,18 @@ class AwqLinear(nn.Module):
 
     def forward(self, x):
         """w4a16 forward."""
-        is_tp = False if self.colwise else self.is_tp
+        all_reduce = False if self.colwise else self.is_tp
+        all_reduce = all_reduce and self.all_reduce
         if self.lora_adapters is None:
             return self.impl.forward(x, self.qweight, self.scales, self.qzeros,
-                                     self.bias, is_tp)
+                                     self.bias, all_reduce)
 
         out = self.impl.forward(x, self.qweight, self.scales, self.qzeros,
                                 self.bias, False)
         if self.lora_adapters is not None:
             for lora_adapter in self.lora_adapters:
                 out = lora_adapter(x, out)
-        if is_tp:
+        if all_reduce:
             dist.all_reduce(out)
         return out
 
@@ -440,14 +445,17 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
 class W8A8Linear(nn.Module):
     """w8a8 linear."""
 
-    def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 bias: bool,
-                 dtype: Optional[torch.dtype] = None,
-                 device: Optional[torch.device] = None,
-                 colwise: bool = True,
-                 is_tp: bool = False):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool,
+        dtype: Optional[torch.dtype] = None,
+        device: Optional[torch.device] = None,
+        colwise: bool = True,
+        is_tp: bool = False,
+        all_reduce: bool = True,
+    ):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -480,6 +488,7 @@ class W8A8Linear(nn.Module):
         self.lora_adapters = []
         self.is_tp = is_tp
         self.colwise = colwise
+        self.all_reduce = all_reduce
 
     def _get_io_features(self, in_features: int, out_features: int,
                          colwise: bool):
@@ -555,15 +564,16 @@ class W8A8Linear(nn.Module):
 
     def forward(self, x):
         """forward of w8a8 linear."""
-        is_tp = False if self.colwise else self.is_tp
+        all_reduce = False if self.colwise else self.is_tp
+        all_reduce = all_reduce and self.all_reduce
         if len(self.lora_adapters) == 0:
             return self.impl.forward(x, self.weight, self.scale, self.bias,
-                                     is_tp)
+                                     all_reduce)
 
         out = self.impl.forward(x, self.weight, self.scale, self.bias, False)
         for lora_adapter in self.lora_adapters:
             out = lora_adapter(x, out)
-        if is_tp:
+        if all_reduce:
             dist.all_reduce(out)
         return out
 
@@ -675,14 +685,17 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
 class BaseLinear(nn.Module):
     """linear layer."""
 
-    def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 bias: bool,
-                 dtype: Optional[torch.dtype] = None,
-                 device: Optional[torch.device] = None,
-                 colwise: bool = True,
-                 is_tp: bool = False):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool,
+        dtype: Optional[torch.dtype] = None,
+        device: Optional[torch.device] = None,
+        colwise: bool = True,
+        is_tp: bool = False,
+        all_reduce: bool = True,
+    ):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -711,6 +724,7 @@ class BaseLinear(nn.Module):
         self.lora_adapters = []
         self.is_tp = is_tp
         self.colwise = colwise
+        self.all_reduce = all_reduce
 
     def _get_io_features(self, in_features: int, out_features: int,
                          colwise: bool):
@@ -779,14 +793,15 @@ class BaseLinear(nn.Module):
 
     def forward(self, x):
         """forward of linear layer."""
-        is_tp = False if self.colwise else self.is_tp
+        all_reduce = False if self.colwise else self.is_tp
+        all_reduce = all_reduce and self.all_reduce
         if len(self.lora_adapters) == 0:
-            return self.impl.forward(x, self.weight, self.bias, is_tp)
+            return self.impl.forward(x, self.weight, self.bias, all_reduce)
 
         out = self.impl.forward(x, self.weight, self.bias, False)
         for lora_adapter in self.lora_adapters:
             out = lora_adapter(x, out)
-        if is_tp:
+        if all_reduce:
             dist.all_reduce(out)
         return out
 
@@ -901,7 +916,8 @@ def build_linear(in_features: int,
                  device: Optional[torch.device] = None,
                  colwise: bool = True,
                  is_tp: bool = False,
-                 quant_config: Any = None) -> nn.Module:
+                 quant_config: Any = None,
+                 all_reduce: bool = True) -> nn.Module:
     """build linear."""
     if is_tp:
         world_size, _ = get_world_rank()
@@ -916,6 +932,7 @@ def build_linear(in_features: int,
             device=device,
             colwise=colwise,
             is_tp=is_tp,
+            all_reduce=all_reduce,
         )
 
     quant_method = quant_config['quant_method']
@@ -931,6 +948,7 @@ def build_linear(in_features: int,
             device=device,
             colwise=colwise,
             is_tp=is_tp,
+            all_reduce=all_reduce,
         )
     if quant_method == 'w8a8':
         return W8A8Linear(
@@ -941,6 +959,7 @@ def build_linear(in_features: int,
             device=device,
             colwise=colwise,
             is_tp=is_tp,
+            all_reduce=all_reduce,
         )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
@@ -961,7 +980,8 @@ def build_colwise_linear(in_features: int,
                         device=device,
                         colwise=True,
                         is_tp=is_tp,
-                        quant_config=quant_config)
+                        quant_config=quant_config,
+                        all_reduce=False)
 
 
 def build_rowwise_linear(in_features: int,
@@ -970,7 +990,8 @@ def build_rowwise_linear(in_features: int,
                          dtype: Optional[torch.dtype] = None,
                          device: Optional[torch.device] = None,
                          is_tp: bool = False,
-                         quant_config: Any = None) -> nn.Module:
+                         quant_config: Any = None,
+                         all_reduce: bool = True) -> nn.Module:
     """build rowwise parallel linear layer."""
     return build_linear(in_features=in_features,
                         out_features=out_features,
@@ -979,7 +1000,8 @@ def build_rowwise_linear(in_features: int,
                         device=device,
                         colwise=False,
                         is_tp=is_tp,
-                        quant_config=quant_config)
+                        quant_config=quant_config,
+                        all_reduce=all_reduce)
 
 
 def build_merged_colwise_linear(

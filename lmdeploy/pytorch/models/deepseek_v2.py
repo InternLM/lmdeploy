@@ -326,7 +326,13 @@ class DeepseekV2MoE(nn.Module):
                 dtype=dtype,
                 device=device,
                 is_tp=True,
+                all_reduce=False,
             )
+        world_size, _ = get_world_rank()
+        if world_size > 1:
+            self._all_reduce = True
+        else:
+            self._all_reduce = False
 
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
@@ -348,6 +354,9 @@ class DeepseekV2MoE(nn.Module):
             out_states += shared_states
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
+        if self._all_reduce:
+            dist.all_reduce(out_states)
+
         return out_states
 
 
@@ -359,7 +368,8 @@ class DeepseekV2MLP(nn.Module):
                  intermediate_size: int = None,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 is_tp: bool = True):
+                 is_tp: bool = True,
+                 all_reduce: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -379,13 +389,16 @@ class DeepseekV2MLP(nn.Module):
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.down_proj = build_rowwise_linear(intermediate_size,
-                                              config.hidden_size,
-                                              bias=False,
-                                              quant_config=quantization_config,
-                                              dtype=dtype,
-                                              device=device,
-                                              is_tp=is_tp)
+        self.down_proj = build_rowwise_linear(
+            intermediate_size,
+            config.hidden_size,
+            bias=False,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=is_tp,
+            all_reduce=all_reduce,
+        )
 
     def forward(self, x):
         """forward."""

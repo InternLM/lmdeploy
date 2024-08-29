@@ -3,6 +3,7 @@ import json
 import os.path as osp
 
 import torch
+import torch.distributed as dist
 from transformers.modeling_utils import load_state_dict
 from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME,
                                 WEIGHTS_INDEX_NAME, WEIGHTS_NAME)
@@ -10,6 +11,14 @@ from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME,
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
+
+
+def _get_rank():
+    """get rank."""
+    rank = 0
+    if dist.is_initialized():
+        rank = dist.get_rank()
+    return rank
 
 
 def load_weight(param: torch.nn.Parameter, loaded_weight: torch.Tensor,
@@ -130,7 +139,10 @@ class ModelWeightLoader:
         """load model weights implementation."""
         assert hasattr(model, 'load_weights')
         paths = self._shard_paths
+        rank = _get_rank()
         for path in paths:
+            if rank == 0:
+                logger.debug(f'loading weights: {path}')
             state_dict = self._load_shard(path)
             model.load_weights(state_dict.items())
         if device is not None:
