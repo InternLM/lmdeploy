@@ -12,4 +12,4 @@ def rms_norm(hidden_states: Tensor,
         out = rms_norm_out
     else:
         out.copy_(rms_norm_out)
-    return rms_norm_out
+    return out

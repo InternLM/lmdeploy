@@ -39,6 +39,10 @@ class ASCENDDeviceUtils(BaseDeviceUtils):
             kv_start_indices, device=step_context.block_offsets.device)
         setattr(step_context, 'kv_start_indices', kv_start_indices)
         setattr(step_context, 'attention_mask', attention_mask)
+        setattr(step_context, 'q_start_loc', step_context.q_start_loc.cpu())
+        setattr(step_context, 'q_seq_length', step_context.q_seq_length.cpu())
+        setattr(step_context, 'kv_seq_length',
+                step_context.kv_seq_length.cpu())
         is_unpaged_prefill = (not step_context.is_decoding) and all(
             (step_context.q_seq_length == step_context.kv_seq_length).tolist())
         setattr(step_context, 'is_unpaged_prefill', is_unpaged_prefill)
