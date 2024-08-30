@@ -36,10 +36,12 @@ class TurbomindModelConfig:
     """Config for turbomind model."""
 
     model_name: str = ''
+    chat_template: str = ''
     model_arch: str = None
     tensor_para_size: int = None
     head_num: int = None
     kv_head_num: int = None
+    hidden_units: int = None
     vocab_size: int = None
     num_layer: int = None
     inter_size: int = None
@@ -54,6 +56,7 @@ class TurbomindModelConfig:
     size_per_head: int = 128
     group_size: int = 0
     max_batch_size: int = 64
+    max_prefill_token_num: int = 8192
     max_context_token_num: int = 1
     step_length: int = 1
     cache_max_entry_count: float = 0.8
@@ -62,7 +65,6 @@ class TurbomindModelConfig:
     enable_prefix_caching: bool = False
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
-    extra_tokens_per_iter: int = 0
     use_context_fmha: int = 1
     quant_policy: int = 0
     max_position_embeddings: int = 0
@@ -163,7 +165,7 @@ class BaseOutputModel(ABC):
     def __init__(self,
                  input_model: BaseInputModel,
                  cfg: TurbomindModelConfig,
-                 to_file: bool = True,
+                 exporter_factory,
                  out_dir: str = ''):
         super().__init__()
         self.input_model = input_model
@@ -171,11 +173,14 @@ class BaseOutputModel(ABC):
         if not cfg.valid:
             self.cfg = self.get_config(cfg)
         assert self.cfg.valid
-        self.to_file = to_file
+        assert self.cfg.kv_head_num % self.cfg.tensor_para_size == 0
         self.out_dir = out_dir
+        self.to_file = True if out_dir else False
         self.tm_params = {}
         model_info = self.input_model.model_info()
         self.permute_qk = model_info.get('permute_qk', True)
+        # ! Dependency on `self`
+        self.exporters = exporter_factory(self)
 
     @abstractmethod
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
@@ -186,14 +191,13 @@ class BaseOutputModel(ABC):
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model.model_info())
 
-        # head_num, vocab_size
+        # vocab_size
         for bin in self.input_model.bins():
             emb = bin.tok_embeddings()
             if emb is not None:
                 _vocab_size, dim = emb.shape
-                head_num = dim // cfg.size_per_head
                 break
-        final_cfg.update(dict(head_num=head_num, vocab_size=_vocab_size))
+        final_cfg.update(dict(vocab_size=_vocab_size))
         return TurbomindModelConfig.from_dict(final_cfg, allow_none=True)
 
     def export_config(self) -> None:
@@ -252,14 +256,28 @@ class BaseOutputModel(ABC):
                    name: str,
                    split_dim=None,
                    copy=False) -> None:
-        """save split."""
+        """save split.
+
+        - 2D input
+            shape must be (input_dims, output_dims)
+        - 1D input (bias)
+            shape must be (output_dims)
+            split is skipped when split_dim == 0
+        """
+
+        if copy or (tensor.dim() == 1 and split_dim == 0):
+            split_dim = None
+            copy = True
+
         tp = self.cfg.tensor_para_size
         if split_dim is not None:
             tprint(
                 f'*** splitting {name}, shape={tensor.shape}, '
                 f'split_dim={split_dim}, tp={tp}',
                 to_file=self.to_file)
-            assert tensor.shape[split_dim] % tp == 0
+            if tensor.shape[split_dim] % tp != 0:
+                raise RuntimeError(
+                    f'{name}: shape={list(tensor.shape)}, tp={tp}')
             split_size = tensor.shape[split_dim] // tp
             splits = torch.split(tensor, split_size, dim=split_dim)
             for i, split in enumerate(splits):
@@ -322,31 +340,7 @@ class BaseOutputModel(ABC):
             output_weight = pad_weight(output_weight)
             self.export_weight(output_weight, 'output.weight')
 
-    @abstractmethod
     def export_transformer_block(self, bin: BaseReader, i: int) -> None:
         """Export transformer block."""
-        pass
-
-
-def permute(x: torch.Tensor, size_per_head: int = 128):
-    if x.shape[-1] > 1:
-        dim = x.shape[-1]
-        n_heads = dim // size_per_head
-        return x.view(-1, n_heads, 2,
-                      dim // n_heads // 2).transpose(2, 3).reshape(-1, dim)
-    else:  # scales, zeros
-        dim = x.shape[0]
-        n_heads = dim // size_per_head
-        return x.view(n_heads, 2, dim // n_heads // 2,
-                      1).transpose(1, 2).reshape(dim, 1)
-
-
-def merge_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, tp: int,
-              dim: int):
-
-    def reshape(x):
-        return x.view(x.size(0), tp, -1) if dim == 2 else x.view(tp, -1)
-
-    qkv = torch.cat((reshape(q), reshape(k), reshape(v)), dim=-1)
-    # (input_dim, head_num + 2 * kv_head_num)
-    return qkv.view(q.size(0), -1)
+        for e in self.exporters:
+            e.export(bin, i)

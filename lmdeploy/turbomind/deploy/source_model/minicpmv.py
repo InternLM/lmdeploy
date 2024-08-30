@@ -17,7 +17,4 @@ class MiniCPMVReader(LlamaReader):
 @INPUT_MODELS.register_module(name='minicpmv')
 class MiniCPMVModel(LlamaModel):
     """MiniCPMV model in hf format."""
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path, **kwargs)
-        self.Reader = MiniCPMVReader
+    Reader = MiniCPMVReader

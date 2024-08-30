@@ -220,6 +220,8 @@ MODULE_MAP.update({
 # peft
 MODULE_MAP.update({
     'peft.tuners.lora.layer.Linear':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear',
+    'peft.tuners.lora.awq.AwqLoraLinear':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear'
 })
 
@@ -341,6 +343,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.PatchedInternVLChatModel'
 })
 
+# awq
+MODULE_MAP.update({
+    'awq.modules.linear.gemm.WQLinear_GEMM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.awq_modules.PatchedWQLinear_GEMM'
+})
+
 # phi3 vision
 MODULE_MAP.update({
     'modeling_phi3_v.Phi3Attention':
@@ -355,6 +363,24 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3MLP',
     'modeling_phi3_v.Phi3RMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})
+
+# phi-3.5-moe
+MODULE_MAP.update({
+    'modeling_phimoe.PhiMoEAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    'modeling_phimoe.PhiMoEFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    'modeling_phimoe.PhiMoESdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    'modeling_phimoe.PhiMoEModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralModel',
+    'modeling_phimoe.PhiMoEBlockSparseTop2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
+    'modeling_phimoe.PhiMoEBLockSparseTop2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
+    'modeling_phimoe.PhiMoESparseMoeBlock':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3_moe.PatchedPhiMoESparseMoeBlock',
 })
 
 # ascend module

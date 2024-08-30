@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 import os.path as osp
 import shutil
 
@@ -10,36 +11,9 @@ from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
 
-from .calibrate import calibrate
+from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
 
-# from lmdeploy.lite.utils.export_turbomind import export_turbomind_config
-
-LAYER_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMDecoderLayer',
-    'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
-    'QWenLMHeadModel': 'QWenBlock',
-    'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
-    'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
-    'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
-    'LlamaForCausalLM': 'LlamaDecoderLayer',
-    'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
-    'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
-    'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
-    'ChatGLMForConditionalGeneration': 'GLMBlock',
-}
-NORM_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMRMSNorm',
-    'InternLM2ForCausalLM': 'InternLM2RMSNorm',
-    'QWenLMHeadModel': 'RMSNorm',
-    'Qwen2ForCausalLM': 'Qwen2RMSNorm',
-    'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
-    'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
-    'LlamaForCausalLM': 'LlamaRMSNorm',
-    'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
-    'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
-    'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
-    'ChatGLMForConditionalGeneration': 'RMSNorm',
-}
+NORM_TYPE_MAP = NORM_TYPE_MAP  # legacy
 
 
 def save_vl_model(vl_model, model_path, dst_path):
@@ -58,6 +32,15 @@ def save_vl_model(vl_model, model_path, dst_path):
                 shutil.copy(tmp_path, osp.join(dst_path, name))
             elif osp.isdir(tmp_path):
                 shutil.copytree(tmp_path, osp.join(dst_path, name))
+    # AutoProcessor files
+    allfiles = os.listdir(model_path)
+    for file in allfiles:
+        if not file.endswith('.py'):
+            continue
+        copy_src = osp.join(model_path, file)
+        copy_dst = osp.join(dst_path, file)
+        if not osp.exists(copy_dst):
+            shutil.copyfile(copy_src, copy_dst)
 
 
 def auto_awq(model: str,

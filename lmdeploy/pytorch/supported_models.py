@@ -62,6 +62,8 @@ _SUPPORTED_ARCHS = dict(
     InternVLChatModel=True,
     # gemma2
     Gemma2ForCausalLM=True,
+    # phi3.5-moe
+    PhiMoEForCausalLM=True,
 )
 
 

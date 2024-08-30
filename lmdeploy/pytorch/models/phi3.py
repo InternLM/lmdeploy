@@ -142,7 +142,6 @@ class PatchedPhi3Attention(nn.Module):
                                           hidden_size)
 
         attn_output = self.o_proj(attn_output)
-
         return attn_output, None, past_key_value
 
     def forward(
@@ -153,6 +152,7 @@ class PatchedPhi3Attention(nn.Module):
         past_key_value: Optional[Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
+        **kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """rewrite of forward."""
@@ -173,7 +173,7 @@ class PatchedPhi3MLP(nn.Module):
                       device: torch.device):
         """load weights."""
         for mod_name in ['gate_up_proj']:
-            out_size = self.gate_up_proj.weight.size(0)
+            out_size = self.gate_up_proj.out_features
             sections = [out_size // 2] * 2
             colwise_split_parallelize_linear(getattr(self, mod_name),
                                              sections,

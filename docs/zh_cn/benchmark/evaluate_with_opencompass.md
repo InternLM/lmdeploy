@@ -8,11 +8,7 @@ LMDeploy设计了TurboMind推理引擎用来加速大模型推理，其推理精
 
 ### 安装 lmdeploy
 
-使用 pip (python 3.8+) 安装 LMDeploy，或者[源码安装](../build.md)
-
-```shell
-pip install lmdeploy
-```
+请参考[安装指南](../get_started/installation.md)安装 lmdeploy
 
 ### 安装 OpenCompass
 
@@ -143,7 +139,7 @@ models = [internlm_chat_20b]
 
 **注**
 
-- 如果想在测评配置文件中`engine_config`和`gen_config`字段传递更多参数，请参考[TurbomindEngineConfig](https://lmdeploy.readthedocs.io/zh-cn/latest/inference/pipeline.html#turbomindengineconfig) 和 [EngineGenerationConfig](https://lmdeploy.readthedocs.io/zh-cn/latest/inference/pipeline.html#generationconfig)
+- 如果想在测评配置文件中`engine_config`和`gen_config`字段传递更多参数，请参考[TurbomindEngineConfig](https://github.com/InternLM/lmdeploy/blob/061f99736544c8bf574309d47baf574b69ab7eaf/lmdeploy/messages.py#L114) 和 [EngineGenerationConfig](https://github.com/InternLM/lmdeploy/blob/061f99736544c8bf574309d47baf574b69ab7eaf/lmdeploy/messages.py#L56)
 
 ## 执行测评任务
 

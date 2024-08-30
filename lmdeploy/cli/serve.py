@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .cli import CLI
 from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
-                    convert_args, get_lora_adapters)
+                    convert_args, get_chat_template, get_lora_adapters)
 
 
 class SubCliServe:
@@ -51,32 +51,31 @@ class SubCliServe:
         ArgumentHelper.download_dir(parser)
 
         # chat template args
-        ArgumentHelper.meta_instruction(parser)  # TODO remove
         ArgumentHelper.chat_template(parser)
-        ArgumentHelper.cap(parser)
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
 
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
-        model_name_act = ArgumentHelper.model_name(pt_group)
+        ArgumentHelper.device(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
-
+        max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(
+            pt_group)
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
         tb_group._group_actions.append(tp_act)
-        tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(cache_block_seq_len_act)
         tb_group._group_actions.append(prefix_caching_act)
+        tb_group._group_actions.append(max_prefill_token_num_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
@@ -129,20 +128,15 @@ class SubCliServe:
                             type=str,
                             default=['*'],
                             help='A list of allowed http headers for cors')
-        parser.add_argument('--qos-config-path',
-                            type=str,
-                            default='',
-                            help='Qos policy config path')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
+        ArgumentHelper.model_name(parser)
 
         # chat template args
-        ArgumentHelper.meta_instruction(parser)  # TODO remove
         ArgumentHelper.chat_template(parser)
-        ArgumentHelper.cap(parser)
 
         # model args
         ArgumentHelper.revision(parser)
@@ -152,25 +146,26 @@ class SubCliServe:
         pt_group = parser.add_argument_group('PyTorch engine arguments')
 
         ArgumentHelper.adapters(pt_group)
+        ArgumentHelper.device(pt_group)
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
-        model_name_act = ArgumentHelper.model_name(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
-
+        max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(
+            pt_group)
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
         tb_group._group_actions.append(tp_act)
-        tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(cache_block_seq_len_act)
         tb_group._group_actions.append(prefix_caching_act)
+        tb_group._group_actions.append(max_prefill_token_num_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
@@ -206,7 +201,6 @@ class SubCliServe:
         from lmdeploy.archs import autoget_backend
         from lmdeploy.messages import (PytorchEngineConfig,
                                        TurbomindEngineConfig)
-        from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.gradio.app import run
         backend = args.backend
 
@@ -216,16 +210,15 @@ class SubCliServe:
         if backend == 'pytorch':
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
-                model_name=args.model_name,
                 max_batch_size=args.max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
                 session_len=args.session_len,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
+                device_type=args.device,
+                max_prefill_token_num=args.max_prefill_token_num)
         else:
             backend_config = TurbomindEngineConfig(
-                model_name=args.model_name,
                 tp=args.tp,
                 max_batch_size=args.max_batch_size,
                 session_len=args.session_len,
@@ -235,14 +228,8 @@ class SubCliServe:
                 cache_max_entry_count=args.cache_max_entry_count,
                 cache_block_seq_len=args.cache_block_seq_len,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
-        chat_template_config = ChatTemplateConfig(
-            model_name=args.model_name,
-            meta_instruction=args.meta_instruction,
-            capability=args.cap)
-        if args.chat_template:
-            chat_template_config = ChatTemplateConfig.from_json(
-                args.chat_template)
+                max_prefill_token_num=args.max_prefill_token_num)
+        chat_template_config = get_chat_template(args.chat_template)
         run(args.model_path_or_server,
             server_name=args.server_name,
             server_port=args.server_port,
@@ -255,7 +242,6 @@ class SubCliServe:
     def api_server(args):
         """Serve LLMs with restful api using fastapi."""
         from lmdeploy.archs import autoget_backend
-        from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.openai.api_server import serve as run_api_server
         backend = args.backend
         if backend != 'pytorch':
@@ -267,18 +253,17 @@ class SubCliServe:
             adapters = get_lora_adapters(args.adapters)
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
-                model_name=args.model_name,
                 max_batch_size=args.max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
                 session_len=args.session_len,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
+                device_type=args.device,
+                max_prefill_token_num=args.max_prefill_token_num)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(
-                model_name=args.model_name,
                 tp=args.tp,
                 max_batch_size=args.max_batch_size,
                 session_len=args.session_len,
@@ -288,11 +273,9 @@ class SubCliServe:
                 cache_max_entry_count=args.cache_max_entry_count,
                 cache_block_seq_len=args.cache_block_seq_len,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
-        chat_template_config = None
-        if args.chat_template:
-            chat_template_config = ChatTemplateConfig.from_json(
-                args.chat_template)
+                max_prefill_token_num=args.max_prefill_token_num)
+        chat_template_config = get_chat_template(args.chat_template)
+
         from lmdeploy.messages import VisionConfig
         vision_config = VisionConfig(args.vision_max_batch_size)
         run_api_server(args.model_path,
@@ -309,8 +292,7 @@ class SubCliServe:
                        allow_headers=args.allow_headers,
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
-                       ssl=args.ssl,
-                       qos_config_path=args.qos_config_path)
+                       ssl=args.ssl)
 
     @staticmethod
     def api_client(args):

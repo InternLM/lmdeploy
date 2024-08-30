@@ -22,8 +22,14 @@ def get_wikitext2(tokenizer, nsamples, seed, seqlen):
         test_enc: Full tokenized Wikitext-2 test set.
     """
     from datasets import load_dataset
-    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
-    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+    traindata = load_dataset('wikitext',
+                             'wikitext-2-raw-v1',
+                             split='train',
+                             trust_remote_code=True)
+    testdata = load_dataset('wikitext',
+                            'wikitext-2-raw-v1',
+                            split='test',
+                            trust_remote_code=True)
 
     trainenc = tokenizer('\n\n'.join(traindata['text']), return_tensors='pt')
     testenc = tokenizer('\n\n'.join(testdata['text']), return_tensors='pt')
@@ -55,10 +61,14 @@ def get_ptb(tokenizer, nsamples, seed, seqlen):
         test_enc: Full tokenized PTB validation set.
     """
     from datasets import load_dataset
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
+    traindata = load_dataset('ptb_text_only',
+                             'penn_treebank',
+                             split='train',
+                             trust_remote_code=True)
     valdata = load_dataset('ptb_text_only',
                            'penn_treebank',
-                           split='validation')
+                           split='validation',
+                           trust_remote_code=True)
 
     trainenc = tokenizer('\n\n'.join(traindata['sentence']),
                          return_tensors='pt')
@@ -96,13 +106,15 @@ def get_c4(tokenizer, nsamples, seed, seqlen):
         'allenai--c4',
         data_files={'train': 'en/c4-train.00000-of-01024.json.gz'},
         split='train',
-        use_auth_token=False)
+        use_auth_token=False,
+        trust_remote_code=True)
     valdata = load_dataset(
         'allenai/c4',
         'allenai--c4',
         data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'},
         split='validation',
-        use_auth_token=False)
+        use_auth_token=False,
+        trust_remote_code=True)
 
     import random
     random.seed(seed)
@@ -158,8 +170,14 @@ def get_ptb_new(tokenizer, nsamples, seed, seqlen):
         test_enc: Full tokenized PTB validation set.
     """
     from datasets import load_dataset
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
-    testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test')
+    traindata = load_dataset('ptb_text_only',
+                             'penn_treebank',
+                             split='train',
+                             trust_remote_code=True)
+    testdata = load_dataset('ptb_text_only',
+                            'penn_treebank',
+                            split='test',
+                            trust_remote_code=True)
 
     trainenc = tokenizer(' '.join(traindata['sentence']), return_tensors='pt')
     testenc = tokenizer(' '.join(testdata['sentence']), return_tensors='pt')
@@ -195,12 +213,14 @@ def get_c4_new(tokenizer, nsamples, seed, seqlen):
         'allenai/c4',
         'allenai--c4',
         data_files={'train': 'en/c4-train.00000-of-01024.json.gz'},
-        split='train')
+        split='train',
+        trust_remote_code=True)
     valdata = load_dataset(
         'allenai/c4',
         'allenai--c4',
         data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'},
-        split='validation')
+        split='validation',
+        trust_remote_code=True)
 
     import random
     random.seed(seed)
@@ -248,7 +268,8 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
     from datasets.builder import DatasetGenerationError
     try:
         dataset = load_dataset('mit-han-lab/pile-val-backup',
-                               split='validation')
+                               split='validation',
+                               trust_remote_code=True)
     except DatasetGenerationError:
         raise InterruptedError('There have been some issues when generating '
                                'the dataset, you could try to download it '

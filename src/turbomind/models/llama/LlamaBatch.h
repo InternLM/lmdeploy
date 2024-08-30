@@ -8,16 +8,34 @@
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/instance_comm.h"
 #include <condition_variable>
 #include <mutex>
 #include <type_traits>
 
+using ffi_api_lock_ctrl_t = std::function<void(int)>;
+
 namespace turbomind {
+
+struct SharedState {
+    std::vector<std::shared_ptr<Request>> infer_requests;
+    std::vector<std::shared_ptr<Request>> stop_requests;
+    RequestQueue                          request_queue;
+    std::shared_ptr<Barrier>              barrier;
+    bool                                  abort;
+    std::atomic<size_t>                   free_size{std::numeric_limits<size_t>::max()};
+};
+
+struct Control {
+    AbstractInstanceComm* comm;
+    Request::Callback     callback;
+};
 
 struct BatchState {
     int*  h_prompt_length;  // history + input, ignore generated
@@ -56,9 +74,7 @@ struct GenerationState {
 
     bool skip_init_sampling;
 
-    int max_input_count1;
-    int max_input_count2;
-
+    // min tokens per iter for satisfying `max_prefill_iters` constraint
     std::deque<int> min_input_count;
 
     int finished_count;
@@ -80,15 +96,15 @@ public:
 
     void ProcessInferRequests(const Requests& requests);
 
-    void AdjustMaxInputCount(GenerationState&                    g,
-                             const std::vector<const Sequence*>& sequences,
-                             const std::vector<int>&             context_length);
+    int AdjustMaxInputCount(GenerationState&                    g,
+                            const std::vector<const Sequence*>& sequences,
+                            const std::vector<int>&             context_length);
 
     void Initialize(GenerationState& g);
 
     void InitializeSampling(const GenerationState& g);
 
-    [[nodiscard]] bool Forward(GenerationState& g, int iter);
+    [[nodiscard]] bool Forward(GenerationState& g);
 
     [[nodiscard]] auto Finish(GenerationState& g) -> std::vector<Signal>;
 
@@ -99,31 +115,37 @@ public:
                              const std::vector<int>&             lengths,
                              const std::vector<const Sequence*>& sequences);
 
-    explicit LlamaBatch(const EngineParams& params, int cache_block_seq_len, int quant_policy, LlamaV2<T>* model);
+    explicit LlamaBatch(const EngineParam&           param,
+                        std::unique_ptr<LlamaV2<T>>  model,
+                        std::unique_ptr<Context<T>>  ctx,
+                        std::shared_ptr<SharedState> state,
+                        int                          device_id);
 
-    ~LlamaBatch()
-    {
-        TM_LOG_INFO("~LlamaBatch()");
-        model_->shared_state_->request_queue.close();
-
-        internal_thread_.join();
-
-        if (output_thread_.joinable()) {
-            {
-                std::lock_guard lock{output_mutex_};
-                output_stop_token_ = true;
-            }
-            output_cv_.notify_one();
-            output_thread_.join();
-        }
-
-        FreeBuffer();
-    }
+    ~LlamaBatch();
 
     void Start();
 
+    void Submit(std::unordered_map<std::string, Tensor>*       outputs,
+                const std::unordered_map<std::string, Tensor>* inputs,
+                Control                                        control);
+
+    void set_ffi_lock(ffi_api_lock_ctrl_t func)
+    {
+        ffi_lock_ = func;
+    }
+
+    LlamaV2<T>& model() noexcept
+    {
+        return *model_;
+    }
+
+    int session_len() const noexcept
+    {
+        return session_len_;
+    }
+
 private:
-    void InternalThreadEntry(int device_id);
+    void InternalThreadEntry();
 
     void OutputThreadEntry();
 
@@ -188,15 +210,30 @@ private:
     }
 
 private:
-    const int  max_batch_size_;
-    const int  max_context_token_num_;
-    int        session_len_;
-    const int  rank_;
-    const bool debug_;
-    const int  step_length_;
+    const EngineParam param_;
 
-    LlamaV2<T>* const model_;
+    const std::shared_ptr<SharedState> shared_state_;
 
+    const int      max_batch_size_;
+    const int      max_forward_token_num_;
+    const int      max_context_token_num_;
+    const int      num_tokens_per_iter_;
+    const int      max_prefill_iters_;
+    const int      device_id_;
+    const int      rank_;
+    const DataType data_type_;
+    const bool     debug_;
+
+    // Refs into `Context<T>`
+    cudaStream_t const     stream_{};
+    cublasMMWrapper* const cublas_wrapper_{};
+    IAllocator* const      allocator_{};
+    IAllocator* const      peer_allocator_{};
+
+    int session_len_;  // May be truncated in ctor
+
+    std::unique_ptr<Context<T>>      context_;
+    std::unique_ptr<LlamaV2<T>>      model_;
     std::unique_ptr<SequenceManager> sequence_manager_;
 
     ///////////////////////////////////////////////////////////////////
@@ -276,8 +313,6 @@ private:
     // hard limits for persistent buffers
     static constexpr int kMaxStopBadWordsLen = 32;
 
-    const DataType data_type_{};
-
     bool is_allocate_persistant_buffer_ = false;
     bool is_allocate_buffer_            = false;
 
@@ -285,10 +320,6 @@ private:
     TensorMap outputs_;
 
     std::vector<std::tuple<std::string, std::byte*, std::byte*>> sampling_params_;
-
-    cudaStream_t     stream_{};
-    cublasMMWrapper* cublas_wrapper_{};
-    IAllocator*      allocator_{};
 
     std::thread internal_thread_;
 
@@ -298,12 +329,12 @@ private:
     std::condition_variable output_cv_;
     std::vector<Signal>     output_signals_;
     bool                    output_stop_token_{false};
+    ffi_api_lock_ctrl_t     ffi_lock_;
 
     int* h_output_ids_{};
-
-    const int num_tokens_per_iter_;
-    const int extra_tokens_per_iter_;
-    const int max_prefill_iters_;
 };
+
+template<class T>
+using Engine = LlamaBatch<T>;
 
 }  // namespace turbomind

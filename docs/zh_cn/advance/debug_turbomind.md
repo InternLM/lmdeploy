@@ -4,7 +4,7 @@ Turbomind 使用 C++ 实现，不像 Python 一样易于调试。该文档提供
 
 ## 前置工作
 
-首先，根据构建[命令](../build.md)完成本地编译。
+首先，根据构建[命令](../get_started/installation.md)完成源码编译和安装。
 
 ## 配置 Python 调试环境
 

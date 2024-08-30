@@ -19,9 +19,9 @@
 
 #pragma once
 
-// #include "src/turbomind/layers/FfnLayer.h"
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/utils/custom_ar_comm.h"
 #include "src/turbomind/utils/nccl_utils.h"
 #include <functional>
@@ -31,23 +31,14 @@ namespace turbomind {
 template<typename T>
 class LlamaFfnLayer {
 public:
-    LlamaFfnLayer(size_t           head_num,
-                  size_t           size_per_head,
-                  size_t           inter_size,
-                  NcclParam        tensor_para,
-                  cudaStream_t     stream,
-                  cublasMMWrapper* cublas_wrapper,
-                  IAllocator*      allocator,
-                  bool             is_free_buffer_after_forward):
-        head_num_(head_num),
-        size_per_head_(size_per_head),
-        inter_size_(inter_size / tensor_para.world_size_),
-        hidden_units_(head_num * size_per_head),
-        stream_(stream),
-        linear_(cublas_wrapper, stream),
-        allocator_(allocator),
-        tensor_para_(tensor_para),
-        is_free_buffer_after_forward_(is_free_buffer_after_forward)
+    LlamaFfnLayer(const ModelParam& model, const NcclParam& tp, const Context<T>& ctx):
+        inter_size_(model.inter_size / tp.world_size_),
+        hidden_units_(model.hidden_units),
+        tensor_para_(tp),
+        stream_(ctx.stream),
+        linear_(ctx.linear.get()),
+        allocator_(ctx.allocator.get())
+
     {
     }
 
@@ -63,21 +54,18 @@ private:
 
     void freeBuffer();
 
-    void activation(int num_token);
+    void activation(int token_num, bool is_chunked);
 
-    size_t         head_num_;
-    size_t         size_per_head_;
-    size_t         inter_size_;
-    size_t         hidden_units_;
-    cudaStream_t   stream_;
-    LlamaLinear<T> linear_;
-    IAllocator*    allocator_;
-    bool           is_free_buffer_after_forward_;
+    const size_t          inter_size_;
+    const size_t          hidden_units_;
+    const NcclParam       tensor_para_;
+    cudaStream_t const    stream_;
+    LlamaLinear<T>* const linear_;
+    IAllocator* const     allocator_;
+    bool                  is_free_buffer_after_forward_{};
 
     T* gating_buf_{};
     T* inter_buf_{};
-
-    NcclParam tensor_para_;
 
     bool is_allocate_buffer_{};
 };
