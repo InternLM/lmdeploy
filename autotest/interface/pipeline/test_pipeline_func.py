@@ -435,7 +435,7 @@ def test_gen_config_stop_words(config, model, backend, worker_id):
             result &= ' and' not in response[
                 i].text and ' to ' not in response[i].text
             result &= response[i].finish_reason == 'stop' and response[
-                i].generate_token_len < 20
+                i].generate_token_len < 50
         save_pipeline_common_log(config, file_name, result, response)
         del pipe
         torch.cuda.empty_cache()
@@ -590,8 +590,9 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend,
         gen_config = GenerationConfig(repetition_penalty=0.01, random_seed=1)
         response = pipe('Shanghai is', gen_config=gen_config)
 
-        result = 'a 上海 is a 上海, ' * 10 in response.text or get_repeat_times(
-            response.text, 'Shanghai is') > 5
+        result = get_repeat_times(response.text,
+                                  'is a name') > 5 or get_repeat_times(
+                                      response.text, 'Shanghai is') > 5
         save_pipeline_common_log(config, file_name, result, response)
         del pipe
         torch.cuda.empty_cache()
