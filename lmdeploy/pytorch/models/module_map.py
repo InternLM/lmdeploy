@@ -58,34 +58,14 @@ MODULE_MAP.update({
 
 # deepseek
 MODULE_MAP.update({
-    'modeling_deepseek.DeepseekAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
-    'modeling_deepseek.DeepseekFlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
-    'modeling_deepseek.DeepseekSdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
-    'modeling_deepseek.DeepseekModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
-    'modeling_deepseek.DeepseekMLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
-    'modeling_deepseek.DeepseekRMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
-    'modeling_deepseek.DeepseekMoE':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekMoE',
+    'DeepseekForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.DeepseekForCausalLM',
 })
 
 # qwen
 MODULE_MAP.update({
-    'modeling_qwen.QWenAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenAttention',
-    'modeling_qwen.FlashSelfAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenAttention',
-    'modeling_qwen.QWenModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenModel',
-    'modeling_qwen.QWenMLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenMLP',
-    'modeling_qwen.RMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedRMSNorm',
+    'QWenLMHeadModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.QWenLMHeadModel',
 })
 
 # qwen1.5

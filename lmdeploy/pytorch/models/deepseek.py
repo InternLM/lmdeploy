@@ -1,279 +1,574 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
 from torch import nn
+from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.kernels.fused_moe import fused_moe
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
+                                 RMSNorm, SiluAndMul, build_rotary_embedding)
+from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
+                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
+from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
-from ..weight_loader.dist_utils import (colwise_parallelize_linear,
-                                        rowwise_parallelize_linear)
+
+def get_world_rank():
+    """get current world size and rank."""
+    import torch.distributed as dist
+    world_size = 1
+    rank = 0
+
+    if dist.is_initialized():
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+
+    return world_size, rank
 
 
-class PatchedDeepseekAttention(nn.Module):
+class DeepseekAttention(nn.Module):
+    """Rewrite module of MistralAttention."""
 
-    def _load_weights(self, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
-        for mod_name in ['q_proj', 'k_proj', 'v_proj']:
-            colwise_parallelize_linear(getattr(self, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
-        for mod_name in ['o_proj']:
-            rowwise_parallelize_linear(getattr(self, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        num_heads = config.num_attention_heads
+        num_key_value_heads = config.num_key_value_heads
+        hidden_size = config.hidden_size
+        head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
 
-    @classmethod
-    def _distribute_output_fn(cls, outputs, **kwargs):
-        """Distribution output hook."""
-        dist.all_reduce(outputs[0])
-        return outputs
-
-    def _contiguous_batching_forward_impl(
-        self,
-        hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        world_size: int = 1,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """Rewrite implementation of forward.
-
-        Add continuous batching support. Add paged attention support. TP
-        support.
-        """
-        context = self.context.context
-        kv_seq_length = context.kv_seq_length
-        q_seq_length = context.q_seq_length
-        q_start_loc = context.q_start_loc
-        block_offsets = context.block_offsets
-        max_q_seq_length = context.max_q_seq_length
-        max_kv_seq_length = context.max_kv_seq_length
-
-        num_heads = self.num_heads // world_size
-        num_kv_heads = self.num_key_value_heads // world_size
-        head_dim = self.head_dim
-        hidden_size = num_heads * head_dim
-
-        def __qkv_proj(hidden_states):
-            """qkv proj."""
-            query_states = self.q_proj(hidden_states)
-            key_states = self.k_proj(hidden_states)
-            value_states = self.v_proj(hidden_states)
-
-            return query_states, key_states, value_states
-
-        def __rotary_emb_fn(query_states, key_states, value_states):
-            if hasattr(self, 'rotary_emb'):
-                if not hasattr(context, '_cos'):
-                    cos, sin = self.rotary_emb(value_states,
-                                               seq_len=max_kv_seq_length)
-                    context._cos = cos
-                    context._sin = sin
-                else:
-                    cos = context._cos
-                    sin = context._sin
-                query_states, key_states = apply_rotary_pos_emb(
-                    query_states,
-                    key_states,
-                    cos,
-                    sin,
-                    position_ids,
-                    context.position_ids_1d,
-                    q_embed=query_states,
-                    k_embed=key_states)
-            return query_states, key_states, value_states
-
-        query_states, key_states, value_states = __qkv_proj(hidden_states)
-
-        query_states = query_states.view(-1, num_heads, head_dim)
-        key_states = key_states.view(-1, num_kv_heads, head_dim)
-        value_states = value_states.view(-1, num_kv_heads, head_dim)
-
-        query_states, key_states, value_states = __rotary_emb_fn(
-            query_states, key_states, value_states)
-
-        fill_kv_cache(
-            key_states,
-            value_states,
-            past_key_value[0],
-            past_key_value[1],
-            q_start_loc,
-            q_seq_length,
-            kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_q_seq_length,
-            block_offsets=block_offsets,
+        # packed qkv
+        self.qkv_proj = build_qkv_proj(
+            hidden_size,
+            num_q_heads=num_heads,
+            num_kv_heads=num_key_value_heads,
+            head_size=head_dim,
+            bias=False,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
         )
 
-        attn_output = query_states
-        paged_attention_fwd(
-            query_states,
-            past_key_value[0],
-            past_key_value[1],
-            attn_output,
-            block_offsets,
-            q_start_loc=q_start_loc,
-            q_seqlens=q_seq_length,
-            kv_seqlens=kv_seq_length,
-            max_seqlen=max_q_seq_length,
+        # rotary embedding
+        self.apply_rotary_pos_emb = ApplyRotaryEmb()
+
+        # attention
+        self.attn_fwd = Attention(
+            num_heads,
+            head_dim,
+            num_kv_heads=num_key_value_heads,
         )
-        attn_output = attn_output.reshape(*hidden_states.shape[:-1],
-                                          hidden_size)
 
-        attn_output = self.o_proj(attn_output)
-
-        return attn_output, None, past_key_value
+        # o_proj
+        self.o_proj = build_rowwise_linear(num_heads * head_dim,
+                                           hidden_size,
+                                           bias=False,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=True)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
-        **kwargs
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """forward."""
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
-        return self._contiguous_batching_forward_impl(
-            hidden_states,
-            position_ids,
-            past_key_value,
-            output_attentions,
-            world_size=world_size,
+        attn_metadata: Any = None,
+    ):
+        """Rewrite of LlamaAttention.forward."""
+        # qkv proj
+        qkv_states = self.qkv_proj(hidden_states)
+        # (-1, heads, head_dim)
+        qkv_states = qkv_states.flatten(0, -2)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(
+            qkv_states)
+
+        # apply rotary embedding
+        cos, sin = rotary_pos_emb
+        query_states, key_states = self.apply_rotary_pos_emb(
+            query_states,
+            key_states,
+            cos,
+            sin,
+            inplace=True,
         )
 
+        # attention
+        attn_output = self.attn_fwd(
+            query_states,
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            attn_metadata,
+            inplace=True,
+        )
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
 
-def _div_up(a, b):
-    """div up."""
-    return (a + b - 1) // b
+        # o proj
+        attn_output = self.o_proj(attn_output)
+        return attn_output
 
 
-class PatchedDeepseekMoE(nn.Module):
+class DeepseekMoE(nn.Module):
+    """Deepseek MoE."""
 
-    def _load_weights(self, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.hidden_dim = config.hidden_size
+        self.ffn_dim = config.moe_intermediate_size
+        self.num_experts = config.n_routed_experts
+        self.top_k = config.num_experts_per_tok
+        self.norm_topk_prob = config.norm_topk_prob
+        self.renormalize = self.top_k > 1 and self.norm_topk_prob
 
-        def __load_mlp(exp_id, exp):
-            """load mlp."""
-            with loader.prefix_context(f'experts.{exp_id}'):
-                loader.load_model_weights(
-                    exp,
-                    rank=rank,
-                    world_size=world_size,
-                    device=device,
-                    load_only=True,
-                )
+        self.gate = build_rowwise_linear(
+            self.hidden_dim,
+            self.num_experts,
+            bias=False,
+            dtype=dtype,
+            device=device,
+            is_tp=False,
+        )
 
-        def __drop_mlp(exp_id, exp):
-            """drop mlp."""
-            for name, _ in exp.named_parameters(recurse=True):
-                loader.pop(f'experts.{exp_id}.{name}')
+        self.softmax_topk = SoftmaxTopK(self.top_k)
 
-        num_experts = len(self.experts)
-        exp_per_rank = _div_up(num_experts, world_size)
-        first_exp = rank * exp_per_rank
-        last_exp = min(num_experts, first_exp + exp_per_rank)
-        for exp_id, exp in enumerate(self.experts):
-            if first_exp <= exp_id < last_exp:
-                __load_mlp(exp_id, exp)
-            else:
-                __drop_mlp(exp_id, exp)
-        self.experts = self.experts[first_exp:last_exp]
-        with loader.prefix_context('gate'):
-            loader.load_model_weights(self.gate,
-                                      rank=rank,
-                                      world_size=world_size,
-                                      device=device)
+        self.experts = FusedMoE(
+            self.hidden_dim,
+            self.ffn_dim,
+            self.num_experts,
+            top_k=self.top_k,
+            renormalize=self.renormalize,
+            dtype=dtype,
+            device=device,
+            all_reduce=False,
+        )
 
-        if self.config.n_shared_experts is not None:
-            with loader.prefix_context('shared_experts'):
-                loader.load_model_weights(self.shared_experts,
-                                          rank=rank,
-                                          world_size=world_size,
-                                          device=device)
+        self.shared_experts = None
+        if config.n_shared_experts is not None:
+            intermediate_size = (config.moe_intermediate_size *
+                                 config.n_shared_experts)
+            self.shared_experts = DeepseekMLP(
+                config=config,
+                intermediate_size=intermediate_size,
+                dtype=dtype,
+                device=device,
+                is_tp=True,
+                all_reduce=False,
+            )
+        world_size, _ = get_world_rank()
+        if world_size > 1:
+            self._all_reduce = True
+        else:
+            self._all_reduce = False
 
-    def _update_model_fn(self):
-        """update model."""
-        num_experts = len(self.experts)
-
-        def __get_meta():
-            exp = self.experts[0]
-            ffn_dim = exp.gate_proj.weight.size(0)
-            hidden_dim = exp.down_proj.weight.size(0)
-            dtype = exp.gate_proj.weight.dtype
-            device = exp.gate_proj.weight.device
-            return ffn_dim, hidden_dim, dtype, device
-
-        def __copy_assign_param(param, weight):
-            """copy assign."""
-            weight.copy_(param.data)
-            param.data = weight
-
-        ffn_dim, hidden_dim, dtype, device = __get_meta()
-
-        gate_up_weights = torch.empty(num_experts,
-                                      ffn_dim * 2,
-                                      hidden_dim,
-                                      device=device,
-                                      dtype=dtype)
-        down_weights = torch.empty(num_experts,
-                                   hidden_dim,
-                                   ffn_dim,
-                                   device=device,
-                                   dtype=dtype)
-
-        for exp_id, exp in enumerate(self.experts):
-            __copy_assign_param(exp.gate_proj.weight,
-                                gate_up_weights[exp_id, :ffn_dim])
-            __copy_assign_param(exp.up_proj.weight, gate_up_weights[exp_id,
-                                                                    ffn_dim:])
-            __copy_assign_param(exp.down_proj.weight, down_weights[exp_id])
-
-        torch.cuda.empty_cache()
-
-        self.register_buffer('gate_up_weights', gate_up_weights)
-        self.register_buffer('down_weights', down_weights)
-
-    def forward(self, hidden_states):
+    def forward(self, hidden_states: torch.Tensor):
         """forward."""
-        world_size = 1
-        rank = 0
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
-            rank = dist.get_rank()
-        exp_per_rank = self.gate_up_weights.size(0)
-        expert_offset = rank * exp_per_rank
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+        router_logits = self.gate(hidden_states)
 
-        identity = hidden_states
-        orig_shape = hidden_states.shape
-        topk_idx, topk_weight, _ = self.gate(hidden_states)
-        hidden_states = hidden_states.flatten(0, 1)
-        flat_topk_idx = topk_idx.flatten()
-        y = fused_moe(hidden_states,
-                      self.gate_up_weights,
-                      self.down_weights,
-                      topk_weight,
-                      flat_topk_idx,
-                      topk=self.num_experts_per_tok,
-                      expert_offset=expert_offset,
-                      num_experts=world_size * exp_per_rank,
-                      renormalize=False).view(*orig_shape)
-        if self.config.n_shared_experts is not None:
-            y = y + self.shared_experts.forward(identity)
-        if dist.is_initialized():
-            dist.all_reduce(y)
-        return y
+        topk_weights, topk_ids = self.softmax_topk(router_logits)
+        out_states = self.experts(
+            hidden_states,
+            topk_weights,
+            topk_ids,
+        )
+
+        if self.shared_experts is not None:
+            shared_states = self.shared_experts(hidden_states)
+            out_states += shared_states
+        out_states = out_states.reshape(batch_size, sequence_length, -1)
+
+        if self._all_reduce:
+            dist.all_reduce(out_states)
+
+        return out_states
+
+
+class DeepseekMLP(nn.Module):
+    """Deepseek mlp."""
+
+    def __init__(self,
+                 config: Any,
+                 intermediate_size: int = None,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 is_tp: bool = True,
+                 all_reduce: bool = True):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        # gate up
+        if intermediate_size is None:
+            intermediate_size = config.intermediate_size
+        self.gate_up_proj = build_merged_colwise_linear(
+            config.hidden_size,
+            [intermediate_size, intermediate_size],
+            bias=False,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            is_tp=is_tp,
+        )
+
+        # silu and mul
+        self.act_fn = SiluAndMul(inplace=True)
+
+        # down
+        self.down_proj = build_rowwise_linear(
+            intermediate_size,
+            config.hidden_size,
+            bias=False,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=is_tp,
+            all_reduce=all_reduce,
+        )
+
+    def forward(self, x):
+        """forward."""
+        gate_up = self.gate_up_proj(x)
+        act = self.act_fn(gate_up)
+        return self.down_proj(act)
+
+
+class DeepseekDecoderLayer(nn.Module):
+    """llama decoder layer."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.layer_idx = layer_idx
+        quantization_config = getattr(config, 'quantization_config', None)
+
+        # build attention layer
+        self.self_attn = DeepseekAttention(config, dtype=dtype, device=device)
+
+        # builf MLP
+        self.mlp = (DeepseekMoE(config, dtype=dtype, device=device) if
+                    (config.n_routed_experts is not None
+                     and layer_idx >= config.first_k_dense_replace
+                     and layer_idx % config.moe_layer_freq == 0) else
+                    DeepseekMLP(config, dtype=dtype, device=device))
+
+        # build input layer norm
+        self.input_layernorm = RMSNorm(config.hidden_size,
+                                       config.rms_norm_eps,
+                                       quant_config=quantization_config,
+                                       dtype=dtype,
+                                       device=device)
+
+        # build attention layer norm
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: Optional[List[torch.FloatTensor]],
+        residual: Optional[torch.Tensor] = None,
+        attn_metadata: Any = None,
+    ):
+
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(
+                hidden_states, residual)
+
+        # Self Attention
+        hidden_states = self.self_attn(
+            hidden_states=hidden_states,
+            rotary_pos_emb=rotary_pos_emb,
+            past_key_value=past_key_value,
+            attn_metadata=attn_metadata,
+        )
+
+        # Fully Connected
+        hidden_states, residual = self.post_attention_layernorm(
+            hidden_states, residual)
+        hidden_states = self.mlp(hidden_states)
+
+        outputs = (hidden_states, residual)
+        return outputs
+
+
+class DeepseekModel(nn.Module):
+    """model."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+        quantization_config = getattr(config, 'quantization_config', None)
+
+        self.embed_tokens = nn.Embedding(config.vocab_size,
+                                         config.hidden_size,
+                                         self.padding_idx,
+                                         dtype=dtype,
+                                         device=device)
+
+        # build all decode layers
+        self.layers = nn.ModuleList([
+            DeepseekDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            for layer_idx in range(config.num_hidden_layers)
+        ])
+
+        # build norm
+        self.norm = RMSNorm(config.hidden_size,
+                            config.rms_norm_eps,
+                            quant_config=quantization_config,
+                            dtype=dtype,
+                            device=device)
+
+        # build rotary embedding
+        rope_scaling = getattr(config, 'rope_scaling', None)
+        emb_type = EmbeddingType.LinearScaling
+        scaling_factor = 1.0
+        if rope_scaling is not None:
+            rope_type = rope_scaling['type']
+            if rope_type == 'linear':
+                emb_type = EmbeddingType.LinearScaling
+            if rope_type == 'dynamic':
+                emb_type = EmbeddingType.DynamicNTKScaling
+            else:
+                raise RuntimeError(f'Unsupported rope type: {rope_type}')
+            scaling_factor = rope_scaling.get('factor', scaling_factor)
+
+        rope_dim = config.hidden_size // config.num_attention_heads
+        rope_max_pos_emb = config.max_position_embeddings
+        rope_base = config.rope_theta
+        self.rotary_emb = build_rotary_embedding(
+            rope_dim,
+            rope_max_pos_emb,
+            rope_base,
+            scaling_factor,
+            emb_type=emb_type,
+        )
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        attn_metadata: Any = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+    ):
+        """Rewrite of LlamaModel.forward."""
+
+        # token embedding
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = inputs_embeds
+
+        # rotary embedding
+        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+
+        # decoding
+        residual = None
+        for idx, decoder_layer in enumerate(self.layers):
+            past_key_value = past_key_values[idx]
+            hidden_states, residual = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                residual=residual,
+                attn_metadata=attn_metadata,
+            )
+
+        # norm
+        hidden_states, _ = self.norm(hidden_states, residual)
+
+        return hidden_states
+
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.embed_tokens
+
+
+class DeepseekForCausalLM(nn.Module):
+    """ModelForCausalLM."""
+
+    support_cuda_graph = True
+
+    packed_modules_mapping = {
+        'qkv_proj': [
+            'q_proj',
+            'k_proj',
+            'v_proj',
+        ],
+        'gate_up_proj': [
+            'gate_proj',
+            'up_proj',
+        ],
+    }
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 ctx_mgr: StepContextManager,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.config = config
+        self.ctx_mgr = ctx_mgr
+        # build model
+        self.model = DeepseekModel(config, dtype=dtype, device=device)
+        # build lm_head
+        self.lm_head = build_rowwise_linear(config.hidden_size,
+                                            config.vocab_size,
+                                            bias=False,
+                                            dtype=dtype,
+                                            device=device)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: List[List[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
+        """model forward, return logits."""
+        hidden_states = self.model(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+        )
+
+        logits = self.lm_head(hidden_states)
+        logits = logits.float()
+        return logits
+
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.model.get_input_embeddings()
+
+    def prepare_inputs_for_generation(
+        self,
+        past_key_values: List[List[torch.Tensor]],
+        inputs_embeds: Optional[torch.Tensor] = None,
+        context: StepContext = None,
+    ):
+        """prepare input."""
+        # get input_ids, position_ids and attention metadatas
+        input_ids = context.input_ids
+        position_ids = context.position_ids
+        attn_metadata = context.attn_metadata
+
+        # process vision embeddings
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            if inputs_embeds is None:
+                inputs_embeds = self.get_input_embeddings()(input_ids)
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
+
+        # inputs of forward
+        return dict(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+        )
+
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor,
+                             params_dict: Dict[str, nn.Parameter],
+                             expert_params_mapping: List):
+        """load weight experts."""
+        for (param_name, weight_name, expert_id,
+             shard_id) in expert_params_mapping:
+            if weight_name not in name:
+                continue
+            name = name.replace(weight_name, param_name)
+            param = params_dict[name]
+            load_weight(param,
+                        loaded_weight,
+                        expert_id=expert_id,
+                        shard_id=shard_id)
+            break
+        else:
+            param = params_dict[name]
+            load_weight(param, loaded_weight)
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        """load weights."""
+        # modify from vllm
+        stacked_params_mapping = [
+            # (param_name, shard_name, shard_id)
+            ('.qkv_proj', '.q_proj', 'q'),
+            ('.qkv_proj', '.k_proj', 'k'),
+            ('.qkv_proj', '.v_proj', 'v'),
+            ('.gate_up_proj', '.gate_proj', 0),
+            ('.gate_up_proj', '.up_proj', 1),
+        ]
+
+        num_experts = self.config.n_routed_experts
+        expert_params_mapping = []
+        for exp_id in range(num_experts):
+            gate_param = ('.experts.gate_up_weights',
+                          f'.experts.{exp_id}.gate_proj.weight', exp_id,
+                          'gate')
+            up_param = ('.experts.gate_up_weights',
+                        f'.experts.{exp_id}.up_proj.weight', exp_id, 'up')
+            down_param = ('.experts.down_weights',
+                          f'.experts.{exp_id}.down_proj.weight', exp_id,
+                          'down')
+            expert_params_mapping += [gate_param, up_param, down_param]
+
+        params_dict = dict(self.named_parameters())
+        for name, loaded_weight in weights:
+            if 'rotary_emb.inv_freq' in name:
+                continue
+            if ('rotary_emb.cos_cached' in name
+                    or 'rotary_emb.sin_cached' in name):
+                continue
+            if self.config.tie_word_embeddings and 'lm_head.weight' in name:
+                continue
+            if '.experts' in name:
+                self._load_weight_experts(
+                    name,
+                    loaded_weight,
+                    params_dict,
+                    expert_params_mapping=expert_params_mapping)
+            else:
+                for (param_name, weight_name,
+                     shard_id) in stacked_params_mapping:
+                    if weight_name not in name:
+                        continue
+                    name = name.replace(weight_name, param_name)
+                    param = params_dict[name]
+                    load_weight(param, loaded_weight, shard_id=shard_id)
+                    break
+                else:
+                    param = params_dict[name]
+                    load_weight(param, loaded_weight)

@@ -142,7 +142,7 @@ class MistralMLP(nn.Module):
 
 
 class MistralDecoderLayer(nn.Module):
-    """llama decoder layer."""
+    """decoder layer."""
 
     def __init__(self,
                  config: PretrainedConfig,
