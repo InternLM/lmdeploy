@@ -34,32 +34,14 @@ MODULE_MAP.update({
 
 # internlm2
 MODULE_MAP.update({
-    'modeling_internlm2.InternLM2Attention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Attention',
-    'modeling_internlm2.InternLM2FlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Attention',
-    'modeling_internlm2.InternLM2Model':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Model',
-    'modeling_internlm2.InternLM2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2MLP',
-    'modeling_internlm2.InternLM2RMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'InternLM2ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.InternLM2ForCausalLM',
 })
 
 # mistral
 MODULE_MAP.update({
-    'transformers.models.mistral.modeling_mistral.MistralAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
-    'transformers.models.mistral.modeling_mistral.MistralFlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
-    'transformers.models.mistral.modeling_mistral.MistralSdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
-    'transformers.models.mistral.modeling_mistral.MistralModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
-    'transformers.models.mistral.modeling_mistral.MistralMLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
-    'transformers.models.mistral.modeling_mistral.MistralRMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'MistralForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralForCausalLM',
 })
 
 # gemma
@@ -160,14 +142,6 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 
-# peft
-MODULE_MAP.update({
-    'peft.tuners.lora.layer.Linear':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear',
-    'peft.tuners.lora.awq.AwqLoraLinear':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear'
-})
-
 # mixtral
 MODULE_MAP.update({
     'MixtralForCausalLM':
@@ -245,8 +219,8 @@ MODULE_MAP.update(
     {
         'LlavaLlamaForCausalLM':
         f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlavaLlamaForCausalLM',
-        'llava.model.language_model.llava_mistral.LlavaMistralForCausalLM':
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.PatchedLlavaLlamaForCausalLM',
+        'LlavaMistralForCausalLM':
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.LlavaMistralForCausalLM',
         'LlavaForConditionalGeneration':
         f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration',  # noqa: E501
         'LlavaNextForConditionalGeneration':  # noqa: E501
@@ -257,12 +231,6 @@ MODULE_MAP.update(
 MODULE_MAP.update({
     'modeling_internvl_chat.InternVLChatModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.PatchedInternVLChatModel'
-})
-
-# awq
-MODULE_MAP.update({
-    'awq.modules.linear.gemm.WQLinear_GEMM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.awq_modules.PatchedWQLinear_GEMM'
 })
 
 # phi3 vision
@@ -285,27 +253,6 @@ MODULE_MAP.update({
 ASCEND_MODULE_MAP = dict()
 
 DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)
-
-# ascend llama
-ASCEND_MODULE_MAP.update({
-    'transformers.models.llama.modeling_llama.LlamaFlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
-    'transformers.models.llama.modeling_llama.LlamaSdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
-    'transformers.models.llama.modeling_llama.LlamaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
-    # support modeling rewritten in lmdeploy
-    'modeling_llama.LlamaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttentionAscend',
-})
-
-# ascend internlm2
-ASCEND_MODULE_MAP.update({
-    'modeling_internlm2.InternLM2Attention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',
-    'modeling_internlm2.InternLM2FlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2AttentionAscend',
-})
 
 # phi-3.5-moe
 MODULE_MAP.update({

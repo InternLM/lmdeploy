@@ -108,7 +108,7 @@ class LlamaDynamicNTKScalingRotaryEmbedding(RotaryEmbeddingImpl):
 
         cos, sin = _rotary_embedding_fwd(position_ids,
                                          inv_freq,
-                                         scaling_factor=self.scaling_factor,
+                                         scaling_factor=1.0,
                                          dtype=dtype,
                                          device_type=device_type)
         return cos, sin
