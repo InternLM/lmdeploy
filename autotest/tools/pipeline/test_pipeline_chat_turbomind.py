@@ -98,6 +98,7 @@ def test_pipeline_chat_kvint_tp2(config, common_case_config, model,
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat
 @pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize(
     'model',

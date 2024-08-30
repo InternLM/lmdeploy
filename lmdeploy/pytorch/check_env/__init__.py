@@ -22,6 +22,19 @@ def _handle_exception(e: Exception,
     exit(1)
 
 
+def check_env_deeplink(device_type: str):
+    """check Deeplink environment if specific device_type is set."""
+    deeplink_device_type_list = [
+        'ascend',
+    ]
+    if device_type in deeplink_device_type_list:
+        logger = get_logger('lmdeploy')
+        try:
+            import deeplink_ext  # noqa: F401
+        except Exception as e:
+            _handle_exception(e, 'PyTorch', logger)
+
+
 def check_env_torch():
     """check PyTorch environment."""
     logger = get_logger('lmdeploy')
@@ -78,6 +91,7 @@ def check_env(device_type: str):
     """check all environment."""
     logger = get_logger('lmdeploy')
     logger.info('Checking environment for PyTorch Engine.')
+    check_env_deeplink(device_type)
     check_env_torch()
     if device_type == 'cuda':
         check_env_triton()
@@ -85,6 +99,27 @@ def check_env(device_type: str):
 
 MIN_TRANSFORMERS_VERSION = '4.33.0'
 MAX_TRANSFORMERS_VERSION = '4.41.2'
+
+
+def check_awq(hf_config):
+    """check awq support."""
+    logger = get_logger('lmdeploy')
+    quantization_config = getattr(hf_config, 'quantization_config', dict())
+    quant_method = quantization_config.get('quant_method', None)
+    if quant_method != 'awq':
+        return
+    try:
+        import awq  # noqa
+    except Exception as e:
+        _handle_exception(e, 'autoawq', logger)
+
+    try:
+        import awq_ext  # noqa
+    except Exception:
+        logger.debug('Exception:', exc_info=1)
+        logger.warning('Failed to import `awq_ext`. '
+                       'Try reinstall it from source: '
+                       'https://github.com/casper-hansen/AutoAWQ_kernels')
 
 
 def check_transformers_version(model_path: str,
@@ -172,6 +207,7 @@ def check_transformers_version(model_path: str,
     config = __check_config(trans_version)
     __check_model_transformers_version(config, trans_version)
     __check_model_dtype_support(config)
+    check_awq(config)
 
 
 def check_model(model_path: str, trust_remote_code: bool = True):

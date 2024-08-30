@@ -6,16 +6,43 @@
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include <cuda_runtime.h>
 
 namespace turbomind {
+
+template<class T>
+UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
+                                  const AttentionParam& attn,
+                                  const LoraParam&      lora,
+                                  const NcclParam&      tp,
+                                  const Context<T>&     ctx):
+    layer_num_(model.layer_num),
+    hidden_units_(model.hidden_units),
+    rmsnorm_eps_(model.norm_eps),
+    stream_(ctx.stream),
+    allocator_(ctx.allocator.get()),
+    dtype_(getTensorType<T>())
+{
+
+    attn_layer_ = std::make_unique<UnifiedAttentionLayer<T>>(model, attn, lora, tp, ctx);
+    ffn_layer_  = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
+
+    check_cuda_error(cudaEventCreateWithFlags(&ev_h_cu_x_, cudaEventDisableTiming));
+}
+
+template<typename T>
+UnifiedDecoder<T>::~UnifiedDecoder()
+{
+    freeBuffer();
+    check_cuda_error(cudaEventDestroy(ev_h_cu_x_));
+}
 
 template<typename T>
 void UnifiedDecoder<T>::allocateBuffer(size_t batch_size)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    cu_q_len_ = (int*)allocator_->reMalloc(cu_q_len_, 2 * sizeof(int) * (batch_size + 1), false);
-
+    cu_q_len_   = (int*)allocator_->reMalloc(cu_q_len_, 2 * sizeof(int) * (batch_size + 1), false);
     h_cu_q_len_ = (int*)allocator_->reMalloc(h_cu_q_len_, 2 * sizeof(int) * (batch_size + 1), false, true);
 }
 
@@ -25,37 +52,7 @@ void UnifiedDecoder<T>::freeBuffer()
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     allocator_->free((void**)&cu_q_len_);
-
     allocator_->free((void**)&h_cu_q_len_, true);
-}
-
-template<typename T>
-void UnifiedDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
-                                   size_t                      kv_head_num,
-                                   int                         cache_block_seq_len,
-                                   int                         quant_policy)
-{
-    attn_layer_ = new UnifiedAttentionLayer<T>(head_num_,
-                                               kv_head_num,
-                                               size_per_head_,
-                                               attn_params,
-                                               tensor_para_,
-                                               lora_params_,
-                                               stream_,
-                                               cublas_wrapper_,
-                                               allocator_,
-                                               is_free_buffer_after_forward_,
-                                               cache_block_seq_len,
-                                               quant_policy);
-
-    ffn_layer_ = new LlamaFfnLayer<T>(head_num_,
-                                      size_per_head_,
-                                      inter_size_,
-                                      tensor_para_,
-                                      stream_,
-                                      cublas_wrapper_,
-                                      allocator_,
-                                      is_free_buffer_after_forward_);
 }
 
 template<typename T>
@@ -79,14 +76,6 @@ void UnifiedDecoder<T>::forwardSelfAttn(T*                             attn_io,
     outputs.insert("hidden_features", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, attn_io});
 
     attn_layer_->forward(&outputs, &inputs, weight);
-}
-
-template<typename T>
-UnifiedDecoder<T>::~UnifiedDecoder()
-{
-    delete attn_layer_;
-    delete ffn_layer_;
-    freeBuffer();
 }
 
 template<typename T>
@@ -124,6 +113,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     T* last_token_hidden_units = outputs->getPtr<T>("last_token_hidden_units");
 
     {  // compute cumulative lengths
+
         h_cu_k_len_ = h_cu_q_len_ + batch_size + 1;
         cu_k_len_   = cu_q_len_ + batch_size + 1;
 
@@ -136,6 +126,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
         check_cuda_error(
             cudaMemcpyAsync(cu_q_len_, h_cu_q_len_, 2 * sizeof(int) * (batch_size + 1), cudaMemcpyDefault, stream_));
+
+        check_cuda_error(cudaEventRecord(ev_h_cu_x_, stream_));
     }
 
     const int pf_offset = dc_batch_size;
@@ -157,7 +149,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
     count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm0", 0), 2);
 
-    for (size_t layer = 0; layer < num_layer_; ++layer) {
+    for (size_t layer = 0; layer < layer_num_; ++layer) {
 
         // Compare(decoder_output, token_num * hidden_units_, "attn_input", kCmpRead, stream_);
 
@@ -200,7 +192,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
         count_and_fix(decoder_output, token_num * hidden_units_, Concat("ffn_block", layer), 2);
 
-        const bool is_last_layer = layer == num_layer_ - 1;
+        const bool is_last_layer = layer == layer_num_ - 1;
 
         auto scale_weight = !is_last_layer ? weights->at(layer + 1)->self_attn_norm_weights :
                                              inputs->at("output_norm_weight").getPtr<T>();
@@ -241,6 +233,9 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     if (is_free_buffer_after_forward_) {
         freeBuffer();
     }
+
+    // Wait for `h_cu_q/k_len_` to be consumed
+    check_cuda_error(cudaEventSynchronize(ev_h_cu_x_));
 }
 
 #ifdef ENABLE_FP32

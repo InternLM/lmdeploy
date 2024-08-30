@@ -23,10 +23,12 @@
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
+#include <cuda_runtime_api.h>
 
 namespace turbomind {
 
@@ -48,49 +50,24 @@ public:
     {
         freeBuffer();
         freeWorkspace();
+
+        for (auto& s : streams_) {
+            s = {};
+        }
+
+        check_cuda_error(cudaEventDestroy(aux_event_));
+        check_cuda_error(cudaEventDestroy(qkv_event_));
+        check_cuda_error(cudaStreamDestroy(aux_stream_));
+
+        aux_event_ = qkv_event_ = {};
+        aux_stream_             = {};
     }
 
-    UnifiedAttentionLayer(size_t               head_num,
-                          size_t               kv_head_num,
-                          size_t               size_per_head,
-                          LlamaAttentionParams attn_params,
-                          NcclParam            tensor_para,
-                          LoraParams           lora_params,
-                          cudaStream_t         stream,
-                          cublasMMWrapper*     cublas_wrapper,
-                          IAllocator*          allocator,
-                          bool                 is_free_buffer_after_forward,
-                          int                  cache_block_seq_len,
-                          int                  quant_policy):
-        head_num_(head_num),
-        size_per_head_(size_per_head),
-        hidden_units_(head_num * size_per_head),
-        local_head_num_(head_num / tensor_para.world_size_),
-        local_kv_head_num_(kv_head_num / tensor_para.world_size_),
-        head_n_rep_(head_num / kv_head_num),
-        params_(attn_params),
-        tensor_para_(tensor_para),
-        lora_params_(lora_params),
-        stream_(stream),
-        cublas_wrapper_(cublas_wrapper),
-        linear_(cublas_wrapper, stream),
-        allocator_(allocator),
-        kv_cache_block_len_(cache_block_seq_len),
-        is_free_buffer_after_forward_(is_free_buffer_after_forward),
-        quant_policy_(quant_policy)
-    {
-        FT_CHECK(head_num % kv_head_num == 0);
-        arch_ = getSMVersion();
-
-        check_cuda_error(cudaStreamCreateWithFlags(&aux_stream_, cudaStreamNonBlocking));
-        check_cuda_error(cudaEventCreateWithFlags(&qkv_event_, cudaEventDisableTiming));
-        check_cuda_error(cudaEventCreateWithFlags(&aux_event_, cudaEventDisableTiming));
-
-        streams_[0] = stream_;
-        streams_[1] = aux_stream_;
-
-        allocateWorkspace();
-    }
+    UnifiedAttentionLayer(const ModelParam&     model,
+                          const AttentionParam& attn,
+                          const LoraParam&      lora,
+                          const NcclParam&      tp,
+                          const Context<T>&     context);
 
     void forward(TensorMap* outputs, const TensorMap* inputs, const LlamaAttentionWeight<T>* weights);
 
@@ -131,34 +108,30 @@ public:
 
 private:
     const size_t head_num_;
+    const size_t kv_head_num_;
     const size_t size_per_head_;
     const size_t hidden_units_;
-    const size_t local_kv_head_num_;
     const size_t local_head_num_;
-    const size_t head_n_rep_;
-    const size_t kv_cache_block_len_;
-    const bool   is_free_buffer_after_forward_;
+    const size_t local_kv_head_num_;
 
-    const LlamaAttentionParams params_;
+    const AttentionParam param_;
+    const ModelParam     model_param_;
+    const LoraParam      lora_param_;
+    const NcclParam      tensor_para_;
+    const Context<T>&    context_;
 
-    const int quant_policy_;
+    cudaStream_t const    stream_;
+    LlamaLinear<T>* const linear_;
+    IAllocator* const     allocator_;
+    const int             arch_{};
 
-    NcclParam tensor_para_;
-
-    LoraParams lora_params_;
-
-    cudaStream_t     stream_;
-    IAllocator*      allocator_;
-    cublasMMWrapper* cublas_wrapper_;
-    LlamaLinear<T>   linear_;
+    const bool is_free_buffer_after_forward_{false};
 
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;
     cudaEvent_t  aux_event_;
 
     std::array<cudaStream_t, 2> streams_;
-
-    int arch_{};
 
     T*     qkv_buf_{};
     T*     q_buf_2_{};

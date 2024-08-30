@@ -17,14 +17,11 @@ class Glm4Reader(LlamaReader):
     norm_weight_key = 'transformer.encoder.final_layernorm.weight'
     output_weight_key = 'transformer.output_layer.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
-
-    def _attn(self, i: int, kind: str, size_dim: int, dim: int = 0):
+    def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
         qkv = self.params[f'transformer.encoder.layers.{i}'
                           f'.self_attention.query_key_value.{kind}']
+        qkv = self.transform(qkv, kind)
         attn_head_num = self.model_cfg['num_attention_heads']
         kv_head_num = attn_head_num
         if self.model_cfg.get('multi_query_attention', False):
@@ -34,29 +31,13 @@ class Glm4Reader(LlamaReader):
             attn_head_num * HEAD_DIM, kv_head_num * HEAD_DIM,
             kv_head_num * HEAD_DIM
         ],
-                              dim=size_dim)
+                              dim=0)
         o = self.params.get(
-            f'transformer.encoder.layers.{i}.self_attention.dense.{kind}',
-            None)
+            f'transformer.encoder.layers.{i}.self_attention.dense.{kind}')
+        o = self.transform(o, kind)
         if o is None:  # handle the case when qkv has bias but o doesn't
             o = torch.zeros_like(q)
         return q, k, v, o
-
-    def attn(self, i: int):
-        """Get q, k, v, o weight for layer i."""
-        return self._attn(i, 'weight', 0, 0)
-
-    def attn_bias(self, i: int):
-        """Get q, k, v, o bias for layer i."""
-        return self._attn(i, 'bias', -1, 0)
-
-    def attn_zero(self, i: int):
-        """Get q, k, v, o zero point for layer i."""
-        return (None, ) * 4
-
-    def attn_scale(self, i: int):
-        """Get q, k, v, o scale for layer i."""
-        return (None, ) * 4
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
@@ -67,23 +48,12 @@ class Glm4Reader(LlamaReader):
         """Get ffn kind for layer i."""
         up_and_gate = self.params[
             f'transformer.encoder.layers.{i}.mlp.dense_h_to_4h.{kind}']
+        up_and_gate = self.transform(up_and_gate, kind)
         up, gate = up_and_gate.chunk(2, dim=0)
         down = self.params[
             f'transformer.encoder.layers.{i}.mlp.dense_4h_to_h.{kind}']
-
+        down = self.transform(down, kind)
         return (up, down, gate)
-
-    def ffn(self, i: int):
-        """Get ffn weight for layer i."""
-        return self._ffn(i, 'weight')
-
-    def ffn_zero(self, i: int):
-        """Get ffn zero point for layer i."""
-        return (None, ) * 3
-
-    def ffn_scale(self, i: int):
-        """Get ffn scale for layer i."""
-        return (None, ) * 3
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
@@ -115,6 +85,7 @@ class Glm4Model(LlamaModel):
     def model_info(self):
         """Read model info."""
         config = self.config
+        hidden_units = config.get('hidden_size', None)
         num_layer = config.get('num_hidden_layers', None)
         num_layer = config.get('num_layers', num_layer)
         norm_eps = config['layernorm_epsilon']
@@ -128,8 +99,9 @@ class Glm4Model(LlamaModel):
         seq_length = config['seq_length']
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
-                    attn_head_num=attn_head_num,
+                    head_num=attn_head_num,
                     kv_head_num=kv_head_num,
+                    hidden_units=hidden_units,
                     rope_theta=rope_theta,
                     max_position_embeddings=seq_length,
                     rotary_embedding=64,
