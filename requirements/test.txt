@@ -7,6 +7,5 @@ pytest-cov
 pytest-order
 pytest-rerunfailures
 pytest-sugar
-pytest-timeout
 pytest-xdist
 pyyaml

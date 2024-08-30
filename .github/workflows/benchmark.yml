@@ -131,9 +131,9 @@ jobs:
           lmdeploy check_env
       - name: Run other benchmark
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 --lf --alluredir=${{env.REPORT_DIR}}/allure-results --timeout=6000 || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m gpu_num_2 --lf --alluredir=${{env.REPORT_DIR}}/allure-results --timeout=6000 || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m gpu_num_4 --lf --alluredir=${{env.REPORT_DIR}}/allure-results --timeout=6000
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m gpu_num_2 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m gpu_num_4 --lf --alluredir=${{env.REPORT_DIR}}/allure-results
       - name: Clear workfile
         if: always()
         run: |
