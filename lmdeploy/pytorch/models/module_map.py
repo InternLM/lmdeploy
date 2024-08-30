@@ -46,34 +46,14 @@ MODULE_MAP.update({
 
 # gemma
 MODULE_MAP.update({
-    'transformers.models.gemma.modeling_gemma.GemmaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
-    'transformers.models.gemma.modeling_gemma.GemmaFlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
-    'transformers.models.gemma.modeling_gemma.GemmaSdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
-    'transformers.models.gemma.modeling_gemma.GemmaModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaModel',
-    'transformers.models.gemma.modeling_gemma.GemmaMLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
-    'transformers.models.gemma.modeling_gemma.GemmaRMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaRMSNorm',
+    'GemmaForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.GemmaForCausalLM',
 })
 
 # gemma2
 MODULE_MAP.update({
-    'transformers.models.gemma2.modeling_gemma2.Gemma2Attention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
-    'transformers.models.gemma2.modeling_gemma2.Gemma2FlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
-    'transformers.models.gemma2.modeling_gemma2.Gemma2SdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
-    'transformers.models.gemma2.modeling_gemma2.Gemma2Model':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaModel',
-    'transformers.models.gemma2.modeling_gemma2.Gemma2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
-    'transformers.models.gemma2.modeling_gemma2.Gemma2RMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaRMSNorm',
+    'Gemma2ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.GemmaForCausalLM',
 })
 
 # deepseek
