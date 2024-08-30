@@ -2,11 +2,17 @@
 
 LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch.models'
 
+# ascend module
+MODULE_MAP = dict()
+ASCEND_MODULE_MAP = dict()
+
+DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)
+
 # llama
-MODULE_MAP = {
+MODULE_MAP.update({
     'LlamaForCausalLM':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
-}
+})
 
 # Falcon Models in transformer / on hub
 MODULE_MAP.update({
@@ -44,6 +50,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralForCausalLM',
 })
 
+# mixtral
+MODULE_MAP.update({
+    'MixtralForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralForCausalLM',
+})
+
 # gemma
 MODULE_MAP.update({
     'GemmaForCausalLM':
@@ -61,6 +73,25 @@ MODULE_MAP.update({
     'DeepseekForCausalLM':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.DeepseekForCausalLM',
 })
+
+# deepseek-v2
+MODULE_MAP.update({
+    'DeepseekV2ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'
+})
+
+# llava
+MODULE_MAP.update(
+    {
+        'LlavaLlamaForCausalLM':
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlavaLlamaForCausalLM',
+        'LlavaMistralForCausalLM':
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.LlavaMistralForCausalLM',
+        'LlavaForConditionalGeneration':
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration',  # noqa: E501
+        'LlavaNextForConditionalGeneration':  # noqa: E501
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration'
+    })
 
 # qwen
 MODULE_MAP.update({
@@ -100,12 +131,6 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_moe.PatchedQwen2MoeSparseMoeBlock',
     'transformers.models.qwen2_moe.modeling_qwen2_moe.Qwen2MoeRMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
-})
-
-# mixtral
-MODULE_MAP.update({
-    'MixtralForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.MixtralForCausalLM',
 })
 
 # dbrx
@@ -154,12 +179,6 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 
-# deepseek-v2
-MODULE_MAP.update({
-    'DeepseekV2ForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'
-})
-
 # cogvlm
 MODULE_MAP.update({
     'modeling_cogvlm.RMSNorm':
@@ -173,19 +192,6 @@ MODULE_MAP.update({
     'modeling_cogvlm.CogVLMModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.cogvlm.PatchedCogVLMModel',
 })
-
-# llava
-MODULE_MAP.update(
-    {
-        'LlavaLlamaForCausalLM':
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlavaLlamaForCausalLM',
-        'LlavaMistralForCausalLM':
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.LlavaMistralForCausalLM',
-        'LlavaForConditionalGeneration':
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration',  # noqa: E501
-        'LlavaNextForConditionalGeneration':  # noqa: E501
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration'
-    })
 
 # internvl
 MODULE_MAP.update({
@@ -208,11 +214,6 @@ MODULE_MAP.update({
     'modeling_phi3_v.Phi3RMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
-
-# ascend module
-ASCEND_MODULE_MAP = dict()
-
-DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)
 
 # phi-3.5-moe
 MODULE_MAP.update({
