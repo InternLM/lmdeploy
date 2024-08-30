@@ -258,6 +258,32 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
   }'
 ```
 
+## 同时启动多个 api_server
+
+下面是一个可以用 torchrun 启动的脚本。用下面的代码跑 torchrun： `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b`.
+
+```python
+from typing import List
+import fire
+
+import os
+
+def main(model_path: str,
+         port: int = 23333):
+    local_rank = int(os.environ.get('LOCAL_RANK', -1))
+    if isinstance(port, List):
+        assert len(port) == int(os.environ.get('WORLD_SIZE', -1))
+        port = port[local_rank]
+    else:
+        port += local_rank*10
+    command = f'CUDA_VISIBLE_DEVICES={local_rank} lmdeploy serve api_server {model_path} --server-port {port}'
+    os.system(command)
+
+
+if __name__ == '__main__':
+    fire.Fire(main)
+```
+
 ## 接入 WebUI
 
 LMDeploy 提供 gradio 和 [OpenAOE](https://github.com/InternLM/OpenAOE) 两种方式，为 api_server 接入 WebUI。

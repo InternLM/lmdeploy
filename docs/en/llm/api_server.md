@@ -249,6 +249,33 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
 lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
+## Launch multiple api servers
+
+Following is a possible way to launch multiple api servers through torchrun. Just create a python script with the following codes.
+Launch the script through `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b`.
+
+```python
+from typing import List
+import fire
+
+import os
+
+def main(model_path: str,
+         port: int = 23333):
+    local_rank = int(os.environ.get('LOCAL_RANK', -1))
+    if isinstance(port, List):
+        assert len(port) == int(os.environ.get('WORLD_SIZE', -1))
+        port = port[local_rank]
+    else:
+        port += local_rank*10
+    command = f'CUDA_VISIBLE_DEVICES={local_rank} lmdeploy serve api_server {model_path} --server-port {port}'
+    os.system(command)
+
+
+if __name__ == '__main__':
+    fire.Fire(main)
+```
+
 ## FAQ
 
 1. When user got `"finish_reason":"length"`, it means the session is too long to be continued. The session length can be

@@ -910,6 +910,20 @@ async def chat_interactive_v1(request: GenerateRequest,
         return JSONResponse(ret)
 
 
+def handle_torchrun():
+    """To disable mmengine logging logic when using torchrun."""
+
+    def dummy_get_device_id():
+        return 0
+
+    if int(os.environ.get('LOCAL_RANK', -1)) > 0:
+        from lmdeploy.vl.model.utils import _set_func
+
+        # the replacement can't be recovered
+        _set_func('mmengine.logging.logger._get_device_id',
+                  dummy_get_device_id)
+
+
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -986,8 +1000,8 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
+    handle_torchrun()
     _, pipeline_class = get_task(model_path)
-
     VariableInterface.async_engine = pipeline_class(
         model_path=model_path,
         model_name=model_name,
