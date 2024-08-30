@@ -1,10 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from .dipu import DIPUDeviceUtils
+from .base_device_utils import BaseDeviceUtils
 
 
-class ASCENDDeviceUtils(DIPUDeviceUtils):
+class ASCENDDeviceUtils(BaseDeviceUtils):
 
     device = 'ascend'
 
@@ -17,7 +17,8 @@ class ASCENDDeviceUtils(DIPUDeviceUtils):
             single_attention_mask = torch.logical_not(
                 torch.tril(
                     torch.ones(step_context.q_seq_length[i],
-                               step_context.kv_seq_length[i],
+                               step_context.block_offsets.shape[1] *
+                               block_size,
                                dtype=torch.bool).cuda(),
                     diagonal=step_context.kv_seq_length[i] -
                     step_context.q_seq_length[i],
@@ -28,7 +29,7 @@ class ASCENDDeviceUtils(DIPUDeviceUtils):
             block_loc = step_context.block_offsets[i][block_idx]
             token_loc = history_length % block_size
             for _ in range(step_context.q_seq_length[i]):
-                kv_start_indices.append(block_loc * block_size + token_loc)
+                kv_start_indices.append([block_loc * block_size + token_loc])
                 if _ == step_context.q_seq_length[i] - 1:
                     break
                 token_loc = (token_loc + 1) % block_size
@@ -38,4 +39,11 @@ class ASCENDDeviceUtils(DIPUDeviceUtils):
             kv_start_indices, device=step_context.block_offsets.device)
         setattr(step_context, 'kv_start_indices', kv_start_indices)
         setattr(step_context, 'attention_mask', attention_mask)
+        setattr(step_context, 'q_start_loc', step_context.q_start_loc.cpu())
+        setattr(step_context, 'q_seq_length', step_context.q_seq_length.cpu())
+        setattr(step_context, 'kv_seq_length',
+                step_context.kv_seq_length.cpu())
+        is_unpaged_prefill = (not step_context.is_decoding) and all(
+            (step_context.q_seq_length == step_context.kv_seq_length).tolist())
+        setattr(step_context, 'is_unpaged_prefill', is_unpaged_prefill)
         return step_context
