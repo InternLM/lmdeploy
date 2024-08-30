@@ -268,7 +268,8 @@ jobs:
       - name: Test lmdeploy - local testcase
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
         run: |
-          pytest /local_case/issue_regression --alluredir=${{env.REPORT_DIR}} --cov ${{env.COV_PATH}}
+          pytest /local_case/issue_regression --alluredir=${{env.REPORT_DIR}} --cov ${{env.COV_PATH}}|| true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()
         run: |
