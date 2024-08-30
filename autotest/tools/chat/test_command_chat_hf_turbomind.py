@@ -106,9 +106,10 @@ def test_hf_turbomind_base_tp2(config, model, cli_case_config, worker_id):
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize(
-    'model',
-    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
+@pytest.mark.parametrize('model', [
+    'internlm/internlm2_5-20b-chat',
+    'internlm/internlm2_5-20b-chat-inner-4bits'
+])
 def test_hf_turbomind_chat_pr(config, model, cli_case_config):
     usercase = 'chat_testcase'
 

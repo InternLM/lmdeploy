@@ -3,6 +3,7 @@ coverage
 pynvml
 pytest
 pytest-assume
+pytest-cov
 pytest-order
 pytest-rerunfailures
 pytest-sugar
