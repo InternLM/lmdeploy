@@ -49,7 +49,7 @@ class GenerationConfig:
     max_new_tokens: int = 512
     do_sample: bool = False
     top_p: float = 1.0
-    top_k: int = 1
+    top_k: int = 50
     temperature: float = 0.8
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
@@ -92,12 +92,6 @@ class GenerationConfig:
         assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
-        if self.do_sample is False:
-            self.top_k = 1
-            # top_k = 1 will do greedy decoding, set other params to default
-            # value to avoid unnecessary compute.
-            self.temperature = 1.0
-            self.repetition_penalty = 1.0
 
 
 @pydantic_dataclass

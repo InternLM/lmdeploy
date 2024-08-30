@@ -500,9 +500,15 @@ class AsyncEngine(LogitsMixin):
         gen_config.convert_stop_bad_words_to_ids(self.tokenizer)
         if gen_config.stop_words_ids is None:
             gen_config.stop_words_ids = self.stop_words
+        gen_config = deepcopy(gen_config)
+        if not gen_config.do_sample:
+            # greedy decode
+            gen_config.top_k = 1
+            # avoid unnecessary process
+            gen_config.temperature = 1.0
+            gen_config.repetition_penalty = 1.0
         # set random if it is not set and sequence_start is True
         if gen_config.random_seed is None and sequence_start:
-            gen_config = deepcopy(gen_config)
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
             logger.warning(f"n({gen_config.n}) > 1 hasn't been supported yet. "
