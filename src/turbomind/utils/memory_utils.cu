@@ -884,7 +884,7 @@ void invokeInPlaceTranspose102(
         cudaAutoCpy(workspace, data, count, stream);
     }
     const int block = 512;
-    const int grid  = std::min((count + block - 1) / block, 8192ul);
+    const int grid  = std::min((count + block - 1) / block, (size_t)8192);
     transpose102<<<grid, block, 0, stream>>>(data, workspace, dim0, dim1, dim2);
 }
 
