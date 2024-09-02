@@ -127,16 +127,47 @@ class LlamaReader(BaseReader):
             f'{self.attn_layer_prefix}.{i}.post_attention_layernorm.weight']
 
 
+class LlamaQQQReader(LlamaReader):
+    """LlamaQQQReader."""
+
+    def attn(self, i: int):
+        """Get q, k, v, o qweight for layer i."""
+        return self._attn(i, 'B')
+
+    def attn_scale_group(self, i: int):
+        """Get q, k, v, o per-group scales for layer i."""
+        return self._attn(i, 's_group')
+
+    def attn_scale_channel(self, i: int):
+        """Get q, k, v, o per-channel scales for layer i."""
+        return self._attn(i, 's_channel')
+
+    def ffn(self, i: int):
+        """Get ffn qweight for layer i."""
+        return self._ffn(i, 'B')
+
+    def ffn_scale_group(self, i: int):
+        """Get ffn per-group scales for layer i."""
+        return self._ffn(i, 's_group')
+
+    def ffn_scale_channel(self, i: int):
+        """Get ffn per-channel scales for layer i."""
+        return self._ffn(i, 's_channel')
+
+
 @INPUT_MODELS.register_module(name='llama')
 class LlamaModel(BaseInputModel):
     """Llama model in hf format."""
-
-    Reader = LlamaReader
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
         ckpt_path = kwargs.get('ckpt_path')
         self.policy = kwargs.get('input_policy')
+        self.model_format = kwargs.get('model_format')
+        if self.model_format == 'qqq':
+            self.Reader = LlamaQQQReader
+        else:
+            self.Reader = LlamaReader
         if ckpt_path is None:
             ckpt_path = model_path
         self.ckpt_path = ckpt_path

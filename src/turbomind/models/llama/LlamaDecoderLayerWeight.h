@@ -22,6 +22,7 @@
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
@@ -30,18 +31,19 @@ template<typename T>
 struct LlamaDecoderLayerWeight {
 public:
     LlamaDecoderLayerWeight() = delete;
-    LlamaDecoderLayerWeight(int        layer_idx,
-                            size_t     head_num,
-                            size_t     kv_head_num,
-                            size_t     size_per_head,
-                            size_t     hidden_units,
-                            size_t     inter_size,
-                            WeightType weight_type,
-                            int        group_size,
-                            LoraParam  lora_param,
-                            bool       attn_bias,
-                            size_t     tensor_para_size,
-                            size_t     tensor_para_rank);
+    LlamaDecoderLayerWeight(int         layer_idx,
+                            size_t      head_num,
+                            size_t      kv_head_num,
+                            size_t      size_per_head,
+                            size_t      hidden_units,
+                            size_t      inter_size,
+                            WeightType  weight_type,
+                            int         group_size,
+                            QuantMethod quantization,
+                            LoraParam   lora_param,
+                            bool        attn_bias,
+                            size_t      tensor_para_size,
+                            size_t      tensor_para_rank);
     ~LlamaDecoderLayerWeight();
     LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight& other) = delete;
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight& other) = delete;
@@ -60,18 +62,19 @@ public:
     LlamaFfnWeight<T>       ffn_weights{};
 
 private:
-    size_t     head_num_;
-    size_t     kv_head_num_;
-    size_t     size_per_head_;
-    size_t     hidden_units_;
-    size_t     inter_size_;
-    WeightType weight_type_;
-    size_t     bit_size_;
-    bool       attn_bias_;
-    size_t     tensor_para_size_;
-    size_t     tensor_para_rank_;
-    bool       is_maintain_buffer_ = false;
-    bool       fused_up_and_gate_;
+    size_t      head_num_;
+    size_t      kv_head_num_;
+    size_t      size_per_head_;
+    size_t      hidden_units_;
+    size_t      inter_size_;
+    WeightType  weight_type_;
+    size_t      bit_size_;
+    bool        attn_bias_;
+    QuantMethod quantization_;
+    size_t      tensor_para_size_;
+    size_t      tensor_para_rank_;
+    bool        is_maintain_buffer_ = false;
+    bool        fused_up_and_gate_;
 
     void mallocWeights();
 };

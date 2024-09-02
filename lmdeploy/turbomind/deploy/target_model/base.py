@@ -67,6 +67,7 @@ class TurbomindModelConfig:
     max_prefill_iters: int = 1
     use_context_fmha: int = 1
     quant_policy: int = 0
+    quantization: str = ''
     max_position_embeddings: int = 0
     original_max_position_embeddings: int = 0
     rope_scaling_type: str = ''
@@ -238,7 +239,7 @@ class BaseOutputModel(ABC):
             assert torch_tensor.dtype in [
                 torch.int32, torch.float, torch.half, torch.bfloat16
             ]
-            if torch_tensor.dtype != torch.int32:
+            if torch_tensor.dtype != torch.int32 and self.cfg.quantization != 'qqq':  # noqa: E501
                 if weight_type in ['fp16', 'int4']:
                     torch_tensor = torch_tensor.half()
                 elif weight_type == 'bf16':

@@ -106,10 +106,11 @@ class ArgumentHelper:
             '--model-format',
             type=str,
             default=default,
-            choices=['hf', 'llama', 'awq', 'gptq'],
-            help='The format of input model. `hf` means `hf_llama`, `llama` '
-            'means `meta_llama`, `awq` represents the quantized model by AWQ,'
-            ' and `gptq` refers to the quantized model by GPTQ')
+            choices=['hf', 'llama', 'awq', 'gptq', 'qqq'],
+            help='The format of input model. `hf` meaning `hf_llama`, `llama` '
+            'meaning `meta_llama`, `awq` meaning the quantized model by awq, '
+            '`gptq` refers to the quantized model by GPTQ, and '
+            '`qqq` meaning the quantized model by qqq')
 
     @staticmethod
     def revision(parser, default: str = None):

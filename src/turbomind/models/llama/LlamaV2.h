@@ -28,6 +28,7 @@
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
@@ -72,6 +73,8 @@ private:
     void forwardUnified(T*               out,
                         T*               decoder_output,
                         T*               decoder_input,
+                        int8_t*          decoder_quant_output,
+                        float*           decoder_quant_scale,
                         void**           block_ptrs,
                         const int*       cu_block_cnts,
                         const int*       input_ids,
@@ -124,6 +127,7 @@ private:
     const NcclParam tensor_para_;
     const size_t    local_head_num_;
     const size_t    local_kv_head_num_;
+    QuantMethod     quantization_;
 
     const std::shared_ptr<LlamaWeight<T>> weights_{};
 

@@ -113,6 +113,7 @@ private:
     const size_t hidden_units_;
     const size_t local_head_num_;
     const size_t local_kv_head_num_;
+    QuantMethod  quantization_;
 
     const AttentionParam param_;
     const ModelParam     model_param_;
@@ -151,6 +152,9 @@ private:
     int*   barriers_{};  // always zero
 
     T* tmp_kv_buf_{};
+    // online act quant
+    int8_t* quant_buf_{};
+    float*  act_scale_buf_{};
 
     bool is_allocate_buffer_    = false;
     bool is_allocate_workspace_ = false;

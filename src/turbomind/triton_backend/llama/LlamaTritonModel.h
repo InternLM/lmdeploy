@@ -23,6 +23,7 @@
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/cuda_utils.h"
