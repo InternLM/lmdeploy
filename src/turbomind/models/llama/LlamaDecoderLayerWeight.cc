@@ -61,7 +61,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
                                                     size_t     inter_size,
                                                     WeightType weight_type,
                                                     int        group_size,
-                                                    LoraParams lora_params,
+                                                    LoraParam  lora_param,
                                                     bool       attn_bias,
                                                     size_t     tensor_para_size,
                                                     size_t     tensor_para_rank):
@@ -75,7 +75,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank)
 {
-    if (lora_params.policy == LoraPolicy::kPlora) {
+    if (lora_param.policy == LoraPolicy::kPlora) {
         std::vector<std::string> keys = {
             "attention.w_qkv", "attention.wo", "feed_forward.w1", "feed_forward.w2", "feed_forward.w3"};
         std::vector<LlamaDenseWeight<T>*> weights = {&self_attn_weights.qkv,
@@ -86,18 +86,18 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
         for (int i = 0; i < keys.size(); i++) {
             const auto& name      = keys[i];
             auto&       weight    = *weights[i];
-            int         rank      = lora_params.r;
-            float       scale     = lora_params.scale;
+            int         rank      = lora_param.r;
+            float       scale     = lora_param.scale;
             std::string full_name = "layers." + std::to_string(layer_idx) + "." + name;
 
-            for (const auto& [re, pr] : lora_params.rank_pattern) {
+            for (const auto& [re, pr] : lora_param.rank_pattern) {
                 if (std::regex_search(full_name, pr.first)) {
                     rank = pr.second;
                     TM_LOG_DEBUG("find rank, pattern=%s, name=%s, value=%d", re.c_str(), full_name.c_str(), rank);
                     break;
                 }
             }
-            for (const auto& [re, pr] : lora_params.scale_pattern) {
+            for (const auto& [re, pr] : lora_param.scale_pattern) {
                 if (std::regex_search(full_name, pr.first)) {
                     scale = pr.second;
                     TM_LOG_DEBUG("find scale pattern=%s, name=%s, value=%f", re.c_str(), full_name.c_str(), scale);
@@ -107,7 +107,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
             if (rank) {
                 weight.lora.r      = rank;
                 weight.lora.scale  = scale;
-                weight.lora.policy = lora_params.policy;
+                weight.lora.policy = lora_param.policy;
             }
         }
     }

@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[tb_internlm2_chat_7b, tb_internlm2_chat_7b_4bits, tb_internlm2_chat_7b_kvint4, tb_internlm2_chat_7b_kvint8, pt_internlm2_chat_7b, tb_internlm2_5_7b_chat, tb_internlm2_5_7b_chat_4bits, tb_internlm2_5_7b_chat_kvint4, tb_internlm2_5_7b_chat_kvint8, pt_internlm2_5_7b_chat, tb_internlm2_chat_20b, tb_internlm2_chat_20b_4bits, tb_internlm2_chat_20b_kvint4, tb_internlm2_chat_20b_kvint8, pt_internlm2_chat_20b, tb_qwen1_5_7b_chat, tb_qwen1_5_7b_chat_4bits, tb_qwen1_5_7b_chat_kvint4, tb_qwen1_5_7b_chat_kvint8, pt_qwen1_5_7b_chat,  tb_llama_3_8b_instruct, pt_llama_3_8b_instruct, tb_llama_3_8b_instruct_4bits, tb_llama_3_8b_instruct_kvint4, tb_llama_3_8b_instruct_kvint8, tb_qwen2_7b_instruct, tb_qwen2_7b_instruct_4bits, tb_qwen2_7b_instruct_kvint4, tb_qwen2_7b_instruct_kvint8, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]'
+        default: '[tb_internlm2_chat_7b, tb_internlm2_chat_7b_4bits, tb_internlm2_chat_7b_kvint4, tb_internlm2_chat_7b_kvint8, pt_internlm2_chat_7b, tb_internlm2_5_7b_chat, tb_internlm2_5_7b_chat_4bits, tb_internlm2_5_7b_chat_kvint4, tb_internlm2_5_7b_chat_kvint8, pt_internlm2_5_7b_chat, tb_internlm2_5_20b_chat, tb_internlm2_5_20b_chat_4bits, tb_internlm2_5_20b_chat_kvint4, tb_internlm2_5_20b_chat_kvint8, pt_internlm2_5_20b_chat, tb_qwen1_5_7b_chat, tb_qwen1_5_7b_chat_4bits, tb_qwen1_5_7b_chat_kvint4, tb_qwen1_5_7b_chat_kvint8, pt_qwen1_5_7b_chat,  tb_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, tb_llama_3d1_8b_instruct_4bits, tb_llama_3d1_8b_instruct_kvint4, tb_llama_3d1_8b_instruct_kvint8, tb_qwen2_7b_instruct, tb_qwen2_7b_instruct_4bits, tb_qwen2_7b_instruct_kvint8, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]'
       datasets:
         required: true
         description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
@@ -37,11 +37,11 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'pynvml packaging protobuf transformers_stream_generator transformers'
+        default: 'pynvml packaging protobuf transformers_stream_generator transformers human_eval'
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'pynvml packaging protobuf transformers_stream_generator transformers'}}
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'pynvml packaging protobuf transformers_stream_generator transformers human_eval'}}
 
 jobs:
   linux-build:
@@ -113,13 +113,13 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.5.7+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install -U 'xformers<=0.0.26' --index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         run: |

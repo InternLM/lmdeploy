@@ -8,7 +8,7 @@ In this part, we are going to setup the environment for evaluation.
 
 ### Install lmdeploy
 
-Please follow the [installation guide](../installation.md) to install lmdeploy.
+Please follow the [installation guide](../get_started/installation.md) to install lmdeploy.
 
 ### Install OpenCompass
 

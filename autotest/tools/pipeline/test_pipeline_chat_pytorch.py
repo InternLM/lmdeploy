@@ -45,6 +45,8 @@ def test_pipeline_chat_pytorch_tp2(config, common_case_config, model,
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
+        os.environ['MASTER_PORT'] = str(
+            int(worker_id.replace('gw', '')) + 29500)
     p = Process(target=run_pipeline_chat_test,
                 args=(config, common_case_config, model, 'pytorch', worker_id))
     p.start()
@@ -61,7 +63,7 @@ def test_pipeline_chat_pytorch_tp2(config, common_case_config, model,
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 def test_pipeline_chat_pytorch_pr(config, common_case_config, model):
     p = Process(target=run_pipeline_chat_test,
                 args=(config, common_case_config, model, 'pytorch'))
@@ -131,6 +133,8 @@ def test_pipeline_chat_pytorch_with_lora_tp2(config, common_case_config, model,
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
+        os.environ['MASTER_PORT'] = str(
+            int(worker_id.replace('gw', '')) + 29500)
     p = Process(target=run_pipeline_chat_test,
                 args=(config, common_case_config, model, 'pytorch_lora',
                       worker_id, {

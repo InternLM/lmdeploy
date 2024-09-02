@@ -1,6 +1,6 @@
 # Quick Start
 
-This tutorial shows the usage of LMDeploy on:
+This tutorial shows the usage of LMDeploy on CUDA platform:
 
 - Offline inference of LLM model and VLM model
 - Serve a LLM or VLM model by the OpenAI compatible server
@@ -19,7 +19,7 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-When constructing the `pipeline`, if an inference engine is not designated between the TurboMind Engine and the PyTorch Engine, LMDeploy will automatically assign one based on [their respective capabilities](supported_models/supported_models.md), with the TurboMind Engine taking precedence by default.
+When constructing the `pipeline`, if an inference engine is not designated between the TurboMind Engine and the PyTorch Engine, LMDeploy will automatically assign one based on [their respective capabilities](../supported_models/supported_models.md), with the TurboMind Engine taking precedence by default.
 
 However, you have the option to manually select an engine. For instance,
 
@@ -74,7 +74,7 @@ response = pipe(prompts,
 
 In the `GenerationConfig`, `top_k=1` or `temperature=0.0` indicates greedy search.
 
-For more information about pipeline, please read the [detailed tutorial](llm/pipeline.md)
+For more information about pipeline, please read the [detailed tutorial](../llm/pipeline.md)
 
 ### VLM inference
 
@@ -110,7 +110,7 @@ print(response)
 
 However, the larger the image batch size, the greater risk of an OOM error, because the LLM component within the VLM model pre-allocates a massive amount of memory in advance.
 
-We encourage you to manually choose between the TurboMind Engine and the PyTorch Engine based on their respective capabilities, as detailed in [the supported-models matrix](./supported_models/supported_models.md).
+We encourage you to manually choose between the TurboMind Engine and the PyTorch Engine based on their respective capabilities, as detailed in [the supported-models matrix](../supported_models/supported_models.md).
 Additionally, follow the instructions in [LLM Inference](#llm-inference) section to reduce the values of memory-related parameters
 
 ## Serving
@@ -147,7 +147,7 @@ response = client.chat.completions.create(
 print(response)
 ```
 
-We encourage you to refer to the detailed guide for more comprehensive information about [serving with Docker](./llm/api_server.md), [function calls](llm/api_server_tools.md) and other topics
+We encourage you to refer to the detailed guide for more comprehensive information about [serving with Docker](../llm/api_server.md), [function calls](../llm/api_server_tools.md) and other topics
 
 ### Serve a VLM model
 
