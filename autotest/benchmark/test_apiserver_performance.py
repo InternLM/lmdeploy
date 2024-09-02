@@ -88,13 +88,13 @@ def test_restful_tp4(config, run_id, prepare_environment, worker_id):
 @pytest.mark.function
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment', [{
-    'model': 'internlm/internlm2-chat-20b',
+    'model': 'internlm/internlm2_5-20b-chat',
     'backend': 'pytorch',
     'tp_num': 2,
     'extra': '--max-batch-size 256 --cache-max-entry-count 0.9',
     'cuda_prefix': None
 }, {
-    'model': 'internlm/internlm2-chat-20b-inner-4bits',
+    'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
     'backend': 'turbomind',
     'quant_policy': 0,
     'tp_num': 2,
@@ -106,7 +106,8 @@ def test_restful_func_tp2(config, run_id, prepare_environment, worker_id):
     result, restful_log, msg = restful_test(config,
                                             run_id,
                                             prepare_environment,
-                                            worker_id=worker_id)
+                                            worker_id=worker_id,
+                                            is_smoke=True)
 
     if restful_log is not None:
         allure.attach.file(restful_log,

@@ -62,11 +62,11 @@ def test_throughput_tp4(config, run_id, run_config, worker_id):
 @pytest.mark.function
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', [{
-    'model': 'internlm/internlm2-chat-20b',
+    'model': 'internlm/internlm2_5-20b-chat',
     'backend': 'pytorch',
     'tp_num': 2
 }, {
-    'model': 'internlm/internlm2-chat-20b-inner-4bits',
+    'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
     'backend': 'turbomind',
     'quant_policy': 0,
     'tp_num': 2
@@ -77,7 +77,8 @@ def test_throughput_func_tp2(config, run_id, run_config, worker_id):
         run_id,
         run_config,
         cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
-        worker_id=worker_id)
+        worker_id=worker_id,
+        is_smoke=True)
 
     if throughput_log is not None:
         allure.attach.file(throughput_log,

@@ -11,7 +11,7 @@ The next chapter demonstrates how to deploy an MiniCPM-V model using LMDeploy, w
 
 ## Installation
 
-Please install LMDeploy by following the [installation guide](../installation.md).
+Please install LMDeploy by following the [installation guide](../get_started/installation.md).
 
 ## Offline inference
 

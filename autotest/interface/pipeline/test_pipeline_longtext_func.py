@@ -19,7 +19,7 @@ SESSION_LEN_PASSKEY_1M = 1048576
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', [
     'internlm/internlm2-chat-7b', 'internlm/internlm2_5-7b',
-    'internlm/internlm2-chat-1_8b', 'internlm/internlm2-1_8b'
+    'internlm/internlm2-chat-1_8b'
 ])
 def test_history_issue_tp1(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])

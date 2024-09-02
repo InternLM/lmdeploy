@@ -4,7 +4,7 @@ Turbomind is implemented in C++, which is not as easy to debug as Python. This d
 
 ## Prerequisite
 
-First, complete the local compilation according to the commands in [Install from source](../installation.md).
+First, complete the local compilation according to the commands in [Install from source](../get_started/installation.md).
 
 ## Configure Python debug environment
 

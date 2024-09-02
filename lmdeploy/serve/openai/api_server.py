@@ -360,6 +360,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens,
+        do_sample=True,
         logprobs=gen_logprobs,
         top_k=request.top_k,
         top_p=request.top_p,
@@ -590,6 +591,7 @@ async def completions_v1(request: CompletionRequest,
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens if request.max_tokens else 512,
+        do_sample=True,
         logprobs=request.logprobs,
         top_k=request.top_k,
         top_p=request.top_p,
@@ -675,7 +677,7 @@ async def completions_v1(request: CompletionRequest,
 
     # Non-streaming response
     usage = UsageInfo()
-    choices = []
+    choices = [None] * len(generators)
 
     async def _inner_call(i, generator):
         final_logprobs = []
@@ -704,12 +706,12 @@ async def completions_v1(request: CompletionRequest,
 
         assert final_res is not None
         choice_data = CompletionResponseChoice(
-            index=0,
+            index=i,
             text=text,
             finish_reason=final_res.finish_reason,
             logprobs=logprobs,
         )
-        choices.append(choice_data)
+        choices[i] = choice_data
 
         total_tokens = sum([
             final_res.history_token_len, final_res.input_token_len,
@@ -841,6 +843,7 @@ async def chat_interactive_v1(request: GenerateRequest,
 
     gen_config = GenerationConfig(
         max_new_tokens=request.request_output_len,
+        do_sample=True,
         top_p=request.top_p,
         top_k=request.top_k,
         temperature=request.temperature,
@@ -963,7 +966,7 @@ def serve(model_path: str,
         api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
             a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
-    """ # noqa E501
+    """  # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)

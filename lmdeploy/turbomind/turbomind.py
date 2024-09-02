@@ -15,8 +15,8 @@ import yaml
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import (EngineGenerationConfig, EngineOutput,
-                               ResponseType, TurbomindEngineConfig)
+from lmdeploy.messages import (EngineOutput, GenerationConfig, ResponseType,
+                               TurbomindEngineConfig)
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model
 
@@ -410,7 +410,7 @@ class TurboMindInstance:
                 input_ids,
                 sequence_start=False,
                 sequence_end=True,
-                gen_config=EngineGenerationConfig(max_new_tokens=0)):
+                gen_config=GenerationConfig(max_new_tokens=0)):
             pass
 
     async def async_end(self, session_id: int):
@@ -427,7 +427,7 @@ class TurboMindInstance:
                 sequence_start=False,
                 sequence_end=False,
                 stop=True,
-                gen_config=EngineGenerationConfig(max_new_tokens=0)):
+                gen_config=GenerationConfig(max_new_tokens=0)):
             pass
 
     async def async_cancel(self, session_id: int):
@@ -486,7 +486,7 @@ class TurboMindInstance:
     def prepare_inputs(self,
                        session_id,
                        input_ids,
-                       gen_config: EngineGenerationConfig,
+                       gen_config: GenerationConfig,
                        input_embeddings=None,
                        input_embedding_ranges=None,
                        sequence_start: bool = True,
@@ -557,13 +557,13 @@ class TurboMindInstance:
             inputs['logprobs'] = _broadcast_np(gen_config.logprobs, np.int32)
 
         bad_words = []
-        if gen_config.bad_words is not None:
-            bad_words.extend(gen_config.bad_words)
+        if gen_config.bad_token_ids is not None:
+            bad_words.extend(gen_config.bad_token_ids)
         if gen_config.ignore_eos:
             stop_words = None
             bad_words.append(self.eos_id)
         else:
-            stop_words = gen_config.stop_words
+            stop_words = gen_config.stop_token_ids
         stop_words = _construct_stop_or_bad_words(stop_words)
         bad_words = _construct_stop_or_bad_words(bad_words)
 
@@ -586,7 +586,7 @@ class TurboMindInstance:
                                  sequence_end: bool = False,
                                  step=0,
                                  stop=False,
-                                 gen_config: EngineGenerationConfig = None,
+                                 gen_config: GenerationConfig = None,
                                  stream_output=False,
                                  **kwargs):
         """Perform model inference.
@@ -601,7 +601,7 @@ class TurboMindInstance:
             sequence_end (bool): indicator for ending a sequence
             step (int): the offset of the k/v cache
             stop (bool): indicator for cancelling the session
-            gen_config (EngineGenerationConfig): generation config
+            gen_config (GenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
@@ -669,8 +669,8 @@ class TurboMindInstance:
                     outputs = EngineOutput(status, output[:-1].tolist(),
                                            len_ - 1)
                 elif len(output) > 0 and \
-                    gen_config.stop_words is not None and \
-                        output[-1].item() in gen_config.stop_words:
+                    gen_config.stop_token_ids is not None and \
+                        output[-1].item() in gen_config.stop_token_ids:
                     outputs = EngineOutput(status, output[:-1].tolist(), len_)
                 else:
                     outputs = EngineOutput(status, output.tolist(), len_)
@@ -703,7 +703,7 @@ class TurboMindInstance:
                      sequence_end: bool = False,
                      step=0,
                      stop=False,
-                     gen_config: EngineGenerationConfig = None,
+                     gen_config: GenerationConfig = None,
                      stream_output=False,
                      **kwargs):
         """Perform model inference.
@@ -718,7 +718,7 @@ class TurboMindInstance:
             sequence_end (bool): indicator for ending a sequence
             step (int): the offset of the k/v cache
             stop (bool): indicator for cancelling the session
-            gen_config (EngineGenerationConfig): generation config
+            gen_config (GenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
@@ -782,8 +782,8 @@ class TurboMindInstance:
                     outputs = EngineOutput(status, output[:-1].tolist(),
                                            len_ - 1, out_logprobs)
                 elif len(output) > 0 and \
-                    gen_config.stop_words is not None and \
-                        output[-1].item() in gen_config.stop_words:
+                    gen_config.stop_token_ids is not None and \
+                        output[-1].item() in gen_config.stop_token_ids:
                     outputs = EngineOutput(status, output[:-1].tolist(), len_,
                                            out_logprobs)
                 else:
