@@ -497,10 +497,11 @@ class AsyncEngine(LogitsMixin):
             self.id2step[str(session_id)] = step
         if gen_config is None:
             gen_config = GenerationConfig()
+        else:
+            gen_config = deepcopy(gen_config)
         gen_config.convert_stop_bad_words_to_ids(self.tokenizer)
         if gen_config.stop_words_ids is None:
             gen_config.stop_words_ids = self.stop_words
-        gen_config = deepcopy(gen_config)
         if not gen_config.do_sample:
             # greedy decode
             gen_config.top_k = 1

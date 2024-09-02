@@ -37,7 +37,12 @@ class GenerationConfig:
         ignore_eos (bool): Indicator to ignore the eos_token_id or not
         random_seed (int): Seed used when sampling a token
         stop_words (List[str]): Words that stop generating further tokens
+        stop_words_ids (List[int]): List of tokens that stop the generation
+            when they are generated. The returned output will not contain
+            the stop tokens.
         bad_words (List[str]): Words that the engine will never generate
+        bad_words_ids (List[str]): List of tokens that the engine will never
+            generate.
         min_new_tokens (int): The minimum numbers of tokens to generate,
             ignoring the number of tokens in the prompt.
         skip_special_tokens (bool): Whether or not to remove special tokens
