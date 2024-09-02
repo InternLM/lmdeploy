@@ -30,6 +30,8 @@ class LongRoPEScalingParameters:
     short_factor: List[int]
     long_factor: List[int]
     original_max_position_embeddings: int
+    long_mscale: float = None
+    short_mscale: float = None
 
 
 class RotaryEmbeddingImpl(ABC):

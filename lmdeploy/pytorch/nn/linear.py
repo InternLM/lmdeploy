@@ -212,6 +212,8 @@ class AwqLinear(nn.Module):
         """weight loader for rowwise linear."""
         if loaded_weight.dim() == 1:
             # bias
+            if rank == 0:
+                loaded_weight = torch.zeros_like(loaded_weight)
             return default_weight_loader(param, loaded_weight)
 
         if loaded_weight.size(0) == self.in_features:
@@ -516,6 +518,8 @@ class W8A8Linear(nn.Module):
             return default_weight_loader(param, weight)
         else:
             # bias
+            if rank == 0:
+                loaded_weight = torch.zeros_like(loaded_weight)
             return default_weight_loader(param, loaded_weight)
 
     def weight_loader(self, param: torch.nn.Parameter,
@@ -762,6 +766,8 @@ class BaseLinear(nn.Module):
             return default_weight_loader(param, weight)
         else:
             # bias
+            if rank != 0:
+                loaded_weight = torch.zeros_like(loaded_weight)
             return default_weight_loader(param, loaded_weight)
 
     def weight_loader(self, param: torch.nn.Parameter,

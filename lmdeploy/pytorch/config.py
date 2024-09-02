@@ -111,7 +111,7 @@ class ModelConfig:
         from transformers import AutoConfig
         hf_config = AutoConfig.from_pretrained(
             pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
-        if getattr(hf_config, 'model_type', None) == 'phi3':
+        if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
             hf_config = AutoConfig.from_pretrained(
                 pretrained_model_name_or_path)

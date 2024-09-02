@@ -167,20 +167,8 @@ MODULE_MAP.update({
 
 # phi-3.5-moe
 MODULE_MAP.update({
-    'modeling_phimoe.PhiMoEAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
-    'modeling_phimoe.PhiMoEFlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
-    'modeling_phimoe.PhiMoESdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
-    'modeling_phimoe.PhiMoEModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralModel',
-    'modeling_phimoe.PhiMoEBlockSparseTop2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
-    'modeling_phimoe.PhiMoEBLockSparseTop2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
-    'modeling_phimoe.PhiMoESparseMoeBlock':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3_moe.PatchedPhiMoESparseMoeBlock',
+    'PhiMoEForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3_moe.PhiMoEForCausalLM',
 })
 
 CUSTOM_MODULE_MAP = dict()

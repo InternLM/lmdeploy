@@ -12,7 +12,7 @@ from ..rotary_embedding import (EmbeddingType, LongRoPEScalingParameters,
 def _rotary_embedding_fwd(position_ids: torch.Tensor,
                           inv_freq: torch.Tensor,
                           scaling_factor: float,
-                          mscale: float = 1.0,
+                          mscale: float = None,
                           dtype: torch.dtype = None,
                           device_type: torch.device = None):
     """rotary embedding forward."""
@@ -36,7 +36,7 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
         cos = emb.cos()
         sin = emb.sin()
 
-        if mscale != 1.0:
+        if mscale is not None:
             cos = cos * mscale
             sin = sin * mscale
 
@@ -233,6 +233,8 @@ class YarnRotaryEmbeddingImpl(RotaryEmbeddingImpl):
         self.mscale = float(
             yarn_get_mscale(self.scaling_factor, self.mscale) /
             yarn_get_mscale(self.scaling_factor, self.mscale_all_dim))
+        if self.mscale == 1.0:
+            self.mscale = None
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
         """forward."""
@@ -267,14 +269,18 @@ class LongRoPEScalingRotaryEmbeddingImpl(RotaryEmbeddingImpl):
         self.register_buffer('long_factor', long_factor, persistent=False)
         self.original_max_position_embeddings = \
             longrope_params.original_max_position_embeddings
-        scale = (max_position_embeddings /
-                 self.original_max_position_embeddings)
-        if scale <= 1.0:
-            self.mscale = 1.0
-        else:
-            self.mscale = math.sqrt(
-                1 + math.log(scale) /
-                math.log(self.original_max_position_embeddings))
+        self.mscale = None
+        self.short_mscale = longrope_params.short_mscale
+        self.long_mscale = longrope_params.long_mscale
+        if self.short_mscale is None and self.long_mscale is None:
+            scale = (max_position_embeddings /
+                     self.original_max_position_embeddings)
+            if scale <= 1.0:
+                self.mscale = 1.0
+            else:
+                self.mscale = math.sqrt(
+                    1 + math.log(scale) /
+                    math.log(self.original_max_position_embeddings))
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
         """rope forward."""
@@ -289,14 +295,18 @@ class LongRoPEScalingRotaryEmbeddingImpl(RotaryEmbeddingImpl):
                                  persistent=False)
 
         max_pos_ids = position_ids.max() + 1
-        ext_factors = torch.where(
-            max_pos_ids > self.original_max_position_embeddings,
-            self.long_factor, self.short_factor)
+        mask = max_pos_ids > self.original_max_position_embeddings
+        ext_factors = torch.where(mask, self.long_factor, self.short_factor)
+
+        mscale = self.mscale
+        if mscale is None:
+            mscale = torch.where(mask, self.long_mscale, self.short_mscale)
+
         inv_freq = self.inv_freq * (1.0 / ext_factors)
         return _rotary_embedding_fwd(position_ids,
                                      inv_freq,
                                      scaling_factor=1.0,
-                                     mscale=self.mscale,
+                                     mscale=mscale,
                                      dtype=dtype,
                                      device_type=device)
 
