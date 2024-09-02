@@ -53,8 +53,8 @@ class SamplingParam:
         """from gen config."""
         min_new_tokens = gen_config.min_new_tokens or 0
 
-        stop_words = gen_config.stop_words_ids or []
-        bad_words = gen_config.bad_words_ids or []
+        stop_words = gen_config.stop_token_ids or []
+        bad_words = gen_config.bad_token_ids or []
         if gen_config.ignore_eos:
             bad_words += stop_words
             stop_words = []

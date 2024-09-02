@@ -132,7 +132,7 @@ def run_local(model_path: str,
                                           top_p=top_p,
                                           top_k=top_k,
                                           temperature=temperature,
-                                          stop_words_ids=engine.stop_words)
+                                          stop_token_ids=engine.stop_words)
             step = session.step
             state = DetokenizeState(len(input_ids))
             for outputs in generator.stream_infer(

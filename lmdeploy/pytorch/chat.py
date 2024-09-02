@@ -113,7 +113,7 @@ def run_chat(model_path: str,
             print(f'{prompt}', end='', flush=True)
             state = DetokenizeState(len(input_ids))
             gen_config.random_seed = seed
-            gen_config.stop_words_ids = stop_words
+            gen_config.stop_token_ids = stop_words
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=input_ids,
                                                   gen_config=gen_config,

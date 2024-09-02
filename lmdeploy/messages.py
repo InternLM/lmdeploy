@@ -37,11 +37,11 @@ class GenerationConfig:
         ignore_eos (bool): Indicator to ignore the eos_token_id or not
         random_seed (int): Seed used when sampling a token
         stop_words (List[str]): Words that stop generating further tokens
-        stop_words_ids (List[int]): List of tokens that stop the generation
+        bad_words (List[str]): Words that the engine will never generate
+        stop_token_ids (List[int]): List of tokens that stop the generation
             when they are generated. The returned output will not contain
             the stop tokens.
-        bad_words (List[str]): Words that the engine will never generate
-        bad_words_ids (List[str]): List of tokens that the engine will never
+        bad_token_ids (List[str]): List of tokens that the engine will never
             generate.
         min_new_tokens (int): The minimum numbers of tokens to generate,
             ignoring the number of tokens in the prompt.
@@ -61,8 +61,8 @@ class GenerationConfig:
     random_seed: int = None
     stop_words: List[str] = None
     bad_words: List[str] = None
-    stop_words_ids: List[int] = None
-    bad_words_ids: List[int] = None
+    stop_token_ids: List[int] = None
+    bad_token_ids: List[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
     logprobs: int = None
@@ -70,7 +70,7 @@ class GenerationConfig:
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """convert stop_words/bad_sords to ids and append the ids to
-        stop_words_ids/bad_words_ids."""
+        stop_token_ids/bad_token_ids."""
 
         def special_word_token_ids(words):
             if words is not None:
@@ -83,12 +83,12 @@ class GenerationConfig:
                 return indexes
             return None
 
-        stop_words = special_word_token_ids(self.stop_words) or []
-        bad_words = special_word_token_ids(self.bad_words) or []
-        stop_words.extend(self.stop_words_ids or [])
-        bad_words.extend(self.bad_words_ids or [])
-        self.stop_words_ids = list(set(stop_words)) or None
-        self.bad_words_ids = list(set(bad_words)) or None
+        stop_token_ids = special_word_token_ids(self.stop_words) or []
+        bad_token_ids = special_word_token_ids(self.bad_words) or []
+        stop_token_ids.extend(self.stop_token_ids or [])
+        bad_token_ids.extend(self.bad_token_ids or [])
+        self.stop_token_ids = list(set(stop_token_ids)) or None
+        self.bad_token_ids = list(set(bad_token_ids)) or None
 
     def __post_init__(self):
         """Check input validation."""

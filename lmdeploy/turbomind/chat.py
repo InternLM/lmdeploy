@@ -115,7 +115,7 @@ def main(model_path: str,
                                   top_p=top_p,
                                   temperature=temperature,
                                   repetition_penalty=repetition_penalty,
-                                  stop_words_ids=stop_words)
+                                  stop_token_ids=stop_words)
 
     nth_round = 1
     step = 0

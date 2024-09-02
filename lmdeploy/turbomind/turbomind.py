@@ -551,13 +551,13 @@ class TurboMindInstance:
             inputs['logprobs'] = _broadcast_np(gen_config.logprobs, np.int32)
 
         bad_words = []
-        if gen_config.bad_words_ids is not None:
-            bad_words.extend(gen_config.bad_words_ids)
+        if gen_config.bad_token_ids is not None:
+            bad_words.extend(gen_config.bad_token_ids)
         if gen_config.ignore_eos:
             stop_words = None
             bad_words.append(self.eos_id)
         else:
-            stop_words = gen_config.stop_words_ids
+            stop_words = gen_config.stop_token_ids
         stop_words = _construct_stop_or_bad_words(stop_words)
         bad_words = _construct_stop_or_bad_words(bad_words)
 
@@ -663,8 +663,8 @@ class TurboMindInstance:
                     outputs = EngineOutput(status, output[:-1].tolist(),
                                            len_ - 1)
                 elif len(output) > 0 and \
-                    gen_config.stop_words_ids is not None and \
-                        output[-1].item() in gen_config.stop_words_ids:
+                    gen_config.stop_token_ids is not None and \
+                        output[-1].item() in gen_config.stop_token_ids:
                     outputs = EngineOutput(status, output[:-1].tolist(), len_)
                 else:
                     outputs = EngineOutput(status, output.tolist(), len_)
@@ -776,8 +776,8 @@ class TurboMindInstance:
                     outputs = EngineOutput(status, output[:-1].tolist(),
                                            len_ - 1, out_logprobs)
                 elif len(output) > 0 and \
-                    gen_config.stop_words_ids is not None and \
-                        output[-1].item() in gen_config.stop_words_ids:
+                    gen_config.stop_token_ids is not None and \
+                        output[-1].item() in gen_config.stop_token_ids:
                     outputs = EngineOutput(status, output[:-1].tolist(), len_,
                                            out_logprobs)
                 else:
