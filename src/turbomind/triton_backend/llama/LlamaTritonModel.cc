@@ -257,6 +257,10 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_param_.num_tokens_per_iter = reader.GetInteger("llama", "num_tokens_per_iter", 0);
     engine_param_.max_prefill_iters   = reader.GetInteger("llama", "max_prefill_iters", 1);
 
+    moe_param_.expert_num        = reader.GetInteger("llama", "expert_num", 0);
+    moe_param_.experts_per_token = reader.GetInteger("llama", "experts_per_token", 0);
+    moe_param_.inter_size        = reader.GetInteger("llama", "expert_inter_size", 0);
+
     lora_param_.policy        = ft::getLoraPolicy(reader.Get("llama", "lora_policy", ""));
     lora_param_.r             = reader.GetInteger("llama", "lora_r", 0);
     lora_param_.scale         = reader.GetFloat("llama", "lora_scale", 0);
@@ -307,48 +311,7 @@ std::unique_ptr<ft::Engine<T>> LlamaTritonModel<T>::createSharedModelInstance(
     ft::check_cuda_error(cudaSetDevice(device_id));
     const int comms_rank = device_id % (tensor_para_size_ * pipeline_para_size_);
 
-    auto ctx = std::make_unique<ft::Context<T>>();
-
-    ft::check_cuda_error(cudaStreamCreateWithFlags(&ctx->stream, cudaStreamNonBlocking));
-
-    ctx->allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, false);
-    ctx->allocator->setStream(ctx->stream);
-
-    ctx->peer_allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, true);
-    ctx->peer_allocator->setStream(ctx->stream);
-
-    cublasHandle_t   cublas_handle;
-    cublasLtHandle_t cublaslt_handle;
-
-    cublasCreate(&cublas_handle);
-    cublasLtCreate(&cublaslt_handle);
-    cublasSetStream(cublas_handle, ctx->stream);
-
-    ctx->cublas_algo_map      = std::make_unique<ft::cublasAlgoMap>("gemm_config.in");
-    ctx->cublas_wrapper_mutex = std::make_unique<std::mutex>();
-    ctx->cublas_wrapper       = std::make_unique<ft::cublasMMWrapper>(cublas_handle,
-                                                                cublaslt_handle,
-                                                                ctx->stream,
-                                                                ctx->cublas_algo_map.get(),
-                                                                ctx->cublas_wrapper_mutex.get(),
-                                                                ctx->allocator.get());
-    ctx->linear               = std::make_unique<ft::LlamaLinear<T>>(ctx->cublas_wrapper.get(), ctx->stream);
-
-    ft::check_cuda_error(cudaGetDeviceProperties(&ctx->cuda_device_prop, device_id));
-
-    if (std::is_same<T, half>::value) {
-        ctx->cublas_wrapper->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
-    }
-#ifdef ENABLE_FP32
-    else if (std::is_same<T, float>::value) {
-        ctx.cublas_wrapper->setFP32GemmConfig();
-    }
-#endif
-#ifdef ENABLE_BF16
-    else if (std::is_same<T, __nv_bfloat16>::value) {
-        ctx->cublas_wrapper->setBF16GemmConfig();
-    }
-#endif
+    auto ctx = std::make_unique<ft::Context<T>>(device_id);
 
     ft::NcclParam tensor_para   = nccl_params.first[comms_rank];
     ft::NcclParam pipeline_para = nccl_params.second[comms_rank];
@@ -358,6 +321,7 @@ std::unique_ptr<ft::Engine<T>> LlamaTritonModel<T>::createSharedModelInstance(
 
     auto model = std::make_unique<ft::LlamaV2<T>>(model_param_,  //
                                                   attn_param_,
+                                                  moe_param_,
                                                   lora_param_,
                                                   tensor_para,
                                                   *ctx,
@@ -412,6 +376,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                weight_type_,
                                                                group_size_,
                                                                lora_param_,
+                                                               moe_param_,
                                                                tensor_para_size_,
                                                                tensor_para_rank);
     // model inited with model_dir

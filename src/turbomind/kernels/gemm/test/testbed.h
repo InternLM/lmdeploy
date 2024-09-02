@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
@@ -13,9 +14,13 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 #include <algorithm>
+#include <climits>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
+#include <numeric>
+#include <random>
 #include <thrust/universal_vector.h>
 #include <type_traits>
 
@@ -77,6 +82,11 @@ public:
 
     void Initialize(int m, int n, int k, int g, cudaStream_t stream)
     {
+        Initialize(m, n, k, g, 1, 1, stream);
+    }
+
+    void Initialize(int m, int n, int k, int g, int experts, int top_e, cudaStream_t stream)
+    {
         rng_.set_stream(stream);
         reference_.set_stream(stream);
         stream_ = stream;
@@ -84,6 +94,10 @@ public:
         m_ = m;
         n_ = n;
         k_ = k;
+
+        batch_size_  = batch_dim == 0 ? m_ : n_;
+        input_dims_  = k;
+        output_dims_ = (size_t)m_ * n_ / batch_size_;
 
         a_.resize(m * k);
         b_.resize(n * k);
@@ -208,6 +222,48 @@ public:
             cudaMemcpyAsync(
                 (Tb*)b_pack_.data().get(), b_.data().get(), sizeof(Tb) * b_.size(), cudaMemcpyDefault, stream);
         }
+
+        SetMoE(batch_size_, experts, top_e);
+    }
+
+    void SetMoE(int batch_size, int experts, int top_e)
+    {
+        experts_ = experts;
+
+        if (experts == 1) {
+            return;
+        }
+
+        std::vector<int> r(experts);
+        std::iota(r.begin(), r.end(), 0);
+        // Sample `top_e` experts per token
+        expert_ids_ = {};
+        for (int i = 0; i < batch_size_; ++i) {
+            std::sample(r.begin(), r.end(), std::back_inserter(expert_ids_), top_e, std::mt19937{});
+        }
+
+        CHECK(batch_dim == 0);
+
+        a_e_.resize(a_f_.size() * top_e);
+        const Tc* src = a_f_.data().get();
+        auto      dst = a_e_.data().get();
+        expert_cnt_.clear();
+        batch_ids_.clear();
+        for (int e = 0; e < experts; ++e) {
+            int count = 0;
+            for (int i = 0; i < (int)expert_ids_.size(); ++i) {
+                const int batch_id = i / top_e;
+                if (i == e) {
+                    cudaMemcpyAsync(
+                        dst, src + batch_id * a_desc_.ld, a_desc_.ld * sizeof(Tc), cudaMemcpyDefault, stream_);
+                    dst += a_desc_.ld;
+                    // batch_ids_.emplace_back(batch_id, i % top_e);
+                    ++count;
+                }
+            }
+            expert_cnt_.push_back(count);
+        }
+        CHECK(batch_ids_.size() == expert_ids_.size());
     }
 
     void Run(void* ctx = {})
@@ -249,12 +305,52 @@ public:
 
     void RunCublas()
     {
-        reference_.gemm(a_f_.data().get(),  //
-                        a_desc_,
-                        b_f_.data().get(),
-                        b_desc_,
-                        c_f_.data().get(),
-                        c_desc_);
+        if (experts_ == 1) {
+            reference_.gemm(a_f_.data().get(),  //
+                            a_desc_,
+                            b_f_.data().get(),
+                            b_desc_,
+                            c_f_.data().get(),
+                            c_desc_);
+        }
+        else {
+            const int top_e = expert_ids_.size() / experts_;
+
+            auto a_desc = a_desc_;
+            auto b_desc = b_desc_;
+            auto c_desc = c_desc_;
+
+            auto a = a_e_.data().get();
+            auto b = b_f_.data().get();
+            auto c = c_e_.data().get();
+            auto d = c_f_.data().get();
+
+            b_desc.cols = output_dims_ / top_e;
+            c_desc.cols = b_desc.cols;
+
+            CHECK(a_desc.order == kRowMajor);
+            const auto a_stride = (size_t)a_desc.ld;
+
+            CHECK(b_desc.order == kColMajor);
+            const auto b_stride = (size_t)b_desc.ld;
+
+            CHECK(c_desc.order == kRowMajor);
+            const auto c_stride = (size_t)c_desc.ld;
+
+            int cumul = 0;
+            for (int e = 0; e < experts_; ++e) {
+                a_desc.rows = expert_cnt_[e];
+                reference_.gemm(a, a_desc, b, b_desc, c, c_desc);
+                a += a_stride * a_desc.rows;  // next expert
+                b += b_stride * b_desc.cols;  // next expert
+
+                for (int i = 0; i < a_desc.rows; ++i) {
+                    cudaMemcpyAsync(d + c_desc_.ld, c, sizeof(Tc) * c_desc_.ld, cudaMemcpyDefault, stream_);
+                    c += c_stride;  // next row
+                }
+                cumul += expert_cnt_[e];
+            }
+        }
     }
 
     void CompareB()
@@ -350,6 +446,18 @@ private:
     int n_{};
     int k_{};
     int g_{};
+
+    int batch_size_{};
+    int input_dims_{};
+    int output_dims_{};
+    int experts_{1};
+
+    universal_vector<Tc> a_e_;
+    universal_vector<Tc> c_e_;
+
+    std::vector<int> expert_ids_;  // f(batch_idx * top_e) -> expert_id
+    std::vector<int> expert_cnt_;
+    std::vector<int> batch_ids_;  // f(reordered_idx) -> (batch_idx, local_eid)
 
     universal_vector<Tc> a_;      // A in fp
     universal_vector<Tc> b_;      // B in fp

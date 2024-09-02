@@ -959,10 +959,6 @@ LlamaBatch<T>::~LlamaBatch()
     sequence_manager_.reset();
     context_.reset();  // This destroy all objects in context except for `stream`
 
-    check_cuda_error(cudaStreamSynchronize(stream_));
-
-    // Destroy the stream in context
-    check_cuda_error(cudaStreamDestroy(stream_));
 }
 
 template<typename T>

@@ -38,7 +38,6 @@ public:
         stream_(ctx.stream),
         linear_(ctx.linear.get()),
         allocator_(ctx.allocator.get())
-
     {
     }
 

@@ -119,6 +119,9 @@ def get_output_model_registered_name_and_config(model_path: str,
             # Qwen-1 didn't set torch_dtype. It used bf16 as default
             if model_arch == 'QWenLMHeadModel':
                 weight_type = 'bf16'
+            # Mixtral + TP + bfloat16 = numerical precision issue
+            if model_arch == 'MixtralForCausalLM':
+                weight_type = 'fp16'
             if not torch.cuda.is_bf16_supported():
                 print(
                     'Device does not support bfloat16. Set float16 forcefully')
@@ -131,7 +134,9 @@ def get_output_model_registered_name_and_config(model_path: str,
 
     lora_type = 'plora' if turbomind_model_arch == 'xcomposer2' else ''
 
-    exporter_factory = get_exporter_factory(weight_type, lora_type)
+    is_moe = model_arch in ['MixtralForCausalLM']
+
+    exporter_factory = get_exporter_factory(weight_type, lora_type, is_moe)
 
     return register_name, config, exporter_factory
 

@@ -29,8 +29,6 @@
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <filesystem>
-#include <ios>
-
 namespace turbomind {
 
 static bool is_fuse_silu_act()
@@ -63,6 +61,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
                                                     int        group_size,
                                                     LoraParam  lora_param,
                                                     bool       attn_bias,
+                                                    MoeParam   moe_param,
                                                     size_t     tensor_para_size,
                                                     size_t     tensor_para_rank):
     head_num_(head_num),
@@ -124,26 +123,23 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
     self_attn_weights.output.type        = weight_type;
     self_attn_weights.output.group_size  = group_size;
 
-    ffn_weights.gating.input_dims  = hidden_units_;
-    ffn_weights.gating.output_dims = inter_size_ / tensor_para_size_;
-    ffn_weights.gating.type        = weight_type;
-    ffn_weights.gating.group_size  = group_size;
+    ffn_weights = LlamaFfnWeight<T>{
+        hidden_units_,
+        inter_size_,
+        tensor_para_size_,
+        weight_type_,
+        group_size,
+        is_fuse_silu_act(),
+    };
 
-    ffn_weights.intermediate.input_dims  = hidden_units_;
-    ffn_weights.intermediate.output_dims = inter_size_ / tensor_para_size_;
-    ffn_weights.intermediate.type        = weight_type;
-    ffn_weights.intermediate.group_size  = group_size;
-
-    ffn_weights.fused_gating_intermediate.input_dims  = hidden_units_;
-    ffn_weights.fused_gating_intermediate.output_dims = inter_size_ / tensor_para_size_ * 2;
-    ffn_weights.fused_gating_intermediate.type        = weight_type;
-    ffn_weights.fused_gating_intermediate.group_size  = group_size;
-    ffn_weights.is_fused_silu                         = weight_type == WeightType::kINT4 && is_fuse_silu_act();
-
-    ffn_weights.output.input_dims  = inter_size_ / tensor_para_size_;
-    ffn_weights.output.output_dims = hidden_units_;
-    ffn_weights.output.type        = weight_type;
-    ffn_weights.output.group_size  = group_size;
+    // FT_CHECK(moe_param.expert_num > 0);
+    moe_weights = MoeFfnWeight<T>{hidden_units_,
+                                  (size_t)moe_param.inter_size,
+                                  tensor_para_size_,
+                                  weight_type,
+                                  group_size,
+                                  is_fuse_silu_act(),
+                                  moe_param.expert_num};
 
     mallocWeights();
 }
@@ -191,7 +187,7 @@ void freeWeights(LlamaDenseWeight<T>& weights)
 }
 
 template<typename T>
-void mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
+void LlamaDecoderLayerWeight<T>::mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
 {
     if (bias) {
         deviceMalloc((T**)&weights.bias, weights.output_dims);
@@ -210,7 +206,6 @@ void mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
     }
 
     if (weights.lora.r > 0) {
-        // FT_CHECK(bit_size >= 16);
         deviceMalloc((T**)&weights.lora.a, weights.input_dims * weights.lora.r);
         deviceMalloc((T**)&weights.lora.b, weights.lora.r * weights.output_dims);
     }
@@ -231,47 +226,33 @@ void getWeightTensor(LlamaDenseWeight<T>& weights, bool bias, const std::string&
     auto get_name = [=](const std::string& name) { return concat(prefix, name); };
 
     if (bias) {
-        output.insert(get_name("bias"),
-                      Tensor{MEMORY_GPU, getTensorType<T>(), {weights.output_dims * sizeof(T)}, weights.bias});
+        output.insert(get_name("bias"), Tensor{MEMORY_GPU, getTensorType<T>(), {weights.bias_size()}, weights.bias});
     }
+
     const size_t bit_size = getBitSize(weights.type);
     if (bit_size >= 16) {
         output.insert(get_name("weight"),
-                      Tensor{MEMORY_GPU,
-                             getTensorType<T>(),
-                             {weights.input_dims * weights.output_dims * sizeof(T)},
-                             weights.kernel});
+                      Tensor{MEMORY_GPU, getTensorType<T>(), {weights.kernel_size()}, weights.kernel});
     }
-    else {  // int8, int4
-        const int factor = sizeof(float) * 8 / bit_size;
-        output.insert(get_name("qweight"),
-                      Tensor{MEMORY_GPU,
-                             TYPE_INT32,
-                             {weights.input_dims * weights.output_dims * sizeof(int) / factor},
-                             weights.kernel});
+    else {
+        output.insert(get_name("qweight"), Tensor{MEMORY_GPU, TYPE_INT32, {weights.kernel_size()}, weights.kernel});
         output.insert(get_name("scales"),
-                      Tensor{MEMORY_GPU,
-                             getTensorType<T>(),
-                             {weights.input_dims / weights.group_size * weights.output_dims * sizeof(T)},
-                             weights.scales});
+                      Tensor{MEMORY_GPU, getTensorType<T>(), {weights.scales_size()}, weights.scales});
         output.insert(get_name("zeros"),
-                      Tensor{MEMORY_GPU,
-                             getTensorType<T>(),
-                             {weights.input_dims / weights.group_size * weights.output_dims * sizeof(T)},
-                             weights.zeros});
+                      Tensor{MEMORY_GPU, getTensorType<T>(), {weights.scales_size()}, weights.zeros});
     }
 
     if (weights.lora.r) {
-        // FT_CHECK(bit_size >= 16);
-        auto        n       = prefix.rfind(".");
+        auto n = prefix.rfind(".");
+
         std::string _prefix = prefix.substr(0, n);
         std::string _num    = prefix.substr(n + 1);
-        output.insert(
-            concat(_prefix, "lora_a", _num, "weight"),
-            Tensor{MEMORY_GPU, getTensorType<T>(), {weights.input_dims * weights.lora.r * sizeof(T)}, weights.lora.a});
-        output.insert(
-            concat(_prefix, "lora_b", _num, "weight"),
-            Tensor{MEMORY_GPU, getTensorType<T>(), {weights.lora.r * weights.output_dims * sizeof(T)}, weights.lora.b});
+
+        output.insert(concat(_prefix, "lora_a", _num, "weight"),
+                      Tensor{MEMORY_GPU, getTensorType<T>(), {weights.lora_size().first}, weights.lora.a});
+        output.insert(concat(_prefix, "lora_b", _num, "weight"),
+                      Tensor{MEMORY_GPU, getTensorType<T>(), {weights.lora_size().second}, weights.lora.b});
+
         TM_LOG_DEBUG("allocate lora weight, layer_name=%s input_dims=%d, output_dims=%d, lora_r=%d",
                      get_name("weight").c_str(),
                      weights.input_dims,
@@ -281,98 +262,23 @@ void getWeightTensor(LlamaDenseWeight<T>& weights, bool bias, const std::string&
 }
 
 template<typename T>
-void loadWeights(LlamaDenseWeight<T>& w,
-                 std::string          prefix,
-                 int                  rank,
-                 FtCudaDataType       model_file_type,
-                 size_t               tensor_para_size,
-                 int                  slice_dim   = 0,
-                 std::vector<size_t>  slice_shape = {})
+void loadWeights(
+    LlamaDenseWeight<T>& w, std::string prefix, int rank, FtCudaDataType model_file_type, size_t tensor_para_size)
 {
     auto       max_prefix = prefix + "." + std::to_string(tensor_para_size - 1);
     const auto type       = model_file_type;
 
-    bool enable_slice = true;
-    // Disable slice if tensor param rank is 1
-    if (tensor_para_size <= 1) {
-        enable_slice = false;
-    }
-    else {
-        // Disable slice if weight has already been sliced
-        if (std::filesystem::exists(max_prefix + ".weight") || std::filesystem::exists(max_prefix + ".qweight")) {
-            TM_LOG_DEBUG("TP weight exists. Disable runtime TP.");
-            enable_slice = false;
-        }
-    }
-
     size_t dim0 = w.input_dims;
     size_t dim1 = w.output_dims;
-    if (enable_slice) {
-        // multiple tp size for slice stride
-        if (slice_dim == 0) {
-            dim0 = dim0 * tensor_para_size;
-            if (slice_shape.size() == 0) {
-                slice_shape = {dim0};
-            }
-        }
-        else {
-            dim1 = dim1 * tensor_para_size;
-            if (slice_shape.size() == 0) {
-                slice_shape = {dim1};
-            }
-        }
 
-        prefix += "." + std::to_string(0);
-    }
-    else {
-        prefix += "." + std::to_string(rank);
-    }
+    prefix += "." + std::to_string(rank);
 
     if (w.bias) {
-        std::vector<ConcateSlice> bias_slices{};
-        if (enable_slice) {
-            if (slice_dim == 1) {
-                size_t       start = 0;
-                ConcateSlice slice0{{{0, 1}}};
-                ConcateSlice slice1{{{}}};
-                for (auto len : slice_shape) {
-                    size_t stride = len / tensor_para_size;
-                    slice1.slices.push_back({start + stride * rank, start + stride * (rank + 1)});
-                    start += len;
-                }
-                bias_slices = {slice0, slice1};
-            }
-        }
-        loadWeightFromBin((T*)w.bias, {1, dim1}, prefix + ".bias", type, bias_slices);
+        loadWeightFromBin((T*)w.bias, {1, dim1}, prefix + ".bias", type);
     }
     const size_t bit_size = getBitSize(w.type);
     if (bit_size >= 16) {  // fp16, fp32
-        std::vector<ConcateSlice> weight_slices{};
-        if (enable_slice) {
-            if (slice_dim == 1) {
-                size_t       start = 0;
-                ConcateSlice slice0{{{0, dim0}}};
-                ConcateSlice slice1{{{}}};
-                for (auto len : slice_shape) {
-                    size_t stride = len / tensor_para_size;
-                    slice1.slices.push_back({start + stride * rank, start + stride * (rank + 1)});
-                    start += len;
-                }
-                weight_slices = {slice0, slice1};
-            }
-            else {
-                size_t       start = 0;
-                ConcateSlice slice0{{}};
-                ConcateSlice slice1{{{0, dim1}}};
-                for (auto len : slice_shape) {
-                    size_t stride = len / tensor_para_size;
-                    slice0.slices.push_back({start + stride * rank, start + stride * (rank + 1)});
-                    start += len;
-                }
-                weight_slices = {slice0, slice1};
-            }
-        }
-        loadWeightFromBin((T*)w.kernel, {dim0, dim1}, prefix + ".weight", type, weight_slices);
+        loadWeightFromBin((T*)w.kernel, {dim0, dim1}, prefix + ".weight", type);
     }
     else {  // int8, int4
         const int factor = sizeof(float) * 8 / bit_size;
@@ -380,12 +286,12 @@ void loadWeights(LlamaDenseWeight<T>& w,
         FT_CHECK(dim1 % factor == 0);
 
         std::vector<size_t> w_shape{dim0, dim1 / factor * sizeof(uint32_t)};
-        loadWeightFromBin((int8_t*)w.kernel, w_shape, prefix + ".qweight", FtCudaDataType::INT8, {});
+        loadWeightFromBin((int8_t*)w.kernel, w_shape, prefix + ".qweight", FtCudaDataType::INT8);
 
         const size_t group_count = w.group_size > 0 ? dim0 / w.group_size : 1;
 
-        loadWeightFromBin((half*)w.scales, {group_count, dim1}, prefix + ".scales", type, {});
-        loadWeightFromBin((half*)w.zeros, {group_count, dim1}, prefix + ".zeros", type, {});
+        loadWeightFromBin((half*)w.scales, {group_count, dim1}, prefix + ".scales", type);
+        loadWeightFromBin((half*)w.zeros, {group_count, dim1}, prefix + ".zeros", type);
     }
 }
 
@@ -395,12 +301,22 @@ void LlamaDecoderLayerWeight<T>::mallocWeights()
     deviceMalloc((T**)&self_attn_norm_weights, hidden_units_);
     deviceMalloc((T**)&ffn_norm_weights, hidden_units_);
 
-    turbomind::mallocWeights(self_attn_weights.qkv, attn_bias_);
-    turbomind::mallocWeights(self_attn_weights.output, attn_bias_);
+    mallocWeights(self_attn_weights.qkv, attn_bias_);
+    mallocWeights(self_attn_weights.output, attn_bias_);
 
-    turbomind::mallocWeights(ffn_weights.gating, false);
-    turbomind::mallocWeights(ffn_weights.intermediate, false);
-    turbomind::mallocWeights(ffn_weights.output, false);
+    if (moe_weights.experts.empty()) {
+        mallocWeights(ffn_weights.gating, false);
+        mallocWeights(ffn_weights.intermediate, false);
+        mallocWeights(ffn_weights.output, false);
+    }
+    else {
+        mallocWeights(moe_weights.gate, false);
+        for (auto& e : moe_weights.experts) {
+            mallocWeights(e.gating, false);
+            mallocWeights(e.intermediate, false);
+            mallocWeights(e.output, false);
+        }
+    }
 }
 
 template<typename T>
@@ -430,29 +346,13 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
         (T*)self_attn_norm_weights, {hidden_units_}, dir_path + ".attention_norm.weight", model_file_type);
     loadWeightFromBin((T*)ffn_norm_weights, {hidden_units_}, dir_path + ".ffn_norm.weight", model_file_type);
 
-    loadWeights(self_attn_weights.qkv,
-                dir_path + ".attention.w_qkv",
-                tensor_para_rank_,
-                type,
-                tensor_para_size_,
-                1,
-                {head_num_ * size_per_head_, kv_head_num_ * size_per_head_, kv_head_num_ * size_per_head_});
+    loadWeights(self_attn_weights.qkv, dir_path + ".attention.w_qkv", tensor_para_rank_, type, tensor_para_size_);
 
-    loadWeights(self_attn_weights.output, dir_path + ".attention.wo", tensor_para_rank_, type, tensor_para_size_, 0);
+    loadWeights(self_attn_weights.output, dir_path + ".attention.wo", tensor_para_rank_, type, tensor_para_size_);
 
-    // if (fused_up_and_gate_) {
-    //     loadWeights(ffn_weights.fused_gating_intermediate,
-    //                 dir_path + ".feed_forward.w13",
-    //                 tensor_para_rank_,
-    //                 type,
-    //                 tensor_para_size_,
-    //                 1);
-    // }
-    // else {
-    loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type, tensor_para_size_, 1);
-    loadWeights(ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type, tensor_para_size_, 1);
-    // }
-    loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", tensor_para_rank_, type, tensor_para_size_, 0);
+    loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type, tensor_para_size_);
+    loadWeights(ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type, tensor_para_size_);
+    loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", tensor_para_rank_, type, tensor_para_size_);
 }
 
 template<typename T>
@@ -471,9 +371,24 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
     getWeightTensor(self_attn_weights.qkv, attn_bias_, get_prefix("attention.w_qkv"), output);
     getWeightTensor(self_attn_weights.output, attn_bias_, get_prefix("attention.wo"), output);
 
-    getWeightTensor(ffn_weights.gating, false, get_prefix("feed_forward.w1"), output);
-    getWeightTensor(ffn_weights.intermediate, false, get_prefix("feed_forward.w3"), output);
-    getWeightTensor(ffn_weights.output, false, get_prefix("feed_forward.w2"), output);
+    if (moe_weights.experts.empty()) {
+        getWeightTensor(ffn_weights.gating, false, get_prefix("feed_forward.w1"), output);
+        getWeightTensor(ffn_weights.intermediate, false, get_prefix("feed_forward.w3"), output);
+        getWeightTensor(ffn_weights.output, false, get_prefix("feed_forward.w2"), output);
+    }
+    else {
+        output.insert(
+            concat(prefix, "moe_ffn.gate.weight"),
+            Tensor{MEMORY_GPU, getTensorType<T>(), {moe_weights.gate.kernel_size()}, moe_weights.gate.kernel});
+        auto& experts = moe_weights.experts;
+        for (size_t i = 0; i < experts.size(); ++i) {
+            const std::string name = "moe_ffn.experts." + std::to_string(i);
+            // std::cerr << "FUCK " << get_prefix(concat(name, "w1")) << "\n";
+            getWeightTensor(experts[i].gating, false, get_prefix(concat(name, "w1")), output);
+            getWeightTensor(experts[i].intermediate, false, get_prefix(concat(name, "w3")), output);
+            getWeightTensor(experts[i].output, false, get_prefix(concat(name, "w2")), output);
+        }
+    }
 
     return output;
 }
@@ -497,21 +412,6 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size, b
     extend_to_u16((uint16_t*)workspace, (const uint4_t*)weight.kernel, weight.input_dims * weight.output_dims);
     sync_check_cuda_error();
 
-    if constexpr (0) {
-        std::vector<uint16_t> tmp(weight.input_dims * weight.output_dims);
-        cudaMemcpy(tmp.data(), workspace, sizeof(uint16_t) * tmp.size(), cudaMemcpyDefault);
-        cudaDeviceSynchronize();
-        int i = 0;
-        for (auto it = tmp.begin(); i < 1000 && it != tmp.end(); ++it, ++i) {
-            std::cout << *it << " ";
-        }
-        i = 0;
-        std::cout << "\n";
-        for (auto it = tmp.rbegin(); i < 1000 && it != tmp.rend(); ++it, ++i) {
-            std::cout << *it << " ";
-        }
-    }
-
     MatrixLayout w_desc{
         gemm::DataType::F16,
         order_b,
@@ -528,21 +428,6 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size, b
 
     FT_CHECK(Convert(workspace, w_desc, weight.kernel, k_desc, 0) == 0);
     sync_check_cuda_error();
-
-    if constexpr (0) {
-        std::vector<uint32_t> tmp(weight.input_dims * weight.output_dims / 8);
-        cudaMemcpy(tmp.data(), weight.kernel, sizeof(uint32_t) * tmp.size(), cudaMemcpyDefault);
-        cudaDeviceSynchronize();
-        int i = 0;
-        for (auto it = tmp.begin(); i < 1000 && it != tmp.end(); ++it, ++i) {
-            std::cout << std::hex << *it << " ";
-        }
-        i = 0;
-        std::cout << "\n";
-        for (auto it = tmp.rbegin(); i < 1000 && it != tmp.rend(); ++it, ++i) {
-            std::cout << std::hex << *it << " ";
-        }
-    }
 
     const int scale_count = (weight.input_dims / weight.group_size) * weight.output_dims;
 
@@ -574,24 +459,6 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size, b
 
     FT_CHECK(Convert(workspace, s_desc, weight.scales_zeros, q_desc, 0) == 0);
     sync_check_cuda_error();
-
-    if constexpr (0) {
-        std::vector<T> tmp(scale_count * 2);
-        cudaMemcpy(tmp.data(), weight.scales_zeros, sizeof(T) * tmp.size(), cudaMemcpyDefault);
-        cudaDeviceSynchronize();
-        // for (const auto& x: tmp) {
-        //     std::cout << (float)x << " ";
-        // }
-        int i = 0;
-        for (auto it = tmp.begin(); i < 1000 && it != tmp.end(); ++it, ++i) {
-            std::cout << std::hex << *it << " ";
-        }
-        i = 0;
-        std::cout << "\n";
-        for (auto it = tmp.rbegin(); i < 1000 && it != tmp.rend(); ++it, ++i) {
-            std::cout << std::hex << *it << " ";
-        }
-    }
 
     weight.k_desc = k_desc;
     weight.q_desc = q_desc;
@@ -672,30 +539,39 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
     convert(self_attn_weights.qkv, workspace, size, is_16xx);
     convert(self_attn_weights.output, workspace, size, is_16xx);
 
-    if (fused_up_and_gate_) {
+    auto process_ffn = [&](LlamaFfnWeight<T>& ffn) {
+        if (fused_up_and_gate_) {
+            auto& fused_up_and_gate = ffn.fused_gating_intermediate;
 
-        auto& fused_up_and_gate = ffn_weights.fused_gating_intermediate;
+            mallocWeights(fused_up_and_gate, false);
 
-        turbomind::mallocWeights(fused_up_and_gate, false);
+            if (ffn.is_fused_silu) {
+                interleave(fused_up_and_gate, ffn.gating, ffn.intermediate, workspace, size);
+            }
+            else {
+                chunk(fused_up_and_gate, ffn.gating, ffn.intermediate, workspace, size);
+            }
 
-        if (ffn_weights.is_fused_silu) {
-            interleave(fused_up_and_gate, ffn_weights.gating, ffn_weights.intermediate, workspace, size);
+            convert(ffn.fused_gating_intermediate, workspace, size, is_16xx);
+
+            freeWeights(ffn.gating);
+            freeWeights(ffn.intermediate);
         }
         else {
-            chunk(fused_up_and_gate, ffn_weights.gating, ffn_weights.intermediate, workspace, size);
+            convert(ffn.gating, workspace, size, is_16xx);
+            convert(ffn.intermediate, workspace, size, is_16xx);
         }
+        convert(ffn.output, workspace, size, is_16xx);
+    };
 
-        convert(ffn_weights.fused_gating_intermediate, workspace, size, is_16xx);
-
-        freeWeights(ffn_weights.gating);
-        freeWeights(ffn_weights.intermediate);
+    if (moe_weights.experts.empty()) {
+        process_ffn(ffn_weights);
     }
     else {
-        convert(ffn_weights.gating, workspace, size, is_16xx);
-        convert(ffn_weights.intermediate, workspace, size, is_16xx);
+        for (auto& expert : moe_weights.experts) {
+            process_ffn(expert);
+        }
     }
-
-    convert(ffn_weights.output, workspace, size, is_16xx);
 }
 
 #ifdef ENABLE_FP32

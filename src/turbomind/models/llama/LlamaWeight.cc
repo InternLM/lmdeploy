@@ -19,6 +19,7 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptWeight.cc
 
 #include "src/turbomind/models/llama/LlamaWeight.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include <cuda_runtime.h>
 
@@ -36,6 +37,7 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
                             WeightType weight_type,
                             int        group_size,
                             LoraParam  lora_param,
+                            MoeParam   moe_param,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank):
     hidden_units_(hidden_units),
@@ -63,6 +65,7 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
                                                                        group_size,
                                                                        lora_param,
                                                                        attn_bias,
+                                                                       moe_param,
                                                                        tensor_para_size_,
                                                                        tensor_para_rank_));
     }

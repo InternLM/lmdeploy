@@ -144,11 +144,11 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
 
     count_and_fix(ffn_output_data, num_token * weights->output.output_dims, Concat("w2", layer_id), 3);
 
-    if (tensor_para_.world_size_ > 1) {
-        NcclGuard nccl_guard(tensor_para_, stream_);
-        ftNcclAllReduceSum(ffn_output_data, ffn_output_data, num_token * hidden_units_, tensor_para_, stream_);
-        sync_check_cuda_error();
-    }
+    // if (tensor_para_.world_size_ > 1) {
+    //     NcclGuard nccl_guard(tensor_para_, stream_);
+    //     ftNcclAllReduceSum(ffn_output_data, ffn_output_data, num_token * hidden_units_, tensor_para_, stream_);
+    //     sync_check_cuda_error();
+    // }
 
     if (is_free_buffer_after_forward_) {
         freeBuffer();

@@ -3,6 +3,7 @@
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -13,6 +14,7 @@ namespace turbomind {
 template<class T>
 UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
                                   const AttentionParam& attn,
+                                  const MoeParam&       moe,
                                   const LoraParam&      lora,
                                   const NcclParam&      tp,
                                   const Context<T>&     ctx):
@@ -24,8 +26,9 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
     dtype_(getTensorType<T>())
 {
 
-    attn_layer_ = std::make_unique<UnifiedAttentionLayer<T>>(model, attn, lora, tp, ctx);
-    ffn_layer_  = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
+    attn_layer_    = std::make_unique<UnifiedAttentionLayer<T>>(model, attn, lora, tp, ctx);
+    ffn_layer_     = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
+    moe_ffn_layer_ = std::make_unique<MoeFfnLayer<T>>(model, moe, tp, ctx);
 
     check_cuda_error(cudaEventCreateWithFlags(&ev_h_cu_x_, cudaEventDisableTiming));
 }
@@ -180,15 +183,20 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
         ////////////////////////////////////////////
         /// feed-forward network
-        int       layer_id = layer;  // int is needed
-        TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}},
-                             {"layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id}}};
-        TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
-        if (inputs->isExist("lora_mask")) {
-            ffn_inputs.insert({"lora_mask", inputs->at("lora_mask")});
-        }
 
-        ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &weights->at(layer)->ffn_weights);
+        if (!weights->at(layer)->moe_weights.experts.empty()) {
+            moe_ffn_layer_->forward(decoder_output, token_num, layer, weights->at(layer)->moe_weights);
+        }
+        else {
+            int       layer_id = layer;  // int is needed
+            TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}},
+                                 {"layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id}}};
+            TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
+            if (inputs->isExist("lora_mask")) {
+                ffn_inputs.insert({"lora_mask", inputs->at("lora_mask")});
+            }
+            ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &weights->at(layer)->ffn_weights);
+        }
 
         count_and_fix(decoder_output, token_num * hidden_units_, Concat("ffn_block", layer), 2);
 

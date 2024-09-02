@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 
 import torch
 
-from .target_model.base import BaseOutputModel, BaseReader
+from .target_model.base import BaseOutputModel, BaseReader, TurbomindModelConfig
 
 
 def permute_v2(x: torch.Tensor, size_per_head: int = 128):
@@ -77,6 +77,7 @@ class BaseExporter(ABC):
         self.tp = model.cfg.tensor_para_size
         self.head_dim = model.cfg.size_per_head
         self.inter_size = model.cfg.inter_size
+        self.expert_num = model.cfg.expert_num
 
     def export_attn(self, idx: int, qkvo, kind: str, pack_fn=identity):
         if all(x is None for x in qkvo):
@@ -100,7 +101,7 @@ class BaseExporter(ABC):
                               split_dim=0,
                               copy=is_lora_b)
 
-    def export_ffn(self, idx: int, w123, kind: str, pack_fn=identity, g=1):
+    def _export_ffn(self, fmt: str, idx: int, w123, kind: str, pack_fn=identity, g=1):
         is_lora_a, is_lora_b = self.get_lora_flags(kind)
         w1, w2, w3 = map(transpose, w123)
 
@@ -112,17 +113,20 @@ class BaseExporter(ABC):
 
         w1, w2, w3 = map(pack_fn, (w1, w2, w3))
         self.model.save_split(w1,
-                              self._ffn.format(idx, 'w1', kind),
+                              fmt.format(idx, 'w1', kind),
                               split_dim=-1,
                               copy=is_lora_a)
         self.model.save_split(w3,
-                              self._ffn.format(idx, 'w3', kind),
+                              fmt.format(idx, 'w3', kind),
                               split_dim=-1,
                               copy=is_lora_a)
         self.model.save_split(w2,
-                              self._ffn.format(idx, 'w2', kind),
+                              fmt.format(idx, 'w2', kind),
                               split_dim=0,
                               copy=is_lora_b)
+        
+    def export_ffn(self, *args, **kwargs):
+        self._export_ffn(self._ffn, *args, **kwargs)
 
     # split out dims -> copy A, split-out-dims B (qkv, w1, w3)
     # split  in dims -> split-in-dims A,  copy B (  o, w2)
@@ -139,8 +143,7 @@ class WeightExporter(BaseExporter):
     def export(self, r: BaseReader, i: int):
         self.export_attn(i, r.attn(i), 'weight')
         self.export_attn(i, r.attn_bias(i), 'bias')
-        self.export_ffn(i, r.ffn(i), 'weight')
-
+        # self.export_ffn(i, r.ffn(i), 'weight')
 
 class LayerNormExporter(BaseExporter):
 
@@ -193,7 +196,32 @@ class PLoraExporter(BaseExporter):
         self.export_ffn(i, r.ffn_lora_b(i), 'lora_b.weight')
 
 
-def get_exporter_factory(weight_type, lora_type):
+class MoeExporter(BaseExporter):
+
+    _moe_ffn_expert = 'layers.[0].moe_ffn.experts.{0}.[1].[2]'
+    _moe_ffn_gate = 'layers.{0}.moe_ffn.gate.{1}'
+
+    def __init__(self, model: BaseOutputModel):
+        super().__init__(model)
+        self.expert_num = model.cfg.expert_num
+
+    def export_moe_ffn(self, e: int, *args, **kwargs):
+        # write expert id and replace [] with {}
+        fmt = self._moe_ffn_expert.format(e).replace('[', '{').replace(']','}')
+        self._export_ffn(fmt, *args, **kwargs)
+
+    def export(self, r: BaseReader, i: int):
+        for e in range(self.expert_num):
+            self.export_moe_ffn(e, i, r.moe_ffn_expert(e, i), 'weight')
+
+        gate = transpose(r.moe_ffn_gate(i))
+        self.model.save_split(gate, self._moe_ffn_gate.format(i, 'weight'))
+
+
+
+def get_exporter_factory(weight_type, lora_type, is_moe):
+
+    print (weight_type, lora_type, is_moe)
 
     def get_exporters(model: BaseOutputModel):
         exporters = [LayerNormExporter(model)]
@@ -202,6 +230,9 @@ def get_exporter_factory(weight_type, lora_type):
             exporters.append(QuantWeightExporter(model, pack_u4_row))
         else:
             exporters.append(WeightExporter(model))
+
+        if is_moe:
+            exporters.append(MoeExporter(model))
 
         if lora_type == 'plora':
             exporters.append(PLoraExporter(model))

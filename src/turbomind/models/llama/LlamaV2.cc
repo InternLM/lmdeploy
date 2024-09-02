@@ -60,6 +60,7 @@ inline int pad_vocab_size(int vocab_size, int tp)
 template<typename T>
 LlamaV2<T>::LlamaV2(const ModelParam&               model,
                     const AttentionParam&           attn,
+                    const MoeParam&                 moe,
                     const LoraParam&                lora,
                     const NcclParam&                tp,
                     const Context<T>&               ctx,
@@ -92,7 +93,7 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, lora, tp, ctx);
+    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, moe, lora, tp, ctx);
 
     dynamic_decode_layer_ = std::make_unique<DynamicDecodeLayer<float>>(vocab_size_,
                                                                         vocab_size_padded_,

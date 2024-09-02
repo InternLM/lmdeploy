@@ -45,6 +45,7 @@ public:
 
     LlamaV2(const ModelParam&               model,
             const AttentionParam&           attn,
+            const MoeParam&                 moe,
             const LoraParam&                lora,
             const NcclParam&                tp,
             const Context<T>&               ctx,

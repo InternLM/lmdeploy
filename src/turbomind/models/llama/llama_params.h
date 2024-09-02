@@ -25,6 +25,12 @@ struct ModelParam {
     int end_id;
 };
 
+struct MoeParam {
+    int expert_num;
+    int experts_per_token;
+    int inter_size;
+};
+
 struct AttentionParam {
     int         rotary_embedding_dim;
     float       rotary_embedding_base;

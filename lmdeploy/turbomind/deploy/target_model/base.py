@@ -81,6 +81,9 @@ class TurbomindModelConfig:
     lora_max_wo_r: int = 0
     lora_rank_pattern: str = ''
     lora_scale_pattern: str = ''
+    expert_num: int = 0
+    expert_inter_size: int = 0
+    experts_per_token: int = 0
 
     @classmethod
     def from_dict(cls, env, allow_none=False):
