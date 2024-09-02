@@ -584,7 +584,7 @@ jobs:
 
           python3 .github/scripts/action_tools.py evaluate \
             --models "[tb_internlm2_5_7b_chat, tb_internlm2_5_7b_chat_4bits, tb_internlm2_5_7b_chat_kvint4, pt_internlm2_5_7b_chat, tb_internlm2_5_20b_chat, tb_internlm2_5_20b_chat_4bits, tb_internlm2_5_20b_chat_kvint4, pt_internlm2_5_20b_chat, tb_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, tb_llama_3d1_8b_instruct_4bits, tb_llama_3d1_8b_instruct_kvint4, tb_qwen2_7b_instruct, tb_qwen2_7b_instruct_4bits, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]" \
-            --datasets "[*mmlu_datasets, *gsm8k_datasets]" \
+            --datasets "[*race_datasets, *gsm8k_datasets]" \
             --workspace /root/evaluation-reports/${{ github.run_id }} --is_smoke true
       - name: Clear workspace
         if: always()
