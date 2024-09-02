@@ -13,8 +13,9 @@ def get_turbomind_model_list(tp_num: int = None,
     for key in quatization_case_config.get('awq'):
         if key in case_list:
             case_list.append(key + '-inner-4bits')
-    if model_type == 'chat_model':
-        case_list += quatization_case_config.get('gptq')
+    for key in quatization_case_config.get('gptq'):
+        if key in case_list:
+            case_list.append(key + '-inner-gptq')
 
     if tp_num is not None:
         return [
@@ -54,12 +55,10 @@ def get_all_model_list(tp_num: int = None, model_type: str = 'chat_model'):
     turbomind_quantization_config = config.get('turbomind_quatization')
     pytorch_quantization_config = config.get('pytorch_quatization')
     for key in turbomind_quantization_config.get(
-            'awq') + pytorch_quantization_config.get('awq'):
+            'awq') + pytorch_quantization_config.get(
+                'awq') + turbomind_quantization_config.get('gptq'):
         if key in case_list and key + '-inner-4bits' not in case_list:
             case_list.append(key + '-inner-4bits')
-
-    if model_type == 'chat_model':
-        case_list += turbomind_quantization_config.get('gptq')
 
     if tp_num is not None:
         return [
@@ -85,6 +84,9 @@ def get_kvint_model_list(tp_num: int = None, model_type: str = 'chat_model'):
     for key in config.get('turbomind_quatization').get('awq'):
         if key in case_list_base and key in case_list:
             case_list.append(key + '-inner-4bits')
+    for key in config.get('turbomind_quatization').get('gptq'):
+        if key in case_list_base and key in case_list:
+            case_list.append(key + '-inner-gptq')
 
     if tp_num is not None:
         return [
@@ -103,6 +105,8 @@ def get_quantization_model_list(type):
                 case_list.append(key)
         return case_list
     if type == 'kvint':
+        return config.get('turbomind_quatization').get(type)
+    if type == 'gptq':
         return config.get('turbomind_quatization').get(type)
     if type == 'w8a8':
         return config.get('pytorch_quatization').get(type)

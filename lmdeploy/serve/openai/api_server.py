@@ -675,7 +675,7 @@ async def completions_v1(request: CompletionRequest,
 
     # Non-streaming response
     usage = UsageInfo()
-    choices = []
+    choices = [None] * len(generators)
 
     async def _inner_call(i, generator):
         final_logprobs = []
@@ -704,12 +704,12 @@ async def completions_v1(request: CompletionRequest,
 
         assert final_res is not None
         choice_data = CompletionResponseChoice(
-            index=0,
+            index=i,
             text=text,
             finish_reason=final_res.finish_reason,
             logprobs=logprobs,
         )
-        choices.append(choice_data)
+        choices[i] = choice_data
 
         total_tokens = sum([
             final_res.history_token_len, final_res.input_token_len,
