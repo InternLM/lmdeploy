@@ -1254,11 +1254,10 @@ class TPModelAgent(AutoModelAgent):
         return output
 
 
-# [Note] Exit By Sending Exit Flag
-# the registration to `atexit` of this function should be called
-# after importing torch.multiprocessing and the initialization of
-# distributed process group
 def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):
+    """[Note] Exit By Sending Exit Flag: the registration to `atexit` of this
+    function should be called after importing torch.multiprocessing and the
+    initialization of distributed process group."""
     if not hasattr(agent, 'stream'):
         # agent is not initialized, just exits normally
         return
@@ -1266,10 +1265,6 @@ def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):
     # and wait at _broadcast_inputs
     exit_flag = True
     _broadcast_inputs(rank, [None, None, None, exit_flag], agent.stream)
-    agent.stream.synchronize()
-    # Tricky, extra sleep for subprocess releasing resources
-    import time
-    time.sleep(1)
     return
 
 
