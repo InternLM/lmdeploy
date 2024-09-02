@@ -22,7 +22,7 @@ def apply_rotary_pos_emb(
         ext_ops.apply_rotary_pos_emb(query_states_reshaped,
                                      key_states_reshaped,
                                      cos_reshaped, sin_reshaped,
-                                     None, None, None)
+                                     None, None)
     if q_embed is None:
         q_embed = query_states_reshaped.view(query_states.shape)
     elif q_embed is not query_states:

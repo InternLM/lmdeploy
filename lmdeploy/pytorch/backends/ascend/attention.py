@@ -13,6 +13,8 @@ class AscendAttentionMetadata(AttentionMetadata):
     block_size: int = 64
     attention_mask: Sequence[Tensor] = tuple()
     is_unpaged_prefill: Optional[bool] = None
+    max_q_seq_len: int = 1
+    max_kv_seq_len: int = 1
 
 
 class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
@@ -25,9 +27,9 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
         scale: float = None,
         num_kv_heads: int = None,
         v_head_size: int = None,
-        alibi_scale: float = None,
+        alibi: bool = None,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logit_softcapping: float = None,
         **kwargs,
     ):
         super().__init__(
@@ -36,8 +38,9 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
             scale,
             num_kv_heads,
             v_head_size,
-            alibi_scale,
+            alibi,
             sliding_window,
+            logit_softcapping,
             **kwargs,
         )
 
@@ -67,6 +70,8 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
         block_size = attn_metadata.block_size
         attn_mask = attn_metadata.attention_mask
         is_unpaged_prefill = attn_metadata.is_unpaged_prefill
+        max_q_seq_len = attn_metadata.max_q_seq_len
+        max_kv_seq_len = attn_metadata.max_kv_seq_len
 
         # fill kv cache
         k_cache, v_cache = self.fill_kv_cache(
@@ -95,6 +100,8 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
             q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
+            max_q_seq_len=max_q_seq_len,
+            max_kv_seq_len=max_kv_seq_len,
             is_decoding=is_decoding,
             block_size=block_size,
             attn_mask=attn_mask,

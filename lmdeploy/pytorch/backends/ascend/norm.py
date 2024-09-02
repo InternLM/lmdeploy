@@ -7,21 +7,23 @@ from lmdeploy.pytorch.kernels.ascend import rms_norm
 from ..norm import RMSNormBuilder, RMSNormImpl
 
 
-class AscendRMSNormImpl(RMSNormImpl, nn.Module):
+class AscendRMSNormImpl(RMSNormImpl):
     """ascend RMS norm implementation."""
 
-    def __init__(self, weight: torch.Tensor, eps: float = 1e-6):
-        super().__init__()
-        self.weight = nn.Parameter(weight.clone())
+    def __init__(self, hidden_size: int, eps: float = 1e-6):
+        self.hidden_size = hidden_size
         self.eps = eps
 
-    def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
+    def forward(self,
+                x: torch.Tensor,
+                weight: torch.Tensor,
+                residual: torch.Tensor = None):
         """forward."""
         if residual is None:
-            x = rms_norm(x, self.weight, self.eps)
+            x = rms_norm(x, weight, self.eps)
             return x
         else:
-            x, residual = rms_norm(x, self.weight, self.eps, residual=residual)
+            x, residual = rms_norm(x, weight, self.eps, residual=residual)
             return x, residual
 
 
