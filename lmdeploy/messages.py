@@ -48,7 +48,11 @@ class GenerationConfig:
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
         logprobs (int): Number of log probabilities to return per output token.
-    """
+        response_format (Dict): Only pytorch backend support formatting
+            response. Examples: `{"type": "json_schema", "json_schema": {"name":"test","schema": {"properties": {"name": {"type": "string"}}, "required": ["name"], "type": "object"}}}`
+            or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
+        logits_processors (List[Callable]): Custom logit processors.
+    """  # noqa
 
     n: int = 1
     max_new_tokens: int = 512
@@ -66,6 +70,7 @@ class GenerationConfig:
     min_new_tokens: int = None
     skip_special_tokens: bool = True
     logprobs: int = None
+    response_format: Optional[Dict] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
