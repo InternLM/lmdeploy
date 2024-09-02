@@ -1,267 +1,446 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Optional, Tuple, Union
+from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
-import torch.distributed as dist
 from torch import nn
-from transformers.cache_utils import Cache
-from transformers.modeling_outputs import BaseModelOutputWithPast
+from transformers.configuration_utils import PretrainedConfig
 
-from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
-from ..weight_loader.dist_utils import (colwise_split_parallelize_linear,
-                                        rowwise_parallelize_linear)
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
+                                 RMSNorm, SiluAndMul)
+from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
+                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn.rotary_embedding import (LongRoPEScalingParameters,
+                                                  build_rotary_embedding)
+from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 
-class PatchedPhi3Attention(nn.Module):
+class Phi3Attention(nn.Module):
+    """Rewrite module of Phi3Attention."""
 
-    def _load_weights(self, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
-        sections = [
-            self.num_heads * self.head_dim,
-            self.num_key_value_heads * self.head_dim,
-            self.num_key_value_heads * self.head_dim,
-        ]
-        for mod_name in ['qkv_proj']:
-            colwise_split_parallelize_linear(getattr(self, mod_name),
-                                             sections,
-                                             loader,
-                                             rank=rank,
-                                             world_size=world_size,
-                                             prefix=mod_name)
-        for mod_name in ['o_proj']:
-            rowwise_parallelize_linear(getattr(self, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        num_heads = config.num_attention_heads
+        num_key_value_heads = config.num_key_value_heads
+        hidden_size = config.hidden_size
+        head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
 
-    @classmethod
-    def _distribute_output_fn(cls, outputs, **kwargs):
-        """Distribution output hook."""
-        dist.all_reduce(outputs[0])
-        return outputs
+        # packed qkv
+        self.qkv_proj = build_qkv_proj(
+            hidden_size,
+            num_q_heads=num_heads,
+            num_kv_heads=num_key_value_heads,
+            head_size=head_dim,
+            bias=False,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+        )
 
-    def _contiguous_batching_forward_impl(
+        # rotary embedding
+        self.apply_rotary_pos_emb = ApplyRotaryEmb()
+
+        # attention
+        sliding_window = getattr(config, 'sliding_window', None)
+        self.attn_fwd = Attention(
+            num_heads,
+            head_dim,
+            num_kv_heads=num_key_value_heads,
+            v_head_size=head_dim,
+            sliding_window=sliding_window,
+        )
+
+        # o_proj
+        self.o_proj = build_rowwise_linear(num_heads * head_dim,
+                                           hidden_size,
+                                           bias=False,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=True)
+
+    def forward(
         self,
         hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        world_size: int = 1,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """Rewrite implementation of LlamaAttention.forward.
+        attn_metadata: Any = None,
+    ):
+        """Rewrite of LlamaAttention.forward."""
+        # qkv proj
+        qkv_states = self.qkv_proj(hidden_states)
+        # (-1, heads, head_dim)
+        qkv_states = qkv_states.flatten(0, -2)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(
+            qkv_states)
 
-        Add continuous batching support. Add paged attention support. TP
-        support.
-        """
-        context = self.context.context
-        q_start_loc = context.q_start_loc
-        kv_seq_length = context.kv_seq_length
-        q_seq_length = context.q_seq_length
-        block_offsets = context.block_offsets
-        max_q_seq_length = context.max_q_seq_length
-        max_kv_seq_length = context.max_kv_seq_length
-        position_ids_1d = context.position_ids_1d
+        # apply rotary embedding
+        cos, sin = rotary_pos_emb
+        query_states, key_states = self.apply_rotary_pos_emb(
+            query_states,
+            key_states,
+            cos,
+            sin,
+            inplace=True,
+        )
 
-        num_heads = self.num_heads // world_size
-        num_kv_heads = self.num_key_value_heads // world_size
-        head_dim = self.head_dim
-        hidden_size = num_heads * head_dim
-
-        def __qkv_proj(hidden_states):
-            """qkv proj."""
-            qkv_states = self.qkv_proj(hidden_states)
-            query_states, key_states, value_states = qkv_states.split(
-                (num_heads * head_dim, num_kv_heads * head_dim,
-                 num_kv_heads * head_dim),
-                dim=-1,
-            )
-
-            return query_states, key_states, value_states
-
-        def __rotary_emb_fn(query_states, key_states, value_states):
-            """rotary embedding func."""
-            if not hasattr(context, '_cos'):
-                cos, sin = self.rotary_emb(
-                    value_states,
-                    position_ids=position_ids_1d[None, :],
-                    seq_len=max_kv_seq_length)
-                context._cos = cos
-                context._sin = sin
-            cos = context._cos
-            sin = context._sin
-            query_states, key_states = apply_rotary_pos_emb(
-                query_states,
-                key_states,
-                cos[0],
-                sin[0],
-                position_ids,
-                torch.arange(0,
-                             len(position_ids_1d),
-                             device=query_states.device),
-                q_embed=query_states,
-                k_embed=key_states)
-            return query_states, key_states, value_states
-
-        query_states, key_states, value_states = __qkv_proj(hidden_states)
-
-        query_states = query_states.view(-1, num_heads, head_dim)
-        key_states = key_states.view(-1, num_kv_heads, head_dim)
-        value_states = value_states.view(-1, num_kv_heads, head_dim)
-
-        # inplace rotary
-        query_states, key_states, value_states = __rotary_emb_fn(
-            query_states, key_states, value_states)
-        fill_kv_cache(
+        # attention
+        attn_output = self.attn_fwd(
+            query_states,
             key_states,
             value_states,
             past_key_value[0],
             past_key_value[1],
-            q_start_loc,
-            q_seq_length,
-            kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_q_seq_length,
-            block_offsets=block_offsets,
+            attn_metadata,
+            inplace=True,
         )
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
 
-        attn_output = query_states
-        paged_attention_fwd(
-            query_states,
-            past_key_value[0],
-            past_key_value[1],
-            attn_output,
-            block_offsets,
-            q_start_loc=q_start_loc,
-            q_seqlens=q_seq_length,
-            kv_seqlens=kv_seq_length,
-            max_seqlen=max_q_seq_length,
-            window_size=self.config.sliding_window,
-        )
-        attn_output = attn_output.reshape(*hidden_states.shape[:-1],
-                                          hidden_size)
-
+        # o proj
         attn_output = self.o_proj(attn_output)
-        return attn_output, None, past_key_value
+        return attn_output
+
+
+class Phi3MLP(nn.Module):
+    """mlp."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        # gate up
+        self.gate_up_proj = build_merged_colwise_linear(
+            config.hidden_size,
+            [config.intermediate_size, config.intermediate_size],
+            bias=False,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            is_tp=True,
+        )
+
+        # silu and mul
+        self.act_fn = SiluAndMul(inplace=True)
+
+        # down
+        self.down_proj = build_rowwise_linear(config.intermediate_size,
+                                              config.hidden_size,
+                                              bias=False,
+                                              quant_config=quantization_config,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True)
+
+    def forward(self, x):
+        """forward."""
+        gate_up = self.gate_up_proj(x)
+        act = self.act_fn(gate_up)
+        return self.down_proj(act)
+
+
+class Phi3DecoderLayer(nn.Module):
+    """decoder layer."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.layer_idx = layer_idx
+        quantization_config = getattr(config, 'quantization_config', None)
+
+        # build attention layer
+        self.self_attn = Phi3Attention(config, dtype=dtype, device=device)
+
+        # builf MLP
+        self.mlp = Phi3MLP(config, dtype=dtype, device=device)
+
+        # build input layer norm
+        self.input_layernorm = RMSNorm(config.hidden_size,
+                                       config.rms_norm_eps,
+                                       quant_config=quantization_config,
+                                       dtype=dtype,
+                                       device=device)
+
+        # build attention layer norm
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
-        **kwargs
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """rewrite of forward."""
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
-        return self._contiguous_batching_forward_impl(
-            hidden_states,
-            position_ids,
-            past_key_value,
-            world_size=world_size,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: Optional[List[torch.FloatTensor]],
+        residual: Optional[torch.Tensor] = None,
+        attn_metadata: Any = None,
+    ):
+
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(
+                hidden_states, residual)
+
+        # Self Attention
+        hidden_states = self.self_attn(
+            hidden_states=hidden_states,
+            rotary_pos_emb=rotary_pos_emb,
+            past_key_value=past_key_value,
+            attn_metadata=attn_metadata,
         )
 
+        # Fully Connected
+        hidden_states, residual = self.post_attention_layernorm(
+            hidden_states, residual)
+        hidden_states = self.mlp(hidden_states)
 
-class PatchedPhi3MLP(nn.Module):
-
-    def _load_weights(self, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
-        for mod_name in ['gate_up_proj']:
-            out_size = self.gate_up_proj.out_features
-            sections = [out_size // 2] * 2
-            colwise_split_parallelize_linear(getattr(self, mod_name),
-                                             sections,
-                                             loader,
-                                             rank=rank,
-                                             world_size=world_size,
-                                             prefix=mod_name)
-        for mod_name in ['down_proj']:
-            rowwise_parallelize_linear(getattr(self, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
-
-    @classmethod
-    def _distribute_output_fn(cls, outputs, **kwargs):
-        """Distribution output hook."""
-        dist.all_reduce(outputs)
+        outputs = (hidden_states, residual)
         return outputs
 
 
-class PatchedPhi3Model(nn.Module):
+class Phi3Model(nn.Module):
+    """model."""
 
-    def _continuous_batching_forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
-        """Rewrite implementation of LlamaModel.forward."""
-        output_attentions = True
-        use_cache = True
-        context = self.context.context
-        # get inputs from context
-        vision_embeddings = context.input_embeddings
-        vision_embedding_indexing = context.input_embedding_indexing
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+        quantization_config = getattr(config, 'quantization_config', None)
 
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
+        self.embed_tokens = nn.Embedding(config.vocab_size,
+                                         config.hidden_size,
+                                         self.padding_idx,
+                                         dtype=dtype,
+                                         device=device)
 
-        if vision_embeddings is not None and len(vision_embeddings) > 0:
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+        # build all decode layers
+        self.layers = nn.ModuleList([
+            Phi3DecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            for layer_idx in range(config.num_hidden_layers)
+        ])
 
-        # Attention mask is not necessary in continuous batching
-        attention_mask = None
-        hidden_states = inputs_embeds
+        # build norm
+        self.norm = RMSNorm(config.hidden_size,
+                            config.rms_norm_eps,
+                            quant_config=quantization_config,
+                            dtype=dtype,
+                            device=device)
 
-        # decoder layers
-        for idx, decoder_layer in enumerate(self.layers):
-            past_key_value = (past_key_values[idx]
-                              if past_key_values is not None else None)
-            layer_outputs = decoder_layer(
-                hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_value,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
+        # build rotary embedding
+        emb_type = EmbeddingType.LinearScaling
+        rope_dim = config.hidden_size // config.num_attention_heads
+        rope_max_pos_emb = config.max_position_embeddings
+        rope_base = config.rope_theta
+        rope_scaling = config.rope_scaling
+        if rope_scaling is not None:
+            scaling_type = rope_scaling['type']
+            assert scaling_type in ['longrope', 'su']
+            emb_type = EmbeddingType.LongRoPEScaling
+            ori_pos_emb = getattr(config, 'original_max_position_embeddings',
+                                  rope_max_pos_emb)
+            longrope_params = LongRoPEScalingParameters(
+                short_factor=rope_scaling['short_factor'],
+                long_factor=rope_scaling['long_factor'],
+                original_max_position_embeddings=ori_pos_emb)
+            self.rotary_emb = build_rotary_embedding(
+                rope_dim,
+                rope_max_pos_emb,
+                rope_base,
+                longrope_params=longrope_params,
+                emb_type=emb_type,
             )
-            hidden_states = layer_outputs[0]
-
-        hidden_states = self.norm(hidden_states)
-
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=past_key_value,
-            hidden_states=None,
-            attentions=None,
-        )
+        else:
+            self.rotary_emb = build_rotary_embedding(
+                rope_dim,
+                rope_max_pos_emb,
+                rope_base,
+                emb_type=emb_type,
+            )
 
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
+        attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+    ):
+        """Rewrite of LlamaModel.forward."""
+
+        # token embedding
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = inputs_embeds
+
+        # rotary embedding
+        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+
+        # decoding
+        residual = None
+        for idx, decoder_layer in enumerate(self.layers):
+            past_key_value = past_key_values[idx]
+            hidden_states, residual = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                residual=residual,
+                attn_metadata=attn_metadata,
+            )
+
+        # norm
+        hidden_states, _ = self.norm(hidden_states, residual)
+
+        return hidden_states
+
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.embed_tokens
+
+
+class Phi3ForCausalLM(nn.Module):
+    """ModelForCausalLM."""
+
+    support_cuda_graph = True
+
+    packed_modules_mapping = {
+        'gate_up_proj': [
+            'gate_proj',
+            'up_proj',
+        ],
+    }
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 ctx_mgr: StepContextManager,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.config = config
+        self.ctx_mgr = ctx_mgr
+        # build model
+        self.model = Phi3Model(config, dtype=dtype, device=device)
+        # build lm_head
+        self.lm_head = build_rowwise_linear(config.hidden_size,
+                                            config.vocab_size,
+                                            bias=False,
+                                            dtype=dtype,
+                                            device=device)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: List[List[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
         **kwargs,
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
-        """rewrite of forward."""
-        return self._continuous_batching_forward(
-            input_ids,
-            attention_mask,
-            position_ids,
-            past_key_values,
-            inputs_embeds,
+    ):
+        """model forward, return logits."""
+        hidden_states = self.model(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
         )
+
+        logits = self.lm_head(hidden_states)
+        logits = logits.float()
+        return logits
+
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.model.get_input_embeddings()
+
+    def prepare_inputs_for_generation(
+        self,
+        past_key_values: List[List[torch.Tensor]],
+        inputs_embeds: Optional[torch.Tensor] = None,
+        context: StepContext = None,
+    ):
+        """prepare input."""
+        # get input_ids, position_ids and attention metadatas
+        input_ids = context.input_ids
+        position_ids = context.position_ids
+        attn_metadata = context.attn_metadata
+
+        # process vision embeddings
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            if inputs_embeds is None:
+                inputs_embeds = self.get_input_embeddings()(input_ids)
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
+
+        # inputs of forward
+        return dict(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+        )
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        """load weights."""
+        # modify from vllm
+
+        config = self.config
+        num_heads = config.num_attention_heads
+        num_key_value_heads = config.num_key_value_heads
+        hidden_size = config.hidden_size
+        head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
+        qkv_section = [
+            head_dim * num_heads, head_dim * num_key_value_heads,
+            head_dim * num_key_value_heads
+        ]
+
+        params_dict = dict(self.named_parameters())
+        for name, loaded_weight in weights:
+            if 'rotary_emb.inv_freq' in name:
+                continue
+            if ('rotary_emb.cos_cached' in name
+                    or 'rotary_emb.sin_cached' in name):
+                continue
+            if self.config.tie_word_embeddings and 'lm_head.weight' in name:
+                continue
+            if 'vision_embed_tokens' in name:
+                continue
+            if '.qkv_proj' in name:
+                q, k, v = loaded_weight.split(qkv_section)
+                param = params_dict[name]
+                load_weight(param, q, shard_id='q')
+                load_weight(param, k, shard_id='k')
+                load_weight(param, v, shard_id='v')
+            elif '.gate_up_proj' in name:
+                gate, up = loaded_weight.chunk(2)
+                param = params_dict[name]
+                load_weight(param, gate, shard_id=0)
+                load_weight(param, up, shard_id=1)
+            else:
+                param = params_dict[name]
+                load_weight(param, loaded_weight)
+
+
+class Phi3VForCausalLM(Phi3ForCausalLM):
+    ...

@@ -4,8 +4,9 @@ import math
 import torch
 from torch import nn
 
-from ..rotary_embedding import (EmbeddingType, RotaryEmbeddingBuilder,
-                                RotaryEmbeddingImpl, YarnParameters)
+from ..rotary_embedding import (EmbeddingType, LongRoPEScalingParameters,
+                                RotaryEmbeddingBuilder, RotaryEmbeddingImpl,
+                                YarnParameters)
 
 
 def _rotary_embedding_fwd(position_ids: torch.Tensor,
@@ -247,6 +248,59 @@ class YarnRotaryEmbeddingImpl(RotaryEmbeddingImpl):
                                      device_type=device_type)
 
 
+class LongRoPEScalingRotaryEmbeddingImpl(RotaryEmbeddingImpl):
+    """yarn rotary embedding implementation."""
+
+    def __init__(
+        self,
+        dim: int,
+        base: int = 10000,
+        max_position_embeddings: int = 4096,
+        longrope_params: LongRoPEScalingParameters = None,
+    ):
+        super().__init__(dim, base)
+        short_factor = torch.tensor(longrope_params.short_factor,
+                                    dtype=torch.float32)
+        long_factor = torch.tensor(longrope_params.long_factor,
+                                   dtype=torch.float32)
+        self.register_buffer('short_factor', short_factor, persistent=False)
+        self.register_buffer('long_factor', long_factor, persistent=False)
+        self.original_max_position_embeddings = \
+            longrope_params.original_max_position_embeddings
+        scale = (max_position_embeddings /
+                 self.original_max_position_embeddings)
+        if scale <= 1.0:
+            self.mscale = 1.0
+        else:
+            self.mscale = math.sqrt(
+                1 + math.log(scale) /
+                math.log(self.original_max_position_embeddings))
+
+    def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
+        """rope forward."""
+        dtype = x.dtype
+        device = position_ids.device
+        if self.short_factor.device != device:
+            self.register_buffer('short_factor',
+                                 self.short_factor.to(device),
+                                 persistent=False)
+            self.register_buffer('long_factor',
+                                 self.long_factor.to(device),
+                                 persistent=False)
+
+        max_pos_ids = position_ids.max() + 1
+        ext_factors = torch.where(
+            max_pos_ids > self.original_max_position_embeddings,
+            self.long_factor, self.short_factor)
+        inv_freq = self.inv_freq * (1.0 / ext_factors)
+        return _rotary_embedding_fwd(position_ids,
+                                     inv_freq,
+                                     scaling_factor=1.0,
+                                     mscale=self.mscale,
+                                     dtype=dtype,
+                                     device_type=device)
+
+
 class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
     """rotary embedding builder."""
 
@@ -259,6 +313,7 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
         low_freq_factor: float = 1.0,
         high_freq_factor: float = 4.0,
         yarn_params: YarnParameters = None,
+        longrope_params: LongRoPEScalingParameters = None,
         emb_type: EmbeddingType = EmbeddingType.Default,
     ):
         """build."""
@@ -277,6 +332,13 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
                                            scaling_factor,
                                            max_position_embeddings,
                                            yarn_params=yarn_params)
+        elif emb_type == EmbeddingType.LongRoPEScaling:
+            return LongRoPEScalingRotaryEmbeddingImpl(
+                dim,
+                base,
+                max_position_embeddings=max_position_embeddings,
+                longrope_params=longrope_params,
+            )
         else:
             raise NotImplementedError(
                 f'Unsupported embedding type: {emb_type}')

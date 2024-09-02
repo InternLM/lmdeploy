@@ -98,7 +98,7 @@ def check_env(device_type: str):
 
 
 MIN_TRANSFORMERS_VERSION = '4.33.0'
-MAX_TRANSFORMERS_VERSION = '4.41.2'
+MAX_TRANSFORMERS_VERSION = '4.44.1'
 
 
 def check_awq(hf_config):

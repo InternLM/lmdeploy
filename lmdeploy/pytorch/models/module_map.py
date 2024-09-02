@@ -129,32 +129,14 @@ MODULE_MAP.update({
 
 # starcoder2
 MODULE_MAP.update({
-    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2Attention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2Attention',
-    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2FlashAttention2':    # noqa: E501
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2Attention',
-    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2SdpaAttention':    # noqa: E501
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2Attention',
-    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2Model':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
-    'transformers.models.starcoder2.modeling_starcoder2.Starcoder2MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.PatchedStarcoder2MLP',
+    'Starcoder2ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.Starcoder2ForCausalLM',
 })
 
 # phi-3
 MODULE_MAP.update({
-    'modeling_phi3.Phi3Attention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
-    'modeling_phi3.Phi3FlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
-    'modeling_phi3.Phi3SdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
-    'modeling_phi3.Phi3Model':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Model',
-    'modeling_phi3.Phi3MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3MLP',
-    'modeling_phi3.Phi3RMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'Phi3ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.Phi3ForCausalLM',
 })
 
 # cogvlm
@@ -179,18 +161,8 @@ MODULE_MAP.update({
 
 # phi3 vision
 MODULE_MAP.update({
-    'modeling_phi3_v.Phi3Attention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
-    'modeling_phi3_v.Phi3FlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
-    'modeling_phi3_v.Phi3SdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Attention',
-    'modeling_phi3_v.Phi3VModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3Model',
-    'modeling_phi3_v.Phi3MLP':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.PatchedPhi3MLP',
-    'modeling_phi3_v.Phi3RMSNorm':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+    'Phi3VForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.Phi3VForCausalLM',
 })
 
 # phi-3.5-moe

@@ -1,186 +1,412 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional, Tuple
+from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
-import torch.distributed as dist
 from torch import nn
+from transformers.configuration_utils import PretrainedConfig
 
-from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
-from ..weight_loader.dist_utils import (colwise_parallelize_linear,
-                                        rowwise_parallelize_linear)
-
-
-class PatchedStarcoder2MLP(nn.Module):
-
-    def _load_weights(self, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
-        for mod_name in ['c_fc']:
-            colwise_parallelize_linear(getattr(self, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
-        for mod_name in ['c_proj']:
-            rowwise_parallelize_linear(getattr(self, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
-
-    @classmethod
-    def _distribute_output_fn(cls, outputs, **kwargs):
-        """Distribution output hook."""
-        dist.all_reduce(outputs)
-        return outputs
-
-    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        """rewrite of starcoder2mlp forward."""
-        hidden_states = self.c_fc(hidden_states)
-        hidden_states = self.act(hidden_states)
-        hidden_states = self.c_proj(hidden_states)
-        return hidden_states
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
+                                 build_rotary_embedding)
+from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_qkv_proj,
+                                        build_rowwise_linear)
+from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 
-class PatchedStarcoder2Attention(nn.Module):
+class Starcoder2Attention(nn.Module):
+    """Rewrite module of Starcoder2Attention."""
 
-    def _load_weights(self, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
-        for mod_name in ['q_proj', 'k_proj', 'v_proj']:
-            colwise_parallelize_linear(getattr(self, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
-        for mod_name in ['o_proj']:
-            rowwise_parallelize_linear(getattr(self, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        num_heads = config.num_attention_heads
+        num_key_value_heads = config.num_key_value_heads
+        hidden_size = config.hidden_size
+        head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
 
-    @classmethod
-    def _distribute_output_fn(cls, outputs, **kwargs):
-        """Distribution output hook."""
-        dist.all_reduce(outputs[0])
-        return outputs
-
-    def _contiguous_batching_forward_impl(
-        self,
-        hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        world_size: int = 1,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """Rewrite implementation of LlamaAttention.forward.
-
-        Add continuous batching support. Add paged attention support. TP
-        support.
-        """
-        context = self.context.context
-        q_start_loc = context.q_start_loc
-        q_seq_length = context.q_seq_length
-        kv_seq_length = context.kv_seq_length
-        block_offsets = context.block_offsets
-        max_q_seq_length = context.max_q_seq_length
-        max_kv_seq_length = context.max_kv_seq_length
-
-        num_heads = self.num_heads // world_size
-        num_kv_heads = self.num_key_value_heads // world_size
-        head_dim = self.head_dim
-        hidden_size = num_heads * head_dim
-
-        def __qkv_proj(hidden_states):
-            """qkv proj."""
-            query_states = self.q_proj(hidden_states)
-            key_states = self.k_proj(hidden_states)
-            value_states = self.v_proj(hidden_states)
-
-            return query_states, key_states, value_states
-
-        def __rotary_emb_fn(query_states, key_states, value_states):
-            """rotary embedding func."""
-            if not hasattr(context, '_cos'):
-                cos, sin = self.rotary_emb(value_states.transpose(0, 1),
-                                           seq_len=max_kv_seq_length)
-                context._cos = cos
-                context._sin = sin
-            else:
-                cos = context._cos
-                sin = context._sin
-            query_states, key_states = apply_rotary_pos_emb(
-                query_states,
-                key_states,
-                cos,
-                sin,
-                position_ids,
-                context.position_ids_1d,
-                q_embed=query_states,
-                k_embed=key_states)
-            return query_states, key_states, value_states
-
-        query_states, key_states, value_states = __qkv_proj(hidden_states)
-
-        query_states = query_states.view(-1, num_heads, head_dim)
-        key_states = key_states.view(-1, num_kv_heads, head_dim)
-        value_states = value_states.view(-1, num_kv_heads, head_dim)
-
-        query_states, key_states, value_states = __rotary_emb_fn(
-            query_states, key_states, value_states)
-
-        fill_kv_cache(
-            key_states,
-            value_states,
-            past_key_value[0],
-            past_key_value[1],
-            q_start_loc,
-            q_seq_length,
-            kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_q_seq_length,
-            block_offsets=block_offsets,
+        # packed qkv
+        self.qkv_proj = build_qkv_proj(
+            hidden_size,
+            num_q_heads=num_heads,
+            num_kv_heads=num_key_value_heads,
+            head_size=head_dim,
+            bias=config.use_bias,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
         )
 
-        attn_output = query_states
-        paged_attention_fwd(
-            query_states,
-            past_key_value[0],
-            past_key_value[1],
-            attn_output,
-            block_offsets,
-            q_start_loc=q_start_loc,
-            q_seqlens=q_seq_length,
-            kv_seqlens=kv_seq_length,
-            max_seqlen=max_q_seq_length,
+        # rotary embedding
+        self.apply_rotary_pos_emb = ApplyRotaryEmb()
+
+        # attention
+        sliding_window = getattr(config, 'sliding_window', None)
+        self.attn_fwd = Attention(
+            num_heads,
+            head_dim,
+            num_kv_heads=num_key_value_heads,
+            v_head_size=head_dim,
+            sliding_window=sliding_window,
         )
-        attn_output = attn_output.reshape(*hidden_states.shape[:-1],
-                                          hidden_size)
 
-        attn_output = self.o_proj(attn_output)
-
-        return attn_output, None, past_key_value
+        # o_proj
+        self.o_proj = build_rowwise_linear(num_heads * head_dim,
+                                           hidden_size,
+                                           bias=config.use_bias,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=True)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
-        **kwargs
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """forward."""
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
-        return self._contiguous_batching_forward_impl(
-            hidden_states,
-            position_ids,
-            past_key_value,
-            output_attentions,
-            world_size=world_size,
+        attn_metadata: Any = None,
+    ):
+        """Rewrite of LlamaAttention.forward."""
+        # qkv proj
+        qkv_states = self.qkv_proj(hidden_states)
+        # (-1, heads, head_dim)
+        qkv_states = qkv_states.flatten(0, -2)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(
+            qkv_states)
+
+        # apply rotary embedding
+        cos, sin = rotary_pos_emb
+        query_states, key_states = self.apply_rotary_pos_emb(
+            query_states,
+            key_states,
+            cos,
+            sin,
+            inplace=True,
         )
+
+        # attention
+        attn_output = self.attn_fwd(
+            query_states,
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            attn_metadata,
+            inplace=True,
+        )
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
+
+        # o proj
+        attn_output = self.o_proj(attn_output)
+        return attn_output
+
+
+class Starcoder2MLP(nn.Module):
+    """mlp."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        # gate up
+        self.c_fc = build_colwise_linear(
+            config.hidden_size,
+            config.intermediate_size,
+            bias=config.use_bias,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            is_tp=True,
+        )
+
+        # silu and mul
+        hidden_act = config.hidden_act
+        if hidden_act is None:
+            hidden_act = 'gelu_pytorch_tanh'
+            assert hidden_act == 'gelu_pytorch_tanh'
+        self.act_fn = nn.GELU(approximate='tanh')
+
+        # down
+        self.c_proj = build_rowwise_linear(config.intermediate_size,
+                                           config.hidden_size,
+                                           bias=config.use_bias,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=True)
+
+    def forward(self, x):
+        """forward."""
+        gate_up = self.c_fc(x)
+        act = self.act_fn(gate_up)
+        return self.c_proj(act)
+
+
+class Starcoder2DecoderLayer(nn.Module):
+    """decoder layer."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.layer_idx = layer_idx
+
+        # build attention layer
+        self.self_attn = Starcoder2Attention(config,
+                                             dtype=dtype,
+                                             device=device)
+
+        # builf MLP
+        self.mlp = Starcoder2MLP(config, dtype=dtype, device=device)
+
+        # build input layer norm
+        self.input_layernorm = nn.LayerNorm(config.hidden_size,
+                                            eps=config.norm_epsilon,
+                                            dtype=dtype,
+                                            device=device)
+
+        # build attention layer norm
+        self.post_attention_layernorm = nn.LayerNorm(config.hidden_size,
+                                                     eps=config.norm_epsilon,
+                                                     dtype=dtype,
+                                                     device=device)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: Optional[List[torch.FloatTensor]],
+        attn_metadata: Any = None,
+    ):
+        residual = hidden_states
+
+        hidden_states = self.input_layernorm(hidden_states)
+
+        # Self Attention
+        hidden_states = self.self_attn(
+            hidden_states=hidden_states,
+            rotary_pos_emb=rotary_pos_emb,
+            past_key_value=past_key_value,
+            attn_metadata=attn_metadata,
+        )
+        hidden_states = residual + hidden_states
+
+        # Fully Connected
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        return hidden_states
+
+
+class Starcoder2Model(nn.Module):
+    """model."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+
+        self.embed_tokens = nn.Embedding(config.vocab_size,
+                                         config.hidden_size,
+                                         self.padding_idx,
+                                         dtype=dtype,
+                                         device=device)
+
+        # build all decode layers
+        self.layers = nn.ModuleList([
+            Starcoder2DecoderLayer(config,
+                                   layer_idx,
+                                   dtype=dtype,
+                                   device=device)
+            for layer_idx in range(config.num_hidden_layers)
+        ])
+
+        # build norm
+        self.norm = nn.LayerNorm(config.hidden_size,
+                                 eps=config.norm_epsilon,
+                                 dtype=dtype,
+                                 device=device)
+
+        # build rotary embedding
+        emb_type = EmbeddingType.LinearScaling
+        rope_dim = config.hidden_size // config.num_attention_heads
+        rope_max_pos_emb = config.max_position_embeddings
+        rope_base = config.rope_theta
+        self.rotary_emb = build_rotary_embedding(
+            rope_dim,
+            rope_max_pos_emb,
+            rope_base,
+            emb_type=emb_type,
+        )
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        attn_metadata: Any = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+    ):
+        """Rewrite of LlamaModel.forward."""
+
+        # token embedding
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = inputs_embeds
+
+        # rotary embedding
+        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+
+        # decoding
+        for idx, decoder_layer in enumerate(self.layers):
+            past_key_value = past_key_values[idx]
+            hidden_states = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                attn_metadata=attn_metadata,
+            )
+
+        # norm
+        hidden_states = self.norm(hidden_states)
+
+        return hidden_states
+
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.embed_tokens
+
+
+class Starcoder2ForCausalLM(nn.Module):
+    """ModelForCausalLM."""
+
+    support_cuda_graph = True
+
+    packed_modules_mapping = {
+        'qkv_proj': [
+            'q_proj',
+            'k_proj',
+            'v_proj',
+        ],
+    }
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 ctx_mgr: StepContextManager,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.config = config
+        self.ctx_mgr = ctx_mgr
+        # build model
+        self.model = Starcoder2Model(config, dtype=dtype, device=device)
+        # build lm_head
+        self.lm_head = build_rowwise_linear(config.hidden_size,
+                                            config.vocab_size,
+                                            bias=False,
+                                            dtype=dtype,
+                                            device=device)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: List[List[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
+        """model forward, return logits."""
+        hidden_states = self.model(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+        )
+
+        logits = self.lm_head(hidden_states)
+        logits = logits.float()
+        return logits
+
+    def update_weights(self):
+        """update weights."""
+        self.lm_head.weight = self.model.embed_tokens.weight
+
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.model.get_input_embeddings()
+
+    def prepare_inputs_for_generation(
+        self,
+        past_key_values: List[List[torch.Tensor]],
+        inputs_embeds: Optional[torch.Tensor] = None,
+        context: StepContext = None,
+    ):
+        """prepare input."""
+        # get input_ids, position_ids and attention metadatas
+        input_ids = context.input_ids
+        position_ids = context.position_ids
+        attn_metadata = context.attn_metadata
+
+        # process vision embeddings
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            if inputs_embeds is None:
+                inputs_embeds = self.get_input_embeddings()(input_ids)
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
+
+        # inputs of forward
+        return dict(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+        )
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        """load weights."""
+        # modify from vllm
+        stacked_params_mapping = [
+            # (param_name, shard_name, shard_id)
+            ('.qkv_proj', '.q_proj', 'q'),
+            ('.qkv_proj', '.k_proj', 'k'),
+            ('.qkv_proj', '.v_proj', 'v'),
+        ]
+
+        params_dict = dict(self.named_parameters())
+        for name, loaded_weight in weights:
+            if 'rotary_emb.inv_freq' in name:
+                continue
+            if ('rotary_emb.cos_cached' in name
+                    or 'rotary_emb.sin_cached' in name):
+                continue
+            if self.config.tie_word_embeddings and 'lm_head.weight' in name:
+                continue
+            for (param_name, weight_name, shard_id) in stacked_params_mapping:
+                if weight_name not in name:
+                    continue
+                name = name.replace(weight_name, param_name)
+                param = params_dict[name]
+                load_weight(param, loaded_weight, shard_id=shard_id)
+                break
+            else:
+                param = params_dict[name]
+                load_weight(param, loaded_weight)
