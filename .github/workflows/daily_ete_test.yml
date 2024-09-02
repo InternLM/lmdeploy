@@ -33,31 +33,11 @@ on:
         description: 'Dependency packages, you can also set a specific version'
         type: string
         default: 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord auto_gptq'
-      tools_regression:
+      regression_func:
         required: true
-        description: 'Whether start a tool regression'
-        type: boolean
-        default: true
-      restful_regression:
-        required: true
-        description: 'Whether start a restful api regression'
-        type: boolean
-        default: true
-      pipeline_regression:
-        required: true
-        description: 'Whether start an interface pipeline regression'
-        type: boolean
-        default: true
-      benchmark_regression:
-        required: true
-        description: 'Whether start a benchmark script regression'
-        type: boolean
-        default: true
-      evaluate_regression:
-        required: true
-        description: 'Whether start a evaluate regression'
-        type: boolean
-        default: true
+        description: 'regression functions'
+        type: string
+        default: "['tools','restful','pipeline','benchmark','evaluation']"
   schedule:
     - cron:  '00 18 * * 0-4'
 
@@ -108,7 +88,7 @@ jobs:
 
   test_tools:
     needs: linux-build
-    if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.tools_regression)}}
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 420
     env:
@@ -286,7 +266,7 @@ jobs:
           chmod -R 777 $workdir
 
   test_restful:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.restful_regression)}}
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
     strategy:
@@ -391,7 +371,7 @@ jobs:
           chmod -R 777 $workdir
 
   test_pipeline:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.pipeline_regression)}}
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
     timeout-minutes: 300
@@ -461,7 +441,7 @@ jobs:
 
 
   test_benchmark:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.benchmark_regression)}}
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
     timeout-minutes: 300
@@ -525,10 +505,10 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
-  test_evaluate:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.evaluate_regression)}}
-    needs: linux-build
+  test_evaluation:
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
     runs-on: [self-hosted, linux-a100]
+    needs: test_tools
     timeout-minutes: 300 # 5hours
     container:
       image: openmmlab/lmdeploy:latest-cu11
@@ -601,7 +581,7 @@ jobs:
 
 
   get_benchmark_result:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.benchmark_regression)}}
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     needs: [test_benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
@@ -676,7 +656,7 @@ jobs:
 
   notify_to_feishu:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
-    needs: [get_benchmark_result, get_coverage_report]
+    needs: [get_benchmark_result, get_coverage_report, test_evaluation]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     steps:
