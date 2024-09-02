@@ -13,7 +13,7 @@ import numpy as np
 from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
-from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
 from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -105,12 +105,11 @@ class Engine:
             for outputs in model_inst.stream_infer(
                     session_id,
                     input_ids=input_ids,
-                    gen_config=EngineGenerationConfig(
-                        max_new_tokens=output_seqlen,
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        ignore_eos=True),
+                    gen_config=GenerationConfig(max_new_tokens=output_seqlen,
+                                                temperature=temperature,
+                                                top_p=top_p,
+                                                top_k=top_k,
+                                                ignore_eos=True),
                     sequence_start=True,
                     sequence_end=True,
                     stream_output=stream_output):

@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 import numpy as np
 import torch
 
-from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                ResponseType)
 from lmdeploy.utils import get_logger, get_model, logging_timer
 
@@ -912,7 +912,7 @@ class Engine:
             self,
             session_ids: List[int],
             token_ids: List[List[int]] = None,
-            gen_config: EngineGenerationConfig = None,
+            gen_config: GenerationConfig = None,
             adapter_names: List[str] = None,
             keep_cache: bool = False,
             input_embeddings: List[InputEmbeddingType] = None,
@@ -922,7 +922,7 @@ class Engine:
         Args:
             session_ids (List[int]): The session id.
             token_ids (List[int]): The input token ids.
-            gen_config (EngineGenerationConfig): The sampling parameters.
+            gen_config (GenerationConfig): The sampling parameters.
             adapter_names (List[str]): The name of the adapters.
             keep_cache (bool): Keep kv cache after infer.
 
@@ -944,7 +944,7 @@ class Engine:
             self,
             session_ids: List[int],
             token_ids: List[List[int]] = None,
-            gen_config: EngineGenerationConfig = None,
+            gen_config: GenerationConfig = None,
             adapter_names: List[str] = None,
             keep_cache: bool = False,
             input_embeddings: List[InputEmbeddingType] = None,
