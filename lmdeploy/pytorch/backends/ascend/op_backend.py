@@ -94,15 +94,14 @@ class AscendOpsBackend(DefaultOpsBackend):
                 token_loc = (token_loc + 1) % block_size
                 block_idx = block_idx if token_loc else block_idx + 1
                 block_loc = step_context.block_offsets[i][block_idx]
-        kv_start_indices = torch.tensor(
-            kv_start_indices, device=device)
+        kv_start_indices = torch.tensor(kv_start_indices, device=device)
 
         q_start_loc_cpu = step_context.q_start_loc.cpu()
         q_seqlens_cpu = step_context.q_seqlens.cpu()
         kv_seqlens_cpu = step_context.kv_seqlens.cpu()
         max_q_seq_len = torch.max(q_seqlens_cpu).item()
         max_kv_seq_len = torch.max(kv_seqlens_cpu).item()
-        
+
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,

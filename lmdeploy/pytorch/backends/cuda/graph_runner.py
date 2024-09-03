@@ -204,8 +204,8 @@ class CUDAGraphRunner(GraphRunner):
     def __init__(self, model: torch.nn.Module, model_config: ModelConfig,
                  cache_config: CacheConfig, backend_config: BackendConfig,
                  device: torch.device):
-        super().__init__(model, model_config, cache_config,
-                         backend_config, device)
+        super().__init__(model, model_config, cache_config, backend_config,
+                         device)
         self.max_batches = cache_config.max_batches
         self.max_tokens = cache_config.max_prefill_token_num
         self.num_blocks = cache_config.num_gpu_blocks

@@ -11,6 +11,5 @@ def fill_kv_cache(
     kv_start_indices: Tensor,
 ):
     """fill key/value state to cache for paged attention."""
-    return ext_ops.fill_kv_cache(key_states, value_states,
-                                 key_caches, value_caches,
-                                 kv_start_indices)
+    return ext_ops.fill_kv_cache(key_states, value_states, key_caches,
+                                 value_caches, kv_start_indices)
