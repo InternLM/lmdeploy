@@ -8,6 +8,7 @@ from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX, IMAGE_TOKEN
 from lmdeploy.vl.engine import ImageEncoder
 from lmdeploy.vl.templates import VLPromptType, get_vl_prompt_template
+from lmdeploy.pytorch.check_env import try_import_deeplink
 
 logger = get_logger('lmdeploy')
 
@@ -18,10 +19,12 @@ class VLAsyncEngine(AsyncEngine):
     def __init__(self, model_path: str, **kwargs) -> None:
         vision_config = kwargs.pop('vision_config', None)
         backend_config = kwargs.get('backend_config', None)
-        super().__init__(model_path, **kwargs)
+        if kwargs.get('backend', '') == 'pytorch':
+            try_import_deeplink(backend_config.device_type)
         self.vl_encoder = ImageEncoder(model_path,
                                        vision_config,
                                        backend_config=backend_config)
+        super().__init__(model_path, **kwargs)
         if self.model_name == 'base':
             raise RuntimeError(
                 'please specify chat template as guided in https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#set-chat-template'  # noqa: E501
