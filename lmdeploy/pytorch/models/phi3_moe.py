@@ -5,7 +5,8 @@ import torch
 from torch import nn
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, EmbeddingType
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
+                                 LayerNorm)
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import FusedMoE
 from lmdeploy.pytorch.nn.rotary_embedding import (LongRoPEScalingParameters,
@@ -227,29 +228,31 @@ class PhiMoEDecoderLayer(nn.Module):
                                                      device=device)
 
         # build input layer norm
-        self.input_layernorm = nn.LayerNorm(config.hidden_size,
-                                            eps=config.rms_norm_eps,
-                                            elementwise_affine=True,
-                                            dtype=dtype,
-                                            device=device)
+        self.input_layernorm = LayerNorm(config.hidden_size,
+                                         eps=config.rms_norm_eps,
+                                         dtype=dtype,
+                                         device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = nn.LayerNorm(config.hidden_size,
-                                                     eps=config.rms_norm_eps,
-                                                     elementwise_affine=True,
-                                                     dtype=dtype,
-                                                     device=device)
+        self.post_attention_layernorm = LayerNorm(config.hidden_size,
+                                                  eps=config.rms_norm_eps,
+                                                  dtype=dtype,
+                                                  device=device)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[List[torch.FloatTensor]],
+        residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
     ):
-        residual = hidden_states
-
-        hidden_states = self.input_layernorm(hidden_states)
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(
+                hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -258,15 +261,14 @@ class PhiMoEDecoderLayer(nn.Module):
             past_key_value=past_key_value,
             attn_metadata=attn_metadata,
         )
-        hidden_states = residual + hidden_states
 
         # Fully Connected
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states, residual = self.post_attention_layernorm(
+            hidden_states, residual)
         hidden_states, _ = self.block_sparse_moe(hidden_states)
-        hidden_states = residual + hidden_states
 
-        return hidden_states
+        outputs = (hidden_states, residual)
+        return outputs
 
 
 class PhiMoEModel(nn.Module):
@@ -290,11 +292,10 @@ class PhiMoEModel(nn.Module):
         ])
 
         # build norm
-        self.norm = nn.LayerNorm(config.hidden_size,
-                                 eps=config.rms_norm_eps,
-                                 elementwise_affine=True,
-                                 dtype=dtype,
-                                 device=device)
+        self.norm = LayerNorm(config.hidden_size,
+                              eps=config.rms_norm_eps,
+                              dtype=dtype,
+                              device=device)
 
         # build rotary embedding
         emb_type = EmbeddingType.LinearScaling
@@ -345,17 +346,18 @@ class PhiMoEModel(nn.Module):
         cos, sin = self.rotary_emb(hidden_states, position_ids)
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
+        residual = None
         for idx, decoder_layer in enumerate(self.layers):
-
             past_key_value = past_key_values[idx]
-            hidden_states = decoder_layer(
+            hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
                 past_key_value=past_key_value,
+                residual=residual,
                 attn_metadata=attn_metadata,
             )
 
-        hidden_states = self.norm(hidden_states)
+        hidden_states, _ = self.norm(hidden_states, residual)
 
         return hidden_states
 

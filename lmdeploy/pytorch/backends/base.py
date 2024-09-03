@@ -18,6 +18,7 @@ class LayerType(Enum):
     ApplyRotaryEmb = auto()
     SiluAndMul = auto()
     RMSNorm = auto()
+    LayerNorm = auto()
     SLoRA = auto()
     LinearW8A8 = auto()
     RMSNormW8A8 = auto()

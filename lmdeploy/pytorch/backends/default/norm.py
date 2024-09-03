@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from ..norm import RMSNormBuilder, RMSNormImpl
+from ..norm import LayerNormBuilder, LayerNormImpl, RMSNormBuilder, RMSNormImpl
 
 
 class DefaultRMSNormImpl(RMSNormImpl):
@@ -36,3 +36,40 @@ class DefaultRMSNormBuilder(RMSNormBuilder):
     def build(hidden_size: int, eps: float = 1e-6, inplace: bool = False):
         """build."""
         return DefaultRMSNormImpl(hidden_size, eps)
+
+
+class DefaultLayerNormImpl(LayerNormImpl):
+    """RMS norm implementation api."""
+
+    def __init__(self, normalized_shape: int, eps: float = 1e-6):
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape, )
+        self.normalized_shape = normalized_shape
+        self.eps = eps
+
+    def forward(self,
+                x: torch.Tensor,
+                weight: torch.Tensor = None,
+                bias: torch.Tensor = None,
+                residual: torch.Tensor = None):
+        """forward."""
+        if residual is not None:
+            x = x + residual
+            residual = x
+        x = torch.nn.functional.layer_norm(x,
+                                           self.normalized_shape,
+                                           weight=weight,
+                                           bias=bias,
+                                           eps=self.eps)
+        if residual is None:
+            return x
+        return x, residual
+
+
+class DefaultLayerNormBuilder(LayerNormBuilder):
+    """RMS norm implementation builder."""
+
+    @staticmethod
+    def build(normalized_shape: int, eps: float = 1e-6):
+        """build."""
+        return DefaultLayerNormImpl(normalized_shape, eps)

@@ -7,7 +7,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                 build_rotary_embedding)
+                                 LayerNorm, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_qkv_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -166,27 +166,31 @@ class Starcoder2DecoderLayer(nn.Module):
         self.mlp = Starcoder2MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
-        self.input_layernorm = nn.LayerNorm(config.hidden_size,
-                                            eps=config.norm_epsilon,
-                                            dtype=dtype,
-                                            device=device)
+        self.input_layernorm = LayerNorm(config.hidden_size,
+                                         eps=config.norm_epsilon,
+                                         dtype=dtype,
+                                         device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = nn.LayerNorm(config.hidden_size,
-                                                     eps=config.norm_epsilon,
-                                                     dtype=dtype,
-                                                     device=device)
+        self.post_attention_layernorm = LayerNorm(config.hidden_size,
+                                                  eps=config.norm_epsilon,
+                                                  dtype=dtype,
+                                                  device=device)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[List[torch.FloatTensor]],
+        residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
     ):
-        residual = hidden_states
-
-        hidden_states = self.input_layernorm(hidden_states)
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(
+                hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -195,14 +199,14 @@ class Starcoder2DecoderLayer(nn.Module):
             past_key_value=past_key_value,
             attn_metadata=attn_metadata,
         )
-        hidden_states = residual + hidden_states
 
         # Fully Connected
-        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states, residual = self.post_attention_layernorm(
+            hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states
 
-        return hidden_states
+        outputs = (hidden_states, residual)
+        return outputs
 
 
 class Starcoder2Model(nn.Module):
@@ -232,10 +236,10 @@ class Starcoder2Model(nn.Module):
         ])
 
         # build norm
-        self.norm = nn.LayerNorm(config.hidden_size,
-                                 eps=config.norm_epsilon,
-                                 dtype=dtype,
-                                 device=device)
+        self.norm = LayerNorm(config.hidden_size,
+                              eps=config.norm_epsilon,
+                              dtype=dtype,
+                              device=device)
 
         # build rotary embedding
         emb_type = EmbeddingType.LinearScaling
@@ -271,17 +275,19 @@ class Starcoder2Model(nn.Module):
         rotary_pos_emb = (cos, sin)
 
         # decoding
+        residual = None
         for idx, decoder_layer in enumerate(self.layers):
             past_key_value = past_key_values[idx]
-            hidden_states = decoder_layer(
+            hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
                 past_key_value=past_key_value,
+                residual=residual,
                 attn_metadata=attn_metadata,
             )
 
         # norm
-        hidden_states = self.norm(hidden_states)
+        hidden_states, _ = self.norm(hidden_states, residual)
 
         return hidden_states
 

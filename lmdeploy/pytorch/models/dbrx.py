@@ -7,7 +7,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                 build_rotary_embedding)
+                                 LayerNorm, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -232,7 +232,7 @@ class DbrxNormAttentionNorm(nn.Module):
         super().__init__()
         self.layer_idx = layer_idx
 
-        self.norm_1 = nn.LayerNorm(
+        self.norm_1 = LayerNorm(
             config.d_model,
             bias=False,
             dtype=dtype,
@@ -243,7 +243,7 @@ class DbrxNormAttentionNorm(nn.Module):
             dtype=dtype,
             device=device,
         )
-        self.norm_2 = nn.LayerNorm(
+        self.norm_2 = LayerNorm(
             config.d_model,
             bias=False,
             dtype=dtype,
@@ -255,11 +255,16 @@ class DbrxNormAttentionNorm(nn.Module):
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        residual_states: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
     ):
         """forward."""
-        residual_states = hidden_states
-        hidden_states = self.norm_1(hidden_states).to(hidden_states.dtype)
+        if residual_states is None:
+            residual_states = hidden_states
+            hidden_states = self.norm_1(hidden_states)
+        else:
+            hidden_states, residual_states = self.norm_1(
+                hidden_states, residual_states)
 
         hidden_states = self.attn(
             hidden_states,
@@ -268,10 +273,8 @@ class DbrxNormAttentionNorm(nn.Module):
             attn_metadata,
         )
 
-        hidden_states = hidden_states + residual_states
-
-        residual_states = hidden_states
-        hidden_states = self.norm_2(hidden_states).to(hidden_states.dtype)
+        hidden_states, residual_states = self.norm_2(hidden_states,
+                                                     residual_states)
         return hidden_states, residual_states
 
 
@@ -300,21 +303,22 @@ class DbrxBlock(nn.Module):
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[List[torch.FloatTensor]],
+        residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
     ):
         # Self Attention
-        hidden_states, resid_states = self.norm_attn_norm(
+        hidden_states, residual = self.norm_attn_norm(
             hidden_states=hidden_states,
             rotary_pos_emb=rotary_pos_emb,
             past_key_value=past_key_value,
+            residual_states=residual,
             attn_metadata=attn_metadata,
         )
 
         # Fully Connected
         hidden_states = self.ffn(hidden_states)
-        hidden_states = resid_states + hidden_states
 
-        return hidden_states
+        return hidden_states, residual
 
 
 class DbrxModel(nn.Module):
@@ -341,10 +345,10 @@ class DbrxModel(nn.Module):
         ])
 
         # build norm
-        self.norm_f = nn.LayerNorm(config.d_model,
-                                   bias=False,
-                                   dtype=dtype,
-                                   device=device)
+        self.norm_f = LayerNorm(config.d_model,
+                                bias=False,
+                                dtype=dtype,
+                                device=device)
 
         # build rotary embedding
         emb_type = EmbeddingType.LinearScaling
@@ -380,17 +384,19 @@ class DbrxModel(nn.Module):
         rotary_pos_emb = (cos, sin)
 
         # decoding
+        residual = None
         for idx, decoder_layer in enumerate(self.blocks):
             past_key_value = past_key_values[idx]
-            hidden_states = decoder_layer(
+            hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
                 past_key_value=past_key_value,
+                residual=residual,
                 attn_metadata=attn_metadata,
             )
 
         # norm
-        hidden_states = self.norm_f(hidden_states)
+        hidden_states, _ = self.norm_f(hidden_states, residual)
 
         return hidden_states
 
