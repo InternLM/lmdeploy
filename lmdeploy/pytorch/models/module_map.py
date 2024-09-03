@@ -145,8 +145,8 @@ MODULE_MAP.update({
 
 # internvl
 MODULE_MAP.update({
-    'modeling_internvl_chat.InternVLChatModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.PatchedInternVLChatModel'
+    'InternVLChatModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.InternVLChatModel'
 })
 
 # phi3 vision
