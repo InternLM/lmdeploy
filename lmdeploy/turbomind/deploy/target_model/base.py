@@ -232,7 +232,7 @@ class BaseOutputModel(ABC):
         if emb is not None:
             emb = pad_weight(emb)
             # try split along hidden dim
-            if emb.shape[1] % self.cfg.tensor_para_size == 0:
+            if emb.shape[1] % self.tensor_para_size == 0:
                 self.save_split(emb, 'tok_embeddings.weight', 1)
             else:
                 self.export_weight(emb, 'tok_embeddings.weight')

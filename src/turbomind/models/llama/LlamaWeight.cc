@@ -118,37 +118,21 @@ void loadLinearWeights(T*             weights,
                        size_t         split_dim)
 {
     FT_CHECK(split_dim == 0 || split_dim == 1);
-    auto max_prefix   = prefix + "." + std::to_string(tensor_para_size - 1);
-    bool enable_slice = true;
-    if (tensor_para_size <= 1 || std::filesystem::exists(max_prefix + ".weight")) {
-        enable_slice = false;
-    }
-
+    // the weight could be split along split_dim
     std::vector<std::reference_wrapper<size_t>> dims = {dim0, dim1};
-    if (dims[split_dim] % tensor_para_size != 0) {
-        enable_slice = false;
-    }
-    else if (!enable_slice && dims[split_dim] % tensor_para_size == 0) {
-        dims[split_dim] /= tensor_para_size;
-    }
+    if (dims[split_dim] % tensor_para_size == 0) {
+        // check converted file with tp
+        auto should_exist     = prefix + "." + std::to_string(tensor_para_size - 1) + ".weight";
+        auto should_not_exist = prefix + "." + std::to_string(tensor_para_size) + ".weight";
+        if (!std::filesystem::exists(should_exist) || std::filesystem::exists(should_not_exist)) {
+            TM_LOG_ERROR("please make sure the tp parameter is same when you convert the model.");
+            FT_CHECK(false);
+        }
 
-    prefix += "." + (enable_slice ? std::to_string(0) : std::to_string(rank));
-    std::vector<ConcateSlice> weight_slices{};
-    if (enable_slice) {
-        if (split_dim == 0) {
-            size_t       stride = dim0 / tensor_para_size;
-            ConcateSlice slice0{{{stride * rank, stride * (rank + 1)}}};
-            ConcateSlice slice1{{{0, dim1}}};
-            weight_slices = {slice0, slice1};
-        }
-        else if (split_dim == 1) {
-            size_t       stride = dim1 / tensor_para_size;
-            ConcateSlice slice0{{{0, dim0}}};
-            ConcateSlice slice1{{{stride * rank, stride * (rank + 1)}}};
-            weight_slices = {slice0, slice1};
-        }
+        dims[split_dim] /= tensor_para_size;
+        prefix += "." + std::to_string(rank);
     }
-    loadWeightFromBin(weights, {dim0, dim1}, prefix + ".weight", type, weight_slices);
+    loadWeightFromBin(weights, {dim0, dim1}, prefix + ".weight", type);
 }
 
 template<typename T>
