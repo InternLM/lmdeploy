@@ -27,6 +27,9 @@ class DefaultLayersBackend(LayersBackend):
         elif layer_type == LayerType.SiluAndMul:
             from .activation import DefaultSiluAndMulBuilder
             return DefaultSiluAndMulBuilder
+        elif layer_type == LayerType.GeluAndMul:
+            from .activation import DefaultGeluAndMulBuilder
+            return DefaultGeluAndMulBuilder
         elif layer_type == LayerType.RMSNorm:
             from .norm import DefaultRMSNormBuilder
             return DefaultRMSNormBuilder

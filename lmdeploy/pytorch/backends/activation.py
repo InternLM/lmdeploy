@@ -19,3 +19,22 @@ class SiluAndMulBuilder(ABC):
     def build(inplace: bool = False):
         """build."""
         raise NotImplementedError
+
+
+class GeluAndMulImpl(ABC):
+    """gelu + multiple residual fused implementation."""
+
+    @abstractmethod
+    def forward(self, x):
+        """forward."""
+        raise NotImplementedError
+
+
+class GeluAndMulBuilder(ABC):
+    """gelu and mul implementation builder."""
+
+    @staticmethod
+    @abstractmethod
+    def build(approximate: str = 'none'):
+        """build."""
+        raise NotImplementedError

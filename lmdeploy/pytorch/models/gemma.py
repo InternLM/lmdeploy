@@ -8,7 +8,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                 RMSNorm, build_rotary_embedding)
+                                 GeluAndMul, RMSNorm, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -134,7 +134,7 @@ class GemmaMLP(nn.Module):
         if hidden_activation is None:
             hidden_activation = 'gelu_pytorch_tanh'
             assert hidden_activation == 'gelu_pytorch_tanh'
-        self.act_fn = nn.GELU(approximate='tanh')
+        self.act_fn = GeluAndMul(approximate='tanh')
 
         # down
         self.down_proj = build_rowwise_linear(config.intermediate_size,
@@ -148,8 +148,7 @@ class GemmaMLP(nn.Module):
     def forward(self, x):
         """forward."""
         gate_up = self.gate_up_proj(x)
-        gate, up = gate_up.chunk(2, -1)
-        act = self.act_fn(gate) * up
+        act = self.act_fn(gate_up)
         out = self.down_proj(act)
         return out
 

@@ -16,3 +16,17 @@ class SiluAndMul(nn.Module):
     def forward(self, x: Tensor):
         """forward."""
         return self.impl.forward(x)
+
+
+class GeluAndMul(nn.Module):
+    """Gelu and elementwise multiple."""
+
+    def __init__(self, approximate: str = 'none'):
+        super().__init__()
+        backend = get_backend()
+        builder = backend.get_layer_impl_builder(LayerType.GeluAndMul)
+        self.impl = builder.build(approximate)
+
+    def forward(self, x: Tensor):
+        """forward."""
+        return self.impl.forward(x)
