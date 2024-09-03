@@ -208,6 +208,7 @@ class StepContext:
     adapter_params: Dict[str, AdapterInfo] = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
+    vision_inputs: VisionModelInputs = None
     attn_metadata: Any = None
 
     _outputs: Dict = field(default_factory=dict)
@@ -269,6 +270,7 @@ class StepContext:
             is_decoding=inputs.is_decoding,
             world_size=world_size,
             local_adapter_ids=inputs.local_adapter_ids,
+            vision_inputs=inputs.vision_inputs,
         )
 
         ret = get_backend().update_step_context(ret)

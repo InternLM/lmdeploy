@@ -224,18 +224,7 @@ class CUDAGraphRunner(GraphRunner):
         if self.backend_config.eager_mode:
             return False
 
-        if not getattr(self.model, 'support_cuda_graph', False):
-            return False
-
-        # TODO: should we enable cudagraph awq now?
-        # hf_config = self.model_config.hf_config
-        # quantization_config = getattr(hf_config,
-        #    'quantization_config', dict())
-        # quant_method = quantization_config.get('quant_method', None)
-        # if quant_method == 'awq':
-        #     logger.warning('AWQ model does not support cuda graph yet.')
-        #     return False
-        return True
+        return getattr(self.model, 'support_cuda_graph', False)
 
     def get_graph_key(self, input_ids: torch.Tensor,
                       position_ids: torch.Tensor, past_key_values: List,
@@ -250,7 +239,11 @@ class CUDAGraphRunner(GraphRunner):
 
     def __call__(self, **kwargs):
         """call."""
-        if not self.enable_graph:
+        enable_graph = self.enable_graph
+        if callable(enable_graph):
+            enable_graph = enable_graph(**kwargs)
+
+        if not enable_graph:
             return self.model(**kwargs)
 
         graph_key = self.get_graph_key(**kwargs)
