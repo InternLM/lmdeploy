@@ -3,12 +3,12 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 
+from lmdeploy.pytorch.check_env import try_import_deeplink
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX, IMAGE_TOKEN
 from lmdeploy.vl.engine import ImageEncoder
 from lmdeploy.vl.templates import VLPromptType, get_vl_prompt_template
-from lmdeploy.pytorch.check_env import try_import_deeplink
 
 logger = get_logger('lmdeploy')
 
