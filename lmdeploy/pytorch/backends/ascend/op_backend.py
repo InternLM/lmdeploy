@@ -30,6 +30,9 @@ class AscendOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.RMSNorm:
             from .norm import AscendRMSNormBuilder
             return AscendRMSNormBuilder
+        elif layer_type == LayerType.SoftmaxTopK:
+            from .moe import AscendSoftmaxTopKBuilder
+            return AscendSoftmaxTopKBuilder
         else:
             logger.debug(
                 f'Op {layer_type} fallback to default implementation.')
