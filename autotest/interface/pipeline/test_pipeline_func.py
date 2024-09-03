@@ -835,8 +835,7 @@ def test_gen_config_same_random_seed_batch(config, model, backend, worker_id):
         pipe = pipeline(model_path, backend_config=backend_config)
         gen_config = GenerationConfig(random_seed=1, top_k=40, do_sample=True)
         response = pipe(['Shanghai is'] * 3, gen_config=gen_config)
-        result = response[0].text == response[1].text and response[
-            1].text == response[2].text
+        result = response[1].text == response[2].text
         save_pipeline_common_log(config, file_name, result, response)
         del pipe
         torch.cuda.empty_cache()

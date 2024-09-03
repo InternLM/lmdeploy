@@ -39,7 +39,7 @@ on:
         type: string
         default: "['tools','restful','pipeline','benchmark','evaluation']"
   schedule:
-    - cron:  '00 18 * * 0-4'
+    - cron:  '00 17 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
