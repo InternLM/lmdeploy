@@ -5,7 +5,7 @@ from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
-MODEL = 'internlm/internlm2-20b'
+MODEL = 'internlm/internlm2_5-20b'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
@@ -188,3 +188,14 @@ class TestRestfulInterfaceBase:
         assert output_last.get('choices')[0].get('finish_reason') in [
             'stop', 'length'
         ]
+
+    def test_batch_prompt_order(self):
+        api_client = APIClient(BASE_URL)
+        model_name = api_client.available_models[0]
+        for item in api_client.completions_v1(
+                model=model_name,
+                prompt=['你好', '今天天气怎么样', '你是谁', '帮我写一首以梅花为主题的五言律诗', '5+2等于多少'],
+                max_tokens=200):
+            assert '天气' in item.get('choices')[1].get('text')
+            assert '梅' in item.get('choices')[3].get('text')
+            assert '7' in item.get('choices')[4].get('text')

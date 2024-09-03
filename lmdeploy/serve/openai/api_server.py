@@ -298,6 +298,11 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
+    - response_format (Dict | None): Only pytorch backend support formatting
+        response. Examples: `{"type": "json_schema", "json_schema": {"name":
+        "test","schema": {"properties": {"name": {"type": "string"}},
+        "required": ["name"], "type": "object"}}}`
+        or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
     - logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
     - tools (List): A list of tools the model may call. Currently, only
         internlm2 functions are supported as a tool. Use this to specify a
@@ -345,6 +350,13 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     gen_logprobs, logits_processors = None, None
     if request.logprobs and request.top_logprobs:
         gen_logprobs = request.top_logprobs
+    response_format = None
+    if request.response_format and request.response_format.type != 'text':
+        if VariableInterface.async_engine.backend != 'pytorch':
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                'only pytorch backend can use response_format now')
+        response_format = request.response_format.model_dump()
 
     if request.logit_bias is not None:
         try:
@@ -360,6 +372,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens,
+        do_sample=True,
         logprobs=gen_logprobs,
         top_k=request.top_k,
         top_p=request.top_p,
@@ -368,6 +381,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens,
+        response_format=response_format,
         logits_processors=logits_processors,
         random_seed=random_seed)
 
@@ -590,6 +604,7 @@ async def completions_v1(request: CompletionRequest,
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens if request.max_tokens else 512,
+        do_sample=True,
         logprobs=request.logprobs,
         top_k=request.top_k,
         top_p=request.top_p,
@@ -675,7 +690,7 @@ async def completions_v1(request: CompletionRequest,
 
     # Non-streaming response
     usage = UsageInfo()
-    choices = []
+    choices = [None] * len(generators)
 
     async def _inner_call(i, generator):
         final_logprobs = []
@@ -704,12 +719,12 @@ async def completions_v1(request: CompletionRequest,
 
         assert final_res is not None
         choice_data = CompletionResponseChoice(
-            index=0,
+            index=i,
             text=text,
             finish_reason=final_res.finish_reason,
             logprobs=logprobs,
         )
-        choices.append(choice_data)
+        choices[i] = choice_data
 
         total_tokens = sum([
             final_res.history_token_len, final_res.input_token_len,
@@ -841,6 +856,7 @@ async def chat_interactive_v1(request: GenerateRequest,
 
     gen_config = GenerationConfig(
         max_new_tokens=request.request_output_len,
+        do_sample=True,
         top_p=request.top_p,
         top_k=request.top_k,
         temperature=request.temperature,
@@ -963,7 +979,7 @@ def serve(model_path: str,
         api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
             a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
-    """ # noqa E501
+    """  # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)

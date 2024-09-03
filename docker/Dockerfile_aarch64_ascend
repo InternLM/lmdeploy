@@ -1,0 +1,171 @@
+FROM ubuntu:20.04 as export_image
+
+WORKDIR /tmp
+
+ARG http_proxy
+ARG https_proxy
+ARG PYVERSION=3.10.5
+ARG DEBIAN_FRONTEND=noninteractive
+ARG CHIP=all
+ARG ASCEND_BASE=/usr/local/Ascend
+ARG TOOLKIT_PKG=Ascend-cann-toolkit_*.run
+ARG KERNELS_PKG=Ascend-cann-kernels-*.run
+ARG TOOLKIT_PATH=$ASCEND_BASE/ascend-toolkit/latest
+ARG DEEPLINK_TAG_OR_COMMIT=6012186b03cff6eac6587e7a06dbaa590af6d5df
+ARG DEEPLINKEXT_TAG_OR_COMMIT=525678f2c4c227e1e8bf358259a19a578b67bc37
+ARG LMDEPLOY_TAG_OR_COMMIT=v0.6.0a0
+
+RUN sed -i 's@http://.*.ubuntu.com@http://mirrors.tuna.tsinghua.edu.cn@g' /etc/apt/sources.list && \
+    apt update && \
+    apt install --no-install-recommends ca-certificates -y && \
+    apt install --no-install-recommends bc wget -y && \
+    apt install --no-install-recommends curl gcc make g++ pkg-config unzip -y && \
+    apt install --no-install-recommends libsqlite3-dev libblas3 liblapack3 gfortran vim -y && \
+    apt install --no-install-recommends liblapack-dev libblas-dev libhdf5-dev libffi-dev -y && \
+    apt install --no-install-recommends libssl-dev zlib1g-dev xz-utils cython3 python3-h5py -y && \
+    apt install --no-install-recommends libopenblas-dev libgmpxx4ldbl liblzma-dev -y && \
+    apt install --no-install-recommends libicu66 libxml2 pciutils libgl1-mesa-glx libbz2-dev -y && \
+    apt install --no-install-recommends libreadline-dev libncurses5 libncurses5-dev libncursesw5 -y && \
+    apt install --no-install-recommends git gdb gcc-7 g++-7 -y && \
+    sed -i 's@http://mirrors.tuna.tsinghua.edu.cn@https://mirrors.tuna.tsinghua.edu.cn@g' /etc/apt/sources.list && \
+    apt clean && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-7 7 \
+    --slave /usr/bin/g++ g++ /usr/bin/g++-7 --slave /usr/bin/gcov gcov /usr/bin/gcov-7 && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 9 \
+    --slave /usr/bin/g++ g++ /usr/bin/g++-9 --slave /usr/bin/gcov gcov /usr/bin/gcov-9 && \
+    update-alternatives --set gcc $(update-alternatives --list gcc | grep gcc-7)
+
+ENV LD_LIBRARY_PATH=/usr/local/python${PYVERSION}/lib: \
+    PATH=/usr/local/python${PYVERSION}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN umask 0022  && \
+    wget https://repo.huaweicloud.com/python/${PYVERSION}/Python-${PYVERSION}.tar.xz && \
+    tar -xf Python-${PYVERSION}.tar.xz && cd Python-${PYVERSION} && ./configure --prefix=/usr/local/python${PYVERSION} --enable-shared && \
+    make -j 16 && make install && \
+    ln -sf /usr/local/python${PYVERSION}/bin/python3 /usr/bin/python3 && \
+    ln -sf /usr/local/python${PYVERSION}/bin/python3 /usr/bin/python && \
+    ln -sf /usr/local/python${PYVERSION}/bin/pip3 /usr/bin/pip3 && \
+    ln -sf /usr/local/python${PYVERSION}/bin/pip3 /usr/bin/pip && \
+    cd .. && \
+    rm -rf Python* && \
+    mkdir -p ~/.pip  && \
+    echo '[global] \n\
+    index-url=http://mirrors.aliyun.com/pypi/simple\n\
+    trusted-host=mirrors.aliyun.com' >> ~/.pip/pip.conf && \
+    pip3 install pip -U
+
+RUN pip3 install -U pip && \
+    pip3 install wheel==0.43.0 scikit-build==0.18.0 numpy==1.24 setuptools==69.5.1 && \
+    pip3 install decorator sympy cffi && \
+    pip3 install cmake ninja pyyaml && \
+    pip3 install pathlib2 protobuf attrs attr scipy && \
+    pip3 install requests psutil absl-py && \
+    pip3 install torch==2.1.1 torchvision==0.16.1 --index-url=https://download.pytorch.org/whl/cpu && \
+    pip3 install transformers==4.41.0 && \
+    rm -rf /root/.cache/pip
+
+ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/hdf5/serial:$LD_LIBRARY_PATH
+ENV LD_PRELOAD=/lib/aarch64-linux-gnu/libGLdispatch.so.0:$LD_PRELOAD
+
+RUN if [ ! -d "/lib64" ]; \
+    then \
+        mkdir /lib64 && ln -sf /lib/ld-linux-aarch64.so.1 /lib64/ld-linux-aarch64.so.1; \
+    fi
+
+FROM ubuntu:20.04 as buildtemp
+COPY ./*.run /tmp
+
+FROM export_image
+
+ENV LD_LIBRARY_PATH=\
+$ASCEND_BASE/driver/lib64:\
+$ASCEND_BASE/driver/lib64/common:\
+$ASCEND_BASE/driver/lib64/driver:\
+$ASCEND_BASE/driver/tools/hccn_tool/:\
+$TOOLKIT_PATH/opp/built-in/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64/:\
+$LD_LIBRARY_PATH
+
+RUN --mount=type=cache,target=/tmp,from=buildtemp,source=/tmp \
+    umask 0022 && \
+    mkdir -p $ASCEND_BASE/driver && \
+    if [ "$CHIP" != "all" ]; \
+    then \
+        CHIPOPTION="--chip=$CHIP"; \
+    else \
+        CHIPOPTION=""; \
+    fi && \
+    chmod +x $TOOLKIT_PKG $KERNELS_PKG && \
+    ./$TOOLKIT_PKG --quiet --install --install-path=$ASCEND_BASE --install-for-all $CHIPOPTION && \
+    ./$KERNELS_PKG --quiet --install --install-path=$ASCEND_BASE --install-for-all && \
+    rm -f $TOOLKIT_PKG $KERNELS_PKG
+
+ENV GLOG_v=2 \
+    LD_LIBRARY_PATH=$TOOLKIT_PATH/lib64:$LD_LIBRARY_PATH \
+    TBE_IMPL_PATH=$TOOLKIT_PATH/opp/op_impl/built-in/ai_core/tbe \
+    PATH=$TOOLKIT_PATH/ccec_compiler/bin:$PATH \
+    ASCEND_OPP_PATH=$TOOLKIT_PATH/opp \
+    ASCEND_AICPU_PATH=$TOOLKIT_PATH
+
+ENV PYTHONPATH=$TBE_IMPL_PATH:$PYTHONPATH
+
+RUN rm -rf ./*
+
+SHELL ["/bin/bash", "-c"]
+RUN echo "source /usr/local/Ascend/ascend-toolkit/set_env.sh" >> ~/.bashrc && \
+    . ~/.bashrc
+
+WORKDIR /deeplink
+RUN echo -e "diff --git a/impl/ascend_npu/CMakeLists.txt b/impl/ascend_npu/CMakeLists.txt\n\
+index e684c59..f1cd8d4 100755\n\
+--- a/impl/ascend_npu/CMakeLists.txt\n\
++++ b/impl/ascend_npu/CMakeLists.txt\n\
+@@ -14,6 +14,11 @@ FetchContent_Declare(op_plugin\n\
+ FetchContent_MakeAvailable(op_plugin)\n\
+ message(STATUS \"op-plugin download done\")\n\
+ \n\
++add_custom_target(patch_op_plugin_code\n\
++  COMMAND sed -i 's/GetOpApiLibHandler\(GetCustOpApiLibName\(\)\)/nullptr/' \${op_plugin_SOURCE_DIR}/op_plugin/utils/op_api_common.h\n\
++  BYPRODUCTS \${op_plugin_SOURCE_DIR}/op_plugin/utils/op_api_common.h\n\
++)\n\
++\n\
+ add_custom_target(op_plugin_gen\n\
+   COMMAND cd \${op_plugin_SOURCE_DIR} && bash ./gencode.sh 2.1 python\n\
+   BYPRODUCTS \${op_plugin_SOURCE_DIR}/op_plugin/OpInterface.h \${op_plugin_SOURCE_DIR}/op_plugin/OpInterface.cpp\n\
+@@ -253,7 +258,7 @@ endif()\n\
+ set(THIRD_PARTY_INCLUDE_DIRS \${CMAKE_CURRENT_SOURCE_DIR}/../third_party/half/include)\n\
+ \n\
+ add_library(\${DEVICEIMPL} SHARED \${IMPL_SRC})\n\
+-add_dependencies(\${DEVICEIMPL} op_plugin_gen)\n\
++add_dependencies(\${DEVICEIMPL} op_plugin_gen patch_op_plugin_code)\n\
+ set_target_properties(\${DEVICEIMPL} PROPERTIES SUFFIX \".so\")\n\
+ target_include_directories(\${DEVICEIMPL} PRIVATE \${ASCEND_DIR}/ascend-toolkit/latest/include/aclnn)\n\
+ target_include_directories(\${DEVICEIMPL} SYSTEM PUBLIC \${THIRD_PARTY_INCLUDE_DIRS})\n" > /deeplink/warning.patch
+
+# deeplink
+RUN git clone https://github.com/DeepLink-org/deeplink.framework.git && \
+    cd deeplink.framework/dipu && \
+    git checkout ${DEEPLINK_TAG_OR_COMMIT} && \
+    git submodule update --init --recursive && \
+    git -C ./third_party/DIOPI apply /deeplink/warning.patch && \
+    DIPU_DEVICE=ascend python setup.py develop && \
+    rm -rf /root/.cache/pip
+
+# deeplink_ext
+RUN git clone https://github.com/DeepLink-org/DeepLinkExt.git && \
+    cd DeepLinkExt && \
+    git checkout ${DEEPLINKEXT_TAG_OR_COMMIT} && \
+    DIPU_REPO=/deeplink/deeplink.framework/dipu DIPU_ROOT=${DIPU_REPO}/torch_dipu \
+    DIOPI_PATH=${DIPU_REPO}/third_party/DIOPI/proto \
+    VENDOR_INCLUDE_DIRS=/usr/local/Ascend/ascend-toolkit/latest/include \
+    pip install -vv --no-build-isolation -e . && \
+    rm -rf /root/.cache/pip
+
+# lmdeploy
+WORKDIR /workspace
+RUN git clone https://github.com/InternLM/lmdeploy.git && \
+    cd lmdeploy && \
+    git checkout ${LMDEPLOY_TAG_OR_COMMIT} && \
+    sed -i '/triton/d' requirements/runtime.txt && \
+    pip install -vv --no-build-isolation -e . && \
+    rm -rf /root/.cache/pip

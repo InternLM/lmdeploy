@@ -6,7 +6,7 @@ from subprocess import PIPE
 def quantization(config,
                  quantization_model_name,
                  origin_model_name,
-                 quantization_type: str = 'w4a16',
+                 quantization_type: str = 'awq',
                  cuda_prefix: str = 'CUDA_VISIBLE_DEVICES=0'):
     model_path = config.get('model_path')
     log_path = config.get('log_path')
@@ -18,9 +18,14 @@ def quantization(config,
             quantization_model_name.split('/')[1]
         ]) + '.log')
 
-    if quantization_type == 'w4a16':
+    if quantization_type == 'awq':
         quantization_cmd = ' '.join([
             cuda_prefix, 'lmdeploy lite auto_awq', origin_model_path,
+            '--work-dir', quantization_model_path, '--batch-size 32'
+        ])
+    elif quantization_type == 'gptq':
+        quantization_cmd = ' '.join([
+            cuda_prefix, 'lmdeploy lite auto_gptq', origin_model_path,
             '--work-dir', quantization_model_path, '--batch-size 32'
         ])
     elif quantization_type == 'w8a8':
@@ -29,7 +34,7 @@ def quantization(config,
             '--work-dir', quantization_model_path, '--batch-size 32'
         ])
     else:
-        return False, 'quantization type should in [w4a16, w8a8], \
+        return False, 'quantization type should in [awq, gptq, w8a8], \
             now the type is ' + quantization_type
 
     if 'llama-3' in origin_model_name.lower():

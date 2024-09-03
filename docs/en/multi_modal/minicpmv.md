@@ -11,7 +11,7 @@ The next chapter demonstrates how to deploy an MiniCPM-V model using LMDeploy, w
 
 ## Installation
 
-Please install LMDeploy by following the [installation guide](../installation.md).
+Please install LMDeploy by following the [installation guide](../get_started/installation.md).
 
 ## Offline inference
 
@@ -153,7 +153,7 @@ docker run --runtime nvidia --gpus all \
     --env "HUGGING_FACE_HUB_TOKEN=<secret>" \
     -p 23333:23333 \
     --ipc=host \
-    openmmlab/lmdeploy:v0.5.3-cu12 \
+    openmmlab/lmdeploy:latest \
     lmdeploy serve api_server openbmb/MiniCPM-V-2_6
 ```
 
@@ -165,7 +165,7 @@ version: '3.5'
 services:
   lmdeploy:
     container_name: lmdeploy
-    image: openmmlab/lmdeploy:v0.5.3-cu12
+    image: openmmlab/lmdeploy:latest
     ports:
       - "23333:23333"
     environment:

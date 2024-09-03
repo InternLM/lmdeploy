@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 import numpy as np
 import torch
 
-from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                ResponseType)
 from lmdeploy.utils import get_logger, get_model, logging_timer
 
@@ -500,6 +500,7 @@ class Engine:
     @logging_timer('SamplingLogits', logger)
     def async_sampling_logits(self, logits: torch.Tensor,
                               all_ids: torch.Tensor,
+                              guided_input_ids: torch.Tensor,
                               sampling_inputs: SamplingInputs,
                               inputs: ModelInputs, ignore_eos: torch.Tensor):
         """sampling logits."""
@@ -514,8 +515,9 @@ class Engine:
             return logits[last_idx, :]
 
         split_logits = __get_last_logits().cuda()
-        logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos)
-        logits = logits_processor(split_logits, all_ids)
+        logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos,
+                                                self.tokenizer.model.model)
+        logits = logits_processor(all_ids, guided_input_ids, split_logits)
         next_token_ids = logits_processor.sampling(logits)
 
         return next_token_ids
@@ -679,7 +681,8 @@ class Engine:
 
     async def _async_step_background(
             self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-            all_ids: torch.Tensor, sampling_inputs: SamplingInputs,
+            all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
+            sampling_inputs: SamplingInputs,
             num_appendable_ids: torch.LongTensor,
             num_ignore_eos: torch.LongTensor, return_logits: bool,
             output_que: asyncio.Queue):
@@ -687,11 +690,16 @@ class Engine:
 
         def __update_inputs(next_token_ids):
             """update inputs."""
-            nonlocal all_ids
+            nonlocal all_ids, guided_input_ids
             inputs.update(next_token_ids)
             if all_ids is not None:
                 all_ids = torch.cat(
                     [all_ids, next_token_ids[:, None].to(all_ids.device)], 1)
+            if guided_input_ids is not None:
+                guided_input_ids = torch.cat([
+                    guided_input_ids, next_token_ids[:, None].to(
+                        guided_input_ids.device)
+                ], 1)
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
@@ -701,6 +709,8 @@ class Engine:
         is_decoding = inputs.is_decoding
         if all_ids is not None:
             all_ids = all_ids.cuda()
+        if guided_input_ids is not None:
+            guided_input_ids = guided_input_ids.cuda()
         sampling_inputs = sampling_inputs.to_device('cuda')
         num_appendable_ids = num_appendable_ids.cuda()
         num_ignore_eos = num_ignore_eos.cuda()
@@ -720,7 +730,8 @@ class Engine:
 
             # sampling
             next_token_ids = self.async_sampling_logits(
-                logits, all_ids, sampling_inputs, inputs, num_ignore_eos > 0)
+                logits, all_ids, guided_input_ids, sampling_inputs, inputs,
+                num_ignore_eos > 0)
             num_ignore_eos = num_ignore_eos - 1
 
             # stopping criteria
@@ -766,6 +777,24 @@ class Engine:
                 output[idx, -h_len:] = h_ids
             return output
 
+        def __gather_guided_input_ids(seqs: SeqList,
+                                      sampling_inputs: SamplingInputs):
+            """gather input ids for guided decode."""
+            if not any(sampling_inputs.response_formats or ()):
+                return None
+            batch = len(seqs)
+            max_len = max(seq.num_new_tokens for seq in seqs)
+            pad_id = self.model_config.bos_token_id
+            pad_id = 0 if pad_id is None else pad_id
+            output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
+            for idx, seq in enumerate(seqs):
+                h_len = seq.num_new_tokens
+                if h_len == 0:
+                    continue
+                h_ids = torch.from_numpy(seq.all_ids[-seq.num_new_tokens:])
+                output[idx, -h_len:] = h_ids
+            return output
+
         def __get_num_appendable_ids(seqs: SeqList):
             """get num appendable ids."""
             ret = [
@@ -802,6 +831,8 @@ class Engine:
                                                   is_prefill)
                 sampling_inputs = SamplingInputs.from_sampling_params(running)
                 all_ids = __gather_all_ids(running, sampling_inputs)
+                guided_input_ids = __gather_guided_input_ids(
+                    running, sampling_inputs)
                 num_appendable_ids = __get_num_appendable_ids(running)
                 num_ignore_eos = __get_num_ignore_eos(running)
                 return_logits = __need_logits(running)
@@ -814,6 +845,7 @@ class Engine:
                     swap_in_map=schedule_output.swap_in_map,
                     swap_out_map=schedule_output.swap_out_map,
                     all_ids=all_ids,
+                    guided_input_ids=guided_input_ids,
                     sampling_inputs=sampling_inputs,
                     num_appendable_ids=num_appendable_ids,
                     num_ignore_eos=num_ignore_eos,
@@ -912,7 +944,7 @@ class Engine:
             self,
             session_ids: List[int],
             token_ids: List[List[int]] = None,
-            gen_config: EngineGenerationConfig = None,
+            gen_config: GenerationConfig = None,
             adapter_names: List[str] = None,
             keep_cache: bool = False,
             input_embeddings: List[InputEmbeddingType] = None,
@@ -922,7 +954,7 @@ class Engine:
         Args:
             session_ids (List[int]): The session id.
             token_ids (List[int]): The input token ids.
-            gen_config (EngineGenerationConfig): The sampling parameters.
+            gen_config (GenerationConfig): The sampling parameters.
             adapter_names (List[str]): The name of the adapters.
             keep_cache (bool): Keep kv cache after infer.
 
@@ -944,7 +976,7 @@ class Engine:
             self,
             session_ids: List[int],
             token_ids: List[List[int]] = None,
-            gen_config: EngineGenerationConfig = None,
+            gen_config: GenerationConfig = None,
             adapter_names: List[str] = None,
             keep_cache: bool = False,
             input_embeddings: List[InputEmbeddingType] = None,

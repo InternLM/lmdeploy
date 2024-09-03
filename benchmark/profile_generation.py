@@ -16,7 +16,7 @@ from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
 from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
-from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
 from lmdeploy.utils import get_logger
 
@@ -25,7 +25,7 @@ os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
 def infer(model, session_id: int, input_ids: List,
-          gen_config: EngineGenerationConfig, test_round: int, que: Queue):
+          gen_config: GenerationConfig, test_round: int, que: Queue):
     if session_id == 1:
         pbar = tqdm(total=test_round)
     chatbot = model.create_instance()
@@ -73,7 +73,7 @@ def infer(model, session_id: int, input_ids: List,
 
 
 def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int,
-           gen_config: EngineGenerationConfig):
+           gen_config: GenerationConfig):
     if not warmup_round:
         return
 
@@ -110,7 +110,7 @@ def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int,
 def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
                        engine_config: Union[PytorchEngineConfig,
                                             TurbomindEngineConfig],
-                       gen_config: EngineGenerationConfig, test_round: int,
+                       gen_config: GenerationConfig, test_round: int,
                        warmup_round: int):
     output_seqlen = gen_config.max_new_tokens
     print(f'profiling ... concurrency: {concurrency}, '
@@ -424,12 +424,11 @@ def main():
                     thread_safe=True,
                     enable_prefix_caching=args.enable_prefix_caching,
                 )
-            gen_config = EngineGenerationConfig(
-                top_k=args.top_k,
-                top_p=args.top_p,
-                temperature=args.temperature,
-                max_new_tokens=completion_tokens,
-                ignore_eos=True)
+            gen_config = GenerationConfig(top_k=args.top_k,
+                                          top_p=args.top_p,
+                                          temperature=args.temperature,
+                                          max_new_tokens=completion_tokens,
+                                          ignore_eos=True)
             profile_target = partial(
                 profile_throughput,
                 concurrency=batch,

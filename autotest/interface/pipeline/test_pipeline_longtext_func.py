@@ -19,7 +19,7 @@ SESSION_LEN_PASSKEY_1M = 1048576
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', [
     'internlm/internlm2-chat-7b', 'internlm/internlm2_5-7b',
-    'internlm/internlm2-chat-1_8b', 'internlm/internlm2-1_8b'
+    'internlm/internlm2-chat-1_8b'
 ])
 def test_history_issue_tp1(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
@@ -53,9 +53,7 @@ def stream_infer_basic(config, model, log_name):
     tp_num = get_tp_num(config, model)
     model_path = '/'.join([config.get('model_path'), model])
 
-    backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
-                                           session_len=SESSION_LEN,
-                                           tp=tp_num)
+    backend_config = TurbomindEngineConfig(session_len=SESSION_LEN, tp=tp_num)
     pipe = pipeline(model_path, backend_config=backend_config)
     prompt = '今 天 心 ' * int(SESSION_LEN / 6)
 
@@ -76,12 +74,13 @@ def stream_infer_basic(config, model, log_name):
                              True,
                              str(outputs),
                              write_type='a')
-    assert False
 
 
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize(
-    'model', ['internlm/internlm2-chat-7b', 'Qwen/Qwen2-7B-Instruct'])
+@pytest.mark.parametrize('model', [
+    'internlm/internlm2-chat-7b', 'Qwen/Qwen2-7B-Instruct',
+    'meta-llama/Meta-Llama-3-1-8B-Instruct'
+])
 @pytest.mark.parametrize('backend', ['turbomind'])
 def test_long_test_passkey_tp1(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
@@ -138,17 +137,16 @@ def passkey_retrival(config,
                      tp_num,
                      session_len: int = SESSION_LEN_PASSKEY):
     model_path = '/'.join([config.get('model_path'), model])
+    if 'llama-3' in model.lower():
+        session_len = 128000
     if backend == 'turbomind':
         if 'internlm2_5' in model and '-1m' in model:
-            backend_config = TurbomindEngineConfig(rope_scaling_factor=2.5,
-                                                   session_len=session_len,
+            backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    max_batch_size=1,
                                                    cache_max_entry_count=0.7,
                                                    tp=tp_num)
         else:
-            backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
-                                                   session_len=session_len,
-                                                   use_logn_attn=True,
+            backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    tp=tp_num)
     else:
         if 'internlm2_5' in model and '-1m' in model:

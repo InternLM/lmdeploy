@@ -11,7 +11,7 @@ LMDeploy 支持 MiniCPM-V 系列模型，具体如下：
 
 ## 安装
 
-请参考[安装文档](../installation.md)安装 LMDeploy。
+请参考[安装文档](../get_started/installation.md)安装 LMDeploy。
 
 ## 离线推理
 
@@ -153,7 +153,7 @@ docker run --runtime nvidia --gpus all \
     --env "HUGGING_FACE_HUB_TOKEN=<secret>" \
     -p 23333:23333 \
     --ipc=host \
-    openmmlab/lmdeploy:v0.5.3-cu12 \
+    openmmlab/lmdeploy:latest \
     lmdeploy serve api_server openbmb/MiniCPM-V-2_6
 ```
 
@@ -165,7 +165,7 @@ version: '3.5'
 services:
   lmdeploy:
     container_name: lmdeploy
-    image: openmmlab/lmdeploy:v0.5.3-cu12
+    image: openmmlab/lmdeploy:latest
     ports:
       - "23333:23333"
     environment:

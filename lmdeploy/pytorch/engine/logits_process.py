@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import json
 from dataclasses import asdict, dataclass
-from typing import List
+from typing import Dict, List, Optional, Tuple
 
 import torch
 from transformers.generation.logits_process import LogitsWarper
 
 from lmdeploy.messages import LogitsProcessor
+from lmdeploy.tokenizer import Tokenizer
 
 from ..messages import SchedulerSequence
 
@@ -95,6 +97,40 @@ def _multinomial_sampling(scores: torch.Tensor,
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
+def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor,
+                     guided_input_ids: Optional[torch.Tensor],
+                     tokenizer: object):
+    if guided_input_ids is None:
+        return scores
+    for i in range(len(response_formats)):
+        _format = response_formats[i]
+        if isinstance(_format, Dict) and _format.get('type', 'text') != 'text':
+            if _format['type'] == 'json_schema':
+                schema = _format['json_schema']
+                if isinstance(schema, Dict):
+                    for key in ['json_schema', 'schema']:
+                        if key in schema:
+                            schema = json.dumps(schema[key])
+                elif schema is None:
+                    from .guided_process import JSON_GRAMMAR
+                    schema = JSON_GRAMMAR
+                elif isinstance(schema, str):
+                    raise ValueError(
+                        f'Cannot parse schema {schema}. The schema must be '
+                        'either a dictionary or a string that contains the'
+                        ' JSON Schema specification')
+            elif _format['type'] == 'regex_schema':
+                schema = _format.get('regex_schema', '')
+            else:
+                raise ValueError(f"unsupported format type: {_format['type']}")
+            from .guided_process import _get_guided_logits_processor
+            processor = _get_guided_logits_processor(schema, tokenizer,
+                                                     _format['type'])
+            if processor:
+                scores[i] = processor(guided_input_ids[i].tolist(), scores[i])
+    return scores
+
+
 @dataclass
 class SamplingInputs:
     temperature: torch.Tensor = None
@@ -107,6 +143,7 @@ class SamplingInputs:
     random_offsets: int = None
     max_top_k: int = 1
     min_top_p: float = 1.0
+    response_formats: Tuple[str] = ()
     logits_processors: List[List[LogitsProcessor]] = None
 
     @classmethod
@@ -121,6 +158,7 @@ class SamplingInputs:
         stop_words = [None] * batch_size
         random_seeds = [torch.seed() & 0xffffffff] * batch_size
         random_offsets = [None] * batch_size
+        response_formats = [None] * batch_size
         logits_processors = [None] * batch_size
 
         def __gather_params():
@@ -132,6 +170,7 @@ class SamplingInputs:
                 top_k[idx] = param.top_k
                 top_p[idx] = param.top_p
                 random_offsets[idx] = seq.random_offsets
+                response_formats[idx] = param.response_format
                 if param.random_seed is not None:
                     random_seeds[idx] = param.random_seed & 0xffffffff
 
@@ -204,6 +243,7 @@ class SamplingInputs:
             top_p=top_p,
             random_seeds=random_seeds,
             random_offsets=random_offsets,
+            response_formats=tuple(response_formats),
             max_top_k=max_top_k,
             min_top_p=min_top_p,
             logits_processors=logits_processors,
@@ -235,21 +275,26 @@ def _apply_custom_logits_processors(batched_logits_processors, all_ids,
 class FusedLogitsProcessor(LogitsWarper):
     """Custom logits processor."""
 
-    def __init__(self, sampling_inputs: SamplingInputs,
-                 ignore_eos: torch.Tensor):
+    def __init__(self,
+                 sampling_inputs: SamplingInputs,
+                 ignore_eos: torch.Tensor,
+                 tokenizer: Optional[Tokenizer] = None):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.ignore_eos = ignore_eos
+        self.tokenizer = tokenizer
 
-    def __call__(self, scores: torch.FloatTensor,
-                 all_ids: torch.LongTensor) -> torch.FloatTensor:
+    def __call__(self, all_ids: torch.LongTensor,
+                 guided_input_ids: torch.LongTensor,
+                 scores: torch.FloatTensor) -> torch.FloatTensor:
         r"""
         Args:
+            all_ids (torch.LongTensor): All the token ids.
+            guided_input_ids (torch.LongTensor): Guided prompt ids.
             scores (torch.FloatTensor):
                 Prediction scores of a language modeling head.
                 These can be logits for each vocabulary when not using
                 beam search or log softmax for each vocabulary token
                 when using beam search
-            all_ids (torch.LongTensor): All the token ids.
 
 
         Return:
@@ -282,6 +327,8 @@ class FusedLogitsProcessor(LogitsWarper):
             stop_words = torch.where(self.ignore_eos[:, None], stop_words, -1)
             scores = _process_bad_words(scores, stop_words)
 
+        scores = _guided_sampling(sampling_inputs.response_formats, scores,
+                                  guided_input_ids, self.tokenizer)
         return scores
 
     def sampling(self, logits: torch.Tensor):

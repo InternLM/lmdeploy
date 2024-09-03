@@ -23,6 +23,8 @@ class GenerationConfig:
             input message. **Only 1** is supported now.
         max_new_tokens (int): The maximum number of tokens that can be
             generated in the chat completion
+        do_sample (bool):  Whether or not to use sampling, use greedy
+            decoding otherwise. Default to be False.
         top_p (float): An alternative to sampling with temperature, called
             nucleus sampling, where the model considers the results of the
             tokens with top_p probability mass
@@ -36,51 +38,44 @@ class GenerationConfig:
         random_seed (int): Seed used when sampling a token
         stop_words (List[str]): Words that stop generating further tokens
         bad_words (List[str]): Words that the engine will never generate
+        stop_token_ids (List[int]): List of tokens that stop the generation
+            when they are generated. The returned output will not contain
+            the stop tokens.
+        bad_token_ids (List[str]): List of tokens that the engine will never
+            generate.
         min_new_tokens (int): The minimum numbers of tokens to generate,
             ignoring the number of tokens in the prompt.
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
         logprobs (int): Number of log probabilities to return per output token.
-    """
+        response_format (Dict): Only pytorch backend support formatting
+            response. Examples: `{"type": "json_schema", "json_schema": {"name":"test","schema": {"properties": {"name": {"type": "string"}}, "required": ["name"], "type": "object"}}}`
+            or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
+        logits_processors (List[Callable]): Custom logit processors.
+    """  # noqa
 
     n: int = 1
     max_new_tokens: int = 512
+    do_sample: bool = False
     top_p: float = 1.0
-    top_k: int = 1
+    top_k: int = 50
     temperature: float = 0.8
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
     stop_words: List[str] = None
     bad_words: List[str] = None
+    stop_token_ids: List[int] = None
+    bad_token_ids: List[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
     logprobs: int = None
+    response_format: Optional[Dict] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
 
-
-@dataclass
-class EngineGenerationConfig(GenerationConfig):
-    """generation parameter used by the inference engines."""
-    stop_words: List[int] = None
-    bad_words: List[int] = None
-
-    @staticmethod
-    def From(gen_config: GenerationConfig, tokenizer: Tokenizer):
-        """convert `GenerationConfig` to `EngineGenerationConfig`
-        Args:
-            gen_config (GenerationConfig): an instance of class `GenerationConfig`
-            tokenizer (Tokenizer): a tokenizer to encode the `stop_words` and `bad_words` in `gen_config`
-
-        Returns:
-            EngineGenerationConfig: the generation config used by inference engines
-
-        Examples:
-            >>> from lmdeploy import Tokenizer, GenerationConfig, EngineGenerationConfig
-            >>> tokenizer = Tokenizer('internlm/internlm-chat-7b')
-            >>> gen_config = GenerationConfig(stop_words=['<eoa>'])
-            >>> gen_config = EngineGenerationConfig.From(gen_config, tokenizer)
-        """  # noqa E501
+    def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
+        """convert stop_words/bad_sords to ids and append the ids to
+        stop_token_ids/bad_token_ids."""
 
         def special_word_token_ids(words):
             if words is not None:
@@ -93,21 +88,12 @@ class EngineGenerationConfig(GenerationConfig):
                 return indexes
             return None
 
-        return EngineGenerationConfig(
-            n=gen_config.n,
-            logprobs=gen_config.logprobs,
-            max_new_tokens=gen_config.max_new_tokens,
-            min_new_tokens=gen_config.min_new_tokens,
-            top_p=gen_config.top_p,
-            top_k=gen_config.top_k,
-            temperature=gen_config.temperature,
-            repetition_penalty=gen_config.repetition_penalty,
-            ignore_eos=gen_config.ignore_eos,
-            random_seed=gen_config.random_seed,
-            skip_special_tokens=gen_config.skip_special_tokens,
-            stop_words=special_word_token_ids(gen_config.stop_words),
-            bad_words=special_word_token_ids(gen_config.bad_words),
-            logits_processors=gen_config.logits_processors)
+        stop_token_ids = special_word_token_ids(self.stop_words) or []
+        bad_token_ids = special_word_token_ids(self.bad_words) or []
+        stop_token_ids.extend(self.stop_token_ids or [])
+        bad_token_ids.extend(self.bad_token_ids or [])
+        self.stop_token_ids = list(set(stop_token_ids)) or None
+        self.bad_token_ids = list(set(bad_token_ids)) or None
 
     def __post_init__(self):
         """Check input validation."""
@@ -123,18 +109,21 @@ class TurbomindEngineConfig:
     """TurboMind Engine config.
 
     Args:
-        model_format (str): the layout of the deployed model. It can be one of the following values [hf, meta_llama, awq],
-            `hf` meaning huggingface model(.bin, .safetensors), `meta_llama` being meta llama's format(.pth), awq` meaning the quantized model by AWQ.
+        model_format (str): the layout of the deployed model. It can be one of the following values [hf, meta_llama, awq, gptq],
+            `hf` meaning huggingface model(.bin, .safetensors), `meta_llama` being meta llama's format(.pth),
+            `awq` and `gptq` meaning the quantized model by AWQ and GPTQ, respectively.
+            If it is not specified, i.e. None, it will be extracted from the input model
         tp (int): the number of GPU cards used in tensor parallelism, default to 1
         session_len (int): the max session length of a sequence, default to None
         max_batch_size (int): the max batch size during inference, default to 128
         cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
             For versions of lmdeploy between `v0.2.0` and `v0.2.1`, it defaults to 0.5, depicting the percentage of TOTAL GPU memory to be allocated to the k/v cache.
             For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8, signifying the percentage of FREE GPU memory to be reserved for the k/v cache
+        cache_chunk_size (int): The policy to apply for KV block from the block manager, default to -1.
         cache_block_seq_len (int): the length of the token sequence in a k/v block, default to 64
         enable_prefix_caching (bool): enable cache prompts for block reuse, default to False
         quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
-        rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
+        rope_scaling_factor (float): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
         use_logn_attn (bool): whether or not to use log attn: default to False
         download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
         revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
@@ -148,6 +137,7 @@ class TurbomindEngineConfig:
     session_len: Optional[int] = None
     max_batch_size: int = 128
     cache_max_entry_count: float = 0.8
+    cache_chunk_size: int = -1
     cache_block_seq_len: int = 64
     enable_prefix_caching: bool = False
     quant_policy: int = 0

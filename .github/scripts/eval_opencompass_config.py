@@ -150,12 +150,10 @@ MAX_SESSION_LEN = 2048
 MAX_NEW_TOKENS = 1024
 
 tb_engine_config_template_max_bs_128 = dict(session_len=MAX_SESSION_LEN,
-                                            max_batch_size=128,
-                                            rope_scaling_factor=1.0)
+                                            max_batch_size=128)
 tb_engine_config_template_max_bs_128_tp2 = dict(session_len=MAX_SESSION_LEN,
                                                 max_batch_size=128,
-                                                tp=2,
-                                                rope_scaling_factor=1.0)
+                                                tp=2)
 
 pt_engine_config_template_max_bs_16 = dict(session_len=MAX_SESSION_LEN,
                                            max_batch_size=16)
@@ -192,12 +190,10 @@ pt_engine_config_template_max_bs_8_prefill_tp2 = dict(
     tp=2)
 tb_awq_engine_config_template_max_bs_8 = dict(session_len=MAX_SESSION_LEN,
                                               max_batch_size=8,
-                                              model_format='awq',
-                                              rope_scaling_factor=1.0)
+                                              model_format='awq')
 tb_awq_engine_config_template_max_bs_32 = dict(session_len=MAX_SESSION_LEN,
                                                max_batch_size=32,
-                                               model_format='awq',
-                                               rope_scaling_factor=1.0)
+                                               model_format='awq')
 
 gen_config_template = dict(top_k=1,
                            top_p=0.8,
@@ -313,6 +309,38 @@ pt_internlm2_5_7b_chat = dict(
     concurrency=64,
     meta_template=internlm2_meta_template,
     run_cfg=run_cfg_tp1_template,
+    end_str='<|im_end|>')
+
+# ===== Configs for internlm/internlm2_5_20b_chat =====
+tb_internlm2_5_20b_chat = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_internlm2_5_20b_chat',
+    path='internlm/internlm2_5-20b-chat',
+    engine_config=engine_config_template_max_bs_128_tp2,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=2),
+    stop_words=['</s>', '<|im_end|>'],
+)
+
+tb_internlm2_5_20b_chat_4bits = deepcopy(tb_internlm2_5_20b_chat)
+tb_internlm2_5_20b_chat_kvint4 = deepcopy(tb_internlm2_5_20b_chat)
+tb_internlm2_5_20b_chat_kvint8 = deepcopy(tb_internlm2_5_20b_chat)
+
+pt_internlm2_5_20b_chat = dict(
+    type=LmdeployPytorchModel,
+    abbr='pt_internlm2_5_20b_chat',
+    path='internlm/internlm2_5-20b-chat',
+    engine_config=pt_engine_config_template_max_bs_64_tp2,
+    gen_config=gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=64,
+    concurrency=64,
+    meta_template=internlm2_meta_template,
+    run_cfg=run_cfg_tp2_template,
     end_str='<|im_end|>')
 
 # ===== Configs for internlm/internlm2_chat_20b =====
@@ -472,6 +500,38 @@ pt_llama_3_8b_instruct = dict(
 tb_llama_3_8b_instruct_4bits = deepcopy(tb_llama_3_8b_instruct)
 tb_llama_3_8b_instruct_kvint4 = deepcopy(tb_llama_3_8b_instruct)
 tb_llama_3_8b_instruct_kvint8 = deepcopy(tb_llama_3_8b_instruct)
+
+# ===== Configs for meta-llama/Meta-Llama-3.1-8B-Instruct =====
+tb_llama_3d1_8b_instruct = dict(
+    type=TurboMindModelwithChatTemplate,
+    abbr='tb_llama_3d1_8b_instruct',
+    path='meta-llama/Meta-Llama-3-1-8B-Instruct',
+    engine_config=engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_seq_len=MAX_SESSION_LEN,
+    max_out_len=MAX_NEW_TOKENS,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+    stop_words=['<|eot_id|>', '<|end_of_text|>'],
+)
+
+pt_llama_3d1_8b_instruct = dict(
+    type=LmdeployPytorchModel,
+    abbr='pt_llama_3d1_8b_instruct',
+    path='meta-llama/Meta-Llama-3-1-8B-Instruct',
+    engine_config=pt_engine_config_template_max_bs_128,
+    gen_config=gen_config_template,
+    max_out_len=MAX_NEW_TOKENS,
+    max_seq_len=MAX_SESSION_LEN,
+    batch_size=128,
+    concurrency=128,
+    meta_template=llama3_meta_template,
+    run_cfg=run_cfg_tp1_template,
+    end_str='[INST]')
+
+tb_llama_3d1_8b_instruct_4bits = deepcopy(tb_llama_3d1_8b_instruct)
+tb_llama_3d1_8b_instruct_kvint4 = deepcopy(tb_llama_3d1_8b_instruct)
+tb_llama_3d1_8b_instruct_kvint8 = deepcopy(tb_llama_3d1_8b_instruct)
 
 # ===== Configs for Qwen/Qwen2-7B-Instruct =====
 tb_qwen2_7b_instruct = dict(
