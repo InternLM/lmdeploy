@@ -1,8 +1,8 @@
 import pytest
 import torch
 from transformers.generation.logits_process import (
-    RepetitionPenaltyLogitsProcessor, TemperatureLogitsWarper,
-    TopKLogitsWarper, TopPLogitsWarper)
+    MinPLogitsWarper, RepetitionPenaltyLogitsProcessor,
+    TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper)
 
 
 @pytest.mark.parametrize('inplace', [True, False])
@@ -112,4 +112,23 @@ def test_filter_topp_sorted(inplace):
     gt = torch.cat(gt)
 
     out = _filter_topp_sorted(scores, top_p, inplace=inplace)
+    torch.testing.assert_close(out, gt)
+
+
+@pytest.mark.parametrize('inplace', [True, False])
+def test_filter_minp_sorted(inplace):
+    from lmdeploy.pytorch.engine.logits_process import _filter_minp_sorted
+
+    batch_size = 4
+    num_tokens = 16
+    scores = torch.rand(batch_size, num_tokens).sort(1, descending=True)[0]
+    min_p = torch.rand(batch_size)
+
+    gt = []
+    for score, p in zip(scores, min_p):
+        warper = MinPLogitsWarper(p.item())
+        gt.append(warper(None, score[None].clone()))
+    gt = torch.cat(gt)
+
+    out = _filter_minp_sorted(scores, min_p, inplace=inplace)
     torch.testing.assert_close(out, gt)
