@@ -113,18 +113,8 @@ MODULE_MAP.update({
 
 # dbrx
 MODULE_MAP.update({
-    'modeling_dbrx.DbrxAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxAttention',
-    'modeling_dbrx.DbrxFlashAttention2':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxAttention',
-    'modeling_dbrx.DbrxSdpaAttention':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxAttention',
-    'modeling_dbrx.DbrxModel':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxModel',
-    'modeling_dbrx.DbrxExpertGLU':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxExpertGLU',
-    'modeling_dbrx.DbrxExperts':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.PatchedDbrxExperts',
+    'DbrxForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.DbrxForCausalLM',
 })
 
 # starcoder2
