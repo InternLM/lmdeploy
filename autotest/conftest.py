@@ -42,13 +42,3 @@ def pytest_addoption(parser):
 @pytest.fixture(scope='session')
 def run_id(request):
     return request.config.getoption('--run_id')
-
-
-@pytest.fixture(scope='session', autouse=True)
-def init_mp_converage():
-    try:
-        from pytest_cov.embed import cleanup_on_sigterm
-    except ImportError:
-        pass
-    else:
-        cleanup_on_sigterm()
