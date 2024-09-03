@@ -494,15 +494,6 @@ class DbrxForCausalLM(nn.Module):
         """load weights."""
         # modify from vllm
         config = self.config
-        attn_config = config.attn_config
-        hidden_size = config.d_model
-        num_heads = config.n_heads
-        num_key_value_heads = attn_config.kv_n_heads
-        head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
-        qkv_section = [
-            head_dim * num_heads, head_dim * num_key_value_heads,
-            head_dim * num_key_value_heads
-        ]
 
         ffn_config = config.ffn_config
         num_experts = ffn_config.moe_num_experts
@@ -547,8 +538,8 @@ class DbrxForCausalLM(nn.Module):
                                     expert_id=exp_id,
                                     shard_id='down')
             elif '.Wqkv' in name:
-                q, k, v = loaded_weight.split(qkv_section)
                 param = params_dict[name]
+                q, k, v = param.weight_spliter(loaded_weight)
                 load_weight(param, q, shard_id='q')
                 load_weight(param, k, shard_id='k')
                 load_weight(param, v, shard_id='v')

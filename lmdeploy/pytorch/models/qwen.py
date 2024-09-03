@@ -400,16 +400,6 @@ class QWenLMHeadModel(nn.Module):
             ('.gate_up_proj', '.w1', 1),
         ]
 
-        config = self.config
-        num_attention_heads = config.num_attention_heads
-        projection_size = config.kv_channels * num_attention_heads
-        num_kv_heads = num_attention_heads
-        head_size = (projection_size // num_attention_heads)
-        qkv_section = [
-            head_size * num_attention_heads, head_size * num_kv_heads,
-            head_size * num_kv_heads
-        ]
-
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_pos_emb.inv_freq' in name:
@@ -428,8 +418,8 @@ class QWenLMHeadModel(nn.Module):
                 break
             else:
                 if '.c_attn' in name:
-                    q, k, v = loaded_weight.split(qkv_section)
                     param = params_dict[name]
+                    q, k, v = param.weight_spliter(loaded_weight)
                     load_weight(param, q, shard_id='q')
                     load_weight(param, k, shard_id='k')
                     load_weight(param, v, shard_id='v')

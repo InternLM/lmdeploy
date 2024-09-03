@@ -320,6 +320,13 @@ class MergedAwqLinear(AwqLinear):
                  out_names: Optional[List[int]] = None):
         if replicate is None:
             replicate = tuple(False for _ in all_out_features)
+
+        self.split_section_s = all_out_features
+        elem_per_int = 32 // w_bit
+        self.split_section_wz = [
+            size // elem_per_int for size in all_out_features
+        ]
+
         all_out_features = self._update_all_out_features(
             all_out_features, w_bit, group_size, replicate)
         self.all_out_features = all_out_features
@@ -339,13 +346,17 @@ class MergedAwqLinear(AwqLinear):
                          colwise=True,
                          is_tp=is_tp)
         self.qweight.weight_loader = self.weight_loader
+        self.qweight.weight_spliter = self.weight_spliter_wz
         self.qweight._weight_type = 'qweight'
         self.scales.weight_loader = self.weight_loader
+        self.scales.weight_spliter = self.weight_spliter_s
         self.scales._weight_type = 'scales'
         self.qzeros.weight_loader = self.weight_loader
+        self.qzeros.weight_spliter = self.weight_spliter_wz
         self.qzeros._weight_type = 'qzeros'
         if self.bias is not None:
             self.bias.weight_loader = self.weight_loader
+            self.bias.weight_spliter = self.weight_spliter_s
             self.bias._weight_type = 'bias'
 
     def _get_io_features(self, in_features: int, out_features: int, w_bit: int,
@@ -400,6 +411,14 @@ class MergedAwqLinear(AwqLinear):
             weight = _chunk_align(loaded_weight, world_size, 1, align)[rank]
         param_w.copy_(weight)
 
+    def weight_spliter_wz(self, loaded_weight: torch.Tensor):
+        """weight spliter."""
+        return loaded_weight.split(self.split_section_wz, dim=1)
+
+    def weight_spliter_s(self, loaded_weight: torch.Tensor):
+        """weight spliter."""
+        return loaded_weight.split(self.split_section_s, dim=-1)
+
 
 class QKVAwqLinear(MergedAwqLinear, QKVMixin):
     """qkv awq linear."""
@@ -416,6 +435,14 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
                  bias: bool = False,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True):
+
+        self.qkv_split_section_s = self._get_qkv_out_features(
+            num_q_heads, num_kv_heads, head_size, head_size_v)
+        elem_per_int = 32 // w_bit
+        self.qkv_split_section_wz = [
+            size // elem_per_int for size in self.qkv_split_section_s
+        ]
+
         num_q_heads, num_kv_heads = self._update_num_heads(
             num_q_heads, num_kv_heads, replicate_kv)
         all_out_features = self._get_qkv_out_features(num_q_heads,
@@ -442,6 +469,14 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
                                  replicate: Optional[List[bool]]):
         """update all out features."""
         return all_out_features
+
+    def weight_spliter_wz(self, loaded_weight: torch.Tensor):
+        """weight spliter."""
+        return loaded_weight.split(self.qkv_split_section_wz, dim=1)
+
+    def weight_spliter_s(self, loaded_weight: torch.Tensor):
+        """weight spliter."""
+        return loaded_weight.split(self.qkv_split_section_s, dim=-1)
 
 
 class W8A8Linear(nn.Module):
@@ -596,6 +631,7 @@ class MergedW8A8Linear(W8A8Linear):
                  out_names: Optional[List[int]] = None):
         if replicate is None:
             replicate = tuple(False for _ in all_out_features)
+        self.split_section = all_out_features
         all_out_features = self._update_all_out_features(
             all_out_features, replicate)
         self.all_out_features = all_out_features
@@ -615,8 +651,11 @@ class MergedW8A8Linear(W8A8Linear):
                          is_tp=is_tp)
         self.weight.weight_loader = self.weight_loader
         self.scale.weight_loader = self.weight_loader
+        self.weight.weight_spliter = self.weight_spliter
+        self.scale.weight_spliter = self.weight_spliter
         if self.bias is not None:
             self.bias.weight_loader = self.weight_loader
+            self.bias.weight_spliter = self.weight_spliter
 
     def _get_io_features(self, in_features: int, out_features: int,
                          colwise: bool):
@@ -645,6 +684,10 @@ class MergedW8A8Linear(W8A8Linear):
             loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
         param_w.copy_(loaded_weight)
 
+    def weight_spliter(self, loaded_weight: torch.Tensor):
+        """weight spliter."""
+        return loaded_weight.split(self.split_section, dim=0)
+
 
 class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
     """qkv w8a8 linear."""
@@ -660,6 +703,8 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True):
+        self.qkv_split_section = self._get_qkv_out_features(
+            num_q_heads, num_kv_heads, head_size, head_size_v)
         num_q_heads, num_kv_heads = self._update_num_heads(
             num_q_heads, num_kv_heads, replicate_kv)
         all_out_features = self._get_qkv_out_features(num_q_heads,
@@ -684,6 +729,10 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                                  replicate: Optional[List[bool]]):
         """update all out features."""
         return all_out_features
+
+    def weight_spliter(self, loaded_weight: torch.Tensor):
+        """weight spliter."""
+        return loaded_weight.split(self.qkv_split_section, dim=0)
 
 
 class BaseLinear(nn.Module):
@@ -836,6 +885,7 @@ class MergedBaseLinear(BaseLinear):
                  out_names: Optional[List[int]] = None):
         if replicate is None:
             replicate = tuple(False for _ in all_out_features)
+        self.split_section = all_out_features
         all_out_features = self._update_all_out_features(
             all_out_features, replicate)
         self.all_out_features = all_out_features
@@ -854,8 +904,10 @@ class MergedBaseLinear(BaseLinear):
                          colwise=True,
                          is_tp=is_tp)
         self.weight.weight_loader = self.weight_loader
+        self.weight.weight_spliter = self.weight_spliter
         if self.bias is not None:
             self.bias.weight_loader = self.weight_loader
+            self.bias.weight_spliter = self.weight_spliter
 
     def _get_io_features(self, in_features: int, out_features: int,
                          colwise: bool):
@@ -884,6 +936,10 @@ class MergedBaseLinear(BaseLinear):
             loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
         param_w.copy_(loaded_weight)
 
+    def weight_spliter(self, loaded_weight: torch.Tensor):
+        """weight spliter."""
+        return loaded_weight.split(self.split_section, dim=0)
+
 
 class QKVBaseLinear(MergedBaseLinear, QKVMixin):
     """qkv base linear."""
@@ -899,6 +955,8 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True):
+        self.qkv_split_section = self._get_qkv_out_features(
+            num_q_heads, num_kv_heads, head_size, head_size_v)
         num_q_heads, num_kv_heads = self._update_num_heads(
             num_q_heads, num_kv_heads, replicate_kv)
         all_out_features = self._get_qkv_out_features(num_q_heads,
@@ -938,6 +996,10 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
                 loaded_weight = _chunk_align(loaded_weight, world_size, 0,
                                              self.head_size_v)[rank]
         param_w.copy_(loaded_weight)
+
+    def weight_spliter(self, loaded_weight: torch.Tensor):
+        """weight spliter."""
+        return loaded_weight.split(self.qkv_split_section, dim=0)
 
 
 def build_linear(in_features: int,

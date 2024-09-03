@@ -405,16 +405,6 @@ class Phi3ForCausalLM(nn.Module):
         """load weights."""
         # modify from vllm
 
-        config = self.config
-        num_heads = config.num_attention_heads
-        num_key_value_heads = config.num_key_value_heads
-        hidden_size = config.hidden_size
-        head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
-        qkv_section = [
-            head_dim * num_heads, head_dim * num_key_value_heads,
-            head_dim * num_key_value_heads
-        ]
-
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
@@ -427,14 +417,14 @@ class Phi3ForCausalLM(nn.Module):
             if 'vision_embed_tokens' in name:
                 continue
             if '.qkv_proj' in name:
-                q, k, v = loaded_weight.split(qkv_section)
                 param = params_dict[name]
+                q, k, v = param.weight_spliter(loaded_weight)
                 load_weight(param, q, shard_id='q')
                 load_weight(param, k, shard_id='k')
                 load_weight(param, v, shard_id='v')
             elif '.gate_up_proj' in name:
-                gate, up = loaded_weight.chunk(2)
                 param = params_dict[name]
+                gate, up = param.weight_spliter(loaded_weight)
                 load_weight(param, gate, shard_id=0)
                 load_weight(param, up, shard_id=1)
             else:

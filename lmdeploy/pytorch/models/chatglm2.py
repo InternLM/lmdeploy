@@ -468,19 +468,6 @@ class ChatGLMForConditionalGeneration(nn.Module):
         """load weights."""
         # modify from vllm
 
-        config = self.config
-        num_attention_heads = config.num_attention_heads
-        projection_size = config.kv_channels * num_attention_heads
-        num_kv_heads = num_attention_heads
-        head_size = (projection_size // num_attention_heads)
-        multi_query_attention = config.multi_query_attention
-        if multi_query_attention:
-            num_kv_heads = config.multi_query_group_num
-        qkv_section = [
-            head_size * num_attention_heads, head_size * num_kv_heads,
-            head_size * num_kv_heads
-        ]
-
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_pos_emb.inv_freq' in name:
@@ -492,14 +479,14 @@ class ChatGLMForConditionalGeneration(nn.Module):
                     and 'output_layer.weight' in name):
                 continue
             if '.query_key_value' in name:
-                q, k, v = loaded_weight.split(qkv_section)
                 param = params_dict[name]
+                q, k, v = param.weight_spliter(loaded_weight)
                 load_weight(param, q, shard_id='q')
                 load_weight(param, k, shard_id='k')
                 load_weight(param, v, shard_id='v')
             elif '.dense_h_to_4h' in name:
-                gate, up = loaded_weight.chunk(2)
                 param = params_dict[name]
+                gate, up = param.weight_spliter(loaded_weight)
                 load_weight(param, gate, shard_id=0)
                 load_weight(param, up, shard_id=1)
             else:
