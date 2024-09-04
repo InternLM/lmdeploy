@@ -722,8 +722,8 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
             context_decoder_output_buf_, sizeof(T) * max_forward_token_num_ * hidden_units, false);
     }
 
-    context_decoder_input_buf_ = (T*)allocator_->reMalloc(
-        context_decoder_input_buf_, sizeof(T) * max_forward_token_num_ * hidden_units * 2, false);
+    context_decoder_input_buf_ =
+        (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_forward_token_num_ * hidden_units, false);
     context_decoder_ids_buf_ =
         (int*)allocator_->reMalloc(context_decoder_ids_buf_, sizeof(int) * max_forward_token_num_, false);
 

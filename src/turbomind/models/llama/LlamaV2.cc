@@ -227,10 +227,8 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                                  stream_);
     }
     else {
-        const size_t local_hidden_units  = hidden_units_ / tensor_para_.world_size_;
-        T*           local_decoder_input = decoder_input + token_num * hidden_units_;  // workspace
-        invokeInputIdsEmbeddingLookupPosEncoding(local_decoder_input
-                                                     + tensor_para_.rank_ * token_num * local_hidden_units,
+        const size_t local_hidden_units = hidden_units_ / tensor_para_.world_size_;
+        invokeInputIdsEmbeddingLookupPosEncoding(decoder_output + tensor_para_.rank_ * token_num * local_hidden_units,
                                                  nullptr,  // processed somewhere else
                                                  weights_->pre_decoder_embedding_table,
                                                  static_cast<T*>(nullptr),
@@ -245,8 +243,8 @@ void LlamaV2<T>::forwardUnified(T*               out,
 
         {
             NcclGuard nccl_guard(tensor_para_, stream_);
-            ftNcclAllGather(local_decoder_input,                                   // send_buf
-                            local_decoder_input,                                   // recv_buf
+            ftNcclAllGather(decoder_output,                                        // send_buf
+                            decoder_output,                                        // recv_buf
                             token_num * hidden_units_ / tensor_para_.world_size_,  // data_size
                             tensor_para_.rank_,
                             tensor_para_,
@@ -255,13 +253,8 @@ void LlamaV2<T>::forwardUnified(T*               out,
             sync_check_cuda_error();
         }
 
-        invokeInPlaceTranspose102(decoder_input,
-                                  local_decoder_input,
-                                  tensor_para_.world_size_,
-                                  token_num,
-                                  local_hidden_units,
-                                  false,
-                                  stream_);
+        invokeInPlaceTranspose102(
+            decoder_input, decoder_output, tensor_para_.world_size_, token_num, local_hidden_units, false, stream_);
 
         sync_check_cuda_error();
     }
