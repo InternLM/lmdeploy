@@ -69,6 +69,7 @@ $ASCEND_BASE/driver/tools/hccn_tool/:\
 $TOOLKIT_PATH/opp/built-in/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64/:\
 $LD_LIBRARY_PATH
 
+# run files should be placed at the root dir of repo
 ARG CHIP=all
 ARG TOOLKIT_PKG=Ascend-cann-toolkit_*.run
 ARG KERNELS_PKG=Ascend-cann-kernels-*.run
