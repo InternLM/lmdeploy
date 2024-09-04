@@ -1,15 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import json
 import os.path as osp
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from configparser import ConfigParser
+from dataclasses import asdict
 from itertools import repeat
 from queue import LifoQueue, Queue
 from typing import Dict, Iterable, List, Union
 
 import numpy as np
 import torch
+import yaml
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
@@ -18,8 +20,7 @@ from lmdeploy.messages import (EngineOutput, GenerationConfig, ResponseType,
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model
 
-from .deploy.converter import SUPPORTED_FORMATS, get_tm_model
-from .deploy.target_model.base import TurbomindModelConfig
+from .deploy.config import TurbomindModelConfig
 from .supported_models import is_supported
 from .utils import ModelSource, get_model_source
 
@@ -164,33 +165,53 @@ class TurboMind:
                     tm_params[k] = []
                 tm_params[k].append(v)
 
+    def _postprocess_config(self, tm_config, engine_config):
+        """postprocess turbomind config by."""
+        import copy
+        self.config = copy.deepcopy(tm_config)
+        # Update the attribute values in `self.config` with the valid values
+        # from the corresponding attributes in `engine_config`, such as
+        # `session_len`, `quant_policy`, `rope_scaling_factor`, etc.
+        self.config.update_from_engine_config(engine_config)
+
+        # update some attributes of `engine_config` which depends on
+        # `session_len`
+        self.engine_config = engine_config
+        if engine_config.max_prefill_token_num is not None \
+                and engine_config.num_tokens_per_iter == 0:
+            self.engine_config.num_tokens_per_iter = \
+                engine_config.max_prefill_token_num
+            self.engine_config.max_prefill_iters = (
+                self.config.session_len + engine_config.max_prefill_token_num -
+                1) // engine_config.max_prefill_token_num
+
+        # pack `self.config` and `self.engine_config` into a dict
+        self.config_dict = self.config.to_dict()
+        self.config_dict.update(dict(engine_config=asdict(self.engine_config)))
+        logger.info(f'turbomind model config:\n\n'
+                    f'{json.dumps(self.config_dict, indent=2)}')
+
     def _from_hf(self, model_source: ModelSource, model_path: str,
                  engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
-        if engine_config is None:
-            logger.warning('input engine config is None, using the default')
-            engine_config = TurbomindEngineConfig()
-        assert engine_config.model_format in SUPPORTED_FORMATS, \
-            f'The model format should be in {SUPPORTED_FORMATS}'
-
         assert is_supported(model_path), (
             f'turbomind does not support {model_path}. '
             'Plz try pytorch engine instead.')
 
-        # convert transformers model into turbomind model format
+        # convert transformers model into turbomind model
+        from .deploy.converter import get_tm_model
         tm_model = get_tm_model(model_path, self.model_name,
                                 self.chat_template_name, engine_config)
 
-        self.config = tm_model.cfg
-        logger.info(f'model_config:\n\n{self.config.toini()}')
+        self._postprocess_config(tm_model.tm_config, engine_config)
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir='',
-            config=self.config.toini(),
+            config=yaml.safe_dump(self.config_dict),
             tensor_para_size=self.gpu_count,
-            data_type=self.config.weight_type)
+            data_type=self.config.model_config.weight_type)
 
         # create empty weight
         self._create_weight(model_comm)
@@ -212,42 +233,27 @@ class TurboMind:
     def _from_workspace(self, model_path: str,
                         engine_config: TurbomindEngineConfig):
         """Load model which is converted by `lmdeploy convert`"""
-        ini_path = osp.join(model_path, 'triton_models', 'weights',
-                            'config.ini')
-        # load cfg
-        with open(ini_path, 'r') as f:
-            parser = ConfigParser()
-            parser.read_file(f)
-        section_name = 'llama'
-        _cfg = parser._sections[section_name]
+        config_path = osp.join(model_path, 'triton_models', 'weights',
+                               'config.yaml')
+        # load TurbomindModelConfig from config file
+        with open(config_path, 'r') as f:
+            _cfg = yaml.safe_load(f)
         cfg = TurbomindModelConfig.from_dict(_cfg)
 
         # check whether input tp is valid
+        self.gpu_count = engine_config.tp
         if cfg.tensor_para_size != 1 and \
                 self.gpu_count != cfg.tensor_para_size:
-            logger.info(f'found tp={cfg.tensor_para_size} in config.ini.')
+            logger.info(f'found tp={cfg.tensor_para_size} in config.yaml.')
             self.gpu_count = cfg.tensor_para_size
+        engine_config.tp = self.gpu_count
 
-        if engine_config is not None:
-            engine_config.tp = cfg.tensor_para_size
-            if engine_config.rope_scaling_factor == 0:
-                # to avoid `rope_scaling_factor` from engine_config override
-                # the rope_scaling_factor in TurbomindModelConfig
-                engine_config.rope_scaling_factor = None
-            cfg.update_from_engine_config(engine_config)
-        if self.model_name:
-            cfg.model_name = self.model_name
-        if self.chat_template_name:
-            cfg.chat_template_name = self.chat_template_name
-        # update cfg
-        self.config = cfg
+        self._postprocess_config(cfg, engine_config)
 
-        # create model
-        logger.warning(f'model_config:\n\n{cfg.toini()}')
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir=weight_dir,
-            config=cfg.toini(),
+            config=yaml.safe_dump(self.config_dict),
             tensor_para_size=self.gpu_count,
             data_type=self.config.weight_type)
 

@@ -44,10 +44,10 @@ def test_registered_models():
         output_name, config, _ = get_output_model_registered_name_and_config(
             model, model_format=model_format, group_size=0)
         assert output_name == register_name
-        assert config.group_size == group_size
+        assert config.model_config.group_size == group_size
         assert config.weight_type == weight_type
         assert config.session_len > 0
-        assert config.model_arch is not None
+        assert config.model_config.model_arch is not None
 
 
 def test_update_from_engine_config():
@@ -61,26 +61,7 @@ def test_update_from_engine_config():
     config = copy.deepcopy(_config)
     config.update_from_engine_config(TurbomindEngineConfig())
     assert config.tensor_para_size == 1
-    assert config.session_len == 32776
-    assert config.max_batch_size == 128
-    assert config.cache_max_entry_count == 0.8
-    assert config.quant_policy == 0
-    assert config.max_prefill_iters == 5
-    assert config.num_tokens_per_iter == 8192
-
-    config = copy.deepcopy(_config)
-    config.update_from_engine_config(
-        TurbomindEngineConfig(max_prefill_token_num=2048,
-                              num_tokens_per_iter=0))
-    assert config.max_prefill_iters == 17
-    assert config.num_tokens_per_iter == 2048
-
-    config = copy.deepcopy(_config)
-    config.update_from_engine_config(
-        TurbomindEngineConfig(max_prefill_token_num=2048,
-                              num_tokens_per_iter=256))
-    assert config.max_prefill_iters == 1
-    assert config.num_tokens_per_iter == 256
+    assert config.session_len == 32768
 
     config = copy.deepcopy(_config)
     engine_config = TurbomindEngineConfig(model_format='hf',
@@ -98,11 +79,9 @@ def test_update_from_engine_config():
 
     assert (config.tensor_para_size == engine_config.tp)
     assert (config.session_len == engine_config.session_len)
-    assert (config.max_batch_size == engine_config.max_batch_size)
+    assert (config.attention_config.rope_scaling_factor ==
+            engine_config.rope_scaling_factor)
+    assert (config.attention_config.rope_scaling_factor ==
+            engine_config.rope_scaling_factor)
     assert (
-        config.cache_max_entry_count == engine_config.cache_max_entry_count)
-    assert (config.quant_policy == engine_config.quant_policy)
-    assert (config.rope_scaling_factor == engine_config.rope_scaling_factor)
-    assert (config.use_logn_attn == engine_config.use_logn_attn)
-    assert (config.max_prefill_iters == engine_config.max_prefill_iters)
-    assert (config.num_tokens_per_iter == engine_config.num_tokens_per_iter)
+        config.attention_config.use_logn_attn == engine_config.use_logn_attn)

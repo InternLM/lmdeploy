@@ -298,6 +298,11 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
+    - response_format (Dict | None): Only pytorch backend support formatting
+        response. Examples: `{"type": "json_schema", "json_schema": {"name":
+        "test","schema": {"properties": {"name": {"type": "string"}},
+        "required": ["name"], "type": "object"}}}`
+        or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
     - logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
     - tools (List): A list of tools the model may call. Currently, only
         internlm2 functions are supported as a tool. Use this to specify a
@@ -345,6 +350,13 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     gen_logprobs, logits_processors = None, None
     if request.logprobs and request.top_logprobs:
         gen_logprobs = request.top_logprobs
+    response_format = None
+    if request.response_format and request.response_format.type != 'text':
+        if VariableInterface.async_engine.backend != 'pytorch':
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                'only pytorch backend can use response_format now')
+        response_format = request.response_format.model_dump()
 
     if request.logit_bias is not None:
         try:
@@ -369,6 +381,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens,
+        response_format=response_format,
         logits_processors=logits_processors,
         random_seed=random_seed)
 
