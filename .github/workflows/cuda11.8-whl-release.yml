@@ -51,6 +51,7 @@ jobs:
           if-no-files-found: error
           path: builder/manywheel/${{ env.OUTPUT_FOLDER }}/*
           retention-days: 1
+          name: linux-${{ matrix.pyver }}
 
   windows-build:
     strategy:
@@ -94,6 +95,7 @@ jobs:
           if-no-files-found: error
           path: build/wheel/*
           retention-days: 1
+          name: windows-${{ matrix.pyver }}
 
   publish:
     runs-on: ubuntu-latest
@@ -106,6 +108,9 @@ jobs:
         uses: actions/checkout@v3
       - name: Download artifacts
         uses: actions/download-artifact@v4
+        with:
+          path: artifact
+          merge-multiple: true
       - name: Add cuda version to package name
         run: |
           ver=$(cat lmdeploy/version.py | grep '__version__ =' | cut -d\' -f2)
