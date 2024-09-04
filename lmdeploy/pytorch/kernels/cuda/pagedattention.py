@@ -111,9 +111,9 @@ def _fwd_grouped_split_kernel(
     BLOCK_DMODEL1: tl.constexpr,
 ):
     """first step kernel of split k attention."""
-    cur_batch = tl.program_id(0)
-    cur_kv_head = tl.program_id(1)
-    split_k_id = tl.program_id(2)
+    cur_batch = tl.program_id(2)
+    cur_kv_head = tl.program_id(0)
+    split_k_id = tl.program_id(1)
 
     if BLOCK_H < kv_group_num:
         HEAD_PER_CTA: tl.constexpr = BLOCK_H
@@ -184,9 +184,11 @@ def _fwd_grouped_split_kernel(
         kv_min_loc = tl.maximum(history_len - window_size, 0)
 
     loop_start = start_block_id * BLOCK_N
+    block_offset_ptrs += start_block_id
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        b_offset = tl.load(block_offset_ptrs + start_n // BLOCK_N)
+        b_offset = tl.load(block_offset_ptrs)
+        block_offset_ptrs += 1
 
         # -- compute qk ----
         k = tl.load(k_ptrs + b_offset * stride_kp)
@@ -439,9 +441,11 @@ def _fwd_kernel(
         start_block_id = tl.maximum(history_len - window_size, 0) // BLOCK_N
         kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
     kv_start_loc = start_block_id * BLOCK_N
+    block_offset_ptrs += start_block_id
     for start_n in range(kv_start_loc, kv_seqlen, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        b_offset = tl.load(block_offset_ptrs + start_n // BLOCK_N)
+        b_offset = tl.load(block_offset_ptrs)
+        block_offset_ptrs += 1
 
         # -- compute qk ----
         k = tl.load(k_ptrs + b_offset * stride_kp)
@@ -623,7 +627,11 @@ def paged_attention_fwd(
         p2_kv_group_num = triton.next_power_of_2(kv_group_num)
         BLOCK_H = max(16, min(BLOCK, p2_kv_group_num))
         grid_1 = triton.cdiv(head, min(BLOCK_H, kv_group_num))
-        grid = (batch, grid_1, SPLIT_K)
+        grid = (
+            grid_1,
+            SPLIT_K,
+            batch,
+        )
         _fwd_grouped_split_kernel[grid](q,
                                         k,
                                         v,
