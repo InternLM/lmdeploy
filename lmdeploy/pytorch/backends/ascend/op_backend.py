@@ -33,6 +33,9 @@ class AscendOpsBackend(DefaultOpsBackend):
         elif layer_type == LayerType.SoftmaxTopK:
             from .moe import AscendSoftmaxTopKBuilder
             return AscendSoftmaxTopKBuilder
+        elif layer_type == LayerType.FusedMoE:
+            from .moe import AscendFusedMoEBuilder
+            return AscendFusedMoEBuilder
         else:
             logger.debug(
                 f'Op {layer_type} fallback to default implementation.')
