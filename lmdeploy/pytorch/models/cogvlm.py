@@ -35,12 +35,16 @@ class VisionExpertAttention(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
+        is_cogvlm2 = hasattr(config, 'num_multi_query_heads')
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
-        num_key_value_heads = num_heads
+        num_key_value_heads = getattr(config, 'num_multi_query_heads',
+                                      num_heads)
         hidden_size = config.hidden_size
         head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
         self.hidden_size = hidden_size
+        self.num_kv_heads = num_key_value_heads
+        self.head_dim = head_dim
 
         # packed qkv
         self.vision_expert_query_key_value = build_qkv_proj(
@@ -48,7 +52,7 @@ class VisionExpertAttention(nn.Module):
             num_q_heads=num_heads,
             num_kv_heads=num_key_value_heads,
             head_size=head_dim,
-            bias=False,
+            bias=is_cogvlm2,
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
@@ -109,12 +113,14 @@ class VisionExpertAttention(nn.Module):
         """Rewrite of LlamaAttention.forward."""
         bsz, seqlen, _ = hidden_states.size()
         hidden_size = self.hidden_size // self.world_size
+        kv_size = self.num_kv_heads * self.head_dim // self.world_size
 
         # qkv proj
         if lang_ids is None and vision_ids is None:
             qkv_states = self.language_expert_query_key_value(hidden_states)
         else:
-            qkv_states = hidden_states.new_empty(bsz, seqlen, hidden_size * 3)
+            qkv_states = hidden_states.new_empty(bsz, seqlen,
+                                                 hidden_size + kv_size * 2)
             if lang_ids is not None:
                 qkv_states[:, lang_ids] = self.language_expert_query_key_value(
                     hidden_states[:, lang_ids])
