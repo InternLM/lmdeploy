@@ -30,6 +30,6 @@ class TritonRMSNormBuilder(RMSNormBuilder):
     """triton RMS norm implementation builder."""
 
     @staticmethod
-    def build(weight: torch.Tensor, eps: float = 1e-6, inplace: bool = False):
+    def build(weight: torch.Tensor, eps: float = 1e-6):
         """build."""
         return TritonRMSNormImpl(weight, eps)

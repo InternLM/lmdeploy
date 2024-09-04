@@ -14,6 +14,5 @@ class InternVLModelConfigBuilder(AutoModelConfigBuilder):
     def build(cls, hf_config, model_path: str = None):
         """build llava hf."""
         cfg = DefaultModelConfigBuilder.build(hf_config.llm_config)
-        # cfg.unused_modules = ['InternVisionModel']
         cfg.hf_config = hf_config
         return cfg

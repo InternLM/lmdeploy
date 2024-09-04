@@ -12,6 +12,87 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+LANGUAGE_TOKEN_TYPE = 0
+VISION_TOKEN_TYPE = 1
+
+
+def get_vision_expert_mask(token_type_ids: torch.LongTensor):
+    vision_token_mask = torch.zeros_like(token_type_ids, dtype=torch.bool)
+    vision_token_mask[:, :-1] = (token_type_ids[:, :-1]
+                                 == VISION_TOKEN_TYPE) & (token_type_ids[:, 1:]
+                                                          == VISION_TOKEN_TYPE)
+    language_token_mask = ~vision_token_mask
+    return vision_token_mask, language_token_mask
+
+
+def build_position_ids(x: torch.BoolTensor) -> torch.LongTensor:
+    tmp = x.clone()
+    # image boi eoi token as LANGUAGE_TOKEN_TYPE
+    is_boi_eoi = torch.zeros_like(x, dtype=torch.bool)
+    is_boi_eoi[:, 1:] |= (tmp[:, 1:] == VISION_TOKEN_TYPE) & (
+        tmp[:, :-1] == LANGUAGE_TOKEN_TYPE)
+    is_boi_eoi[:, 0] |= (tmp[:, 0] == VISION_TOKEN_TYPE)
+    is_boi_eoi[:, :-1] |= (tmp[:, :-1] == VISION_TOKEN_TYPE) & (
+        tmp[:, 1:] == LANGUAGE_TOKEN_TYPE)
+    is_boi_eoi[:, -1] |= (tmp[:, -1] == VISION_TOKEN_TYPE)
+    tmp[is_boi_eoi] = LANGUAGE_TOKEN_TYPE
+    # final position ids
+    y = torch.zeros_like(x, dtype=torch.long)
+    y[:, 1:] = (tmp[:, 1:] == LANGUAGE_TOKEN_TYPE) | (
+        (tmp[:, 1:] == VISION_TOKEN_TYPE) &
+        (tmp[:, :-1] == LANGUAGE_TOKEN_TYPE))
+    y = y.cumsum(dim=-1)
+    return y
+
+
+def _get_cogvlm_position_ids(context):
+    """get cogvlm position_ids."""
+    q_seqlens = context.q_seqlens
+    history_lengths = context.kv_seqlens - q_seqlens
+    vision_input_info = context.vision_inputs
+    position_id_offsets = (vision_input_info.history_image_token_lengths -
+                           vision_input_info.history_image_nums * 3)
+    lang_ids = None
+    vis_ids = None
+    if context.is_decoding:
+        position_ids = history_lengths - position_id_offsets
+    else:
+        if vision_input_info.input_embeddings is not None and len(
+                vision_input_info.input_embeddings) > 0:
+            starts = history_lengths - vision_input_info.history_lengths
+            ends = starts + q_seqlens
+            token_type_ids = vision_input_info.input_embedding_indexing.to(
+                torch.int)
+            history_position_lengths = (vision_input_info.history_lengths -
+                                        position_id_offsets)
+            position_ids_all = (history_position_lengths[:, None] +
+                                build_position_ids(token_type_ids))
+            position_ids = torch.cat([
+                pids[s:e]
+                for (pids, s, e) in zip(position_ids_all, starts, ends)
+            ])
+            vision_token_mask_all, _ = get_vision_expert_mask(token_type_ids)
+            vision_token_mask = torch.cat([
+                masks[s:e]
+                for (masks, s, e) in zip(vision_token_mask_all, starts, ends)
+            ])
+            mask_indexing = torch.arange(vision_token_mask.shape[-1],
+                                         device=vision_token_mask.device)
+            vis_ids = mask_indexing[vision_token_mask]
+            lang_ids = mask_indexing[~vision_token_mask]
+
+        else:
+            position_ids = context.attention_mask.long().cumsum(-1) - 1
+            position_ids += (history_lengths -
+                             position_id_offsets).unsqueeze(-1)
+            device = position_ids.device
+            position_ids_1d = [
+                ids[:l] for ids, l in zip(position_ids.cpu(), q_seqlens.cpu())
+            ]
+            position_ids = torch.cat(position_ids_1d).to(device)
+
+    return position_ids, lang_ids, vis_ids
+
 
 class SelfAttention(torch.nn.Module):
     """Parallel self-attention layer abstract class.
@@ -58,8 +139,7 @@ class SelfAttention(torch.nn.Module):
         # o_proj
         self.dense = build_rowwise_linear(self.projection_size,
                                           config.hidden_size,
-                                          bias=config.add_bias_linear
-                                          or config.add_qkv_bias,
+                                          bias=config.add_bias_linear,
                                           quant_config=quantization_config,
                                           dtype=dtype,
                                           device=device,
@@ -444,6 +524,8 @@ class ChatGLMForConditionalGeneration(nn.Module):
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
+        if context.vision_inputs is not None:
+            position_ids = _get_cogvlm_position_ids(context)[0][None]
 
         # process vision embeddings
         vision_embeddings = context.input_embeddings
@@ -470,6 +552,8 @@ class ChatGLMForConditionalGeneration(nn.Module):
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
+            if 'transformer.vision' in name:
+                continue
             if 'rotary_pos_emb.inv_freq' in name:
                 continue
             if ('rotary_pos_emb.cos_cached' in name

@@ -59,7 +59,7 @@ def find_all_target(model: torch.nn.Module, target_name: str):
 
 def get_max_ranks_per_block(block_numel: int, rank_stride: int):
     assert block_numel >= rank_stride, (
-        'LoRA Adapter raquires larger block_size.')
+        'LoRA Adapter requires larger block_size.')
     return block_numel // rank_stride
 
 

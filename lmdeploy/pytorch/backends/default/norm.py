@@ -33,7 +33,7 @@ class DefaultRMSNormBuilder(RMSNormBuilder):
     """RMS norm implementation builder."""
 
     @staticmethod
-    def build(hidden_size: int, eps: float = 1e-6, inplace: bool = False):
+    def build(hidden_size: int, eps: float = 1e-6):
         """build."""
         return DefaultRMSNormImpl(hidden_size, eps)
 
