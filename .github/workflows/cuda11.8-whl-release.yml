@@ -105,7 +105,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Download artifacts
-        uses: actions/download-artifact@4.1.7
+        uses: actions/download-artifact@v4
       - name: Add cuda version to package name
         run: |
           ver=$(cat lmdeploy/version.py | grep '__version__ =' | cut -d\' -f2)
