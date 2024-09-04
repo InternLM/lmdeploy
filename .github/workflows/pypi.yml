@@ -104,7 +104,7 @@ jobs:
       - windows-build
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@4.1.7
       - name: Display artifacts
         run: ls artifact/ -lh
       - name: Set up python3.8
