@@ -46,7 +46,7 @@ jobs:
           sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
           bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           if-no-files-found: error
           path: builder/manywheel/${{ env.OUTPUT_FOLDER }}/*
@@ -89,7 +89,7 @@ jobs:
           rm build -Force -Recurse
           python setup.py bdist_wheel -d build/wheel
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           if-no-files-found: error
           path: build/wheel/*
