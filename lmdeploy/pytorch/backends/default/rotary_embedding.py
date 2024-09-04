@@ -4,7 +4,8 @@ import math
 import torch
 from torch import nn
 
-from ..rotary_embedding import (EmbeddingType, LongRoPEScalingParameters,
+from ..rotary_embedding import (EmbeddingType, Llama3Parameters,
+                                LongRoPEScalingParameters,
                                 RotaryEmbeddingBuilder, RotaryEmbeddingImpl,
                                 YarnParameters)
 
@@ -320,10 +321,9 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
         max_position_embeddings: int = 2048,
         base: int = 10000,
         scaling_factor: float = 1.0,
-        low_freq_factor: float = 1.0,
-        high_freq_factor: float = 4.0,
         yarn_params: YarnParameters = None,
         longrope_params: LongRoPEScalingParameters = None,
+        llama3_params: Llama3Parameters = None,
         emb_type: EmbeddingType = EmbeddingType.Default,
     ):
         """build."""
@@ -334,7 +334,8 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
                 dim, base, scaling_factor, max_position_embeddings)
         elif emb_type == EmbeddingType.Llama3:
             return Llama3RotaryEmbeddingImpl(dim, base, scaling_factor,
-                                             low_freq_factor, high_freq_factor,
+                                             llama3_params.low_freq_factor,
+                                             llama3_params.high_freq_factor,
                                              max_position_embeddings)
         elif emb_type == EmbeddingType.Yarn:
             return YarnRotaryEmbeddingImpl(dim,

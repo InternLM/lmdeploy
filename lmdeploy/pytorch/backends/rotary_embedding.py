@@ -34,6 +34,13 @@ class LongRoPEScalingParameters:
     short_mscale: float = None
 
 
+@dataclass
+class Llama3Parameters:
+    """llama3 rope parameters."""
+    low_freq_factor: float = 1.0
+    high_freq_factor: float = 4.0
+
+
 class RotaryEmbeddingImpl(ABC):
     """rotary embedding implementation api."""
 
@@ -53,10 +60,9 @@ class RotaryEmbeddingBuilder(ABC):
         max_position_embeddings: int = 2048,
         base: int = 10000,
         scaling_factor: float = 1.0,
-        low_freq_factor: float = 1.0,
-        high_freq_factor: float = 4.0,
         yarn_params: YarnParameters = None,
         longrope_params: LongRoPEScalingParameters = None,
+        llama3_params: Llama3Parameters = None,
         emb_type: EmbeddingType = EmbeddingType.Default,
     ):
         """build."""

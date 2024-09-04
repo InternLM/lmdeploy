@@ -10,6 +10,7 @@ from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
                                  RMSNorm, SiluAndMul, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn.rotary_embedding import Llama3Parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 
@@ -252,20 +253,20 @@ class LlamaModel(nn.Module):
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
         scaling_factor = 1.0
-        low_freq_factor = 1.0
-        high_freq_factor = 4.0
+        llama3_params = None
         if rope_scaling is not None:
             scaling_factor = rope_scaling.get('scaling_factor', scaling_factor)
             if emb_type == EmbeddingType.Llama3:
                 low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
                 high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
+                llama3_params = Llama3Parameters(low_freq_factor,
+                                                 high_freq_factor)
         self.rotary_emb = build_rotary_embedding(
             rope_dim,
             rope_max_pos_emb,
             rope_base,
             scaling_factor,
-            low_freq_factor=low_freq_factor,
-            high_freq_factor=high_freq_factor,
+            llama3_params=llama3_params,
             emb_type=emb_type,
         )
 

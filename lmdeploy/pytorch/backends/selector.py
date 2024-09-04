@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from lmdeploy.pytorch.devices import get_device_manager
-from lmdeploy.utils import get_logger
 
 
 def get_backend():
@@ -17,6 +16,4 @@ def get_backend():
         from .ascend import AscendLayersBackend
         return AscendLayersBackend
     else:
-        logger = get_logger('lmdeploy')
-        logger.warning(f'Unsupported device type: {device_type}')
-        return None
+        raise RuntimeError(f'Unsupported device type: {device_type}')
