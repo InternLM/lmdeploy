@@ -64,7 +64,7 @@ from lmdeploy import pipeline
 from lmdeploy import PytorchEngineConfig
 if __name__ == "__main__":
     pipe = pipeline("internlm/internlm2_5-7b-chat",
-                     backend_config = PytorchEngineConfig(tp=1, device_type="ascend"))
+                    backend_config = PytorchEngineConfig(tp=1, device_type="ascend"))
     question = ["Shanghai is", "Please introduce China", "How are you?"]
     response = pipe(question)
     print(response)
@@ -79,7 +79,7 @@ from lmdeploy import pipeline, PytorchEngineConfig
 from lmdeploy.vl import load_image
 if __name__ == "__main__":
     pipe = pipeline('OpenGVLab/InternVL2-2B',
-                    backend_config=PytorchEngineConfig(tp=1, device_type='ascend'))
+                    backend_config=PytorchEngineConfig(tp=1, device_type='ascend'))
     image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
     response = pipe(('describe this image', image))
     print(response)
