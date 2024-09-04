@@ -105,7 +105,7 @@ lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2
 Add `--device ascend` in the serve command.
 
 ```bash
-lmdeploy chat /path_to_internlm2_5-7b-chat --backend pytorch --device ascend
+lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend
 ```
 
 Run the following commands to launch lmdeploy chatting after starting container:

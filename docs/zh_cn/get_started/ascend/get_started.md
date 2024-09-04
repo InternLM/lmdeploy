@@ -1,7 +1,7 @@
 # 华为昇腾(Atlas 800T A2）
 
 我们采用了LMDeploy中的PytorchEngine后端支持了华为昇腾设备，
-所以在华为昇腾使用 lmdeploy 的方法与在lmdeploy中使用PytorchEngine的使用方法几乎相同。
+所以在华为昇腾上使用lmdeploy的方法与在英伟达GPU上使用PytorchEngine后端的使用方法几乎相同。
 在阅读本教程之前，请先阅读原版的[快速开始](../get_started.md)。
 
 ## 安装
@@ -25,7 +25,6 @@ Host需要安装华为驱动程序和固件版本23.0.3，请参考
 
 #### 构建镜像的命令
 
-The following reference command for building the image is based on the lmdeploy source code root directory as the current directory, and the CANN-related installation packages are also placed under this directory.
 请在lmdeploy源代码根目录下执行以下镜像构建命令，CANN相关的安装包也放在此目录下。
 
 ```bash
@@ -37,9 +36,6 @@ DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:v0.1 \
 
 #### 镜像的使用
 
-You can refer to the [documentation](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc1/clusterscheduling/dockerruntimeug/dlruntime_ug_013.html)
-for usage. It is recommended to install Ascend Docker Runtime.
-Here is an example of starting container for Huawei Ascend device with Ascend Docker Runtime installed:
 关于镜像的使用方式，请参考这篇[文档](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc1/clusterscheduling/dockerruntimeug/dlruntime_ug_013.html)。
 并且在使用镜像前安装Ascend Docker Runtime。
 以下是在安装了 Ascend Docker Runtime 的情况下，启动用于华为昇腾设备的容器的示例：
@@ -70,7 +66,8 @@ if __name__ == "__main__":
     pipe = pipeline(“internlm/internlm2_5-7b-chat",
                             backend_config = PytorchEngineConfig(tp=1, device_type="ascend"))
     question = ["Shanghai is", "Please introduce China", "How are you?"]
-    response = pipe(question)    print(response)
+    response = pipe(question)
+    print(response)
 ```
 
 ### VLM 推理
@@ -111,7 +108,7 @@ lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2
 将`--device ascend`加入到服务启动命令中。
 
 ```bash
-lmdeploy chat /path_to_internlm2_5-7b-chat --backend pytorch --device ascend
+lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend
 ```
 
 也可以运行以下命令使启动容器后开启lmdeploy聊天
