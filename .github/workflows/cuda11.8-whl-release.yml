@@ -110,6 +110,7 @@ jobs:
         run: |
           ver=$(cat lmdeploy/version.py | grep '__version__ =' | cut -d\' -f2)
           cuver=$ver+cu118
+          ls -lh
           cd artifact
           for file in *; do
             mv "$file" "`echo $file | sed "s/$ver/$cuver/g"`";
