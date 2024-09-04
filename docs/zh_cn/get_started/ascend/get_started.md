@@ -78,11 +78,11 @@ if __name__ == "__main__":
 from lmdeploy import pipeline, PytorchEngineConfig
 from lmdeploy.vl import load_image
 if __name__ == "__main__":
-        pipe = pipeline('OpenGVLab/InternVL2-2B',
-                        backend_config=PytorchEngineConfig(tp=1, device_type='ascend'))
-        image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-        response = pipe(('describe this image', image))
-        print(response)
+    pipe = pipeline('OpenGVLab/InternVL2-2B',
+                    backend_config=PytorchEngineConfig(tp=1, device_type='ascend'))
+    image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+    response = pipe(('describe this image', image))
+    print(response)
 ```
 
 ## 在线服务
