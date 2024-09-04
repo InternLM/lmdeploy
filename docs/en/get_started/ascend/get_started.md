@@ -64,12 +64,13 @@ if __name__ == "__main__":
     pipe = pipeline(“internlm/internlm2_5-7b-chat",
                             backend_config = PytorchEngineConfig(tp=1, device_type="ascend"))
     question = ["Shanghai is", "Please introduce China", "How are you?"]
-    response = pipe(question)    print(response)
+    response = pipe(question)
+    print(response)
 ```
 
 ### VLM inference
 
-Set `device_type="ascend"`  in the `PytorchEngineConfig`:
+Set `device_type="ascend"` in the `PytorchEngineConfig`:
 
 ```python
 from lmdeploy import pipeline, PytorchEngineConfig
@@ -86,7 +87,7 @@ if __name__ == "__main__":
 
 ### Serve a LLM model
 
-Add `--device ascend`  in the serve command.
+Add `--device ascend` in the serve command.
 
 ```bash
 lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5-7b-chat
@@ -94,7 +95,7 @@ lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5
 
 ### Serve a VLM model
 
-Add `--device ascend`  in the serve command
+Add `--device ascend` in the serve command
 
 ```bash
 lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2-2B
