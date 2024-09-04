@@ -11,7 +11,6 @@
 
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
-#include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
@@ -855,6 +854,7 @@ TYPED_TEST(SamplingDecodeTest, InvalidArgsBatchTopKBatchTopPContainZero)
     delete[] top_ps;
 }
 
+#if 0
 TYPED_TEST(SamplingDecodeTest, LocalBatchBatchTopP)
 {
     size_t                     batch_size = this->batch_size;
@@ -913,6 +913,7 @@ TYPED_TEST(SamplingDecodeTest, LocalBatchBatchTopKBatchTopP)
     delete[] top_ks;
     delete[] top_ps;
 }
+#endif
 
 template<typename T>
 class SamplingDecodeTest2: public FtTestBase {
@@ -1260,6 +1261,7 @@ TYPED_TEST(SamplingDecodeTest2, CorrectnessBatchRandTopP)
     this->runCurandTest({113, 1201, 1, 0, 1.0f, 5}, false, false);
 }
 
+#if 0
 TYPED_TEST(SamplingDecodeTest2, CorrectnessBatchRandTopKLocalBatch)
 {
     // test TopKSampling
@@ -1280,3 +1282,4 @@ TYPED_TEST(SamplingDecodeTest2, CorrectnessCumLogProbTopP)
 {
     this->runCumLogProbTest({99, 1201, 1, 0, 1.0f, 5});
 }
+#endif

@@ -775,6 +775,7 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
     h_min_length_    = (int*)allocator_->reMalloc(h_min_length_, sizeof(int) * max_batch_size, true, true);
     h_runtime_top_k_ = (int*)allocator_->reMalloc(h_runtime_top_k_, sizeof(int) * max_batch_size, true, true);
     h_runtime_top_p_ = (float*)allocator_->reMalloc(h_runtime_top_p_, sizeof(float) * max_batch_size, true, true);
+    h_runtime_min_p_ = (float*)allocator_->reMalloc(h_runtime_min_p_, sizeof(float) * max_batch_size, true, true);
     h_temperature_   = (float*)allocator_->reMalloc(h_temperature_, sizeof(float) * max_batch_size, true, true);
     h_repetition_penalty_ =
         (float*)allocator_->reMalloc(h_repetition_penalty_, sizeof(float) * max_batch_size, true, true);
@@ -798,6 +799,7 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
         {"min_length", (std::byte*)h_min_length_, nullptr},
         {"runtime_top_k", (std::byte*)h_runtime_top_k_, nullptr},
         {"runtime_top_p", (std::byte*)h_runtime_top_p_, nullptr},
+        {"runtime_min_p", (std::byte*)h_runtime_min_p_, nullptr},
         {"temperature", (std::byte*)h_temperature_, nullptr},
         {"repetition_penalty", (std::byte*)h_repetition_penalty_, nullptr},
     };

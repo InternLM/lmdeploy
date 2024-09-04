@@ -3,7 +3,6 @@
 #pragma once
 
 // #include "src/turbomind/models/llama/LlamaCacheManager.h"
-#include "src/turbomind/layers/sampling_layers/BaseSamplingLayer.h"
 #include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/Request.h"
@@ -16,6 +15,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/instance_comm.h"
 #include <condition_variable>
+#include <curand_kernel.h>
 #include <mutex>
 #include <type_traits>
 
@@ -289,6 +289,7 @@ private:
     int*   h_min_length_{};
     int*   h_runtime_top_k_{};
     float* h_runtime_top_p_{};
+    float* h_runtime_min_p_{};
     float* h_temperature_{};
     float* h_repetition_penalty_{};
     int*   h_stop_words_{};  // [batch_size, 2, kMaxStopWordsLen]
