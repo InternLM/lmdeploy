@@ -121,14 +121,6 @@ void loadLinearWeights(T*             weights,
     // the weight could be split along split_dim
     std::vector<std::reference_wrapper<size_t>> dims = {dim0, dim1};
     if (dims[split_dim] % tensor_para_size == 0) {
-        // check converted file with tp
-        auto should_exist     = prefix + "." + std::to_string(tensor_para_size - 1) + ".weight";
-        auto should_not_exist = prefix + "." + std::to_string(tensor_para_size) + ".weight";
-        if (!std::filesystem::exists(should_exist) || std::filesystem::exists(should_not_exist)) {
-            TM_LOG_ERROR("please make sure the tp parameter is same when you convert the model.");
-            FT_CHECK(false);
-        }
-
         dims[split_dim] /= tensor_para_size;
         prefix += "." + std::to_string(rank);
     }

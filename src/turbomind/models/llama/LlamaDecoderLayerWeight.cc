@@ -284,14 +284,10 @@ template<typename T>
 void loadWeights(
     LlamaDenseWeight<T>& w, std::string prefix, int rank, FtCudaDataType model_file_type, size_t tensor_para_size)
 {
-    // check converted file with tp
-    auto check_exist = [&](size_t max_index) {
-        auto weight_file  = prefix + "." + std::to_string(max_index) + ".weight";
-        auto qweight_file = prefix + "." + std::to_string(max_index) + ".qweight";
-        return std::filesystem::exists(weight_file) || std::filesystem::exists(qweight_file);
-    };
-    if (!check_exist(tensor_para_size - 1) || check_exist(tensor_para_size)) {
-        TM_LOG_ERROR("please make sure the tp parameter is same when you convert the model.");
+    auto weight_file  = prefix + "." + std::to_string(tensor_para_size - 1) + ".weight";
+    auto qweight_file = prefix + "." + std::to_string(tensor_para_size - 1) + ".qweight";
+    if (!std::filesystem::exists(weight_file) && !std::filesystem::exists(qweight_file)) {
+        TM_LOG_ERROR("%s and %s does not exist", weight_file.c_str(), qweight_file.c_str());
         FT_CHECK(false);
     }
 
