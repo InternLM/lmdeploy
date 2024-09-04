@@ -200,6 +200,7 @@ def get_model(pretrained_model_name_or_path: str,
         download_kwargs['token'] = token
 
     model_path = snapshot_download(pretrained_model_name_or_path,
+                                   ignore_file_pattern=['*.pth'],
                                    **download_kwargs)
     return model_path
 
