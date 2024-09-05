@@ -9,7 +9,7 @@ from lmdeploy.archs import get_model_arch
 from lmdeploy.model import BaseModel
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import IMAGE_TOKEN
-from lmdeploy.vl.utils import encode_image_base64, load_image
+from lmdeploy.vl.utils import load_image
 
 logger = get_logger('lmdeploy')
 
@@ -43,15 +43,11 @@ class VLChatTemplateWrapper:
                 # 'image_url': means url or local path to image.
                 # 'image_data': means PIL.Image.Image object.
                 if isinstance(image, str):
-                    image_base64_data = encode_image_base64(image)
-                    if image_base64_data == '':
-                        logger.error(f'failed to load file {image}')
-                        continue
+                    image = load_image(image)
                     item = {
-                        'type': 'image_url',
-                        'image_url': {
-                            'url':
-                            f'data:image/jpeg;base64,{image_base64_data}'
+                        'type': 'image_data',
+                        'image_data': {
+                            'data': image
                         }
                     }
                 elif isinstance(image, PIL.Image.Image):
