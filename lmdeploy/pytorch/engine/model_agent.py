@@ -676,8 +676,6 @@ class TPModelAgent(AutoModelAgent):
         _check_context_alive(self.mp_context)
 
         rank = 0
-        # Please see [Note Exit By Sending Exit Flag]
-        atexit.register(_exit_by_sending_exit_flag, rank, self)
         try:
             dist.init_process_group('nccl',
                                     rank=rank,
@@ -690,6 +688,8 @@ class TPModelAgent(AutoModelAgent):
             if dist.is_initialized():
                 dist.destroy_process_group()
             raise e
+        # Please see Note [Exit By Sending Exit Flag]
+        atexit.register(_exit_by_sending_exit_flag, rank, self)
 
     @torch.inference_mode()
     def _build_model(
@@ -786,10 +786,26 @@ class TPModelAgent(AutoModelAgent):
         return output
 
 
-# [Note] Exit By Sending Exit Flag
-# the registration of this function in atexit should be called
-# after importing torch.multiprocessing
 def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):
+    """[Note] Exit By Sending Exit Flag: the registration to `atexit` of this
+    function should be called after importing torch.multiprocessing and the
+    initialization of distributed process group."""
+    if not hasattr(agent, 'stream'):
+        # agent is not initialized, just exits normally
+        if hasattr(agent, 'patched_model'):
+            del agent.patched_model
+        return
+
+    import sys
+    if agent.backend_config.device_type == 'ascend' \
+            and 'uvicorn.server' in sys.modules:
+        # Workaround for CLI serve mode with device_type ascend:
+        # using uvicorn server causes ascend low-level backend of subprocesses
+        # corrupted, and using _broadcast_inputs in this case leads to
+        # main process hanging, just exits normally
+        del agent.patched_model
+        return
+
     # send exit_flag to all subprocess relying on all subprocess are alive
     # and wait at _broadcast_inputs
     exit_flag = True
@@ -797,11 +813,6 @@ def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):
     agent.stream.synchronize()
 
     del agent.patched_model
-
-    # Tricky, extra sleep for subprocess releasing resources
-    import time
-    time.sleep(1)
-    return
 
 
 def build_model_agent(model_path: str,
