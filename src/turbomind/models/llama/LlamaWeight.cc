@@ -21,7 +21,6 @@
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include <cuda_runtime.h>
-#include <filesystem>
 
 namespace turbomind {
 
