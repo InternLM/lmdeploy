@@ -69,17 +69,13 @@ def _filter_topp_sorted_(scores: torch.Tensor,
 
 def _filter_minp_sorted(scores: torch.Tensor,
                         minp: torch.Tensor,
-                        filter_value: float = -float('inf'),
-                        inplace: bool = True):
+                        filter_value: float = -float('inf')):
     """filter minp on sorted scores."""
     softmax_scores = scores.softmax(-1)
     top_probs, _ = softmax_scores.max(dim=-1, keepdim=True)
     scaled_min_p = minp.unsqueeze(dim=1) * top_probs
     mask = softmax_scores < scaled_min_p
-    if inplace:
-        scores.masked_fill_(mask, filter_value)
-    else:
-        scores = scores.masked_fill(mask, filter_value)
+    scores.masked_fill_(mask, filter_value)
     return scores
 
 

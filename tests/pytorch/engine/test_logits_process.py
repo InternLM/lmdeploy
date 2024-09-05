@@ -106,8 +106,7 @@ def test_filter_topp_sorted():
     torch.testing.assert_close(out, gt)
 
 
-@pytest.mark.parametrize('inplace', [True, False])
-def test_filter_minp_sorted(inplace):
+def test_filter_minp_sorted():
     from lmdeploy.pytorch.engine.logits_process import _filter_minp_sorted
 
     batch_size = 4
@@ -121,5 +120,5 @@ def test_filter_minp_sorted(inplace):
         gt.append(warper(None, score[None].clone()))
     gt = torch.cat(gt)
 
-    out = _filter_minp_sorted(scores, min_p, inplace=inplace)
+    out = _filter_minp_sorted(scores, min_p)
     torch.testing.assert_close(out, gt)
