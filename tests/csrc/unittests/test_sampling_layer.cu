@@ -854,67 +854,6 @@ TYPED_TEST(SamplingDecodeTest, InvalidArgsBatchTopKBatchTopPContainZero)
     delete[] top_ps;
 }
 
-#if 0
-TYPED_TEST(SamplingDecodeTest, LocalBatchBatchTopP)
-{
-    size_t                     batch_size = this->batch_size;
-    float*                     top_ps     = new float[batch_size]{0.3f, 0.5f, 0.5f, 0.3f, 0.5f, 0.5f};
-    std::vector<std::set<int>> expected_output_ids{
-        {0},
-        {0},
-        {0, 1},
-        {0},
-        {0},
-        {0},  // step 0
-        {0},
-        {0},
-        {4, 5},
-        {4},
-        {0},
-        {0},  // step 1
-        {0},
-        {0},
-        {2, 3},
-        {2},
-        {0},
-        {0}  // step 2
-    };
-    this->runTest(expected_output_ids, nullptr, 0, top_ps, batch_size, nullptr, nullptr, true);
-    delete[] top_ps;
-}
-
-TYPED_TEST(SamplingDecodeTest, LocalBatchBatchTopKBatchTopP)
-{
-    size_t                     batch_size = this->batch_size;
-    int*                       top_ks     = new int[batch_size]{2, 2, 0, 2, 2, 0};
-    float*                     top_ps     = new float[batch_size]{0.0, 0.3, 0.5, 0.0, 0.3, 0.5};
-    std::vector<std::set<int>> expected_output_ids{
-        // batch
-        {0},
-        {0},
-        {0, 1},
-        {0, 1},
-        {0},
-        {0},  // step 0
-        {0},
-        {0},
-        {4, 5},
-        {4, 5},
-        {0},
-        {0},  // step 1
-        {0},
-        {0},
-        {2, 3},
-        {2, 3},
-        {0},
-        {0}  // step 2
-    };
-    this->runTest(expected_output_ids, top_ks, batch_size, top_ps, batch_size, nullptr, nullptr, true);
-    delete[] top_ks;
-    delete[] top_ps;
-}
-#endif
-
 template<typename T>
 class SamplingDecodeTest2: public FtTestBase {
 
@@ -1260,26 +1199,3 @@ TYPED_TEST(SamplingDecodeTest2, CorrectnessBatchRandTopP)
 {
     this->runCurandTest({113, 1201, 1, 0, 1.0f, 5}, false, false);
 }
-
-#if 0
-TYPED_TEST(SamplingDecodeTest2, CorrectnessBatchRandTopKLocalBatch)
-{
-    // test TopKSampling
-    this->runCurandTest({99, 1201, 1, 3, 1.0f, 5}, true, false);
-}
-
-TYPED_TEST(SamplingDecodeTest2, CorrectnessBatchRandTopPLocalBatch)
-{
-    this->runCurandTest({99, 1201, 1, 0, 1.0f, 5}, true, false);
-}
-
-TYPED_TEST(SamplingDecodeTest2, CorrectnessCumLogProbTopK)
-{
-    this->runCumLogProbTest({99, 1201, 1, 5, 1.0f, 5});
-}
-
-TYPED_TEST(SamplingDecodeTest2, CorrectnessCumLogProbTopP)
-{
-    this->runCumLogProbTest({99, 1201, 1, 0, 1.0f, 5});
-}
-#endif

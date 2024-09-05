@@ -54,7 +54,7 @@ void invokeCurandBatchInitialize(curandState_t*            states,
                                  cudaStream_t              stream);
 
 struct TopKSortFilterParams {
-    void*  workspace{};
+    void*  workspace;
     size_t workspace_size;
     void*  logits;
     void*  sorted_logits;

@@ -87,7 +87,7 @@ void SamplingLayer<T>::allocateBuffer(const size_t batch_size)
 
     {
         // topk buffer
-        TopKSortFilterParams params;
+        TopKSortFilterParams params{};
         params.batch_size = batch_size;
         params.max_top_k  = max_topk_;
         invokeTopKSortFilter<T>(params, stream_);
@@ -97,7 +97,7 @@ void SamplingLayer<T>::allocateBuffer(const size_t batch_size)
 
     {
         // topp buffer
-        TopPSortParams params;
+        TopPSortParams params{};
         params.batch_size        = batch_size;
         params.vocab_size        = args_.vocab_size;
         params.vocab_size_padded = args_.vocab_size_padded;
@@ -163,7 +163,7 @@ void SamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tenso
     // use topk sort if some request use topk filter
     if (max_topk_ > 0) {
         // TODO: top_k >= 64 is much slower than torch.topk()
-        TopKSortFilterParams params;
+        TopKSortFilterParams params{};
         params.workspace         = topk_ws_;
         params.workspace_size    = topk_ws_size_;
         params.logits            = logits_;
@@ -180,9 +180,9 @@ void SamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tenso
 
     // use topp sort if some request skip topk filter
     if (min_topk_ == 0) {
-        invokeSoftMax<T>(logits_, args_.vocab_size_padded, batch_size, kept_, stream_);
+        invokeSoftmax<T>(logits_, args_.vocab_size_padded, batch_size, kept_, stream_);
 
-        TopPSortParams params;
+        TopPSortParams params{};
         params.workspace         = topp_ws_;
         params.workspace_size    = topp_ws_size_;
         params.logits            = logits_;
@@ -199,7 +199,7 @@ void SamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tenso
 
     // apply topp minp filter
     if (max_minp_ != 0.f || min_topp_ != 1.f) {
-        TopPMinPFilterParams params;
+        TopPMinPFilterParams params{};
         params.sorted_logits     = logits_;
         params.sorted_indices    = indices_;
         params.kept              = kept_;
@@ -213,7 +213,7 @@ void SamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tenso
 
     // sample
     {
-        SamplingParams params;
+        SamplingParams params{};
         params.logits      = logits.getPtr<T>();
         params.stride      = args_.vocab_size_padded;
         params.indices     = indices_;

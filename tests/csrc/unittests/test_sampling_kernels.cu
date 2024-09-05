@@ -287,13 +287,13 @@ public:
     void runTest(int batch_size, int* top_ks, float* top_ps, int vocab_size)
     {
 
-        TopKSortFilterParams params1;
+        TopKSortFilterParams params1{};
         params1.batch_size = batch_size;
         int max_top_k      = *std::max_element(top_ks, top_ks + batch_size);
         params1.max_top_k  = std::min(1024, std::max(0, max_top_k));
         invokeTopKSortFilter<T>(params1, stream);
 
-        TopPSortParams params2;
+        TopPSortParams params2{};
         params2.batch_size        = batch_size;
         params2.vocab_size        = vocab_size;
         params2.vocab_size_padded = vocab_size;
@@ -339,7 +339,7 @@ public:
         params1.vocab_size_padded = vocab_size;
         invokeTopKSortFilter<T>(params1, stream);
 
-        invokeSoftMax<T>(d_logits, vocab_size, batch_size, d_kept, stream);
+        invokeSoftmax<T>(d_logits, vocab_size, batch_size, d_kept, stream);
         params2.workspace      = d_ws_topp;
         params2.logits         = d_logits;
         params2.sorted_logits  = d_sorted_logits;
@@ -460,7 +460,7 @@ public:
         cudaAutoCpy(d_top_ps, top_ps, batch_size, stream);
         cudaAutoCpy(d_min_ps, min_ps, batch_size, stream);
 
-        TopPMinPFilterParams params;
+        TopPMinPFilterParams params{};
         params.sorted_logits     = d_sorted_logits;
         params.sorted_indices    = d_sorted_indices;
         params.kept              = d_kept;
@@ -598,7 +598,7 @@ public:
         }
 
         // sample
-        SamplingParams params;
+        SamplingParams params{};
         params.logits           = d_sorted_logits;
         params.stride           = vocab_size;
         params.indices          = d_sorted_indices;

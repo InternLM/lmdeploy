@@ -123,7 +123,7 @@ static __global__ void softmax(T* logits, const int vocab_size_padded, const int
 }
 
 template<typename T>
-void invokeSoftMax(T* logits, const int vocab_size_padded, const int batch_size, const int* kept, cudaStream_t stream)
+void invokeSoftmax(T* logits, const int vocab_size_padded, const int batch_size, const int* kept, cudaStream_t stream)
 {
     dim3 grid(batch_size);
     dim3 block(min(vocab_size_padded, 1024));
@@ -131,7 +131,7 @@ void invokeSoftMax(T* logits, const int vocab_size_padded, const int batch_size,
 }
 
 template void
-invokeSoftMax(float* logits, const int vocab_size_padded, const int batch_size, const int* kept, cudaStream_t stream);
+invokeSoftmax(float* logits, const int vocab_size_padded, const int batch_size, const int* kept, cudaStream_t stream);
 
 template<typename T, int MAX_K, int THREADBLOCK_SIZE>
 __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const T*     logits,

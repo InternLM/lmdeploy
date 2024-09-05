@@ -33,9 +33,9 @@ struct SamplingParams {
     int*           end_ids;
     int*           output_ids;
     int*           sequence_length;
-    float*         sampled_logprobs{};
-    uint32_t*      sampled_indexes{};
-    uint32_t*      sampled_nums{};
+    float*         sampled_logprobs;
+    uint32_t*      sampled_indexes;
+    uint32_t*      sampled_nums;
 };
 
 template<typename T>

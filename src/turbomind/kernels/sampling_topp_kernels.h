@@ -29,7 +29,7 @@ void invokeTopPSortInitialize(const int    vocab_size_padded,
                               cudaStream_t stream);
 
 template<typename T>
-void invokeSoftMax(T* logits, const int vocab_size_padded, const int batch_size, const int* kept, cudaStream_t stream);
+void invokeSoftmax(T* logits, const int vocab_size_padded, const int batch_size, const int* kept, cudaStream_t stream);
 
 struct BlockPrefixCallbackOp {
     // Running prefix
@@ -47,8 +47,8 @@ struct BlockPrefixCallbackOp {
 };
 
 struct TopPSortParams {
-    void*  workspace{};
-    size_t workspace_size{};
+    void*  workspace;
+    size_t workspace_size;
     void*  logits;
     void*  sorted_logits;
     int*   sorted_indices;

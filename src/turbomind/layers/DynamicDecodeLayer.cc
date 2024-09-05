@@ -15,8 +15,6 @@
  */
 
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
-#include "src/turbomind/kernels/ban_bad_words.h"
-#include "src/turbomind/kernels/stop_criteria_kernels.h"
 #include "src/turbomind/layers/sampling_layers/LogitsProcessorLayer.h"
 #include "src/turbomind/layers/sampling_layers/SamplingLayer.h"
 #include "src/turbomind/layers/sampling_layers/StopCriteriaLayer.h"
