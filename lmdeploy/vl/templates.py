@@ -110,6 +110,8 @@ class VLChatTemplateWrapper:
 
     def append_image_token(self, prompt, num_images: int):
         """append image token to user prompt."""
+        if IMAGE_TOKEN in prompt:
+            return prompt
         return (IMAGE_TOKEN + '\n') * num_images + prompt
 
     def convert_messages(self, messages, sequence_start=True):
@@ -134,9 +136,8 @@ class VLChatTemplateWrapper:
                     num_images += 1
                 elif item['type'] == 'text':
                     prompt = item['text']
-            # if IMAGE_TOKEN in user prompt, use user custom prompt instead
-            # of adding IMAGE_TOKEN to user prompt
-            if IMAGE_TOKEN not in prompt and num_images > 0:
+            if num_images > 0:
+                # add IMAGE_TOKEN to user prompt
                 prompt = self.append_image_token(prompt, num_images)
             new_item = {'role': 'user', 'content': prompt}
             new_messages.append(new_item)
@@ -165,8 +166,17 @@ class InternVLChatTemplateWrapper(VLChatTemplateWrapper):
 
     def append_image_token(self, prompt, num_images: int):
         """append image tokens to user prompt."""
-        # not sure whether support multi images.
-        return f'<img>{IMAGE_TOKEN * num_images}</img>\n' + prompt
+        # lmdeploy uses <IMAGET_TOKEN> as image token
+        # internvl uses special tags
+        if IMAGE_TOKEN in prompt and f'<img>{IMAGE_TOKEN}' not in prompt:
+            prompt = prompt.replace(f'{IMAGE_TOKEN}',
+                                    f'<img>{IMAGE_TOKEN}</img>')
+            prompt = prompt.replace('</img><img>', '')
+            prompt = prompt.replace('<img><img>', '<img>')
+            prompt = prompt.replace('</img></img>', '</img>')
+        else:
+            prompt = f'<img>{IMAGE_TOKEN * num_images}</img>\n' + prompt
+        return prompt
 
 
 class DeepSeekVLChatTemplateWrapper(VLChatTemplateWrapper):
@@ -174,6 +184,8 @@ class DeepSeekVLChatTemplateWrapper(VLChatTemplateWrapper):
 
     def append_image_token(self, prompt, num_images: int):
         """append image tokens to user prompt."""
+        if IMAGE_TOKEN in prompt:
+            return prompt
         logger.error(
             f'for deepseek-vl model, the user should insert the {IMAGE_TOKEN} '
             'to user prompt manually, please read https://lmdeploy.readthedocs'
@@ -192,6 +204,8 @@ class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
 
     def append_image_token(self, prompt, num_images: int):
         """append image tokens to user prompt."""
+        if IMAGE_TOKEN in prompt:
+            return prompt
         res = ''
         for i in range(num_images):
             res += f'Picture {str(i)}:{IMAGE_TOKEN}\n'
@@ -260,6 +274,8 @@ class InternLMXComposer2TemplateWrapper(VLChatTemplateWrapper):
     """InternLM-XComposer2 chat template."""
 
     def append_image_token(self, prompt, num_images: int):
+        if IMAGE_TOKEN in prompt:
+            return prompt
         logger.warning(f'auto append {IMAGE_TOKEN} at the beginning, '
                        'the user can manually insert the token to prompt')
         return ' '.join([IMAGE_TOKEN] * num_images) + prompt
@@ -272,6 +288,8 @@ class MiniGeminiLlamaTempateWrapper(VLChatTemplateWrapper):
         """append image tokens to user prompt."""
         if num_images == 0:
             return prompt
+        if IMAGE_TOKEN in prompt:
+            return prompt
         res = f'{IMAGE_TOKEN}\n'
         assert num_images <= 1, 'MiniGeminiLlama accepts 1 input image'
         res = res + prompt
@@ -282,12 +300,15 @@ class MiniCPMVTempateWrapper(VLChatTemplateWrapper):
     """MiniCPM-Llama3-V-2_5 chat template."""
 
     def append_image_token(self, prompt, num_images: int):
-        return f'<image>{IMAGE_TOKEN}</image>\n' * num_images + prompt
+        if IMAGE_TOKEN in prompt:
+            return prompt
+        prompt = f'{IMAGE_TOKEN}\n' * num_images + prompt
+        return prompt
 
     def update_image_token(self, prompt, features):
         _features = []
         _prompt = []
-        segs = prompt.split(f'<image>{IMAGE_TOKEN}</image>\n')
+        segs = prompt.split(f'{IMAGE_TOKEN}\n')
         for i, seg in enumerate(segs):
             if i > 0 and i <= len(features):
                 _feat = features[i - 1]['embeddings'].split(1)
@@ -313,7 +334,7 @@ class MiniCPMV26TempateWrapper(MiniCPMVTempateWrapper):
     def update_image_token(self, prompt, features):
         _features = []
         _prompt = []
-        segs = prompt.split(f'<image>{IMAGE_TOKEN}</image>\n')
+        segs = prompt.split(f'{IMAGE_TOKEN}\n')
         idx = 0
         for i, seg in enumerate(segs):
             if i > 0 and i <= len(features):
