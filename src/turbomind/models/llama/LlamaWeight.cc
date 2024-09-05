@@ -128,7 +128,7 @@ template<typename T>
 TensorMap LlamaWeight<T>::getParams()
 {
     TensorMap output;
-    FT_CHECK(vocab_size_padded_ % tensor_para_size_ == 0);
+    FT_CHECK(hidden_units_ % tensor_para_size_ == 0);
 
     output.insert("tok_embeddings." + std::to_string(tensor_para_rank_) + ".weight",
                   Tensor{MEMORY_GPU,
