@@ -15,6 +15,14 @@ from .utils import div_up, get_distribute_size, get_world_rank
 
 logger = get_logger('lmdeploy')
 
+QKV_SPLIT_LAYOUTS = ['default', 'hgd']
+
+
+def _check_qkv_split_layout(layout: str):
+    if layout not in QKV_SPLIT_LAYOUTS:
+        raise RuntimeError(f'Expect qkv split layout in {QKV_SPLIT_LAYOUTS}, '
+                           f'but get: {layout}')
+
 
 def _chunk_align(weight: torch.Tensor, chunks: int, dim: int, align: int):
     """chunk aligned."""
@@ -469,13 +477,45 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
         """update all out features."""
         return all_out_features
 
-    def weight_spliter_wz(self, loaded_weight: torch.Tensor):
+    def weight_spliter_wz(self,
+                          loaded_weight: torch.Tensor,
+                          layout: str = 'default'):
         """weight spliter."""
-        return loaded_weight.split(self.qkv_split_section_wz, dim=1)
+        _check_qkv_split_layout(layout)
+        if layout == 'default':
+            return loaded_weight.split(self.qkv_split_section_wz, dim=1)
+        elif layout == 'hgd':
+            assert self.head_size == self.head_size_v
+            heads = [sec // self.head_size for sec in self.qkv_split_section_s]
+            kv_heads = heads[-1]
+            loaded_weight = loaded_weight.unflatten(
+                1, (kv_heads, -1, self.head_size // self.elem_per_int))
+            q = loaded_weight[:, :, :-2].flatten(1, 3)
+            k = loaded_weight[:, :, -2].flatten(1, 2)
+            v = loaded_weight[:, :, -1].flatten(1, 2)
+            return q, k, v
+        else:
+            raise RuntimeError(f'Unsupported layout: {layout}')
 
-    def weight_spliter_s(self, loaded_weight: torch.Tensor):
+    def weight_spliter_s(self,
+                         loaded_weight: torch.Tensor,
+                         layout: str = 'default'):
         """weight spliter."""
-        return loaded_weight.split(self.qkv_split_section_s, dim=-1)
+        _check_qkv_split_layout(layout)
+        if layout == 'default':
+            return loaded_weight.split(self.qkv_split_section_s, dim=-1)
+        elif layout == 'hgd':
+            assert self.head_size == self.head_size_v
+            heads = [sec // self.head_size for sec in self.qkv_split_section_s]
+            kv_heads = heads[-1]
+            loaded_weight = loaded_weight.unflatten(
+                1, (kv_heads, -1, self.head_size))
+            q = loaded_weight[:, :, :-2].flatten(1, 3)
+            k = loaded_weight[:, :, -2].flatten(1, 2)
+            v = loaded_weight[:, :, -1].flatten(1, 2)
+            return q, k, v
+        else:
+            raise RuntimeError(f'Unsupported layout: {layout}')
 
 
 class W8A8Linear(nn.Module):
@@ -728,9 +768,25 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
         """update all out features."""
         return all_out_features
 
-    def weight_spliter(self, loaded_weight: torch.Tensor):
+    def weight_spliter(self,
+                       loaded_weight: torch.Tensor,
+                       layout: str = 'default'):
         """weight spliter."""
-        return loaded_weight.split(self.qkv_split_section, dim=0)
+        _check_qkv_split_layout(layout)
+        if layout == 'default':
+            return loaded_weight.split(self.qkv_split_section, dim=0)
+        elif layout == 'hgd':
+            assert self.head_size == self.head_size_v
+            heads = [sec // self.head_size for sec in self.qkv_split_section]
+            kv_heads = heads[-1]
+            loaded_weight = loaded_weight.unflatten(
+                0, (kv_heads, -1, self.head_size))
+            q = loaded_weight[:, :-2].flatten(0, 2)
+            k = loaded_weight[:, -2].flatten(0, 1)
+            v = loaded_weight[:, -1].flatten(0, 1)
+            return q, k, v
+        else:
+            raise RuntimeError(f'Unsupported layout: {layout}')
 
 
 class BaseLinear(nn.Module):
@@ -995,9 +1051,25 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
                                              self.head_size_v)[rank]
         param_w.copy_(loaded_weight)
 
-    def weight_spliter(self, loaded_weight: torch.Tensor):
+    def weight_spliter(self,
+                       loaded_weight: torch.Tensor,
+                       layout: str = 'default'):
         """weight spliter."""
-        return loaded_weight.split(self.qkv_split_section, dim=0)
+        _check_qkv_split_layout(layout)
+        if layout == 'default':
+            return loaded_weight.split(self.qkv_split_section, dim=0)
+        elif layout == 'hgd':
+            assert self.head_size == self.head_size_v
+            heads = [sec // self.head_size for sec in self.qkv_split_section]
+            kv_heads = heads[-1]
+            loaded_weight = loaded_weight.unflatten(
+                0, (kv_heads, -1, self.head_size))
+            q = loaded_weight[:, :-2].flatten(0, 2)
+            k = loaded_weight[:, -2].flatten(0, 1)
+            v = loaded_weight[:, -1].flatten(0, 1)
+            return q, k, v
+        else:
+            raise RuntimeError(f'Unsupported layout: {layout}')
 
 
 def build_linear(in_features: int,

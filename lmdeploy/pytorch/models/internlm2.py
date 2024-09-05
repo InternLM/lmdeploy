@@ -399,13 +399,6 @@ class InternLM2ForCausalLM(nn.Module):
             ('.gate_up_proj', '.w3', 1),
         ]
 
-        config = self.config
-        num_heads = config.num_attention_heads
-        num_key_value_heads = config.num_key_value_heads
-        hidden_size = config.hidden_size
-        head_dim = hidden_size // num_heads
-        num_key_value_groups = num_heads // num_key_value_heads
-
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
@@ -422,12 +415,8 @@ class InternLM2ForCausalLM(nn.Module):
                 break
             else:
                 if '.wqkv' in name:
-                    loaded_weight = loaded_weight.unflatten(
-                        0, (-1, num_key_value_groups + 2, head_dim))
-                    q = loaded_weight[:, :num_key_value_groups].flatten(0, 2)
-                    k = loaded_weight[:, -2].flatten(0, 1)
-                    v = loaded_weight[:, -1].flatten(0, 1)
                     param = params_dict[name]
+                    q, k, v = param.weight_spliter(loaded_weight, layout='hgd')
                     load_weight(param, q, shard_id='q')
                     load_weight(param, k, shard_id='k')
                     load_weight(param, v, shard_id='v')
