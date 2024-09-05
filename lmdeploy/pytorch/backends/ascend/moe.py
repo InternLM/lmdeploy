@@ -56,7 +56,8 @@ class AscendFusedMoEImpl(FusedMoEImpl):
                 up_proj = torch.matmul(up_weight, current_hidden_state)
 
                 gate_cache, up_cache = up_proj.chunk(2, -1)
-                gate_cache = torch.nn.functional.silu(gate_cache, inplace=True) * up_cache
+                gate_cache = torch.nn.functional.silu(gate_cache,
+                                                      inplace=True) * up_cache
 
                 down_weight = down_weights[expert_id]
                 down_proj = torch.matmul(down_weight, gate_cache)
@@ -64,6 +65,7 @@ class AscendFusedMoEImpl(FusedMoEImpl):
                 moe_output[i] += weight * down_proj
 
         return moe_output
+
 
 class AscendFusedMoEBuilder(FusedMoEBuilder):
     """ascend fused moe builder."""

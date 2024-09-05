@@ -4,7 +4,7 @@ import torch
 from dlinfer.utils.type_annotation import Optional, Sequence, Tensor
 
 
-def flash_context_attention(
+def prefill_attention(
     query_states: Tensor,
     key_states: Tensor,
     value_states: Tensor,
@@ -90,7 +90,7 @@ def paged_attention_fwd(
     is_unpaged_prefill: Optional[bool] = None,
 ):
     if not is_decoding:
-        return flash_context_attention(
+        return prefill_attention(
             query_states,
             key_states,
             value_states,
