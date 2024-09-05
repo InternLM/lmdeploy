@@ -163,7 +163,7 @@ def evaluate(models: List[str],
             if is_smoke:
                 f.write('\nfor d in datasets:\n')
                 f.write("    if d['reader_cfg'] is not None:\n")
-                f.write("        d['reader_cfg']['test_range'] = '[0:5]'\n")
+                f.write("        d['reader_cfg']['test_range'] = '[0:50]'\n")
             if engine_type == 'hf':
                 f.write(f'\nmodels = [ *{target_model} ]\n')
             else:

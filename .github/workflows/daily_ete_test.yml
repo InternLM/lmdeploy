@@ -39,7 +39,7 @@ on:
         type: string
         default: "['tools','restful','pipeline','benchmark','evaluation']"
   schedule:
-    - cron:  '00 17 * * 0-4'
+    - cron:  '00 16 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -90,7 +90,7 @@ jobs:
     needs: linux-build
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 420
+    timeout-minutes: 450
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
