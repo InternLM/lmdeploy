@@ -107,7 +107,7 @@ def test_filter_topp_sorted():
 
 
 def test_filter_minp_sorted():
-    from lmdeploy.pytorch.engine.logits_process import _filter_minp_sorted
+    from lmdeploy.pytorch.engine.logits_process import _filter_minp_sorted_
 
     batch_size = 4
     num_tokens = 16
@@ -120,5 +120,5 @@ def test_filter_minp_sorted():
         gt.append(warper(None, score[None].clone()))
     gt = torch.cat(gt)
 
-    out = _filter_minp_sorted(scores, min_p)
+    out = _filter_minp_sorted_(scores, min_p)
     torch.testing.assert_close(out, gt)

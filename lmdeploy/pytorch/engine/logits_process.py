@@ -67,9 +67,9 @@ def _filter_topp_sorted_(scores: torch.Tensor,
     return scores
 
 
-def _filter_minp_sorted(scores: torch.Tensor,
-                        minp: torch.Tensor,
-                        filter_value: float = -float('inf')):
+def _filter_minp_sorted_(scores: torch.Tensor,
+                         minp: torch.Tensor,
+                         filter_value: float = -float('inf')):
     """filter minp on sorted scores."""
     softmax_scores = scores.softmax(-1)
     top_probs, _ = softmax_scores.max(dim=-1, keepdim=True)
@@ -360,7 +360,7 @@ class FusedLogitsProcessor(LogitsWarper):
 
             min_p = sampling_inputs.min_p
             if min_p is not None:
-                scores = _filter_minp_sorted(scores, min_p)
+                scores = _filter_minp_sorted_(scores, min_p)
 
             softmax_scores = scores.softmax(1)
 
