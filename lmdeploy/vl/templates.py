@@ -174,7 +174,7 @@ class InternVLChatTemplateWrapper(VLChatTemplateWrapper):
             prompt = prompt.replace('</img><img>', '')
             prompt = prompt.replace('<img><img>', '<img>')
             prompt = prompt.replace('</img></img>', '</img>')
-        else:
+        elif IMAGE_TOKEN not in prompt:
             prompt = f'<img>{IMAGE_TOKEN * num_images}</img>\n' + prompt
         return prompt
 
