@@ -21,28 +21,10 @@ def get_cuda_autotune_config():
             num_warps=8),
         triton.Config(
             {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 256,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
                 'BLOCK_SIZE_M': 128,
                 'BLOCK_SIZE_N': 128,
                 'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 64,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8,
+                'GROUP_SIZE_M': 1,
             },
             num_stages=4,
             num_warps=4),
@@ -50,38 +32,11 @@ def get_cuda_autotune_config():
             {
                 'BLOCK_SIZE_M': 64,
                 'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8,
+                'BLOCK_SIZE_K': 64,
+                'GROUP_SIZE_M': 1,
             },
             num_stages=4,
             num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 32,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 32,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8,
-            },
-            num_stages=5,
-            num_warps=2),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 32,
-                'BLOCK_SIZE_N': 64,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8,
-            },
-            num_stages=5,
-            num_warps=2),
     ]
 
 
@@ -234,6 +189,7 @@ def fused_moe_kernel_launcher(
     if num_tokens is None:
         num_tokens = A.size(0)
     M_NP2 = triton.next_power_of_2(num_tokens)
+    M_NP2 = max(32, M_NP2)
     E, N, K = B.shape
 
     def _grid_fn(META):
