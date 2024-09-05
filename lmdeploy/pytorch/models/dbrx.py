@@ -6,8 +6,8 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                 LayerNorm, build_rotary_embedding)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, LayerNorm,
+                                 RopeType, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -351,7 +351,7 @@ class DbrxModel(nn.Module):
                                 device=device)
 
         # build rotary embedding
-        emb_type = EmbeddingType.LinearScaling
+        emb_type = RopeType.LinearScaling
         rope_dim = config.d_model // config.n_heads
         rope_max_pos_emb = config.max_seq_len
         rope_base = config.attn_config.rope_theta

@@ -5,8 +5,8 @@ import torch
 from torch import nn
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                 RMSNorm, build_rotary_embedding)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
+                                 build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -243,7 +243,7 @@ class MixtralModel(nn.Module):
                             dtype=dtype,
                             device=device)
 
-        emb_type = EmbeddingType.LinearScaling
+        emb_type = RopeType.LinearScaling
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta

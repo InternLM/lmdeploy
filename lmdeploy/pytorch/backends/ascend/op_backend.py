@@ -4,10 +4,10 @@ from typing import Tuple
 import torch
 
 from ..base import OpType
-from ..default import DefaultLayersBackend
+from ..default import DefaultOpsBackend
 
 
-class AscendLayersBackend(DefaultLayersBackend):
+class AscendOpsBackend(DefaultOpsBackend):
 
     @staticmethod
     def get_name() -> str:

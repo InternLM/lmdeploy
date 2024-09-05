@@ -5,8 +5,7 @@ import torch
 from torch import nn
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                 LayerNorm)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, LayerNorm, RopeType
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import FusedMoE
 from lmdeploy.pytorch.nn.rotary_embedding import (LongRoPEScalingParameters,
@@ -298,7 +297,7 @@ class PhiMoEModel(nn.Module):
                               device=device)
 
         # build rotary embedding
-        emb_type = EmbeddingType.LinearScaling
+        emb_type = RopeType.LinearScaling
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
@@ -306,7 +305,7 @@ class PhiMoEModel(nn.Module):
         if rope_scaling is not None:
             scaling_type = rope_scaling['type']
             assert scaling_type in ['longrope', 'su']
-            emb_type = EmbeddingType.LongRoPEScaling
+            emb_type = RopeType.LongRoPEScaling
             ori_pos_emb = getattr(config, 'original_max_position_embeddings',
                                   rope_max_pos_emb)
             longrope_params = LongRoPEScalingParameters(

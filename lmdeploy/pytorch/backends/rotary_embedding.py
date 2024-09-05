@@ -5,7 +5,7 @@ from enum import Enum, auto
 from typing import List
 
 
-class EmbeddingType(Enum):
+class RopeType(Enum):
     """rotary embedding type."""
     Default = auto()
     LinearScaling = auto()
@@ -63,7 +63,7 @@ class RotaryEmbeddingBuilder(ABC):
         yarn_params: YarnParameters = None,
         longrope_params: LongRoPEScalingParameters = None,
         llama3_params: Llama3Parameters = None,
-        emb_type: EmbeddingType = EmbeddingType.Default,
+        emb_type: RopeType = RopeType.Default,
     ):
         """build."""
         raise NotImplementedError

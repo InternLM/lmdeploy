@@ -6,8 +6,8 @@ from torch import nn
 from transformers.models.llama import LlamaConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                 RMSNorm, SiluAndMul, build_rotary_embedding)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
+                                 SiluAndMul, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.nn.rotary_embedding import Llama3Parameters
@@ -244,7 +244,7 @@ class LlamaModel(nn.Module):
         llama3_params = None
         rope_scaling = config.rope_scaling
         if rope_scaling is None:
-            emb_type = EmbeddingType.LinearScaling
+            emb_type = RopeType.LinearScaling
         else:
             if 'scaling_factor' in rope_scaling:
                 scaling_factor = rope_scaling['scaling_factor']
@@ -253,11 +253,11 @@ class LlamaModel(nn.Module):
 
             rope_type = rope_scaling['rope_type']
             if rope_type == 'dynamic':
-                emb_type = EmbeddingType.DynamicNTKScaling
+                emb_type = RopeType.DynamicNTKScaling
             if rope_type == 'linear':
-                emb_type = EmbeddingType.LinearScaling
+                emb_type = RopeType.LinearScaling
             elif rope_type == 'llama3':
-                emb_type = EmbeddingType.Llama3
+                emb_type = RopeType.Llama3
                 low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
                 high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
                 llama3_params = Llama3Parameters(low_freq_factor,

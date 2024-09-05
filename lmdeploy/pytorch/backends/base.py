@@ -29,7 +29,7 @@ class OpType(Enum):
     FusedMoE = auto()
 
 
-class LayersBackend(ABC):
+class OpsBackend(ABC):
     """Layer backend abstract."""
 
     @staticmethod

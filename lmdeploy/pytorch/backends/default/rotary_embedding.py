@@ -4,10 +4,9 @@ import math
 import torch
 from torch import nn
 
-from ..rotary_embedding import (EmbeddingType, Llama3Parameters,
-                                LongRoPEScalingParameters,
-                                RotaryEmbeddingBuilder, RotaryEmbeddingImpl,
-                                YarnParameters)
+from ..rotary_embedding import (Llama3Parameters, LongRoPEScalingParameters,
+                                RopeType, RotaryEmbeddingBuilder,
+                                RotaryEmbeddingImpl, YarnParameters)
 
 
 def _rotary_embedding_fwd(position_ids: torch.Tensor,
@@ -324,26 +323,26 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
         yarn_params: YarnParameters = None,
         longrope_params: LongRoPEScalingParameters = None,
         llama3_params: Llama3Parameters = None,
-        emb_type: EmbeddingType = EmbeddingType.Default,
+        emb_type: RopeType = RopeType.Default,
     ):
         """build."""
-        if emb_type in (EmbeddingType.Default, EmbeddingType.LinearScaling):
+        if emb_type in (RopeType.Default, RopeType.LinearScaling):
             return RotaryEmbeddingImpl(dim, base, scaling_factor)
-        elif emb_type == EmbeddingType.DynamicNTKScaling:
+        elif emb_type == RopeType.DynamicNTKScaling:
             return LlamaDynamicNTKScalingRotaryEmbedding(
                 dim, base, scaling_factor, max_position_embeddings)
-        elif emb_type == EmbeddingType.Llama3:
+        elif emb_type == RopeType.Llama3:
             return Llama3RotaryEmbeddingImpl(dim, base, scaling_factor,
                                              llama3_params.low_freq_factor,
                                              llama3_params.high_freq_factor,
                                              max_position_embeddings)
-        elif emb_type == EmbeddingType.Yarn:
+        elif emb_type == RopeType.Yarn:
             return YarnRotaryEmbeddingImpl(dim,
                                            base,
                                            scaling_factor,
                                            max_position_embeddings,
                                            yarn_params=yarn_params)
-        elif emb_type == EmbeddingType.LongRoPEScaling:
+        elif emb_type == RopeType.LongRoPEScaling:
             return LongRoPEScalingRotaryEmbeddingImpl(
                 dim,
                 base,

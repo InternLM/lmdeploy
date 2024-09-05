@@ -7,8 +7,8 @@ import torch.distributed as dist
 from torch import nn
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                 RMSNorm, SiluAndMul, build_rotary_embedding)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
+                                 SiluAndMul, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
                                         build_merged_colwise_linear,
                                         build_rowwise_linear)
@@ -529,7 +529,7 @@ class DeepseekV2Model(nn.Module):
                             dtype=dtype,
                             device=device)
 
-        emb_type = EmbeddingType.LinearScaling
+        emb_type = RopeType.LinearScaling
         rope_dim = config.qk_rope_head_dim
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
@@ -539,9 +539,9 @@ class DeepseekV2Model(nn.Module):
             scaling_type = config.rope_scaling['type']
             scaling_factor = config.rope_scaling['factor']
             if scaling_type == 'dynamic':
-                emb_type = EmbeddingType.DynamicNTKScaling
+                emb_type = RopeType.DynamicNTKScaling
             elif scaling_type == 'yarn':
-                emb_type = EmbeddingType.Yarn
+                emb_type = RopeType.Yarn
                 rope_max_pos_emb = config.rope_scaling.get(
                     'original_max_position_embeddings', 4096)
                 kwargs = {

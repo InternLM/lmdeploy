@@ -7,8 +7,8 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                 GeluAndMul, RMSNorm, build_rotary_embedding)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, GeluAndMul,
+                                 RMSNorm, RopeType, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -279,14 +279,14 @@ class GemmaModel(nn.Module):
 
         # build rotary embedding
         rope_scaling = getattr(config, 'rope_scaling', None)
-        emb_type = EmbeddingType.LinearScaling
+        emb_type = RopeType.LinearScaling
         scaling_factor = 1.0
         if rope_scaling is not None:
             rope_type = rope_scaling['rope_type']
             if rope_type == 'linear':
-                emb_type = EmbeddingType.LinearScaling
+                emb_type = RopeType.LinearScaling
             if rope_type == 'dynamic':
-                emb_type = EmbeddingType.DynamicNTKScaling
+                emb_type = RopeType.DynamicNTKScaling
             else:
                 raise RuntimeError(f'Unsupported rope type: {rope_type}')
             scaling_factor = rope_scaling.get('scaling_factor', scaling_factor)

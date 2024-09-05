@@ -7,12 +7,12 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 from ..base import OpType
-from ..default import DefaultLayersBackend
+from ..default import DefaultOpsBackend
 
 logger = get_logger('lmdeploy')
 
 
-class CudaLayersBackend(DefaultLayersBackend):
+class CudaOpsBackend(DefaultOpsBackend):
     """cuda layer backend."""
 
     @staticmethod

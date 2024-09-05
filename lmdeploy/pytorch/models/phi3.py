@@ -6,8 +6,8 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, EmbeddingType,
-                                 RMSNorm, SiluAndMul)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
+                                 SiluAndMul)
 from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.nn.rotary_embedding import (LongRoPEScalingParameters,
@@ -242,7 +242,7 @@ class Phi3Model(nn.Module):
                             device=device)
 
         # build rotary embedding
-        emb_type = EmbeddingType.LinearScaling
+        emb_type = RopeType.LinearScaling
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
@@ -250,7 +250,7 @@ class Phi3Model(nn.Module):
         if rope_scaling is not None:
             scaling_type = rope_scaling['type']
             assert scaling_type in ['longrope', 'su']
-            emb_type = EmbeddingType.LongRoPEScaling
+            emb_type = RopeType.LongRoPEScaling
             ori_pos_emb = getattr(config, 'original_max_position_embeddings',
                                   rope_max_pos_emb)
             longrope_params = LongRoPEScalingParameters(

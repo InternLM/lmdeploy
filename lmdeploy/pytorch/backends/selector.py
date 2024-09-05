@@ -10,10 +10,10 @@ def get_backend():
     device_type = device_ctx.device_type
 
     if device_type == 'cuda':
-        from .cuda import CudaLayersBackend
-        return CudaLayersBackend
+        from .cuda import CudaOpsBackend
+        return CudaOpsBackend
     if device_type == 'ascend':
-        from .ascend import AscendLayersBackend
-        return AscendLayersBackend
+        from .ascend import AscendOpsBackend
+        return AscendOpsBackend
     else:
         raise RuntimeError(f'Unsupported device type: {device_type}')
