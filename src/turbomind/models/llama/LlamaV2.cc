@@ -225,6 +225,7 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                                  1,
                                                  hidden_units_,
                                                  stream_);
+        sync_check_cuda_error();
     }
     else {
         const size_t local_hidden_units = hidden_units_ / tensor_para_.world_size_;
@@ -240,6 +241,7 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                                  1,
                                                  local_hidden_units,
                                                  stream_);
+        sync_check_cuda_error();
 
         {
             NcclGuard nccl_guard(tensor_para_, stream_);
