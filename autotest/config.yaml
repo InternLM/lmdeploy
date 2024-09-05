@@ -240,3 +240,4 @@ benchmark_model:
     - Qwen/Qwen2-7B-Instruct
     - mistralai/Mistral-7B-Instruct-v0.3
     - mistralai/Mixtral-8x7B-Instruct-v0.1
+    - deepseek-ai/DeepSeek-V2-Lite-Chat
