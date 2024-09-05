@@ -111,7 +111,7 @@ class CLI(object):
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
         ArgumentHelper.adapters(pt_group)
-
+        ArgumentHelper.device(pt_group)
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
@@ -250,7 +250,7 @@ class CLI(object):
                 cache_max_entry_count=args.cache_max_entry_count,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
-            )
+                device_type=args.device)
             run_chat(args.model_path,
                      engine_config,
                      chat_template_config=chat_template_config)
@@ -259,6 +259,7 @@ class CLI(object):
             kwargs = convert_args(args)
             kwargs.pop('chat_template')
             kwargs.pop('backend')
+            kwargs.pop('device')
             kwargs['chat_template_config'] = chat_template_config
             run_chat(**kwargs)
 

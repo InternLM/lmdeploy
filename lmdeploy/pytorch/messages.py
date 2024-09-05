@@ -2,12 +2,12 @@
 import enum
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import GenerationConfig, LogitsProcessor
 from lmdeploy.utils import get_logger
 
 from .block import LogicalTokenBlocks
@@ -46,14 +46,16 @@ class SamplingParam:
     bad_words: List[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
+    response_format: Optional[str] = None
+    logits_processors: Optional[List[LogitsProcessor]] = None
 
     @classmethod
-    def from_gen_config(self, gen_config: EngineGenerationConfig):
+    def from_gen_config(self, gen_config: GenerationConfig):
         """from gen config."""
         min_new_tokens = gen_config.min_new_tokens or 0
 
-        stop_words = gen_config.stop_words or []
-        bad_words = gen_config.bad_words or []
+        stop_words = gen_config.stop_token_ids or []
+        bad_words = gen_config.bad_token_ids or []
         if gen_config.ignore_eos:
             bad_words += stop_words
             stop_words = []
@@ -63,6 +65,7 @@ class SamplingParam:
         temperature = gen_config.temperature
         repetition_penalty = gen_config.repetition_penalty
         max_new_tokens = gen_config.max_new_tokens
+        response_format = gen_config.response_format
 
         if top_p < 0 or top_p > 1.0:
             logger.warning('`top_p` has to be a float > 0 and < 1'
@@ -96,8 +99,10 @@ class SamplingParam:
                              random_seed=gen_config.random_seed,
                              stop_words=stop_words,
                              bad_words=bad_words,
+                             response_format=response_format,
                              max_new_tokens=max_new_tokens,
-                             min_new_tokens=min_new_tokens)
+                             min_new_tokens=min_new_tokens,
+                             logits_processors=gen_config.logits_processors)
 
 
 class MessageStatus(enum.Enum):

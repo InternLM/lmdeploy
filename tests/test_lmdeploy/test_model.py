@@ -469,7 +469,7 @@ def test_internvl2():
     }]
     expected = '<|im_start|>system\n你是由上海人工智能实验室联合商汤科技开发的'\
         '书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。'\
-        '<|im_end|>\n<|im_start|>user\nwho are you<|im_end|>\n<|im_start|>'\
+        '<|im_end|><|im_start|>user\nwho are you<|im_end|><|im_start|>'\
         'assistant\nI am an AI'
     res = model.messages2prompt(messages)
     assert res == expected
@@ -497,5 +497,39 @@ def test_codegeex4():
     tokenizer = AutoTokenizer.from_pretrained(model_path_and_name,
                                               trust_remote_code=True)
     ref = tokenizer.apply_chat_template(messages, tokenize=False)
+    res = model.messages2prompt(messages)
+    assert res.startswith(ref)
+
+
+@pytest.mark.parametrize('model_path_and_name', [
+    'microsoft/Phi-3-mini-128k-instruct',
+    'microsoft/Phi-3-vision-128k-instruct',
+    'microsoft/Phi-3.5-mini-instruct',
+    'microsoft/Phi-3.5-vision-instruct',
+    'microsoft/Phi-3.5-MoE-instruct',
+])
+def test_phi3(model_path_and_name):
+    deduced_name = best_match_model(model_path_and_name)
+    assert deduced_name == 'phi-3'
+    model = MODELS.get(deduced_name)()
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name,
+                                              trust_remote_code=True)
+    ref = tokenizer.apply_chat_template(messages,
+                                        tokenize=False,
+                                        add_generation_prompt=True)
     res = model.messages2prompt(messages)
     assert res.startswith(ref)

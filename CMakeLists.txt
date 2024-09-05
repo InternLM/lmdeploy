@@ -59,6 +59,15 @@ if (BUILD_TEST)
   set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/turbomind/cutlass_extensions/include)
 endif()
 
+FetchContent_Declare(
+  yaml-cpp
+  GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+  GIT_TAG 0.8.0
+)
+set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build static library of yaml-cpp")
+FetchContent_MakeAvailable(yaml-cpp)
+
+
 option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF)
 
 option(BUILD_FAST_MATH "Build in fast math mode" ON)
@@ -142,6 +151,9 @@ if (NOT CMAKE_CUDA_ARCHITECTURES)
   endif ()
   if (${CUDA_VERSION} VERSION_GREATER_EQUAL "11.8")
     list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real 90-real)
+  endif ()
+  if (MSVC)
+    list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90-real)
   endif ()
 endif ()
 
@@ -322,7 +334,6 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:DynamicDecodeLayer>
   $<TARGET_OBJECTS:Llama>
   $<TARGET_OBJECTS:LlamaTritonBackend>
-  $<TARGET_OBJECTS:gemm_s4_f16>
   $<TARGET_OBJECTS:TopKSamplingLayer>
   $<TARGET_OBJECTS:TopPSamplingLayer>
   $<TARGET_OBJECTS:TransformerTritonBackend>

@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 
+from lmdeploy.pytorch.check_env import try_import_deeplink
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX, IMAGE_TOKEN
@@ -18,6 +19,8 @@ class VLAsyncEngine(AsyncEngine):
     def __init__(self, model_path: str, **kwargs) -> None:
         vision_config = kwargs.pop('vision_config', None)
         backend_config = kwargs.get('backend_config', None)
+        if kwargs.get('backend', '') == 'pytorch':
+            try_import_deeplink(backend_config.device_type)
         self.vl_encoder = ImageEncoder(model_path,
                                        vision_config,
                                        backend_config=backend_config)
@@ -124,7 +127,6 @@ class VLAsyncEngine(AsyncEngine):
                                       List[VLPromptType], List[List[Dict]]],
                  **kwargs):
         """Inference a batch of prompts."""
-        prompts = self._convert_prompts(prompts)
         return super().__call__(prompts, **kwargs)
 
     def chat(self, prompts: VLPromptType, **kwargs):

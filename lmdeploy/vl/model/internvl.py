@@ -141,8 +141,10 @@ class InternVLVisionModel(VisonModel):
 
         outputs = []
         for image, param in zip(images, params):
-            res_key = param.get('detail', 'default')
-            max_num = image_res.get(res_key, self.config.max_dynamic_patch)
+            max_num = param.get('max_dynamic_patch')
+            if max_num is None or not isinstance(max_num, int):
+                res_key = param.get('detail', 'default')
+                max_num = image_res.get(res_key, self.config.max_dynamic_patch)
             out = dynamic_preprocess(
                 image,
                 min_num=self.config.min_dynamic_patch,

@@ -22,6 +22,24 @@ def _handle_exception(e: Exception,
     exit(1)
 
 
+def check_env_deeplink(device_type: str):
+    """check Deeplink environment."""
+    try_import_deeplink(device_type)
+
+
+def try_import_deeplink(device_type: str):
+    """import dlinfer if specific device_type is set."""
+    deeplink_device_type_list = [
+        'ascend',
+    ]
+    if device_type in deeplink_device_type_list:
+        logger = get_logger('lmdeploy')
+        try:
+            import dlinfer.framework.lmdeploy_ext  # noqa: F401
+        except Exception as e:
+            _handle_exception(e, 'PyTorch', logger)
+
+
 def check_env_torch():
     """check PyTorch environment."""
     logger = get_logger('lmdeploy')
@@ -78,6 +96,7 @@ def check_env(device_type: str):
     """check all environment."""
     logger = get_logger('lmdeploy')
     logger.info('Checking environment for PyTorch Engine.')
+    check_env_deeplink(device_type)
     check_env_torch()
     if device_type == 'cuda':
         check_env_triton()

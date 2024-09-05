@@ -17,6 +17,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_fp8_utils.h"
+#include <regex>
 
 namespace turbomind {
 
@@ -365,31 +366,10 @@ cudaError_t getSetDevice(int i_device, int* o_device)
     return cudaSuccess;
 }
 
-FtCudaDataType getModelFileType(std::string ini_file, std::string section_name)
+bool is_16xx_series(const char* name)
 {
-    FtCudaDataType model_file_type;
-    INIReader      reader = INIReader(ini_file);
-    if (reader.ParseError() < 0) {
-        TM_LOG_WARNING("Can't load %s. Use FP32 as default", ini_file.c_str());
-        model_file_type = FtCudaDataType::FP32;
-    }
-    else {
-        std::string weight_data_type_str = std::string(reader.Get(section_name, "weight_data_type"));
-        if (weight_data_type_str.find("fp32") != std::string::npos) {
-            model_file_type = FtCudaDataType::FP32;
-        }
-        else if (weight_data_type_str.find("fp16") != std::string::npos) {
-            model_file_type = FtCudaDataType::FP16;
-        }
-        else if (weight_data_type_str.find("bf16") != std::string::npos) {
-            model_file_type = FtCudaDataType::BF16;
-        }
-        else {
-            TM_LOG_WARNING("Invalid type %s. Use FP32 as default", weight_data_type_str.c_str());
-            model_file_type = FtCudaDataType::FP32;
-        }
-    }
-    return model_file_type;
+    const std::regex re(R"(GTX 16\d\d)");
+    return std::regex_search(name, re);
 }
 
 /* ************************** end of common utils ************************** */

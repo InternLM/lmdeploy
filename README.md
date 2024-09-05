@@ -8,7 +8,7 @@
 [![open issues](https://img.shields.io/github/issues-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
 
 [📘Documentation](https://lmdeploy.readthedocs.io/en/latest/) |
-[🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started.html) |
+[🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started/get_started.html) |
 [🤔Reporting Issues](https://github.com/InternLM/lmdeploy/issues/new/choose)
 
 English | [简体中文](README_zh-CN.md) | [日本語](README_ja.md)
@@ -28,7 +28,7 @@ ______________________________________________________________________
 
 - \[2024/08\] 🔥🔥 LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
 - \[2024/07\] 🎉🎉 Support Llama3.1 8B, 70B and its TOOLS CALLING
-- \[2024/07\] Support [InternVL2](https://huggingface.co/collections/OpenGVLab/internvl-20-667d3961ab5eb12c7ed1463e) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
+- \[2024/07\] Support [InternVL2](docs/en/multi_modal/internvl.md) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
 - \[2024/05\] Support 4-bits weight-only quantization and inference on VLMs, such as InternVL v1.5, LLaVa, InternLMXComposer2
@@ -136,6 +136,8 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Dbrx (132B)</li>
   <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
+  <li>Phi-3.5-mini (3.8B)</li>
+  <li>Phi-3.5-MoE (16x3.8B)</li>
 </ul>
 </td>
 <td>
@@ -151,7 +153,9 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
   <li>MiniCPM-Llama3-V-2_5</li>
+  <li>MiniCPM-V-2_6</li>
   <li>Phi-3-vision (4.2B)</li>
+  <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
 </ul>
 </td>
@@ -176,7 +180,7 @@ pip install lmdeploy
 ```
 
 The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
-For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](./docs/en/installation.md).
+For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](docs/en/get_started/installation.md).
 
 ## Offline Batch Inference
 
@@ -196,7 +200,7 @@ For more information about inference pipeline, please refer to [here](docs/en/ll
 
 # Tutorials
 
-Please review [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
+Please review [getting_started](docs/en/get_started/get_started.md) section for the basic usage of LMDeploy.
 
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 

@@ -16,11 +16,11 @@
 
 #pragma once
 
-#include "3rdparty/INIReader.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include "src/turbomind/utils/logger.h"
 
+#include <algorithm>
 #include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -384,8 +384,6 @@ struct getTypeFromCudaDataType<BFLOAT16_DATATYPE> {
 };
 #endif
 
-FtCudaDataType getModelFileType(std::string ini_file, std::string section_name);
-
 // clang-format off
 template<typename T> struct packed_type;
 template <>          struct packed_type<float>         { using type = float; }; // we don't need to pack float by default
@@ -482,6 +480,8 @@ void compareTwoTensor(
     delete[] h_pred;
     delete[] h_ref;
 }
+
+bool is_16xx_series(const char* name);
 
 /* ************************** end of common utils ************************** */
 }  // namespace turbomind

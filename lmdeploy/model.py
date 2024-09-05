@@ -348,7 +348,7 @@ class Llavav1(Vicuna):
         """
         path = model_path.lower()
         if 'llava' in path and 'v1' in path and 'v1.6-34b' not in path \
-            and 'mistral' not in path:
+                and 'mistral' not in path:
             return 'llava-v1'
         elif 'llava-1.5' in path:
             return 'llava-v1'
@@ -485,11 +485,13 @@ class InternLM2Chat7B(InternLMChat7B):
         box_map = dict(user=self.user,
                        assistant=self.assistant,
                        system=self.system,
-                       environment=self.environment)
+                       environment=self.environment,
+                       tool=self.environment)
         eox_map = dict(user=self.eoh,
                        assistant=self.eoa + self.separator,
                        system=self.eosys,
-                       environment=self.eoenv)
+                       environment=self.eoenv,
+                       tool=self.eoenv)
         name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
         ret = ''
         if self.meta_instruction is not None and sequence_start:
@@ -508,6 +510,12 @@ class InternLM2Chat7B(InternLMChat7B):
         for message in messages:
             role = message['role']
             content = message['content']
+            if role == 'assistant' and message.get('tool_calls',
+                                                   None) is not None:
+                for tool_call in message['tool_calls']:
+                    function = tool_call.get('function', {})
+                    function['arguments'] = function.pop('parameters', {})
+                    content += f'<|action_start|><|plugin|>\n{json.dumps(function)}<|action_end|>'
             if 'name' in message and message['name'] in name_map:
                 begin = box_map[role].strip(
                 ) + f" name={name_map[message['name']]}\n"
@@ -550,9 +558,15 @@ class InternVL2InternLM2(InternLM2Chat7B):
     def __init__(
             self,
             meta_instruction='你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。',
+            eosys='<|im_end|>',
+            eoh='<|im_end|>',
+            separator='',
             stop_words=['<|im_start|>', '<|im_end|>'],
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         separator=separator,
+                         eoh=eoh,
                          stop_words=stop_words,
                          **kwargs)
 
@@ -788,7 +802,7 @@ Reminder:
 - Required parameters MUST be specified
 - Only call one function at a time
 - Put the entire function call reply on one line"
-- Always add your sources when using search results to answer the user query\n\n""",  #  noqa
+- Always add your sources when using search results to answer the user query\n\n""",  # noqa
             knowledge='Cutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\n',
             meta_instruction='You are a helpful assistant.',
             ipython='<|start_header_id|>ipython<|end_header_id|>\n\n',
@@ -869,6 +883,7 @@ Reminder:
             return 'llama3_1'
 
 
+@MODELS.register_module(name='minicpmv-2d6')
 @MODELS.register_module(name='qwen')
 class Qwen7BChat(BaseChatTemplate):
     """Chat template for Qwen-7B-Chat."""
@@ -904,6 +919,8 @@ class Qwen7BChat(BaseChatTemplate):
         """
         if 'qwen' in model_path.lower():
             return 'qwen'
+        if 'minicpm-v-2_6' in model_path.lower():
+            return 'minicpmv-2d6'
 
 
 @MODELS.register_module(name='codellama')
@@ -1486,8 +1503,8 @@ class Phi3Instruct(BaseChatTemplate):
                  eoh='<|end|>\n',
                  assistant='<|assistant|>\n',
                  eoa='<|end|>\n',
-                 separator='\n',
-                 stop_words=['<|end|>', '<|endoftext|>'],
+                 separator='',
+                 stop_words=['<|end|>', '<|endoftext|>', '<|assistant|>'],
                  **kwargs):
         super().__init__(system=system,
                          meta_instruction=meta_instruction,

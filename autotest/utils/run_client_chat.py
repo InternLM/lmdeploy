@@ -4,6 +4,8 @@ from subprocess import PIPE, Popen
 from utils.get_run_config import get_command_with_extra, get_model_name
 from utils.rule_condition_assert import assert_result
 
+TEMPLATE = 'autotest/template.json'
+
 
 def command_line_test(config,
                       case,
@@ -17,19 +19,20 @@ def command_line_test(config,
 
     if type == 'api_client':
         cmd = 'lmdeploy serve api_client ' + extra
-    elif type == 'triton_client':
-        cmd = 'lmdeploy serve triton_client ' + extra
     else:
         cmd = get_command_with_extra('lmdeploy chat ' + dst_path +
                                      '/workspace_' + model_case,
                                      config,
                                      model_case,
                                      cuda_prefix=cuda_prefix)
-        if 'w4' in model_case or ('4bits' in model_case
-                                  or 'awq' in model_case.lower()):
-            cmd += ' --model-format awq'
+        if type == 'turbomind':
+            if ('w4' in model_case
+                    or ('4bits' in model_case or 'awq' in model_case.lower())):
+                cmd += ' --model-format awq'
+            elif 'gptq' in model_case.lower():
+                cmd += ' --model-format gptq'
         if case == 'base_testcase':
-            cmd += ' --cap completion'
+            cmd += ' --chat-template ' + TEMPLATE
     return command_test(config, [cmd],
                         model_case,
                         case,
@@ -46,24 +49,29 @@ def hf_command_line_test(config,
                          cuda_prefix: str = None,
                          extra: str = '',
                          use_local_model: bool = True):
-    if use_local_model is True:
+    if use_local_model:
         model_path = config.get('model_path') + '/' + model_case
     else:
         model_path = model_case
 
-    cmd = get_command_with_extra(' '.join(
-        ['lmdeploy chat', model_path, '--backend', type, extra]),
+    cmd = get_command_with_extra(' '.join([
+        'lmdeploy chat', model_path, '--backend', type, extra,
+        '--session-len 4096'
+    ]),
                                  config,
                                  model_case,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
-    if 'w4' in model_case or ('4bits' in model_case
-                              or 'awq' in model_case.lower()):
-        cmd += ' --model-format awq'
+    if type == 'turbomind':
+        if ('w4' in model_case
+                or ('4bits' in model_case or 'awq' in model_case.lower())):
+            cmd += ' --model-format awq'
+        elif 'gptq' in model_case.lower():
+            cmd += ' --model-format gptq'
 
     if case == 'base_testcase':
-        cmd += ' --cap completion'
+        cmd += ' --chat-template ' + TEMPLATE
     return command_test(config, [cmd], model_case,
                         '_'.join(['hf', type, case]), case_info, True)
 
@@ -96,9 +104,8 @@ def command_test(config,
         file.writelines('reproduce command chat: ' + ' '.join(cmd) + '\n')
 
         spliter = '\n\n'
-        if 'CodeLlama' in model and 'api_client' not in cmd:
-            if 'workspace' in ' '.join(cmd):
-                spliter = '\n!!\n'
+        if 'codellama' in model.lower() and 'serve' not in ' '.join(cmd):
+            spliter = '\n!!\n'
         # join prompt together
         prompt = ''
         for item in case_info:
@@ -142,7 +149,7 @@ def command_test(config,
                 file.writelines('result:' + str(case_result) + ',reason:' +
                                 reason + '\n')
                 index += 1
-                if case_result is False:
+                if not case_result:
                     msg = reason
                 result = result & case_result
             file.writelines('\n\n\n' + 'full log:' + outputs + '\n')

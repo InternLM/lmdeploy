@@ -31,11 +31,19 @@ void LlamaFfnLayer<T>::allocateBuffer(size_t                     token_num,
                                       const LlamaDenseWeight<T>* gating,
                                       const LlamaDenseWeight<T>* inter)
 {
-    size_t sz           = sizeof(T) * token_num * inter_size_;
-    size_t sz_gate      = (gating->lora.r > 0) ? sz + sz / inter_size_ * gating->lora.r : sz;
-    size_t sz_inter     = (inter->lora.r > 0) ? sz + sz / inter_size_ * inter->lora.r : sz;
-    inter_buf_          = (T*)allocator_->reMalloc(inter_buf_, sz_inter, false);
-    gating_buf_         = (T*)allocator_->reMalloc(gating_buf_, sz_gate, false);
+    const size_t sz = token_num * inter_size_;
+
+    const size_t sz_gate  = token_num * gating->lora.r;
+    const size_t sz_inter = token_num * inter->lora.r;
+
+    gating_buf_ = (T*)allocator_->reMalloc(gating_buf_, sizeof(T) * (sz * 2 + sz_gate + sz_inter), false);
+    inter_buf_  = gating_buf_ + sz;
+
+    // gate & inter is not fused when lora is enabled
+    if (gating->lora.r) {
+        inter_buf_ += sz_gate;
+    }
+
     is_allocate_buffer_ = true;
 }
 
@@ -43,31 +51,26 @@ template<typename T>
 void LlamaFfnLayer<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
-        allocator_->free((void**)&inter_buf_);
+        // allocator_->free((void**)&inter_buf_);
         allocator_->free((void**)&gating_buf_);
         is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
-void LlamaFfnLayer<T>::activation(int num_token)
+void LlamaFfnLayer<T>::activation(int token_num, bool is_chunked)
 {
     NvtxScope scope("activation");
-    invokeGenericActivation<SiluActivation>(gating_buf_,
-                                            (const T*)nullptr,  // bias
-                                            inter_buf_,
-                                            (const T*)nullptr,  // gated_bias
-                                            nullptr,            // ia3_tasks
-                                            (const T*)nullptr,  // ia3_weights
-                                            num_token,          // m
-                                            inter_size_,        // n
-                                            0,                  // int8_mode
-                                            nullptr,            // activation_in
-                                            nullptr,            // activation_out
-                                            nullptr,            // padding_offset
-                                            0,                  // seq_len
-                                            stream_);
-    sync_check_cuda_error();
+    if (is_chunked) {
+        invokeGenericActivation_v2<SiluActivation>(
+            gating_buf_, gating_buf_ + inter_size_, inter_size_ * 2, token_num, inter_size_, stream_);
+        sync_check_cuda_error();
+    }
+    else {
+        invokeGenericActivation_v2<SiluActivation>(
+            gating_buf_, inter_buf_, inter_size_, token_num, inter_size_, stream_);
+        sync_check_cuda_error();
+    }
 }
 
 template<typename T>
@@ -97,34 +100,46 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
 
     if (weights->fused_gating_intermediate.kernel) {
         NvtxScope scope("fused_silu_ffn");
-        linear_.forward(
-            gating_buf_, ffn_input_data, num_token, weights->fused_gating_intermediate, LlamaLinear<T>::kFusedSiluFfn);
+
+        const auto type = weights->is_fused_silu ? LlamaLinear<T>::kFusedSiluFfn : LlamaLinear<T>::kGemm;
+
+        linear_->forward(gating_buf_, ffn_input_data, num_token, weights->fused_gating_intermediate, type);
+        sync_check_cuda_error();
+
+        if (!weights->is_fused_silu) {
+            activation(num_token, true);
+        }
 
         count_and_fix(gating_buf_, num_token * weights->output.input_dims, Concat("w1_w3_silu", layer_id), 3);
     }
     else {
         {  // w1(x)
             NvtxScope scope("w1");
-            linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating, LlamaLinear<T>::kGemm, lora_mask);
+            linear_->forward(gating_buf_, ffn_input_data, num_token, weights->gating, LlamaLinear<T>::kGemm, lora_mask);
+            sync_check_cuda_error();
         }
         count_and_fix(gating_buf_, num_token * weights->gating.output_dims, Concat("w1", layer_id), 3);
 
         {  // w3(x)
             NvtxScope scope("w3");
-            linear_.forward(
+            linear_->forward(
                 inter_buf_, ffn_input_data, num_token, weights->intermediate, LlamaLinear<T>::kGemm, lora_mask);
+            sync_check_cuda_error();
         }
         count_and_fix(inter_buf_, num_token * weights->intermediate.output_dims, Concat("w3", layer_id), 3);
 
         // silu(w1(x)) * w3(x)
-        activation(num_token);
+        activation(num_token, false);
 
         count_and_fix(gating_buf_, num_token * weights->output.input_dims, Concat("act", layer_id), 3);
     }
 
     {  // w2(x)
         NvtxScope scope("w2");
-        linear_.forward(ffn_output_data, gating_buf_, num_token, weights->output, LlamaLinear<T>::kGemm, lora_mask);
+        const int pitch = (weights->fused_gating_intermediate.kernel && !weights->is_fused_silu) ? inter_size_ * 2 : 0;
+        linear_->forward(
+            ffn_output_data, {gating_buf_, pitch}, num_token, weights->output, LlamaLinear<T>::kGemm, lora_mask);
+        sync_check_cuda_error();
     }
 
     count_and_fix(ffn_output_data, num_token * weights->output.output_dims, Concat("w2", layer_id), 3);

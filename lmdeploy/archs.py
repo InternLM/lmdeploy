@@ -157,16 +157,16 @@ def get_model_arch(model_path: str):
     """
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # the turbomind model
-        import configparser
+        import yaml
         config_file = os.path.join(model_path, 'triton_models', 'weights',
-                                   'config.ini')
-        config = configparser.ConfigParser()
-        config.read(config_file)
-        model_arch = config['llama']['model_arch']
-        tm_config = TurbomindEngineConfig()
-        for key in config['llama']:
-            setattr(tm_config, key, config['llama'][key])
-        return model_arch, tm_config
+                                   'config.yaml')
+        with open(config_file, 'r') as f:
+            config = yaml.safe_load(f)
+
+        from .turbomind.deploy.config import TurbomindModelConfig
+        tm_config = TurbomindModelConfig.from_dict(config)
+
+        return tm_config.model_config.model_arch, tm_config
     else:
         # transformers model
         try:

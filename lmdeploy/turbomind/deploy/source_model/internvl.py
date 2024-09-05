@@ -3,10 +3,8 @@ import json
 import os.path as osp
 
 from .base import INPUT_MODELS
-from .internlm2 import InternLM2AwqReader, InternLM2Reader
+from .internlm2 import InternLM2Reader
 from .llama import LlamaModel, LlamaReader
-from .llama_awq import LlamaAwqReader
-from .qwen import Qwen2Reader
 
 
 class InternVLReader(LlamaReader):
@@ -19,11 +17,13 @@ class InternVLReader(LlamaReader):
     output_weight_key = 'language_model.lm_head.weight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
+                 model_cfg: dict, **kwargs):
         model_cfg = model_cfg.get('llm_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
+        super().__init__(new_params, unused_params, last_bin, model_cfg,
+                         **kwargs)
 
 
+# Note the subtle difference in keys
 class InternVL2Reader(InternLM2Reader):
     """InternVLReader for InternLM2 model."""
 
@@ -34,24 +34,10 @@ class InternVL2Reader(InternLM2Reader):
     output_weight_key = 'language_model.output.weight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
+                 model_cfg: dict, **kwargs):
         model_cfg = model_cfg.get('llm_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
-
-
-class InternVL2ProReader(Qwen2Reader):
-    """InternVL2 pro reader."""
-
-    attn_layer_prefix = 'language_model.model.layers'
-    attn_layer_patten = r'language_model.model.layers.([0-9]+).'
-    tok_embeddings_key = 'language_model.model.embed_tokens.weight'
-    norm_weight_key = 'language_model.model.norm.weight'
-    output_weight_key = 'language_model.lm_head.weight'
-
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
-        model_cfg = model_cfg.get('llm_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
+        super().__init__(new_params, unused_params, last_bin, model_cfg,
+                         **kwargs)
 
 
 @INPUT_MODELS.register_module(name='internvl')
@@ -65,7 +51,7 @@ class InternVLModel(LlamaModel):
         arch = config.llm_config.architectures[0]
         _readers = dict(InternLM2ForCausalLM=InternVL2Reader,
                         LlamaForCausalLM=InternVLReader,
-                        Qwen2ForCausalLM=InternVL2ProReader)
+                        Qwen2ForCausalLM=InternVLReader)
         self.Reader = _readers[arch]
 
     def model_info(self):
@@ -75,6 +61,7 @@ class InternVLModel(LlamaModel):
             model_arg = json.load(f)['llm_config']
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
+            hidden_units = model_arg['hidden_size']
             attn_head_num = model_arg['num_attention_heads']
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
@@ -94,53 +81,10 @@ class InternVLModel(LlamaModel):
 
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
-                    attn_head_num=attn_head_num,
+                    hidden_units=hidden_units,
+                    head_num=attn_head_num,
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,
                     max_position_embeddings=max_position_embeddings,
                     use_dynamic_ntk=use_dynamic_ntk,
                     rope_scaling_factor=scaling_factor)
-
-
-class InternVLAwqReader(LlamaAwqReader):
-    """InternVLReader for llama model."""
-
-    attn_layer_prefix = 'language_model.model.layers'
-    attn_layer_patten = r'language_model.model.layers.([0-9]+).'
-    tok_embeddings_key = 'language_model.model.embed_tokens.weight'
-    norm_weight_key = 'language_model.model.norm.weight'
-    output_weight_key = 'language_model.lm_head.weight'
-
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
-        model_cfg = model_cfg.get('llm_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
-
-
-class InternVL2AwqReader(InternLM2AwqReader):
-    """InternVLReader for InternLM2 model."""
-
-    attn_layer_prefix = 'language_model.model.layers'
-    attn_layer_patten = r'language_model.model.layers.([0-9]+).'
-    tok_embeddings_key = 'language_model.model.tok_embeddings.weight'
-    norm_weight_key = 'language_model.model.norm.weight'
-    output_weight_key = 'language_model.output.weight'
-
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
-        model_cfg = model_cfg.get('llm_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
-
-
-@INPUT_MODELS.register_module(name='internvl-awq')
-class InternVLAwqModel(InternVLModel):
-    """InternVL model in hf format."""
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path, **kwargs)
-        from transformers import AutoConfig
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        arch = config.llm_config.architectures[0]
-        _readers = dict(InternLM2ForCausalLM=InternVL2AwqReader,
-                        LlamaForCausalLM=InternVLAwqReader)
-        self.Reader = _readers[arch]

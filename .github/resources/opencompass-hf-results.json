@@ -129,5 +129,9 @@
         "race-middle": "88.63",
         "race-high": "81.22",
         "crows_pairs": "86.07"
+    },
+    "internlm/internlm2_5-7b-chat": {
+        "mmlu": "72.8",
+        "gsm8k": "86.0"
     }
 }

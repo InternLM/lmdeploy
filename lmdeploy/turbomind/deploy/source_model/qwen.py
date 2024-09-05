@@ -16,34 +16,18 @@ class QwenReader(LlamaReader):
     norm_weight_key = 'transformer.ln_f.weight'
     output_weight_key = 'lm_head.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
-
-    def _attn(self, i: int, kind: str, size_dim: int, dim: int = 0):
+    def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
+        q, k, v, o = (None, ) * 4
         qkv = self.params[f'transformer.h.{i}.attn.c_attn.{kind}']
-        q, k, v = torch.split(qkv, qkv.size(size_dim) // 3, dim=dim)
-        o = self.params.get(f'transformer.h.{i}.attn.c_proj.{kind}', None)
+        qkv = self.transform(qkv, kind)
+        if qkv is not None:
+            q, k, v = torch.split(qkv, qkv.size(0) // 3, dim=0)
+        o = self.params.get(f'transformer.h.{i}.attn.c_proj.{kind}')
+        o = self.transform(o, kind)
         if o is None:
             o = torch.zeros_like(q)
         return q, k, v, o
-
-    def attn(self, i: int):
-        """Get q, k, v, o weight for layer i."""
-        return self._attn(i, 'weight', 0, 0)
-
-    def attn_bias(self, i: int):
-        """Get q, k, v, o bias for layer i."""
-        return self._attn(i, 'bias', -1, 0)
-
-    def attn_zero(self, i: int):
-        """Get q, k, v, o zero point for layer i."""
-        return (None, ) * 4
-
-    def attn_scale(self, i: int):
-        """Get q, k, v, o scale for layer i."""
-        return (None, ) * 4
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
@@ -54,20 +38,9 @@ class QwenReader(LlamaReader):
         result = []
         for key in ['w2', 'c_proj', 'w1']:
             tensor = self.params[f'transformer.h.{i}.mlp.{key}.{kind}']
+            tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-
-    def ffn(self, i: int):
-        """Get ffn weight for layer i."""
-        return self._ffn(i, 'weight')
-
-    def ffn_zero(self, i: int):
-        """Get ffn zero point for layer i."""
-        return (None, ) * 3
-
-    def ffn_scale(self, i: int):
-        """Get ffn scale for layer i."""
-        return (None, ) * 3
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
@@ -79,9 +52,6 @@ class QwenModel(LlamaModel):
     """Qwen model in hf format."""
 
     Reader = QwenReader
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path, **kwargs)
 
     def tokenizer_info(self):
         """Read tokenizer info."""
@@ -95,6 +65,7 @@ class QwenModel(LlamaModel):
         params_path = osp.join(self.model_path, 'config.json')
         with open(params_path) as f:
             config = json.load(f)
+            hidden_units = config['hidden_size']
             num_layer = config['num_hidden_layers']
             norm_eps = config['layer_norm_epsilon']
             rope_theta = float(config.get('rotary_emb_base', 10000.0))
@@ -102,11 +73,14 @@ class QwenModel(LlamaModel):
                 kv_head_num = config['num_key_value_heads']
             else:
                 kv_head_num = config['num_attention_heads']
+            attn_head_num = config['num_attention_heads']
             seq_length = config['seq_length']
             use_dynamic_ntk = int(config['use_dynamic_ntk'])
             use_logn_attn = int(config['use_logn_attn'])
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
+                    hidden_units=hidden_units,
+                    head_num=attn_head_num,
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,
                     max_position_embeddings=seq_length,
@@ -114,43 +88,15 @@ class QwenModel(LlamaModel):
                     use_logn_attn=use_logn_attn)
 
 
-class Qwen2Reader(LlamaReader):
-    """read qwen2 model weights.
-
-    The weight name of qwen2 model is similar to llama, except its attention
-    bias doesn't include o_proj bias. Therefore, we make a dummy zero o_proj
-    bias to make it comply the definition of turbomind llama format
-    """
-
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict):
-        super().__init__(new_params, unused_params, last_bin, model_cfg)
-
-    def attn_bias(self, i: int):
-        """Get q, k, v bias for layer i."""
-        result = []
-
-        for key in ['q', 'k', 'v']:
-            tensor = self.params.get(
-                f'{self.attn_layer_prefix}.{i}.self_attn.{key}_proj.bias')
-            assert tensor is not None
-            result.append(tensor)
-
-        tensor = self.params.get(
-            f'{self.attn_layer_prefix}.{i}.self_attn.o_proj.weight')
-        dummy_oproj_bias = tensor.new_zeros(tensor.shape[0])
-        result.append(dummy_oproj_bias)
-        return (*result, )
-
-
 @INPUT_MODELS.register_module(name='qwen2')
 class Qwen2Model(LlamaModel):
-    """Qwen model in hf format."""
+    """Qwen model in hf format.
 
-    Reader = Qwen2Reader
+    The weight of qwen2 model is similar to Llama, except its attention bias
+    doesn't include o_proj bias.
+    """
 
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path, **kwargs)
+    Reader = LlamaReader
 
     def tokenizer_info(self):
         """set tokenizer info.

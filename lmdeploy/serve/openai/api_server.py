@@ -3,6 +3,7 @@ import asyncio
 import copy
 import os
 import time
+from functools import partial
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
@@ -13,22 +14,20 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 
 from lmdeploy.archs import get_task
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import (GenerationConfig, LogitsProcessor,
+                               PytorchEngineConfig, TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
-    ChatCompletionRequest, ChatCompletionRequestQos, ChatCompletionResponse,
+    ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
     ChatCompletionStreamResponse, ChatCompletionTokenLogprob, ChatMessage,
-    ChoiceLogprobs, CompletionRequest, CompletionRequestQos,
-    CompletionResponse, CompletionResponseChoice,
-    CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
-    EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-    FunctionResponse, GenerateRequest, GenerateRequestQos, GenerateResponse,
-    LogProbs, ModelCard, ModelList, ModelPermission, ToolCall, TopLogprob,
-    UsageInfo)
-from lmdeploy.serve.qos_engine.qos_engine import QosEngine
+    ChoiceLogprobs, CompletionRequest, CompletionResponse,
+    CompletionResponseChoice, CompletionResponseStreamChoice,
+    CompletionStreamResponse, DeltaMessage, EmbeddingsRequest, EncodeRequest,
+    EncodeResponse, ErrorResponse, FunctionResponse, GenerateRequest,
+    GenerateResponse, LogProbs, ModelCard, ModelList, ModelPermission,
+    ToolCall, TopLogprob, UsageInfo)
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -40,7 +39,6 @@ class VariableInterface:
     async_engine: AsyncEngine = None
     session_id: int = 0
     api_keys: Optional[List[str]] = None
-    qos_engine: QosEngine = None
     request_hosts = []
 
 
@@ -99,24 +97,27 @@ def available_models():
     return ModelList(data=model_cards)
 
 
-def create_error_response(status: HTTPStatus, message: str):
+def create_error_response(status: HTTPStatus,
+                          message: str,
+                          error_type='invalid_request_error'):
     """Create error response according to http status and message.
 
     Args:
         status (HTTPStatus): HTTP status codes and reason phrases
         message (str): error message
+        error_type (str): error type
     """
-    return JSONResponse(
-        ErrorResponse(message=message,
-                      type='invalid_request_error',
-                      code=status.value).model_dump())
+    return JSONResponse(ErrorResponse(message=message,
+                                      type=error_type,
+                                      code=status.value).model_dump(),
+                        status_code=status.value)
 
 
 async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
         return create_error_response(
-            HTTPStatus.BAD_REQUEST,
+            HTTPStatus.NOT_FOUND,
             f'The model `{request.model}` does not exist.')
     if hasattr(request, 'n') and request.n <= 0:
         return create_error_response(
@@ -239,133 +240,38 @@ async def health() -> Response:
     return Response(status_code=200)
 
 
-@app.post('/v1/chat/completions_qos')
-async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
-                                  raw_request: Request = None):
-    """Completion API similar to OpenAI's API.
+# modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
+def logit_bias_logits_processor(logit_bias: Union[Dict[int, float],
+                                                  Dict[str, float]],
+                                tokenizer) -> LogitsProcessor:
+    try:
+        # Convert token_id to integer
+        # Clamp the bias between -100 and 100 per OpenAI API spec
+        clamped_logit_bias: Dict[int, float] = {
+            int(token_id): min(100.0, max(-100.0, bias))
+            for token_id, bias in logit_bias.items()
+        }
+    except ValueError as exc:
+        raise ValueError(
+            'Found token_id in logit_bias that is not '
+            'an integer or string representing an integer') from exc
 
-    Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
-    for the API specification.
+    # Check if token_id is within the vocab size
+    for token_id, bias in clamped_logit_bias.items():
+        if token_id < 0 or token_id >= tokenizer.vocab_size:
+            raise ValueError(f'token_id {token_id} in logit_bias contains '
+                             'out-of-vocab token id')
 
-    The request should be a JSON object with the following fields:
-    - model: model name. Available from /v1/models.
-    - messages: string prompt or chat history in OpenAI format.
-    - temperature (float): to modulate the next token probability
-    - top_p (float): If set to float < 1, only the smallest set of most
-        probable tokens with probabilities that add up to top_p or higher
-        are kept for generation.
-    - n (int): How many chat completion choices to generate for each input
-        message. **Only support one here**.
-    - stream: whether to stream the results or not. Default to false.
-    - max_tokens (int): output token nums
-    - repetition_penalty (float): The parameter for repetition penalty.
-        1.0 means no penalty
+    def _logit_bias_processor(
+        logit_bias,
+        token_ids,
+        logits,
+    ):
+        for token_id, bias in logit_bias.items():
+            logits[token_id] = logits[token_id] + bias
+        return logits
 
-    Additional arguments supported by LMDeploy:
-    - ignore_eos (bool): indicator for ignoring eos
-    - user_id (str): for qos; if not specified, will set to "default"
-
-    Currently we do not support the following features:
-    - function_call (Users should implement this by themselves)
-    - logit_bias (not supported yet)
-    - presence_penalty (replaced with repetition_penalty)
-    - frequency_penalty (replaced with repetition_penalty)
-    """
-    VariableInterface.session_id += 1
-    request.session_id = VariableInterface.session_id
-    error_check_ret = await check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-
-    model_name = request.model
-    request_id = str(request.session_id)
-    created_time = int(time.time())
-
-    if VariableInterface.qos_engine is None:
-        return create_error_response(
-            HTTPStatus.NOT_FOUND,
-            'cannot parse qos engine config, this api is not work')
-
-    result_generator = await VariableInterface.qos_engine.generate_with_qos(
-        request)
-
-    if result_generator is None:
-        return create_error_response(HTTPStatus.INTERNAL_SERVER_ERROR,
-                                     'Failed to generate completions')
-
-    def create_stream_response_json(
-        index: int,
-        text: str,
-        finish_reason: Optional[str] = None,
-    ) -> str:
-        choice_data = ChatCompletionResponseStreamChoice(
-            index=index,
-            delta=DeltaMessage(role='assistant', content=text),
-            finish_reason=finish_reason,
-        )
-        response = ChatCompletionStreamResponse(
-            id=request_id,
-            created=created_time,
-            model=model_name,
-            choices=[choice_data],
-        )
-        response_json = response.model_dump_json()
-
-        return response_json
-
-    async def completion_stream_generator() -> AsyncGenerator[str, None]:
-        async for res in result_generator:
-            response_json = create_stream_response_json(
-                index=0,
-                text=res.response,
-            )
-            yield f'data: {response_json}\n\n'
-        yield 'data: [DONE]\n\n'
-
-    # Streaming response
-    if request.stream:
-        return StreamingResponse(completion_stream_generator(),
-                                 media_type='text/event-stream')
-
-    # Non-streaming response
-    final_res = None
-    text = ''
-    async for res in result_generator:
-        if await raw_request.is_disconnected():
-            # Abort the request if the client disconnects.
-            await VariableInterface.async_engine.stop_session(
-                request.session_id)
-            return create_error_response(HTTPStatus.BAD_REQUEST,
-                                         'Client disconnected')
-        final_res = res
-        text += res.response
-    assert final_res is not None
-    choices = []
-    choice_data = ChatCompletionResponseChoice(
-        index=0,
-        message=ChatMessage(role='assistant', content=text),
-        finish_reason=final_res.finish_reason,
-    )
-    choices.append(choice_data)
-
-    total_tokens = sum([
-        final_res.history_token_len, final_res.input_token_len,
-        final_res.generate_token_len
-    ])
-    usage = UsageInfo(
-        prompt_tokens=final_res.input_token_len,
-        completion_tokens=final_res.generate_token_len,
-        total_tokens=total_tokens,
-    )
-    response = ChatCompletionResponse(
-        id=request_id,
-        created=created_time,
-        model=model_name,
-        choices=choices,
-        usage=usage,
-    )
-
-    return response
+    return partial(_logit_bias_processor, clamped_logit_bias)
 
 
 @app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
@@ -392,6 +298,12 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
+    - response_format (Dict | None): Only pytorch backend support formatting
+        response. Examples: `{"type": "json_schema", "json_schema": {"name":
+        "test","schema": {"properties": {"name": {"type": "string"}},
+        "required": ["name"], "type": "object"}}}`
+        or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
+    - logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
     - tools (List): A list of tools the model may call. Currently, only
         internlm2 functions are supported as a tool. Use this to specify a
         list of functions for which the model can generate JSON inputs.
@@ -410,8 +322,6 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         in the decoding. Default to be True.
 
     Currently we do not support the following features:
-    - function_call (Users should implement this by themselves)
-    - logit_bias (not supported yet)
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
@@ -437,12 +347,32 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 
-    gen_logprobs = None
+    gen_logprobs, logits_processors = None, None
     if request.logprobs and request.top_logprobs:
         gen_logprobs = request.top_logprobs
+    response_format = None
+    if request.response_format and request.response_format.type != 'text':
+        if VariableInterface.async_engine.backend != 'pytorch':
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                'only pytorch backend can use response_format now')
+        response_format = request.response_format.model_dump()
+
+    if request.logit_bias is not None:
+        try:
+            logits_processors = [
+                logit_bias_logits_processor(
+                    request.logit_bias,
+                    VariableInterface.async_engine.tokenizer.model)
+            ]
+        except Exception as e:
+            return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
+
+    random_seed = request.seed if request.seed else None
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens,
+        do_sample=True,
         logprobs=gen_logprobs,
         top_k=request.top_k,
         top_p=request.top_p,
@@ -450,7 +380,10 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        skip_special_tokens=request.skip_special_tokens)
+        skip_special_tokens=request.skip_special_tokens,
+        response_format=response_format,
+        logits_processors=logits_processors,
+        random_seed=random_seed)
 
     tools = None
     if request.tools and request.tool_choice != 'none':
@@ -479,11 +412,11 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         adapter_name=adapter_name,
     )
 
-    def create_stream_response_json(
-            index: int,
-            text: str,
-            finish_reason: Optional[str] = None,
-            logprobs: Optional[LogProbs] = None) -> str:
+    def create_stream_response_json(index: int,
+                                    text: str,
+                                    finish_reason: Optional[str] = None,
+                                    logprobs: Optional[LogProbs] = None,
+                                    usage: Optional[UsageInfo] = None) -> str:
         choice_data = ChatCompletionResponseStreamChoice(
             index=index,
             delta=DeltaMessage(role='assistant', content=text),
@@ -494,6 +427,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             created=created_time,
             model=model_name,
             choices=[choice_data],
+            usage=usage,
         )
         response_json = response.model_dump_json()
 
@@ -501,17 +435,27 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         async for res in result_generator:
-            logprobs = None
+            logprobs, usage = None, None
             if gen_logprobs and res.logprobs:
                 logprobs = _create_chat_completion_logprobs(
                     VariableInterface.async_engine.tokenizer, res.token_ids,
                     res.logprobs)
-
+            if request.stream_options and request.stream_options.include_usage:
+                total_tokens = sum([
+                    res.history_token_len, res.input_token_len,
+                    res.generate_token_len
+                ])
+                usage = UsageInfo(
+                    prompt_tokens=res.input_token_len,
+                    completion_tokens=res.generate_token_len,
+                    total_tokens=total_tokens,
+                )
             response_json = create_stream_response_json(
                 index=0,
                 text=res.response,
                 finish_reason=res.finish_reason,
-                logprobs=logprobs)
+                logprobs=logprobs,
+                usage=usage)
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -596,157 +540,6 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     return response
 
 
-@app.post('/v1/completions_qos')
-async def completions_v1_qos(request: CompletionRequestQos,
-                             raw_request: Request = None):
-    """Completion API similar to OpenAI's API.
-
-    Go to `https://platform.openai.com/docs/api-reference/completions/create`
-    for the API specification.
-
-    The request should be a JSON object with the following fields:
-    - model (str): model name. Available from /v1/models.
-    - prompt (str): the input prompt.
-    - suffix (str): The suffix that comes after a completion of inserted text.
-    - max_tokens (int): output token nums
-    - temperature (float): to modulate the next token probability
-    - top_p (float): If set to float < 1, only the smallest set of most
-        probable tokens with probabilities that add up to top_p or higher
-        are kept for generation.
-    - n (int): How many chat completion choices to generate for each input
-        message. **Only support one here**.
-    - stream: whether to stream the results or not. Default to false.
-    - repetition_penalty (float): The parameter for repetition penalty.
-        1.0 means no penalty
-    - user (str): A unique identifier representing your end-user.
-
-    Additional arguments supported by LMDeploy:
-    - top_k (int): The number of the highest probability vocabulary
-        tokens to keep for top-k-filtering
-    - ignore_eos (bool): indicator for ignoring eos
-    - user_id (str): for qos; if not specified, will set to "default"
-
-    Currently we do not support the following features:
-    - logprobs (not supported yet)
-    - presence_penalty (replaced with repetition_penalty)
-    - frequency_penalty (replaced with repetition_penalty)
-    """
-    VariableInterface.session_id += 1
-    request.session_id = VariableInterface.session_id
-    error_check_ret = await check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-
-    model_name = request.model
-    request_id = str(request.session_id)
-    created_time = int(time.time())
-    if isinstance(request.prompt, str):
-        request.prompt = [request.prompt]
-
-    if VariableInterface.qos_engine is None:
-        return create_error_response(
-            HTTPStatus.NOT_FOUND,
-            'cannot parse qos engine config, this api is not work')
-
-    generators = await VariableInterface.qos_engine.generate_with_qos(request)
-
-    def create_stream_response_json(
-        index: int,
-        text: str,
-        finish_reason: Optional[str] = None,
-        usage: Optional[UsageInfo] = None,
-    ) -> str:
-        choice_data = CompletionResponseStreamChoice(
-            index=index,
-            text=text,
-            finish_reason=finish_reason,
-        )
-        response = CompletionStreamResponse(
-            id=request_id,
-            created=created_time,
-            model=model_name,
-            choices=[choice_data],
-            usage=usage,
-        )
-        response_json = response.model_dump_json()
-
-        return response_json
-
-    async def completion_stream_generator() -> AsyncGenerator[str, None]:
-        # First chunk with role
-        for generator in generators:
-            async for res in generator:
-                usage = None
-                if res.finish_reason is not None:
-                    final_res = res
-                    total_tokens = sum([
-                        final_res.history_token_len, final_res.input_token_len,
-                        final_res.generate_token_len
-                    ])
-                    usage = UsageInfo(
-                        prompt_tokens=final_res.input_token_len,
-                        completion_tokens=final_res.generate_token_len,
-                        total_tokens=total_tokens,
-                    )
-                response_json = create_stream_response_json(
-                    index=0,
-                    text=res.response,
-                    usage=usage,
-                )
-                yield f'data: {response_json}\n\n'
-        yield 'data: [DONE]\n\n'
-
-    # Streaming response
-    if request.stream:
-        return StreamingResponse(completion_stream_generator(),
-                                 media_type='text/event-stream')
-
-    # Non-streaming response
-    usage = UsageInfo()
-    choices = []
-
-    async def _inner_call(i, generator):
-        final_res = None
-        text = ''
-        async for res in generator:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(
-                    request.session_id)
-                return create_error_response(HTTPStatus.BAD_REQUEST,
-                                             'Client disconnected')
-            final_res = res
-            text += res.response
-        assert final_res is not None
-        choice_data = CompletionResponseChoice(
-            index=0,
-            text=text,
-            finish_reason=final_res.finish_reason,
-        )
-        choices.append(choice_data)
-
-        total_tokens = sum([
-            final_res.history_token_len, final_res.input_token_len,
-            final_res.generate_token_len
-        ])
-        usage.prompt_tokens += final_res.input_token_len
-        usage.completion_tokens += final_res.generate_token_len
-        usage.total_tokens += total_tokens
-
-    await asyncio.gather(
-        *[_inner_call(i, generators[i]) for i in range(len(generators))])
-
-    response = CompletionResponse(
-        id=request_id,
-        created=created_time,
-        model=model_name,
-        choices=choices,
-        usage=usage,
-    )
-
-    return response
-
-
 @app.post('/v1/completions', dependencies=[Depends(check_api_key)])
 async def completions_v1(request: CompletionRequest,
                          raw_request: Request = None):
@@ -807,8 +600,11 @@ async def completions_v1(request: CompletionRequest,
         request.prompt = [request.prompt]
     if isinstance(request.stop, str):
         request.stop = [request.stop]
+    random_seed = request.seed if request.seed else None
+
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens if request.max_tokens else 512,
+        do_sample=True,
         logprobs=request.logprobs,
         top_k=request.top_k,
         top_p=request.top_p,
@@ -816,7 +612,8 @@ async def completions_v1(request: CompletionRequest,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        skip_special_tokens=request.skip_special_tokens)
+        skip_special_tokens=request.skip_special_tokens,
+        random_seed=random_seed)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -866,7 +663,7 @@ async def completions_v1(request: CompletionRequest,
                         res.token_ids, res.logprobs,
                         gen_config.skip_special_tokens, offset, all_token_ids,
                         state)
-                if res.finish_reason is not None:
+                if request.stream_options and request.stream_options.include_usage:  # noqa E501
                     final_res = res
                     total_tokens = sum([
                         final_res.history_token_len, final_res.input_token_len,
@@ -893,7 +690,7 @@ async def completions_v1(request: CompletionRequest,
 
     # Non-streaming response
     usage = UsageInfo()
-    choices = []
+    choices = [None] * len(generators)
 
     async def _inner_call(i, generator):
         final_logprobs = []
@@ -922,12 +719,12 @@ async def completions_v1(request: CompletionRequest,
 
         assert final_res is not None
         choice_data = CompletionResponseChoice(
-            index=0,
+            index=i,
             text=text,
             finish_reason=final_res.finish_reason,
             logprobs=logprobs,
         )
-        choices.append(choice_data)
+        choices[i] = choice_data
 
         total_tokens = sum([
             final_res.history_token_len, final_res.input_token_len,
@@ -988,83 +785,6 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
             encoded.append(ids)
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)
-
-
-@app.post('/v1/chat/interactive_qos')
-async def chat_interactive_v1_qos(request: GenerateRequestQos,
-                                  raw_request: Request = None):
-    """Generate completion for the request.
-
-    - On interactive mode, the chat history is kept on the server. Please set
-    `interactive_mode = True`.
-    - On normal mode, no chat history is kept on the server. Set
-    `interactive_mode = False`.
-
-    The request should be a JSON object with the following fields:
-    - prompt: the prompt to use for the generation.
-    - session_id: determine which instance will be called. If not specified
-        with a value other than -1, using random value directly.
-    - interactive_mode (bool): turn on interactive mode or not. On interactive
-        mode, session history is kept on the server (and vice versa).
-    - stream: whether to stream the results or not.
-    - stop: whether to stop the session response or not.
-    - request_output_len (int): output token nums
-    - top_p (float): If set to float < 1, only the smallest set of most
-        probable tokens with probabilities that add up to top_p or higher
-        are kept for generation.
-    - top_k (int): The number of the highest probability vocabulary
-        tokens to keep for top-k-filtering
-    - temperature (float): to modulate the next token probability
-    - repetition_penalty (float): The parameter for repetition penalty.
-        1.0 means no penalty
-    - ignore_eos (bool): indicator for ignoring eos
-    - user_id (str): for qos; if not specified, will set to "default"
-    """
-    error_check_ret = await check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-    if request.session_id == -1:
-        VariableInterface.session_id += 1
-        request.session_id = VariableInterface.session_id
-
-    if VariableInterface.qos_engine is None:
-        return create_error_response(
-            HTTPStatus.NOT_FOUND,
-            'cannot parse qos engine config, this api is not work')
-
-    generation = await VariableInterface.qos_engine.generate_with_qos(request)
-
-    # Streaming case
-    async def stream_results() -> AsyncGenerator[bytes, None]:
-        async for out in generation:
-            chunk = GenerateResponse(text=out.response,
-                                     tokens=out.generate_token_len,
-                                     input_tokens=out.input_token_len,
-                                     history_tokens=out.history_token_len,
-                                     finish_reason=out.finish_reason)
-            data = chunk.model_dump_json()
-            yield f'{data}\n'
-
-    if request.stream:
-        return StreamingResponse(stream_results(),
-                                 media_type='text/event-stream')
-    else:
-        ret = {}
-        text = ''
-        tokens = 0
-        finish_reason = None
-        async for out in generation:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await VariableInterface.qos_engine.stop_session(
-                    request.session_id)
-                return create_error_response(HTTPStatus.BAD_REQUEST,
-                                             'Client disconnected')
-            text += out.response
-            tokens = out.generate_token_len
-            finish_reason = out.finish_reason
-        ret = {'text': text, 'tokens': tokens, 'finish_reason': finish_reason}
-        return JSONResponse(ret)
 
 
 @app.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
@@ -1132,15 +852,19 @@ async def chat_interactive_v1(request: GenerateRequest,
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 
+    random_seed = request.seed if request.seed else None
+
     gen_config = GenerationConfig(
         max_new_tokens=request.request_output_len,
+        do_sample=True,
         top_p=request.top_p,
         top_k=request.top_k,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
-        skip_special_tokens=request.skip_special_tokens)
+        skip_special_tokens=request.skip_special_tokens,
+        random_seed=random_seed)
     if request.image_url:
         from lmdeploy.vl import load_image
         if isinstance(request.image_url, List):
@@ -1217,7 +941,6 @@ def serve(model_path: str,
           log_level: str = 'ERROR',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
-          qos_config_path: str = '',
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1256,8 +979,7 @@ def serve(model_path: str,
         api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
             a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
-        qos_config_path (str): qos policy config path
-    """ # noqa E501
+    """  # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
@@ -1289,23 +1011,6 @@ def serve(model_path: str,
         backend_config=backend_config,
         chat_template_config=chat_template_config,
         **kwargs)
-
-    if qos_config_path:
-        try:
-            with open(qos_config_path, 'r') as file:
-                qos_config_str = file.read()
-                VariableInterface.qos_engine = QosEngine(
-                    qos_tag=qos_config_str,
-                    engine=VariableInterface.async_engine,
-                    **kwargs)
-                VariableInterface.qos_engine.start()
-        except FileNotFoundError:
-            VariableInterface.qos_engine = None
-    else:
-        # hide qos functions if not applied
-        for i in range(len(app.router.routes)):
-            if 'qos' in app.router.routes[i].path:
-                app.router.routes[i].include_in_schema = False
 
     for i in range(3):
         print(

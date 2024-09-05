@@ -3,7 +3,7 @@ import os
 import random
 
 from lmdeploy.archs import get_model_arch
-from lmdeploy.messages import EngineGenerationConfig, TurbomindEngineConfig
+from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import get_names_from_model
 from lmdeploy.tokenizer import DetokenizeState
@@ -70,7 +70,7 @@ def main(model_path: str,
         request_output_len (int): output token nums
         chat_template_config (ChatTemplateConfig): chat template config
         kwargs (dict): unused args
-    """ # noqa: E 501
+    """  # noqa: E 501
 
     # chat template
     _, chat_template_name = get_names_from_model(model_path)
@@ -110,12 +110,12 @@ def main(model_path: str,
     if stop_words is not None:
         stop_words = stop_words[0][0].tolist()
 
-    gen_config = EngineGenerationConfig(max_new_tokens=request_output_len,
-                                        top_k=top_k,
-                                        top_p=top_p,
-                                        temperature=temperature,
-                                        repetition_penalty=repetition_penalty,
-                                        stop_words=stop_words)
+    gen_config = GenerationConfig(max_new_tokens=request_output_len,
+                                  top_k=top_k,
+                                  top_p=top_p,
+                                  temperature=temperature,
+                                  repetition_penalty=repetition_penalty,
+                                  stop_token_ids=stop_words)
 
     nth_round = 1
     step = 0
@@ -137,7 +137,6 @@ def main(model_path: str,
             if model.capability == 'chat':
                 sequence_start = (nth_round == 1)
                 sequence_end = False
-                step = step
             else:
                 sequence_start = True
                 sequence_end = True

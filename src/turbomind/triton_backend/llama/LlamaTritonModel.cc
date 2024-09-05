@@ -19,41 +19,49 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
 
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
-#include "3rdparty/INIReader.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaInstanceComm.h"
+#include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include <cuda_runtime.h>
 #include <mutex>
+#include <yaml-cpp/yaml.h>
 
 namespace ft = turbomind;
 
-std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaModel(std::string inifile)
+std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaModel(std::string config_file)
 {
-    INIReader reader = INIReader(inifile);
-    if (reader.ParseError() < 0) {
-        std::cout << "[ERROR] Can't load '" << inifile << "'\n";
-        return nullptr;
+    YAML::Node reader;
+    try {
+        reader = YAML::Load(config_file);
+    }
+    catch (const YAML::Exception& e) {
+        std::cerr << "Error reading YAML config: " << e.what() << std::endl;
+        ft::FT_CHECK(false);
     }
 
-    const std::string data_type        = reader.Get("ft_instance_hyperparameter", "data_type");
-    int               tensor_para_size = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
-    std::string       model_dir        = reader.Get("ft_instance_hyperparameter", "model_dir");
+    const auto        ft_instance_hyperparameter = reader["ft_instance_hyperparameter"];
+    const std::string data_type                  = ft_instance_hyperparameter["data_type"].as<std::string>();
+    int               tensor_para_size           = ft_instance_hyperparameter["tensor_para_size"].as<int>();
+    std::string       model_dir                  = ft_instance_hyperparameter["model_dir"].as<std::string>();
 
     if (data_type == "half" || data_type == "fp16") {
         return std::make_shared<LlamaTritonModel<half>>(
-            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
+            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
+            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
+            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
             model_dir);
     }
     else if (data_type == "bf16") {
 #ifdef ENABLE_BF16
         return std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
-            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
+            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
+            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
+            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
             model_dir);
 #else
         TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF16");
@@ -63,15 +71,16 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
     else {
 #ifdef ENABLE_FP32
         return std::make_shared<LlamaTritonModel<float>>(
-            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
+            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
+            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
+            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
             model_dir);
 #else
         TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF32");
         ft::FT_CHECK(false);
 #endif
     }
+    return nullptr;
 }
 
 template<typename T>
@@ -92,70 +101,84 @@ std::map<std::string, std::pair<std::regex, T>> getLoraPattern(std::string patte
 template<typename T>
 void LlamaTritonModel<T>::handleMissingParams()
 {
-    if (kv_head_num_ == 0) {
-        kv_head_num_ = head_num_;
-        TM_LOG_WARNING("[LlamaTritonModel] `kv_head_num` is not set, default to `head_num` (%d).", (int)kv_head_num_);
+    if (model_param_.kv_head_num == 0) {
+        model_param_.kv_head_num = model_param_.head_num;
+        TM_LOG_WARNING("[LlamaTritonModel] `kv_head_num` is not set, default to `head_num` (%d).",
+                       (int)model_param_.kv_head_num);
     }
 
-    if (!attn_params_.max_position_embeddings) {
-        attn_params_.max_position_embeddings = 2048;
+    if (!attn_param_.max_position_embeddings) {
+        attn_param_.max_position_embeddings = 2048;
         TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to %d.",
-                       (int)attn_params_.max_position_embeddings);
+                       (int)attn_param_.max_position_embeddings);
     }
 
-    if (!engine_params_.max_batch_size) {
-        engine_params_.max_batch_size = 64;
+    if (!engine_param_.max_batch_size) {
+        engine_param_.max_batch_size = 64;
         TM_LOG_WARNING("[LlamaTritonModel] `max_batch_size` is not set, default to %d.",
-                       (int)engine_params_.max_batch_size);
+                       (int)engine_param_.max_batch_size);
     }
 
-    if (!engine_params_.session_len) {
-        engine_params_.session_len = attn_params_.max_position_embeddings;
-        TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)engine_params_.session_len);
+    if (!engine_param_.session_len) {
+        engine_param_.session_len = attn_param_.max_position_embeddings;
+        TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)engine_param_.session_len);
     }
 
-    if (!engine_params_.max_prefill_token_num) {
-        engine_params_.max_prefill_token_num = 8192;
+    if (!engine_param_.max_prefill_token_num) {
+        engine_param_.max_prefill_token_num = 8192;
         TM_LOG_WARNING("[LlamaTritonModel] `max_prefill_token_num` is not set, default to %d.",
-                       (int)engine_params_.max_prefill_token_num);
+                       (int)engine_param_.max_prefill_token_num);
     }
 
-    if (!engine_params_.max_context_token_num) {
-        engine_params_.max_context_token_num = engine_params_.session_len;
+    if (!engine_param_.max_context_token_num) {
+        engine_param_.max_context_token_num = engine_param_.session_len;
         TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` is not set, default to %d.",
-                       (int)engine_params_.max_context_token_num);
+                       (int)engine_param_.max_context_token_num);
     }
 
-    if (engine_params_.max_context_token_num <= engine_params_.max_batch_size) {
-        engine_params_.max_context_token_num *= engine_params_.session_len;
-        TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` = %d.", (int)engine_params_.max_context_token_num);
+    if (engine_param_.max_context_token_num <= engine_param_.max_batch_size) {
+        engine_param_.max_context_token_num *= engine_param_.session_len;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` = %d.", (int)engine_param_.max_context_token_num);
     }
 
-    if (!engine_params_.step_length) {
-        engine_params_.step_length = 1;
+    if (!engine_param_.step_length) {
+        engine_param_.step_length = 1;
     }
 
-    if (!engine_params_.cache_max_block_count) {
-        engine_params_.cache_max_block_count = .95f;
+    if (!engine_param_.cache_max_block_count) {
+        engine_param_.cache_max_block_count = .95f;
         TM_LOG_WARNING("[LlamaTritonModel] `cache_max_entry_count` is not set, default to %f.",
-                       engine_params_.cache_max_block_count);
+                       engine_param_.cache_max_block_count);
     }
 
-    if (!cache_block_seq_len_) {
-        cache_block_seq_len_ = 128;
-        TM_LOG_WARNING("[LlamaTritonModel] `cache_block_seq_len` is not set, default to %d.", cache_block_seq_len_);
+    if (!attn_param_.cache_block_seq_len) {
+        attn_param_.cache_block_seq_len = 128;
+        TM_LOG_WARNING("[LlamaTritonModel] `cache_block_seq_len` is not set, default to %d.",
+                       attn_param_.cache_block_seq_len);
     }
 
-    if (!engine_params_.cache_chunk_size) {
-        engine_params_.cache_chunk_size = engine_params_.cache_max_block_count;
+    if (!engine_param_.cache_chunk_size) {
+        engine_param_.cache_chunk_size = engine_param_.cache_max_block_count;
         TM_LOG_WARNING("[LlamaTritonModel] `cache_chunk_size` is not set, default to %d.",
-                       (int)engine_params_.cache_chunk_size);
+                       (int)engine_param_.cache_chunk_size);
     }
 
-    if (!engine_params_.num_tokens_per_iter) {
-        engine_params_.num_tokens_per_iter = engine_params_.max_context_token_num;
+    if (!engine_param_.num_tokens_per_iter) {
+        engine_param_.num_tokens_per_iter = engine_param_.max_context_token_num;
         TM_LOG_WARNING("[LlamaTritonModel] `num_tokens_per_iter` is not set, default to `max_context_token_num` (%d).",
-                       (int)engine_params_.num_tokens_per_iter);
+                       (int)engine_param_.num_tokens_per_iter);
+    }
+}
+
+template<typename T>
+LlamaTritonModel<T>::~LlamaTritonModel()
+{
+    ft::FT_CHECK(weights_.size() == engines_.size());
+    for (int device_id = 0; device_id < (int)engines_.size(); ++device_id) {
+        // Set device id before destructing CUDA resources
+        ft::check_cuda_error(cudaSetDevice(device_id));
+        engines_[device_id].reset();
+        weights_[device_id].reset();
     }
 }
 
@@ -167,94 +190,94 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
                                       std::string config):
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
-    shared_weights_(std::vector<std::shared_ptr<ft::LlamaWeight<T>>>(ft::getDeviceCount())),
+    weights_(ft::getDeviceCount()),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
-    INIReader reader;
     FT_CHECK_WITH_INFO(!(config.empty() && model_dir.empty()), "invalid init options");
 
-    if (!model_dir.empty()) {
-        model_dir_ = model_dir;
-        const std::string inifile{model_dir + "/config.ini"};
-        reader = INIReader(inifile);
-        if (reader.ParseError() < 0) {
-            TM_LOG_ERROR("[ERROR] Can't load %s", inifile.c_str());
-            ft::FT_CHECK(false);
+    YAML::Node reader;
+
+    try {
+        if (!model_dir.empty()) {
+            model_dir_ = model_dir;
+            const std::string config_file{model_dir + "/config.yaml"};
+            reader = YAML::LoadFile(config_file);
+        }
+
+        if (!config.empty()) {
+            reader = YAML::Load(config);
         }
     }
-
-    if (!config.empty()) {
-        std::FILE* tmpf = std::tmpfile();
-        std::fputs(config.c_str(), tmpf);
-        std::rewind(tmpf);
-        reader = INIReader(tmpf);
-        if (reader.ParseError() < 0) {
-            TM_LOG_ERROR("[ERROR] Can't init with config %s", config.c_str());
-            ft::FT_CHECK(false);
-        }
+    catch (const YAML::Exception& e) {
+        std::cerr << "Error reading YAML config: " << e.what() << std::endl;
+        ft::FT_CHECK(false);
     }
 
-    model_name_          = reader.Get("llama", "model_name");
-    head_num_            = reader.GetInteger("llama", "head_num");
-    kv_head_num_         = reader.GetInteger("llama", "kv_head_num", 0);
-    size_per_head_       = reader.GetInteger("llama", "size_per_head");
-    inter_size_          = reader.GetInteger("llama", "inter_size");
-    num_layer_           = reader.GetInteger("llama", "num_layer");
-    vocab_size_          = reader.GetInteger("llama", "vocab_size");
-    norm_eps_            = reader.GetFloat("llama", "norm_eps");
-    start_id_            = reader.GetInteger("llama", "start_id");
-    end_id_              = reader.GetInteger("llama", "end_id");
-    use_context_fmha_    = reader.GetInteger("llama", "use_context_fmha", 1);
-    cache_block_seq_len_ = reader.GetInteger("llama", "cache_block_seq_len", 0);
+    const auto model_reader     = reader["model_config"];
+    const auto attention_reader = reader["attention_config"];
+    const auto lora_reader      = reader["lora_config"];
+    const auto engine_reader    = reader["engine_config"];
 
-    attn_bias_    = reader.GetInteger("llama", "attn_bias", 0);
-    quant_policy_ = reader.GetInteger("llama", "quant_policy", 0);
-    group_size_   = reader.GetInteger("llama", "group_size", 0);
+    model_name_                     = model_reader["model_name"].as<std::string>();
+    model_param_.head_num           = model_reader["head_num"].as<int>();
+    model_param_.head_dim           = model_reader["size_per_head"].as<int>();
+    model_param_.kv_head_num        = model_reader["kv_head_num"].as<int>(0);
+    model_param_.hidden_units       = model_reader["hidden_units"].as<int>();
+    model_param_.layer_num          = model_reader["num_layer"].as<int>();
+    model_param_.inter_size         = model_reader["inter_size"].as<int>();
+    model_param_.vocab_size         = model_reader["vocab_size"].as<int>();
+    model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
+    model_param_.start_id           = model_reader["start_id"].as<int>();
+    model_param_.end_id             = model_reader["end_id"].as<int>();
+    attn_param_.cache_block_seq_len = attention_reader["cache_block_seq_len"].as<int>(0);
+    model_param_.quant_policy       = engine_reader["quant_policy"].as<int>(0);
+
+    // Only weight classes need these
+    attn_bias_  = model_reader["attn_bias"].as<int>(0);
+    group_size_ = model_reader["group_size"].as<int>(0);
 
     // rotary embedding parameters
-    attn_params_.rotary_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
-    attn_params_.rotary_embedding_base   = reader.GetFloat("llama", "rope_theta", 10000.0f);
-    attn_params_.rope_scaling_type       = reader.Get("llama", "rope_scaling_type", "");
-    attn_params_.rope_scaling_factor     = reader.GetFloat("llama", "rope_scaling_factor", 0.f);
-    attn_params_.low_freq_factor         = reader.GetFloat("llama", "low_freq_factor", 1.0);
-    attn_params_.high_freq_factor        = reader.GetFloat("llama", "high_freq_factor", 1.0);
-    attn_params_.max_position_embeddings = reader.GetInteger("llama", "max_position_embeddings", 0);
-    attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
-    attn_params_.use_logn_attn           = reader.GetInteger("llama", "use_logn_attn", 0);
+    attn_param_.rotary_embedding_dim    = attention_reader["rotary_embedding"].as<int>();
+    attn_param_.rotary_embedding_base   = attention_reader["rope_theta"].as<float>(10000.0f);
+    attn_param_.rope_scaling_type       = attention_reader["rope_scaling_type"].as<std::string>("");
+    attn_param_.rope_scaling_factor     = attention_reader["rope_scaling_factor"].as<float>(0.f);
+    attn_param_.low_freq_factor         = attention_reader["low_freq_factor"].as<float>(1.0);
+    attn_param_.high_freq_factor        = attention_reader["high_freq_factor"].as<float>(1.0);
+    attn_param_.max_position_embeddings = attention_reader["max_position_embeddings"].as<int>(0);
+    attn_param_.use_dynamic_ntk         = attention_reader["use_dynamic_ntk"].as<int>(0);
+    attn_param_.use_logn_attn           = attention_reader["use_logn_attn"].as<int>(0);
 
-    attn_params_.original_max_position_embeddings = reader.GetInteger("llama", "original_max_position_embeddings", 0);
+    attn_param_.original_max_position_embeddings = attention_reader["original_max_position_embeddings"].as<int>(0);
 
-    engine_params_.max_batch_size        = reader.GetInteger("llama", "max_batch_size", 0);
-    engine_params_.max_prefill_token_num = reader.GetInteger("llama", "max_prefill_token_num", 0);
-    engine_params_.max_context_token_num = reader.GetInteger("llama", "max_context_token_num", 0);
-    engine_params_.session_len           = reader.GetInteger("llama", "session_len", 0);
-    engine_params_.step_length           = reader.GetInteger("llama", "step_length", 0);
+    engine_param_.max_batch_size        = engine_reader["max_batch_size"].as<int>(0);
+    engine_param_.max_prefill_token_num = engine_reader["max_prefill_token_num"].as<int>(0);
+    engine_param_.max_context_token_num = engine_reader["max_context_token_num"].as<int>(0);
+    engine_param_.session_len           = model_reader["session_len"].as<int>(0);
 
-    engine_params_.cache_max_block_count = reader.GetFloat("llama", "cache_max_entry_count", 0);
-    engine_params_.cache_chunk_size      = reader.GetInteger("llama", "cache_chunk_size", 0);
-    engine_params_.enable_prefix_caching = reader.GetBoolean("llama", "enable_prefix_caching", false);
+    engine_param_.cache_max_block_count = engine_reader["cache_max_entry_count"].as<float>(0);
+    engine_param_.cache_chunk_size      = engine_reader["cache_chunk_size"].as<int>(0);
+    engine_param_.enable_prefix_caching = engine_reader["enable_prefix_caching"].as<bool>(false);
 
-    engine_params_.num_tokens_per_iter = reader.GetInteger("llama", "num_tokens_per_iter", 0);
-    engine_params_.max_prefill_iters   = reader.GetInteger("llama", "max_prefill_iters", 1);
+    engine_param_.num_tokens_per_iter = engine_reader["num_tokens_per_iter"].as<int>(0);
+    engine_param_.max_prefill_iters   = engine_reader["max_prefill_iters"].as<int>(1);
 
-    lora_params_.policy        = ft::getLoraPolicy(reader.Get("llama", "lora_policy", ""));
-    lora_params_.r             = reader.GetInteger("llama", "lora_r", 0);
-    lora_params_.scale         = reader.GetFloat("llama", "lora_scale", 0);
-    lora_params_.max_wo_r      = reader.GetInteger("llama", "lora_max_wo_r", 0);
-    lora_params_.rank_pattern  = getLoraPattern<int>(reader.Get("llama", "lora_rank_pattern", ""),
-                                                    [](const std::string& s) { return std::stoi(s); });
-    lora_params_.scale_pattern = getLoraPattern<float>(reader.Get("llama", "lora_scale_pattern", ""),
-                                                       [](const std::string& s) { return std::stof(s); });
+    lora_param_.policy        = ft::getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
+    lora_param_.r             = lora_reader["lora_r"].as<int>(0);
+    lora_param_.scale         = lora_reader["lora_scale"].as<float>(0);
+    lora_param_.max_wo_r      = lora_reader["lora_max_wo_r"].as<int>(0);
+    lora_param_.rank_pattern  = getLoraPattern<int>(lora_reader["lora_rank_pattern"].as<std::string>(""),
+                                                   [](const std::string& s) { return std::stoi(s); });
+    lora_param_.scale_pattern = getLoraPattern<float>(lora_reader["lora_scale_pattern"].as<std::string>(""),
+                                                      [](const std::string& s) { return std::stof(s); });
     handleMissingParams();
 
-    shared_state_          = std::make_shared<typename ft::LlamaV2<T>::SharedState>();
+    shared_state_          = std::make_shared<ft::SharedState>();
     shared_state_->barrier = std::make_shared<ft::Barrier>(tensor_para_size);
 
     const auto device_count = ft::getDeviceCount();
-    shared_instances_.resize(device_count);
-    shared_mutexes_.resize(device_count);
+    engines_.resize(device_count);
 
-    const std::string weight_type_str = reader.Get("llama", "weight_type");
+    const std::string weight_type_str = model_reader["weight_type"].as<std::string>();
     if (weight_type_str == "fp16") {
         weight_type_ = ft::WeightType::kFP16;
     }
@@ -279,7 +302,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
 }
 
 template<typename T>
-std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSharedModelInstance(
+std::unique_ptr<ft::Engine<T>> LlamaTritonModel<T>::createSharedModelInstance(
     int                                                               device_id,
     int                                                               rank,
     std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
@@ -288,42 +311,46 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     ft::check_cuda_error(cudaSetDevice(device_id));
     const int comms_rank = device_id % (tensor_para_size_ * pipeline_para_size_);
 
-    /// TODO: this stream handle is leaked
-    cudaStream_t stream{};
-    ft::check_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    auto ctx = std::make_unique<ft::Context<T>>();
 
-    auto allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, false);
-    allocator->setStream(stream);
+    ft::check_cuda_error(cudaStreamCreateWithFlags(&ctx->stream, cudaStreamNonBlocking));
 
-    auto peer_allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, true);
-    peer_allocator->setStream(stream);
+    ctx->allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, false);
+    ctx->allocator->setStream(ctx->stream);
+
+    ctx->peer_allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, true);
+    ctx->peer_allocator->setStream(ctx->stream);
 
     cublasHandle_t   cublas_handle;
     cublasLtHandle_t cublaslt_handle;
 
     cublasCreate(&cublas_handle);
     cublasLtCreate(&cublaslt_handle);
-    cublasSetStream(cublas_handle, stream);
+    cublasSetStream(cublas_handle, ctx->stream);
 
-    std::unique_ptr<ft::cublasAlgoMap>   cublas_algo_map(new ft::cublasAlgoMap("gemm_config.in"));
-    std::unique_ptr<std::mutex>          cublas_wrapper_mutex(new std::mutex());
-    std::unique_ptr<ft::cublasMMWrapper> cublas_wrapper(new ft::cublasMMWrapper(
-        cublas_handle, cublaslt_handle, stream, cublas_algo_map.get(), cublas_wrapper_mutex.get(), allocator.get()));
+    ctx->cublas_algo_map      = std::make_unique<ft::cublasAlgoMap>("gemm_config.in");
+    ctx->cublas_wrapper_mutex = std::make_unique<std::mutex>();
+    ctx->cublas_wrapper       = std::make_unique<ft::cublasMMWrapper>(cublas_handle,
+                                                                cublaslt_handle,
+                                                                ctx->stream,
+                                                                ctx->cublas_algo_map.get(),
+                                                                ctx->cublas_wrapper_mutex.get(),
+                                                                ctx->allocator.get());
+    ctx->linear               = std::make_unique<ft::LlamaLinear<T>>(ctx->cublas_wrapper.get(), ctx->stream);
 
-    std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr(new cudaDeviceProp);
-    ft::check_cuda_error(cudaGetDeviceProperties(cuda_device_prop_ptr.get(), device_id));
+    ft::check_cuda_error(cudaGetDeviceProperties(&ctx->cuda_device_prop, device_id));
 
     if (std::is_same<T, half>::value) {
-        cublas_wrapper->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
+        ctx->cublas_wrapper->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
     }
 #ifdef ENABLE_FP32
     else if (std::is_same<T, float>::value) {
-        cublas_wrapper->setFP32GemmConfig();
+        ctx.cublas_wrapper->setFP32GemmConfig();
     }
 #endif
 #ifdef ENABLE_BF16
     else if (std::is_same<T, __nv_bfloat16>::value) {
-        cublas_wrapper->setBF16GemmConfig();
+        ctx->cublas_wrapper->setBF16GemmConfig();
     }
 #endif
 
@@ -333,70 +360,42 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     ft::FT_CHECK(tensor_para.world_size_ == tensor_para_size_);
     ft::FT_CHECK(pipeline_para.world_size_ == pipeline_para_size_);
 
-    auto llama = std::make_unique<ft::LlamaV2<T>>(head_num_,
-                                                  kv_head_num_,
-                                                  size_per_head_,
-                                                  inter_size_,
-                                                  num_layer_,
-                                                  vocab_size_,
-                                                  norm_eps_,
-                                                  attn_params_,
-                                                  start_id_,
-                                                  end_id_,
-                                                  cache_block_seq_len_,
-                                                  quant_policy_,
-                                                  use_context_fmha_,
-                                                  engine_params_,
-                                                  lora_params_,
-                                                  shared_state_,
-                                                  shared_weights_[device_id].get(),
+    auto model = std::make_unique<ft::LlamaV2<T>>(model_param_,  //
+                                                  attn_param_,
+                                                  lora_param_,
                                                   tensor_para,
-                                                  stream,
-                                                  cublas_wrapper.get(),
-                                                  allocator.get(),
-                                                  peer_allocator.get(),
-                                                  false,  // is_free_buffer_after_forward,
-                                                  cuda_device_prop_ptr.get());
+                                                  *ctx,
+                                                  engine_param_.max_batch_size,
+                                                  weights_[device_id]);
 
-    return std::make_unique<LlamaTritonSharedModelInstance<T>>(
-        LlamaTritonSharedModelInstance<T>{std::move(allocator),
-                                          std::move(peer_allocator),
-                                          std::move(cublas_algo_map),
-                                          std::move(cublas_wrapper_mutex),
-                                          std::move(cublas_wrapper),
-                                          std::move(cuda_device_prop_ptr),
-                                          shared_weights_[device_id],
-                                          std::move(llama),
-                                          engine_params_.session_len});
+    auto engine = std::make_unique<ft::Engine<T>>(engine_param_,  //
+                                                  std::move(model),
+                                                  std::move(ctx),
+                                                  shared_state_,
+                                                  device_id);
+
+    engine->Start();
+
+    return engine;
 }
 
 template<typename T>
 std::unique_ptr<AbstractTransformerModelInstance>
-LlamaTritonModel<T>::createModelInstance(int                                                               device_id,
-                                         int                                                               rank,
-                                         cudaStream_t                                                      stream,
-                                         std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
-                                         std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm)
+LlamaTritonModel<T>::createModelInstance(int          device_id,
+                                         int          rank,
+                                         cudaStream_t stream,
+                                         std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>,
+                                         std::shared_ptr<ft::AbstractCustomComm>)
 {
     ft::check_cuda_error(cudaSetDevice(device_id));
-    // const int comms_rank = device_id % (tensor_para_size_ * pipeline_para_size_);
 
-    std::shared_ptr<LlamaTritonSharedModelInstance<T>> instance;
-    {
-        std::lock_guard<std::mutex> lock(shared_mutexes_[device_id]);
-        instance = shared_instances_[device_id];
-        if (!instance) {
-            instance = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
-            instance->llm->setFfiLock(ffi_lock_);
-            shared_instances_[device_id] = instance;
-        }
-    }
+    ft::FT_CHECK(engines_[device_id] != nullptr);
 
     auto allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, false);
 
     allocator->setStream(stream);
 
-    return std::make_unique<LlamaTritonModelInstance<T>>(instance, std::move(allocator), device_id);
+    return std::make_unique<LlamaTritonModelInstance<T>>(*engines_[device_id], std::move(allocator), device_id);
 }
 
 template<typename T>
@@ -406,21 +405,22 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
     const int tensor_para_rank   = rank % tensor_para_size_;
     const int pipeline_para_rank = rank / tensor_para_size_;
     ft::FT_CHECK(pipeline_para_size_ == 1 && pipeline_para_rank == 0);
-    shared_weights_[device_id] = std::make_shared<ft::LlamaWeight<T>>(head_num_,
-                                                                      kv_head_num_,
-                                                                      size_per_head_,
-                                                                      inter_size_,
-                                                                      vocab_size_,
-                                                                      num_layer_,
-                                                                      attn_bias_,
-                                                                      weight_type_,
-                                                                      group_size_,
-                                                                      lora_params_,
-                                                                      tensor_para_size_,
-                                                                      tensor_para_rank);
+    weights_[device_id] = std::make_shared<ft::LlamaWeight<T>>(model_param_.head_num,
+                                                               model_param_.kv_head_num,
+                                                               model_param_.head_dim,
+                                                               model_param_.hidden_units,
+                                                               model_param_.inter_size,
+                                                               model_param_.vocab_size,
+                                                               model_param_.layer_num,
+                                                               attn_bias_,
+                                                               weight_type_,
+                                                               group_size_,
+                                                               lora_param_,
+                                                               tensor_para_size_,
+                                                               tensor_para_rank);
     // model inited with model_dir
     if (model_dir_ != "") {
-        shared_weights_[device_id]->loadModel(model_dir_);
+        weights_[device_id]->loadModel(model_dir_);
     }
     return;
 }
@@ -430,8 +430,8 @@ TensorMap LlamaTritonModel<T>::getParams(int deviceId, int rank)
 {
     ft::check_cuda_error(cudaSetDevice(deviceId));
     // shared_weight should be created before getParams
-    ft::FT_CHECK(shared_weights_[deviceId] != nullptr);
-    ft::TensorMap output = shared_weights_[deviceId]->getParams();
+    ft::FT_CHECK(weights_[deviceId] != nullptr);
+    ft::TensorMap output = weights_[deviceId]->getParams();
     TensorMap     result;
     for (auto [name, tensor] : output) {
         result.emplace(name, triton::Tensor{tensor.where, tensor.type, tensor.shape, tensor.data});
@@ -440,24 +440,56 @@ TensorMap LlamaTritonModel<T>::getParams(int deviceId, int rank)
 }
 
 template<typename T>
+void LlamaTritonModel<T>::processWeights(int device_id, int rank)
+{
+    ft::check_cuda_error(cudaSetDevice(device_id));
+    ft::FT_CHECK(weights_[device_id] != nullptr);
+
+    cudaDeviceProp props{};
+    ft::check_cuda_error(cudaGetDeviceProperties(&props, device_id));
+
+    weights_[device_id]->prepare(props);
+    ft::sync_check_cuda_error();
+}
+
+template<typename T>
+void LlamaTritonModel<T>::createEngine(int                                                               device_id,
+                                       int                                                               rank,
+                                       std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
+                                       std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm)
+{
+
+    auto engine = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
+    engine->set_ffi_lock(ffi_lock_);
+
+    if (weight_type_ == ft::WeightType::kINT4) {
+        engine->model().tune();
+    }
+
+    engines_[device_id] = std::move(engine);
+}
+
+template<typename T>
 std::string LlamaTritonModel<T>::toString()
 {
     std::stringstream ss;
-    ss << "Model: "
-       << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_ << "\nsize_per_head: " << size_per_head_
-       << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_
-       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_params_.max_batch_size
-       << "\nmax_prefill_token_num: " << engine_params_.max_prefill_token_num
-       << "\nmax_context_token_num: " << engine_params_.max_context_token_num
-       << "\nsession_len: " << engine_params_.session_len << "\nstep_length: " << engine_params_.step_length
-       << "\ncache_max_entry_count: " << engine_params_.cache_max_block_count
-       << "\ncache_block_seq_len: " << cache_block_seq_len_ << "\ncache_chunk_size: " << engine_params_.cache_chunk_size
-       << "\nenable_prefix_caching: " << engine_params_.enable_prefix_caching
-       << "\nuse_context_fmha: " << use_context_fmha_ << "\nstart_id: " << start_id_
+    ss << "Model: "  //
+       << "\nhead_num: " << model_param_.head_num << "\nkv_head_num: " << model_param_.kv_head_num
+       << "\nsize_per_head: " << model_param_.head_dim << "\ninter_size: " << model_param_.inter_size
+       << "\nnum_layer: " << model_param_.layer_num << "\nvocab_size: " << model_param_.vocab_size
+       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_param_.max_batch_size
+       << "\nmax_prefill_token_num: " << engine_param_.max_prefill_token_num
+       << "\nmax_context_token_num: " << engine_param_.max_context_token_num
+       << "\nnum_tokens_per_iter: " << engine_param_.num_tokens_per_iter
+       << "\nmax_prefill_iters: " << engine_param_.max_prefill_iters << "\nsession_len: " << engine_param_.session_len
+       << "\ncache_max_entry_count: " << engine_param_.cache_max_block_count
+       << "\ncache_block_seq_len: " << attn_param_.cache_block_seq_len
+       << "\ncache_chunk_size: " << engine_param_.cache_chunk_size
+       << "\nenable_prefix_caching: " << engine_param_.enable_prefix_caching << "\nstart_id: " << model_param_.start_id
        << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
        << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
-       << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_ << "\ngroup_size: " << group_size_
-       << std::endl;
+       << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << model_param_.quant_policy
+       << "\ngroup_size: " << group_size_ << std::endl;
 
     return ss.str();
 }
@@ -468,36 +500,6 @@ void LlamaTritonModel<T>::createCustomComms(
 {
     using commDataType = typename ft::CustomARCommTypeConverter<T>::Type;
     ft::initCustomAllReduceComm<commDataType>(custom_all_reduce_comms, enable_custom_all_reduce_, world_size);
-}
-
-template<typename T>
-std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>
-LlamaTritonModel<T>::createNcclParams(const int node_id, const int device_id_start, const bool multi_node)
-{
-    const auto device_count     = ft::getDeviceCount();
-    bool       need_nccl_params = false;
-    // create nccl group when there are non-occupied devices
-    for (int i = 0; i < device_count; ++i) {
-        std::lock_guard<std::mutex> lock(shared_mutexes_[i]);
-        if (shared_instances_[i] == nullptr) {
-            need_nccl_params = true;
-            break;
-        }
-    }
-    if (need_nccl_params) {
-        return AbstractTransformerModel::createNcclParams(node_id, device_id_start, multi_node);
-    }
-    else {
-        TM_LOG_INFO("Skipping NCCL param creation.");
-
-        const int tensor_para_size   = getTensorParaSize();
-        const int pipeline_para_size = getPipelineParaSize();
-        const int local_comm_size    = multi_node ? device_count : tensor_para_size * pipeline_para_size;
-
-        std::vector<ft::NcclParam> tensor_para_params(local_comm_size);
-        std::vector<ft::NcclParam> pipeline_para_params(local_comm_size);
-        return {std::move(tensor_para_params), std::move(pipeline_para_params)};
-    }
 }
 
 template<typename T>

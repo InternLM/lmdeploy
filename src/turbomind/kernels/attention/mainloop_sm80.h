@@ -4,7 +4,7 @@
 
 #include "iterator_sm80.h"
 #include "mainloop.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
+#include "src/turbomind/kernels/core/pipe_iter.h"
 #include <cuda_pipeline_primitives.h>
 #include <type_traits>
 
