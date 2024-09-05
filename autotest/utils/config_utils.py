@@ -188,12 +188,16 @@ def get_benchmark_model_list(tp_num,
             'backend': 'turbomind',
             'quant_policy': 0,
             'tp_num': tp_num
-        } for item in model_list]
-        result += [{
-            'model': item,
-            'backend': 'pytorch',
-            'tp_num': tp_num
-        } for item in model_list if '4bits' not in item]
+        } for item in model_list if item.replace('-inner-4bits', '') in
+                   config.get('turbomind_chat_model')]
+        result += [
+            {
+                'model': item,
+                'backend': 'pytorch',
+                'tp_num': tp_num
+            } for item in model_list
+            if '4bits' not in item and item in config.get('pytorch_chat_model')
+        ]
         for kvint in kvint_list:
             result += [{
                 'model': item,

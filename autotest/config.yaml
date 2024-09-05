@@ -88,6 +88,7 @@ pytorch_chat_model:
     - google/gemma-2-9b-it
     - deepseek-ai/deepseek-moe-16b-chat
     - deepseek-ai/deepseek-coder-1.3b-instruct
+    - deepseek-ai/DeepSeek-V2-Lite-Chat
     - THUDM/chatglm2-6b
     - THUDM/cogvlm2-llama3-chinese-chat-19B
     - THUDM/glm-4v-9b
@@ -235,3 +236,8 @@ benchmark_model:
     - meta-llama/Meta-Llama-3-1-70B-Instruct
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
+    - THUDM/glm-4-9b-chat
+    - Qwen/Qwen2-7B-Instruct
+    - deepseek-ai/DeepSeek-V2-Lite-Chat
+    - mistralai/Mistral-7B-Instruct-v0.3
+    - mistralai/Mixtral-8x7B-Instruct-v0.1
