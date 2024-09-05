@@ -2,7 +2,6 @@
 
 #pragma once
 
-// #include "src/turbomind/models/llama/LlamaCacheManager.h"
 #include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/Request.h"

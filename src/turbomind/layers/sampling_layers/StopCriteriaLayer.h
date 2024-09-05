@@ -18,7 +18,6 @@
 
 #include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
 #include "src/turbomind/macro.h"
-#include <vector>
 
 namespace turbomind {
 
