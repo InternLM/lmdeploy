@@ -4,7 +4,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from ..backends import LayerType, get_backend
+from ..backends import OpType, get_backend
 
 
 def _is_w8a8(quant_config: Any):
@@ -31,9 +31,9 @@ class RMSNorm(nn.Module):
         super().__init__()
         backend = get_backend()
         if _is_w8a8(quant_config):
-            builder = backend.get_layer_impl_builder(LayerType.RMSNormW8A8)
+            builder = backend.get_layer_impl_builder(OpType.RMSNormW8A8)
         else:
-            builder = backend.get_layer_impl_builder(LayerType.RMSNorm)
+            builder = backend.get_layer_impl_builder(OpType.RMSNorm)
         self.register_parameter('weight',
                                 self.create_weight(hidden_size, dtype, device))
         self.impl = builder.build(hidden_size, eps)
@@ -69,7 +69,7 @@ class LayerNorm(nn.Module):
                  device: torch.device = None):
         super().__init__()
         backend = get_backend()
-        builder = backend.get_layer_impl_builder(LayerType.LayerNorm)
+        builder = backend.get_layer_impl_builder(OpType.LayerNorm)
         weight, bias = self.create_weight(hidden_size, bias, dtype, device)
         self.register_parameter('weight', weight)
         self.register_parameter('bias', bias)

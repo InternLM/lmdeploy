@@ -3,7 +3,7 @@ from typing import Tuple
 
 import torch
 
-from ..base import LayerType
+from ..base import OpType
 from ..default import DefaultLayersBackend
 
 
@@ -14,8 +14,8 @@ class AscendLayersBackend(DefaultLayersBackend):
         raise 'ascend'
 
     @classmethod
-    def get_layer_impl_builder(cls, layer_type: LayerType):
-        if layer_type == LayerType.Attention:
+    def get_layer_impl_builder(cls, layer_type: OpType):
+        if layer_type == OpType.Attention:
             from .attention import AscendAttentionImpl
             return AscendAttentionImpl
         else:

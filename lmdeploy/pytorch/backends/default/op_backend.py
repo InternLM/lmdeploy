@@ -3,7 +3,7 @@ from typing import Tuple
 
 import torch
 
-from ..base import LayersBackend, LayerType
+from ..base import LayersBackend, OpType
 
 
 class DefaultLayersBackend(LayersBackend):
@@ -13,36 +13,36 @@ class DefaultLayersBackend(LayersBackend):
         raise 'default'
 
     @classmethod
-    def get_layer_impl_builder(cls, layer_type: LayerType):
+    def get_layer_impl_builder(cls, layer_type: OpType):
         """get builder of given layer type."""
-        if layer_type == LayerType.Linear:
+        if layer_type == OpType.Linear:
             from .linear import DefaultLinearBuilder
             return DefaultLinearBuilder
-        elif layer_type == LayerType.RotaryEmbedding:
+        elif layer_type == OpType.RotaryEmbedding:
             from .rotary_embedding import DefaultRotaryEmbeddingBuilder
             return DefaultRotaryEmbeddingBuilder
-        elif layer_type == LayerType.ApplyRotaryEmb:
+        elif layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import DefaultApplyRotaryEmbBuilder
             return DefaultApplyRotaryEmbBuilder
-        elif layer_type == LayerType.SiluAndMul:
+        elif layer_type == OpType.SiluAndMul:
             from .activation import DefaultSiluAndMulBuilder
             return DefaultSiluAndMulBuilder
-        elif layer_type == LayerType.GeluAndMul:
+        elif layer_type == OpType.GeluAndMul:
             from .activation import DefaultGeluAndMulBuilder
             return DefaultGeluAndMulBuilder
-        elif layer_type == LayerType.RMSNorm:
+        elif layer_type == OpType.RMSNorm:
             from .norm import DefaultRMSNormBuilder
             return DefaultRMSNormBuilder
-        elif layer_type == LayerType.LayerNorm:
+        elif layer_type == OpType.LayerNorm:
             from .norm import DefaultLayerNormBuilder
             return DefaultLayerNormBuilder
-        elif layer_type == LayerType.MultinomialSampling:
+        elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import DefaultMultinomialSamplingBuilder
             return DefaultMultinomialSamplingBuilder
-        elif layer_type == LayerType.LinearW4A16:
+        elif layer_type == OpType.LinearW4A16:
             from .awq_modules import DefaultLinearW4A16Builder
             return DefaultLinearW4A16Builder
-        elif layer_type == LayerType.SoftmaxTopK:
+        elif layer_type == OpType.SoftmaxTopK:
             from .moe import DefaultSoftmaxTopKBuilder
             return DefaultSoftmaxTopKBuilder
         else:

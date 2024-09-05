@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from torch import Tensor, nn
 
-from ..backends import LayerType, get_backend
+from ..backends import OpType, get_backend
 from ..backends.rotary_embedding import (EmbeddingType, Llama3Parameters,
                                          LongRoPEScalingParameters,
                                          YarnParameters)
@@ -19,7 +19,7 @@ def build_rotary_embedding(
     """build rotary embedding op."""
     backend = get_backend()
 
-    builder = backend.get_layer_impl_builder(LayerType.RotaryEmbedding)
+    builder = backend.get_layer_impl_builder(OpType.RotaryEmbedding)
     return builder.build(dim,
                          max_position_embeddings,
                          base,
@@ -36,7 +36,7 @@ class ApplyRotaryEmb(nn.Module):
     def __init__(self):
         super().__init__()
         backend = get_backend()
-        builder = backend.get_layer_impl_builder(LayerType.ApplyRotaryEmb)
+        builder = backend.get_layer_impl_builder(OpType.ApplyRotaryEmb)
         self.impl = builder.build()
 
     def forward(self,

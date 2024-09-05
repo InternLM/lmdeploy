@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 
-from ..backends import LayerType, get_backend
+from ..backends import OpType, get_backend
 from ..backends.attention import AttentionMetadata
 from .utils import get_distribute_size, get_world_rank
 
@@ -28,8 +28,7 @@ class Attention(nn.Module):
             num_heads, num_kv_heads, replicate_kv)
 
         layer_backend = get_backend()
-        impl_builder = layer_backend.get_layer_impl_builder(
-            LayerType.Attention)
+        impl_builder = layer_backend.get_layer_impl_builder(OpType.Attention)
 
         self.impl = impl_builder.build(
             num_heads=num_heads,

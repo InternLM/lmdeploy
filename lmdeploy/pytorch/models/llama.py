@@ -237,30 +237,34 @@ class LlamaModel(nn.Module):
                             device=device)
 
         # build rotary embedding in LlamaModel
-        rope_scaling = config.rope_scaling
-        if rope_scaling is None:
-            emb_type = EmbeddingType.LinearScaling
-        else:
-            rope_type = rope_scaling['rope_type']
-            if rope_type == 'dynamic':
-                emb_type = EmbeddingType.DynamicNTKScaling
-            elif rope_type == 'llama3':
-                emb_type = EmbeddingType.Llama3
-            else:
-                raise RuntimeError(f'Unsupported rope type: {rope_type}')
-
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
         scaling_factor = 1.0
         llama3_params = None
-        if rope_scaling is not None:
-            scaling_factor = rope_scaling.get('scaling_factor', scaling_factor)
-            if emb_type == EmbeddingType.Llama3:
+        rope_scaling = config.rope_scaling
+        if rope_scaling is None:
+            emb_type = EmbeddingType.LinearScaling
+        else:
+            if 'scaling_factor' in rope_scaling:
+                scaling_factor = rope_scaling['scaling_factor']
+            elif 'factor' in rope_scaling:
+                scaling_factor = rope_scaling['factor']
+
+            rope_type = rope_scaling['rope_type']
+            if rope_type == 'dynamic':
+                emb_type = EmbeddingType.DynamicNTKScaling
+            if rope_type == 'linear':
+                emb_type = EmbeddingType.LinearScaling
+            elif rope_type == 'llama3':
+                emb_type = EmbeddingType.Llama3
                 low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
                 high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
                 llama3_params = Llama3Parameters(low_freq_factor,
                                                  high_freq_factor)
+            else:
+                raise RuntimeError(f'Unsupported rope type: {rope_type}')
+
         self.rotary_emb = build_rotary_embedding(
             rope_dim,
             rope_max_pos_emb,

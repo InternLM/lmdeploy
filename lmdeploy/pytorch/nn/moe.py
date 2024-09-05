@@ -5,7 +5,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
-from ..backends import LayerType, get_backend
+from ..backends import OpType, get_backend
 from .utils import get_world_rank
 
 
@@ -15,8 +15,7 @@ class SoftmaxTopK(nn.Module):
     def __init__(self, top_k: int, dim: int = -1):
         super().__init__()
         self.top_k = top_k
-        impl_builder = get_backend().get_layer_impl_builder(
-            LayerType.SoftmaxTopK)
+        impl_builder = get_backend().get_layer_impl_builder(OpType.SoftmaxTopK)
         self.impl = impl_builder.build(top_k, dim)
 
     def forward(self, x: torch.Tensor):
@@ -43,7 +42,7 @@ class FusedMoE(nn.Module):
             dtype = torch.float16
         hidden_dim, ffn_dim = self._update_args(hidden_dim, ffn_dim)
 
-        impl_builder = get_backend().get_layer_impl_builder(LayerType.FusedMoE)
+        impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoE)
         self.impl = impl_builder.build(top_k, renormalize)
 
         gate_up_weights, down_weights = self.create_weights(hidden_dim,

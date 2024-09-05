@@ -6,7 +6,7 @@ import torch
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
-from ..base import LayerType
+from ..base import OpType
 from ..default import DefaultLayersBackend
 
 logger = get_logger('lmdeploy')
@@ -21,30 +21,30 @@ class CudaLayersBackend(DefaultLayersBackend):
         raise 'cuda'
 
     @classmethod
-    def get_layer_impl_builder(cls, layer_type: LayerType):
+    def get_layer_impl_builder(cls, layer_type: OpType):
         """get cuda layer builder."""
-        if layer_type == LayerType.Attention:
+        if layer_type == OpType.Attention:
             from .attention import TritonAttentionBuilder
             return TritonAttentionBuilder
-        elif layer_type == LayerType.ApplyRotaryEmb:
+        elif layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import TritonApplyRotaryEmbBuilder
             return TritonApplyRotaryEmbBuilder
-        elif layer_type == LayerType.RMSNorm:
+        elif layer_type == OpType.RMSNorm:
             from .norm import TritonRMSNormBuilder
             return TritonRMSNormBuilder
-        elif layer_type == LayerType.SLoRA:
+        elif layer_type == OpType.SLoRA:
             from .slora import TritonSLoRABuilder
             return TritonSLoRABuilder
-        elif layer_type == LayerType.LinearW8A8:
+        elif layer_type == OpType.LinearW8A8:
             from .qmodules import TritonLinearW8A8Builder
             return TritonLinearW8A8Builder
-        elif layer_type == LayerType.RMSNormW8A8:
+        elif layer_type == OpType.RMSNormW8A8:
             from .qmodules import TritonRMSNormBuilder
             return TritonRMSNormBuilder
-        elif layer_type == LayerType.MultinomialSampling:
+        elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import TritonMultinomialSamplingBuilder
             return TritonMultinomialSamplingBuilder
-        elif layer_type == LayerType.LinearW4A16:
+        elif layer_type == OpType.LinearW4A16:
             from awq.modules.linear.gemm import AWQ_INSTALLED
             if AWQ_INSTALLED:
                 from .awq_modules import AwqLinearW4A16Builder
@@ -53,7 +53,7 @@ class CudaLayersBackend(DefaultLayersBackend):
                 logger.debug(
                     f'Op {layer_type} fallback to default implementation.')
                 return super().get_layer_impl_builder(layer_type)
-        elif layer_type == LayerType.FusedMoE:
+        elif layer_type == OpType.FusedMoE:
             from .moe import TritonFusedMoEBuilder
             return TritonFusedMoEBuilder
         else:

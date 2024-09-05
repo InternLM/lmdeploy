@@ -9,7 +9,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import \
     default_weight_loader
 from lmdeploy.utils import get_logger
 
-from ..backends import LayerType, get_backend
+from ..backends import OpType, get_backend
 from ..backends.slora import AdapterInfo
 from .utils import div_up, get_distribute_size, get_world_rank
 
@@ -93,7 +93,7 @@ class SLoRA(nn.Module):
             base_slice=base_slice,
             max_rank=max_rank,
         )
-        impl_builder = get_backend().get_layer_impl_builder(LayerType.SLoRA)
+        impl_builder = get_backend().get_layer_impl_builder(OpType.SLoRA)
         self.impl = impl_builder.build()
         self.is_tp = is_tp
         self.ctx_mgr = ctx_mgr
@@ -133,8 +133,7 @@ class AwqLinear(nn.Module):
                 in_features, out_features, w_bit, group_size, colwise)
         qweight, scales, qzeros, bias = self.create_weights(
             in_features, out_features, w_bit, group_size, bias, dtype, device)
-        impl_builder = get_backend().get_layer_impl_builder(
-            LayerType.LinearW4A16)
+        impl_builder = get_backend().get_layer_impl_builder(OpType.LinearW4A16)
         self.impl = impl_builder.build(in_features,
                                        out_features,
                                        w_bit,
@@ -501,8 +500,7 @@ class W8A8Linear(nn.Module):
         if is_tp:
             in_features, out_features = self._get_io_features(
                 in_features, out_features, colwise)
-        impl_builder = get_backend().get_layer_impl_builder(
-            LayerType.LinearW8A8)
+        impl_builder = get_backend().get_layer_impl_builder(OpType.LinearW8A8)
         self.impl = impl_builder.build(in_features,
                                        out_features,
                                        bias is not None,
@@ -759,7 +757,7 @@ class BaseLinear(nn.Module):
         if is_tp:
             in_features, out_features = self._get_io_features(
                 in_features, out_features, colwise)
-        impl_builder = get_backend().get_layer_impl_builder(LayerType.Linear)
+        impl_builder = get_backend().get_layer_impl_builder(OpType.Linear)
         self.impl = impl_builder.build(in_features,
                                        out_features,
                                        bias is not None,

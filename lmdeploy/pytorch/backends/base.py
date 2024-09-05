@@ -10,7 +10,7 @@ import torch
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 
 
-class LayerType(Enum):
+class OpType(Enum):
     """Layer type enumerate."""
     Attention = auto()
     Linear = auto()
@@ -40,7 +40,7 @@ class LayersBackend(ABC):
 
     @classmethod
     @abstractmethod
-    def get_layer_impl_builder(cls, layer_type: LayerType):
+    def get_layer_impl_builder(cls, layer_type: OpType):
         """get builder of given layer type."""
         raise NotImplementedError
 
