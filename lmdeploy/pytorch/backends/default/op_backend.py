@@ -10,7 +10,7 @@ class DefaultOpsBackend(OpsBackend):
 
     @staticmethod
     def get_name() -> str:
-        raise 'default'
+        return 'default'
 
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):

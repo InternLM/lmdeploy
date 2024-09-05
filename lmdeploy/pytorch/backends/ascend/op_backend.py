@@ -11,7 +11,7 @@ class AscendOpsBackend(DefaultOpsBackend):
 
     @staticmethod
     def get_name() -> str:
-        raise 'ascend'
+        return 'ascend'
 
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):

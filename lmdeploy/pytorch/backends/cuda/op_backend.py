@@ -18,7 +18,7 @@ class CudaOpsBackend(DefaultOpsBackend):
     @staticmethod
     def get_name() -> str:
         """backend name."""
-        raise 'cuda'
+        return 'cuda'
 
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
