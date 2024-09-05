@@ -5,6 +5,7 @@ fire
 mmengine-lite
 numpy<2.0.0
 openai
+outlines
 peft<=0.11.1
 pillow
 protobuf

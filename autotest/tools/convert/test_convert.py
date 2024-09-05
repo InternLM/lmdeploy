@@ -22,9 +22,10 @@ def test_convert(config, model, worker_id):
 @pytest.mark.convert
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize(
-    'model',
-    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
+@pytest.mark.parametrize('model', [
+    'internlm/internlm2_5-20b-chat',
+    'internlm/internlm2_5-20b-chat-inner-4bits'
+])
 def test_convert_pr(config, model):
     convert(config, model, 'CUDA_VISIBLE_DEVICES=5')
 

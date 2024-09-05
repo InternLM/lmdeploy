@@ -8,7 +8,7 @@
 [![open issues](https://img.shields.io/github/issues-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
 
 [📘Documentation](https://lmdeploy.readthedocs.io/en/latest/) |
-[🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started.html) |
+[🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started/get_started.html) |
 [🤔Reporting Issues](https://github.com/InternLM/lmdeploy/issues/new/choose)
 
 [English](README.md) | [简体中文](README_zh-CN.md) | 日本語
@@ -181,7 +181,7 @@ pip install lmdeploy
 ```
 
 v0.3.0から、デフォルトの事前構築済みパッケージはCUDA 12でコンパイルされています。
-CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/installation.md)参照してください。
+CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/get_started/installation.md)参照してください。
 
 ## オフラインバッチ推論
 
@@ -201,7 +201,7 @@ print(response)
 
 # チュートリアル
 
-LMDeployの基本的な使用方法については、[getting_started](./docs/en/get_started.md)セクションを参照してください。
+LMDeployの基本的な使用方法については、[getting_started](docs/en/get_started/get_started.md)セクションを参照してください。
 
 詳細なユーザーガイドと高度なガイドについては、[チュートリアル](https://lmdeploy.readthedocs.io/en/latest/)を参照してください：
 

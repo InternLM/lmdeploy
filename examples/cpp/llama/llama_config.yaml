@@ -1,0 +1,24 @@
+ft_instance_hyperparameter:
+    data_type: fp16
+    enable_custom_all_reduce: 0
+    pipeline_para_size: 1
+    tensor_para_size: 1
+     # update model_dir path according to the actual situation
+    model_dir: /workspace/models/triton_models/weights/
+
+
+request:
+    request_batch_size: 8
+    max_input_len: 1
+    request_output_len: 2048
+    beam_width: 1  # beam width for beam search
+    top_k: 1  # k value for top k sampling
+    top_p: 0.0  # p value for top p sampling
+    temperature: 1.0  # Use for sampling
+    repetition_penalty: 1.00  # Use for sampling
+    presence_penalty: 0.0  # Only one of repetition_penalty and presence_penalty are allowed.
+    len_penalty: 0.0
+    beam_search_diversity_rate: 0.0
+    # PJLM start/end ids
+    start_id: 0
+    end_id: 1

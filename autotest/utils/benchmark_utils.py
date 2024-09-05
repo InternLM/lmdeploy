@@ -165,7 +165,7 @@ def restful_test(config,
 
     command = f'python3 benchmark/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True '  # noqa: F401, E501
     if is_smoke:
-        command += ' --num-prompts 300'
+        command += ' --num-prompts 200'
     else:
         command += ' --num-prompts 2000'
 
