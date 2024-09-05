@@ -1,4 +1,4 @@
-FROM ubuntu:20.04 as export_image
+FROM ubuntu:20.04 as base_builder
 
 WORKDIR /tmp
 
@@ -53,10 +53,10 @@ RUN if [ ! -d "/lib64" ]; \
         mkdir /lib64 && ln -sf /lib/ld-linux-aarch64.so.1 /lib64/ld-linux-aarch64.so.1; \
     fi
 
-FROM ubuntu:20.04 as buildtemp
-COPY ./*.run /tmp
+FROM ubuntu:20.04 as build_temp
+COPY . /tmp
 
-FROM export_image
+FROM base_builder as cann_builder
 
 ARG ASCEND_BASE=/usr/local/Ascend
 ARG TOOLKIT_PATH=$ASCEND_BASE/ascend-toolkit/latest
@@ -74,7 +74,7 @@ ARG CHIP=all
 ARG TOOLKIT_PKG=Ascend-cann-toolkit_*.run
 ARG KERNELS_PKG=Ascend-cann-kernels-*.run
 
-RUN --mount=type=cache,target=/tmp,from=buildtemp,source=/tmp \
+RUN --mount=type=cache,target=/tmp,from=build_temp,source=/tmp \
     umask 0022 && \
     mkdir -p $ASCEND_BASE/driver && \
     if [ "$CHIP" != "all" ]; \
@@ -97,8 +97,6 @@ ENV GLOG_v=2 \
 
 ENV PYTHONPATH=$TBE_IMPL_PATH:$PYTHONPATH
 
-RUN rm -rf ./*
-
 SHELL ["/bin/bash", "-c"]
 RUN echo "source /usr/local/Ascend/ascend-toolkit/set_env.sh" >> ~/.bashrc && \
     . ~/.bashrc
@@ -111,16 +109,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install dlinfer-ascend==0.1.0
 
 # lmdeploy
-WORKDIR /opt/lmdeploy
+FROM build_temp as copy_temp
+RUN rm -rf /tmp/*.run
 
-COPY autotest /opt/lmdeploy/autotest
-COPY benchmark /opt/lmdeploy/benchmark
-COPY lmdeploy /opt/lmdeploy/lmdeploy
-COPY requirements /opt/lmdeploy/requirements
-COPY tests /opt/lmdeploy/tests
-COPY README.md /opt/lmdeploy/README.md
-COPY requirements.txt /opt/lmdeploy/requirements.txt
-COPY setup.py /opt/lmdeploy/setup.py
+FROM cann_builder as final_builder
+COPY --from=copy_temp /tmp /opt/lmdeploy
+WORKDIR /opt/lmdeploy
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     sed -i '/triton/d' requirements/runtime.txt && \
