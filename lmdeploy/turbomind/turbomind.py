@@ -240,12 +240,13 @@ class TurboMind:
             _cfg = yaml.safe_load(f)
         cfg = TurbomindModelConfig.from_dict(_cfg)
 
-        # check whether input tp is valid
-        self.gpu_count = engine_config.tp
-        if cfg.tensor_para_size != 1 and \
-                self.gpu_count != cfg.tensor_para_size:
-            logger.info(f'found tp={cfg.tensor_para_size} in config.yaml.')
-            self.gpu_count = cfg.tensor_para_size
+        # always use tp in converted model (config.yaml)
+        if cfg.tensor_para_size != engine_config.tp:
+            logger.warning(
+                'tp in engine_config is different from in config.yaml'
+                f'({config_path}), {engine_config.tp} vs '
+                f'{cfg.tensor_para_size}, using tp={cfg.tensor_para_size}')
+        self.gpu_count = cfg.tensor_para_size
         engine_config.tp = self.gpu_count
 
         self._postprocess_config(cfg, engine_config)
