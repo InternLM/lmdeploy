@@ -152,6 +152,8 @@ jobs:
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
@@ -318,6 +320,8 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Start restful api turbomind
         if: matrix.backend == 'turbomind'
         run: |
@@ -419,6 +423,8 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - interface pipeline case
         run: |
           pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
@@ -488,6 +494,8 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test benchmark script
         run: |
           pytest autotest/benchmark -n 4 --run_id ${{ github.run_id }} -m function --lf --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
@@ -571,6 +579,8 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Setup paths for evaluation
         run: |
           ln -s /root/opencompass-data ./data

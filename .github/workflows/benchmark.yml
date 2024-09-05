@@ -127,6 +127,8 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Run other benchmark
         run: |
             pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
