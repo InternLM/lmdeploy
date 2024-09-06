@@ -217,9 +217,11 @@ pytorch_quatization:
         - meta-llama/Meta-Llama-3-8B-Instruct
         - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm2-chat-20b
-        - internlm/internlm2-chat-7b
+        - internlm/internlm2_5-7b-chat
+        - internlm/internlm2_5-20b-chat
         - 01-ai/Yi-6B-Chat
         - internlm/internlm2-20b
+        - internlm/internlm2_5-7b
 
 
 longtext_model:
