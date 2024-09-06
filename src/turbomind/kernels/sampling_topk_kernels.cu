@@ -115,14 +115,14 @@ __global__ void topKSortStage1(T*         logits,
 }
 
 template<typename T, int BLOCK_SIZE, int BLOCKS_PER_BEAM>
-__global__ void topKSortStage2(int* top_ks,
-                               int  max_top_k,
-                               int* topk_tmp_id_buf,
-                               T*   topk_tmp_val_buf,
-                               int  vocab_size_padded,
-                               T*   sorted_logits,
-                               int* sorted_indices,
-                               int* kept)
+__global__ void topKSortStage2(const int* top_ks,
+                               const int  max_top_k,
+                               const int* topk_tmp_id_buf,
+                               T*         topk_tmp_val_buf,
+                               const int  vocab_size_padded,
+                               T*         sorted_logits,
+                               int*       sorted_indices,
+                               int*       kept)
 {
     const bool IS_FP16   = std::is_same<T, half>::value;
     const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;

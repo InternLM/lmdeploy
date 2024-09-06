@@ -12,10 +12,10 @@
 namespace turbomind {
 
 template<typename T, int BLOCK_SIZE>
-__global__ void sampling(T*             logits,
+__global__ void sampling(const T*       logits,
                          const int      stride,
-                         int*           indices,
-                         int*           kept,
+                         const int*     indices,
+                         const int*     kept,
                          curandState_t* curandstate,
                          int*           output_ids,
                          int*           sequence_length,
