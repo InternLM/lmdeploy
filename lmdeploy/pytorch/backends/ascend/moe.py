@@ -48,6 +48,7 @@ class AscendFusedMoEImpl(FusedMoEImpl):
         for i in range(seq_length):
             current_hidden_state = hidden_states[i]
 
+            # faster than remove the for loop
             for j in range(self.top_k):
                 expert_id = topk_ids[i][j]
                 weight = topk_weights[i][j]
