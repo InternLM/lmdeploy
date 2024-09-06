@@ -202,7 +202,7 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const 
 
 #pragma unroll
             for (int i = 0; i < MAX_K; ++i) {
-                sorted_logits[i]  = total.u[i] / (sum_prob + 1e-6f);
+                sorted_logits[i]  = total.u[i] / sum_prob;
                 sorted_indices[i] = total.p[i];
             }
         }
@@ -302,6 +302,8 @@ __global__ void topPMinPFilter(T*           sorted_logits,
     sorted_logits += bid * vocab_size_padded;
     sorted_indices += bid * vocab_size_padded;
 
+    const float kEps = 1e-6f;
+
     __shared__ int   s_kept;
     __shared__ float s_sum;
 
@@ -343,11 +345,11 @@ __global__ void topPMinPFilter(T*           sorted_logits,
         // Initialize running total
         BlockPrefixCallbackOp prefix_op(0);
         // minp
-        float scaled_min_p = (float)sorted_logits[0] / (sum_logits + 1e-6f) * min_p;
+        float scaled_min_p = (float)sorted_logits[0] / (sum_logits + kEps) * min_p;
         int   end          = ((n + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
         float prefix_sum   = 0.f;
         for (int i = tid; i < end; i += BLOCK_SIZE) {
-            float thread_count = (i < n) ? (float)sorted_logits[i] / (sum_logits + 1e-6f) : 0.f;
+            float thread_count = (i < n) ? (float)sorted_logits[i] / (sum_logits + kEps) : 0.f;
             BlockScan(temp_storage).ExclusiveSum(thread_count, prefix_sum, prefix_op);
             auto count = __syncthreads_count(thread_count < scaled_min_p);
             if (count != 0 || (i + BLOCK_SIZE >= end)) {
