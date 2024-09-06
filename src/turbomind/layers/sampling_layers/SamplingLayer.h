@@ -51,9 +51,9 @@ private:
     float              max_minp_;
 
     // device buffer
-    int*   runtime_top_k_buf_;
-    float* runtime_top_p_buf_;
-    float* runtime_min_p_buf_;
+    int*   runtime_top_k_buf_{};
+    float* runtime_top_p_buf_{};
+    float* runtime_min_p_buf_{};
 
     void*  topk_ws_{};
     size_t topk_ws_size_;
@@ -61,9 +61,9 @@ private:
     void*  topp_ws_{};
     size_t topp_ws_size_;
 
-    T*   logits_  = nullptr;  // sorted logits
-    int* indices_ = nullptr;  // sorted indices
-    int* kept_    = nullptr;  // kept sample
+    T*   logits_{};   // sorted logits
+    int* indices_{};  // sorted indices
+    int* kept_{};     // kept sample
 };
 
 }  // namespace turbomind
