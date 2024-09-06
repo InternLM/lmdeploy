@@ -401,10 +401,10 @@ class MergedAwqLinear(AwqLinear):
                                       align)[rank]
             param_w.copy_(weight)
 
-        if param._weight_type == 'scales':
+        if param._weight_type in ['scales', 'bias']:
             # scales
             align = max(self.elem_per_int, self.group_size)
-            param_w = param.data.split(self.all_out_features, 1)[shard_idx]
+            param_w = param.data.split(self.all_out_features, -1)[shard_idx]
         else:
             # qweight or qzeros
             align = max(self.elem_per_int,
@@ -415,7 +415,7 @@ class MergedAwqLinear(AwqLinear):
             param_w = param.data.split(quanted_out_feats, 1)[shard_idx]
 
         if not self.replicate[shard_idx]:
-            weight = _chunk_align(loaded_weight, world_size, 1, align)[rank]
+            weight = _chunk_align(loaded_weight, world_size, -1, align)[rank]
         param_w.copy_(weight)
 
     def weight_spliter_wz(self, loaded_weight: torch.Tensor):
