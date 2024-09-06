@@ -41,6 +41,7 @@ on:
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
   dependency_pkgs: ${{inputs.dependency_pkgs || 'pynvml packaging protobuf transformers_stream_generator transformers human_eval'}}
 
 jobs:
