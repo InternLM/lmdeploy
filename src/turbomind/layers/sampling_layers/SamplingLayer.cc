@@ -180,7 +180,7 @@ void SamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tenso
 
     // use topp sort if some request skip topk filter
     if (min_topk_ == 0) {
-        invokeSoftmax<T>(logits_, args_.vocab_size_padded, batch_size, kept_, stream_);
+        invokeSoftmax<T>(logits_, args_.vocab_size_padded, args_.vocab_size, batch_size, kept_, stream_);
 
         TopPSortParams params{};
         params.workspace         = topp_ws_;

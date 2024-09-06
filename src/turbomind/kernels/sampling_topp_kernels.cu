@@ -80,11 +80,15 @@ void invokeTopPSortInitialize(const int    vocab_size_padded,
 }
 
 template<typename T>
-static __global__ void softmax(T* logits, const int vocab_size_padded, const int* kept)
+static __global__ void softmax(T* logits, const int vocab_size_padded, const int vocab_size, const int* kept)
 {
     int bid = blockIdx.x;
+    int n   = kept[bid];
+    // skip softmax as it was already done by topk
+    if (n != vocab_size) {
+        return;
+    }
     logits += bid * vocab_size_padded;
-    int n = kept[bid];
 
     float            max_val   = -1 * FLT_MAX;
     const bool       IS_FP16   = std::is_same<T, half>::value;
@@ -92,10 +96,7 @@ static __global__ void softmax(T* logits, const int vocab_size_padded, const int
     __shared__ float s_max_val;
     __shared__ float s_sum_val;
 
-    for (int tid = threadIdx.x; tid < vocab_size_padded; tid += blockDim.x) {
-        if (tid >= n) {
-            logits[tid] = -MAX_T_VAL;
-        }
+    for (int tid = threadIdx.x; tid < vocab_size; tid += blockDim.x) {
         max_val = max(max_val, (float)logits[tid]);
     }
 
@@ -107,7 +108,7 @@ static __global__ void softmax(T* logits, const int vocab_size_padded, const int
 
     max_val       = s_max_val;
     float sum_val = 0.0f;
-    for (int tid = threadIdx.x; tid < vocab_size_padded; tid += blockDim.x) {
+    for (int tid = threadIdx.x; tid < vocab_size; tid += blockDim.x) {
         logits[tid] = __expf((float)logits[tid] - max_val);
         sum_val += (float)logits[tid];
     }
@@ -119,21 +120,30 @@ static __global__ void softmax(T* logits, const int vocab_size_padded, const int
     __syncthreads();
 
     sum_val = s_sum_val;
-    for (int tid = threadIdx.x; tid < vocab_size_padded; tid += blockDim.x) {
-        logits[tid] = ((float)logits[tid] / (sum_val + 1e-6f));
+    for (int tid = threadIdx.x; tid < vocab_size; tid += blockDim.x) {
+        logits[tid] = ((float)logits[tid] / sum_val);
     }
 }
 
 template<typename T>
-void invokeSoftmax(T* logits, const int vocab_size_padded, const int batch_size, const int* kept, cudaStream_t stream)
+void invokeSoftmax(T*           logits,
+                   const int    vocab_size_padded,
+                   const int    vocab_size,
+                   const int    batch_size,
+                   const int*   kept,
+                   cudaStream_t stream)
 {
     dim3 grid(batch_size);
     dim3 block(min(vocab_size_padded, 1024));
-    softmax<<<grid, block, 0, stream>>>(logits, vocab_size_padded, kept);
+    softmax<<<grid, block, 0, stream>>>(logits, vocab_size_padded, vocab_size, kept);
 }
 
-template void
-invokeSoftmax(float* logits, const int vocab_size_padded, const int batch_size, const int* kept, cudaStream_t stream);
+template void invokeSoftmax(float*       logits,
+                            const int    vocab_size_padded,
+                            const int    vocab_size,
+                            const int    batch_size,
+                            const int*   kept,
+                            cudaStream_t stream);
 
 template<typename T, int MAX_K, int THREADBLOCK_SIZE>
 __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const T*     logits,

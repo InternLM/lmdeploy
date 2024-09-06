@@ -339,7 +339,7 @@ public:
         params1.vocab_size_padded = vocab_size;
         invokeTopKSortFilter<T>(params1, stream);
 
-        invokeSoftmax<T>(d_logits, vocab_size, batch_size, d_kept, stream);
+        invokeSoftmax<T>(d_logits, vocab_size, vocab_size, batch_size, d_kept, stream);
         params2.workspace      = d_ws_topp;
         params2.logits         = d_logits;
         params2.sorted_logits  = d_sorted_logits;
