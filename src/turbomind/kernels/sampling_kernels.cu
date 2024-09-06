@@ -17,8 +17,6 @@ __global__ void sampling(T*             logits,
                          int*           indices,
                          int*           kept,
                          curandState_t* curandstate,
-                         bool*          finished,
-                         const int*     end_ids,
                          int*           output_ids,
                          int*           sequence_length,
                          float*         sampled_logprobs,
@@ -55,10 +53,8 @@ __global__ void sampling(T*             logits,
                 selected             = min(i, n - 1);
                 output_ids[batch_id] = indices[selected];
 
-                if (sequence_length != nullptr && finished != nullptr) {
-                    sequence_length[batch_id] =
-                        finished[batch_id] ? sequence_length[batch_id] : sequence_length[batch_id] + 1;
-                    finished[batch_id] = output_ids[batch_id] == end_ids[batch_id] ? 1 : 0;
+                if (sequence_length != nullptr) {
+                    sequence_length[batch_id] += 1;
                 }
             }
             break;
@@ -94,8 +90,6 @@ void invokeSampling(SamplingParams& params, cudaStream_t stream)
                                                    params.indices,
                                                    params.kept,
                                                    params.curandstate,
-                                                   params.finished,
-                                                   params.end_ids,
                                                    params.output_ids,
                                                    params.sequence_length,
                                                    params.sampled_logprobs,

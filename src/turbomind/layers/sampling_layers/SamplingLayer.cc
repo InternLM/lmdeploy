@@ -220,9 +220,7 @@ void SamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tenso
         params.kept        = kept_;
         params.curandstate = output_tensors->at("curand_state").getPtr<curandState_t>();
         params.batch_size  = batch_size;
-        params.finished = output_tensors->at("finished", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<bool>();
-        params.end_ids  = input_tensors->at("end_id").getPtr<int>();
-        params.output_ids = output_tensors->at("output_ids").getPtrWithOffset<int>(step * batch_size);
+        params.output_ids  = output_tensors->at("output_ids").getPtrWithOffset<int>(step * batch_size);
         params.sequence_length =
             output_tensors->at("sequence_length", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
         params.sampled_logprobs =

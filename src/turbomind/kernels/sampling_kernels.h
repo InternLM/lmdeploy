@@ -29,8 +29,6 @@ struct SamplingParams {
     int*           kept;
     curandState_t* curandstate;
     size_t         batch_size;
-    bool*          finished;
-    int*           end_ids;
     int*           output_ids;
     int*           sequence_length;
     float*         sampled_logprobs;
