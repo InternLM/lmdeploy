@@ -44,15 +44,15 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import TritonMultinomialSamplingBuilder
             return TritonMultinomialSamplingBuilder
-        # elif layer_type == OpType.LinearW4A16:
-        #     from awq.modules.linear.gemm import AWQ_INSTALLED
-        #     if AWQ_INSTALLED:
-        #         from .awq_modules import AwqLinearW4A16Builder
-        #         return AwqLinearW4A16Builder
-        #     else:
-        #         logger.debug(
-        #             f'Op {layer_type} fallback to default implementation.')
-        #         return super().get_layer_impl_builder(layer_type)
+        elif layer_type == OpType.LinearW4A16:
+            from awq.modules.linear.gemm import AWQ_INSTALLED
+            if AWQ_INSTALLED:
+                from .awq_modules import AwqLinearW4A16Builder
+                return AwqLinearW4A16Builder
+            else:
+                logger.debug(
+                    f'Op {layer_type} fallback to default implementation.')
+                return super().get_layer_impl_builder(layer_type)
         elif layer_type == OpType.FusedMoE:
             from .moe import TritonFusedMoEBuilder
             return TritonFusedMoEBuilder
