@@ -30,10 +30,10 @@ class AscendOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.RMSNorm:
             from .norm import AscendRMSNormBuilder
             return AscendRMSNormBuilder
-        elif layer_type == LayerType.SoftmaxTopK:
+        elif layer_type == OpType.SoftmaxTopK:
             from .moe import AscendSoftmaxTopKBuilder
             return AscendSoftmaxTopKBuilder
-        elif layer_type == LayerType.FusedMoE:
+        elif layer_type == OpType.FusedMoE:
             from .moe import AscendFusedMoEBuilder
             return AscendFusedMoEBuilder
         else:
