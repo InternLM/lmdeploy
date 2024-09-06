@@ -35,7 +35,7 @@ MODULE_MAP.update({
 # internlm
 MODULE_MAP.update({
     'InternLMForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm.InternLMForCausalLM',
 })
 
 # internlm2

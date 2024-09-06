@@ -3,22 +3,21 @@ from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
-from transformers.models.llama import LlamaConfig
+from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
                                  SiluAndMul, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
-from lmdeploy.pytorch.nn.rotary_embedding import Llama3Parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 
-class LlamaAttention(nn.Module):
+class InternLMAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
 
     def __init__(self,
-                 config: LlamaConfig,
+                 config: PretrainedConfig,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
@@ -34,7 +33,7 @@ class LlamaAttention(nn.Module):
             num_q_heads=num_heads,
             num_kv_heads=num_key_value_heads,
             head_size=head_dim,
-            bias=config.attention_bias,
+            bias=config.bias,
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
@@ -54,7 +53,7 @@ class LlamaAttention(nn.Module):
         # o_proj
         self.o_proj = build_rowwise_linear(num_heads * head_dim,
                                            hidden_size,
-                                           bias=config.attention_bias,
+                                           bias=config.bias,
                                            quant_config=quantization_config,
                                            dtype=dtype,
                                            device=device,
@@ -102,11 +101,11 @@ class LlamaAttention(nn.Module):
         return attn_output
 
 
-class LlamaMLP(nn.Module):
-    """llama mlp."""
+class InternLMMLP(nn.Module):
+    """mlp."""
 
     def __init__(self,
-                 config: LlamaConfig,
+                 config: PretrainedConfig,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
@@ -115,7 +114,7 @@ class LlamaMLP(nn.Module):
         self.gate_up_proj = build_merged_colwise_linear(
             config.hidden_size,
             [config.intermediate_size, config.intermediate_size],
-            bias=config.mlp_bias,
+            bias=config.bias,
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
@@ -128,7 +127,7 @@ class LlamaMLP(nn.Module):
         # down
         self.down_proj = build_rowwise_linear(config.intermediate_size,
                                               config.hidden_size,
-                                              bias=config.mlp_bias,
+                                              bias=config.bias,
                                               quant_config=quantization_config,
                                               dtype=dtype,
                                               device=device,
@@ -141,11 +140,11 @@ class LlamaMLP(nn.Module):
         return self.down_proj(act)
 
 
-class LlamaDecoderLayer(nn.Module):
-    """llama decoder layer."""
+class InternLMDecoderLayer(nn.Module):
+    """decoder layer."""
 
     def __init__(self,
-                 config: LlamaConfig,
+                 config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
@@ -154,10 +153,10 @@ class LlamaDecoderLayer(nn.Module):
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = LlamaAttention(config, dtype=dtype, device=device)
+        self.self_attn = InternLMAttention(config, dtype=dtype, device=device)
 
         # builf MLP
-        self.mlp = LlamaMLP(config, dtype=dtype, device=device)
+        self.mlp = InternLMMLP(config, dtype=dtype, device=device)
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -207,11 +206,11 @@ class LlamaDecoderLayer(nn.Module):
         return outputs
 
 
-class LlamaModel(nn.Module):
-    """llama model."""
+class InternLMModel(nn.Module):
+    """model."""
 
     def __init__(self,
-                 config: LlamaConfig,
+                 config: PretrainedConfig,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
@@ -226,7 +225,7 @@ class LlamaModel(nn.Module):
 
         # build all decode layers
         self.layers = nn.ModuleList([
-            LlamaDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            InternLMDecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
@@ -239,38 +238,23 @@ class LlamaModel(nn.Module):
         # build rotary embedding in LlamaModel
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
         scaling_factor = 1.0
-        llama3_params = None
-        rope_scaling = config.rope_scaling
-        if rope_scaling is None:
+        rope_scaling = config.rotary
+        rope_base = rope_scaling["base"]
+        rope_type = rope_scaling['type']
+        if rope_type == 'dynamic':
+            emb_type = RopeType.DynamicNTKScaling
+            scaling_factor=rope_scaling.get("scaling_factor", 1.0)
+        elif rope_type == 'origin':
             emb_type = RopeType.LinearScaling
         else:
-            if 'scaling_factor' in rope_scaling:
-                scaling_factor = rope_scaling['scaling_factor']
-            elif 'factor' in rope_scaling:
-                scaling_factor = rope_scaling['factor']
-
-            rope_type = rope_scaling['rope_type']
-            if rope_type == 'dynamic':
-                emb_type = RopeType.DynamicNTKScaling
-            elif rope_type == 'linear':
-                emb_type = RopeType.LinearScaling
-            elif rope_type == 'llama3':
-                emb_type = RopeType.Llama3
-                low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
-                high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
-                llama3_params = Llama3Parameters(low_freq_factor,
-                                                 high_freq_factor)
-            else:
-                raise RuntimeError(f'Unsupported rope type: {rope_type}')
+            raise RuntimeError(f'Unsupported rope type: {rope_type}')
 
         self.rotary_emb = build_rotary_embedding(
             rope_dim,
             rope_max_pos_emb,
             rope_base,
             scaling_factor,
-            llama3_params=llama3_params,
             emb_type=emb_type,
         )
 
@@ -317,7 +301,7 @@ class LlamaModel(nn.Module):
         return self.embed_tokens
 
 
-class LlamaForCausalLM(nn.Module):
+class InternLMForCausalLM(nn.Module):
     """rewrote model of LlamaForCausalLM."""
 
     support_cuda_graph = True
@@ -335,7 +319,7 @@ class LlamaForCausalLM(nn.Module):
     }
 
     def __init__(self,
-                 config: LlamaConfig,
+                 config: PretrainedConfig,
                  ctx_mgr: StepContextManager,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
@@ -343,7 +327,7 @@ class LlamaForCausalLM(nn.Module):
         self.config = config
         self.ctx_mgr = ctx_mgr
         # build LLamaModel
-        self.model = LlamaModel(config, dtype=dtype, device=device)
+        self.model = InternLMModel(config, dtype=dtype, device=device)
         # build lm_head
         self.lm_head = build_rowwise_linear(config.hidden_size,
                                             config.vocab_size,
@@ -440,21 +424,3 @@ class LlamaForCausalLM(nn.Module):
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
 
-
-class LlavaLlamaForCausalLM(LlamaForCausalLM):
-    """llava llama for causallm."""
-
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
-
-        new_weights = dict()
-        for key, val in weights:
-            if key.startswith('model.vision_tower'):
-                continue
-            if key.startswith('model.mm_projector'):
-                continue
-            if key.startswith('model.image_newline'):
-                continue
-            new_weights[key] = val
-
-        super().load_weights(new_weights.items())
