@@ -240,7 +240,10 @@ def _fwd_grouped_split_kernel(
     # initialize pointers to output
     off_acc = (cur_batch * stride_obs + split_k_id * stride_ok +
                cur_head[:, None] * stride_oh + offs_dv[None, :] * stride_od)
-    tl.store(Acc_out + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
+    if loop_end > loop_start:
+        tl.store(Acc_out + off_acc,
+                 acc,
+                 mask=mask_h[:, None] & mask_dv[None, :])
 
     off_meta = (cur_batch * stride_obs + split_k_id * stride_ok +
                 cur_head * stride_oh + head_size_v)

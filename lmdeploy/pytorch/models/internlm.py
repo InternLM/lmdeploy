@@ -240,11 +240,11 @@ class InternLMModel(nn.Module):
         rope_max_pos_emb = config.max_position_embeddings
         scaling_factor = 1.0
         rope_scaling = config.rotary
-        rope_base = rope_scaling["base"]
+        rope_base = rope_scaling['base']
         rope_type = rope_scaling['type']
         if rope_type == 'dynamic':
             emb_type = RopeType.DynamicNTKScaling
-            scaling_factor=rope_scaling.get("scaling_factor", 1.0)
+            scaling_factor = rope_scaling.get('scaling_factor', 1.0)
         elif rope_type == 'origin':
             emb_type = RopeType.LinearScaling
         else:
@@ -423,4 +423,3 @@ class InternLMForCausalLM(nn.Module):
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
-
