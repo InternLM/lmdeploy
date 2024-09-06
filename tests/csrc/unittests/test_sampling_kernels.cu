@@ -605,8 +605,6 @@ public:
         params.kept             = d_kept;
         params.curandstate      = curand_states;
         params.batch_size       = batch_size;
-        params.finished         = nullptr;
-        params.end_ids          = nullptr;
         params.output_ids       = d_output_ids;
         params.sequence_length  = nullptr;
         params.sampled_logprobs = d_sampled_logprobs;

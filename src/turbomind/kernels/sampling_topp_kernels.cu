@@ -73,7 +73,9 @@ void invokeTopPSortInitialize(const int    vocab_size_padded,
                               int*         end_offset_buf,
                               cudaStream_t stream)
 {
-    topPSortInitialize<<<32, 512, 0, stream>>>(
+    const size_t block_size = 512;
+    const size_t grid_size  = (batch_size * vocab_size_padded + block_size - 1) / block_size;
+    topPSortInitialize<<<grid_size, block_size, 0, stream>>>(
         vocab_size_padded, vocab_size, batch_size, top_ks, topp_id_val_buf, begin_offet_buf, end_offset_buf);
 }
 
