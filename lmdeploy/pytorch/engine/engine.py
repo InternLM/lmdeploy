@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import copy
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -9,7 +10,8 @@ import torch
 
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                ResponseType)
-from lmdeploy.utils import get_logger, get_model, logging_timer
+from lmdeploy.utils import (get_logger, get_max_batch_size, get_model,
+                            logging_timer)
 
 from ..adapter.adapter import AdapterManager, SchedulerAdapter
 from ..check_env import check_adapters, check_env, check_model
@@ -114,40 +116,43 @@ class Engine:
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
+
         if engine_config is None:
-            engine_config = PytorchEngineConfig()
-        check_env(engine_config.device_type)
+            self.engine_config = PytorchEngineConfig()
+        else:
+            self.engine_config = copy.deepcopy(engine_config)
+        check_env(self.engine_config.device_type)
         check_model(model_path, trust_remote_code)
-        if engine_config.adapters is not None:
-            check_adapters(list(engine_config.adapters.values()))
+        if self.engine_config.max_batch_size is None:
+            self.engine_config.max_batch_size = get_max_batch_size(
+                self.engine_config.device_type)
+        if self.engine_config.adapters is not None:
+            check_adapters(list(self.engine_config.adapters.values()))
 
-        self.engine_config = engine_config
-        tp = engine_config.tp
-
-        self.tp = tp
+        self.tp = self.engine_config.tp
 
         self.device_context = DeviceContext(
-            device_type=engine_config.device_type)
+            device_type=self.engine_config.device_type)
 
         scheduler_config = SchedulerConfig(
-            max_batches=engine_config.max_batch_size,
-            max_session_len=engine_config.session_len,
-            prefill_interval=engine_config.prefill_interval)
+            max_batches=self.engine_config.max_batch_size,
+            max_session_len=self.engine_config.session_len,
+            prefill_interval=self.engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
-        adapters = engine_config.adapters
+        adapters = self.engine_config.adapters
         cache_config = CacheConfig(
-            block_size=engine_config.block_size,
-            num_cpu_blocks=engine_config.num_cpu_blocks,
-            num_gpu_blocks=engine_config.num_gpu_blocks,
-            cache_max_entry_count=engine_config.cache_max_entry_count,
-            max_prefill_token_num=engine_config.max_prefill_token_num,
-            enable_prefix_caching=engine_config.enable_prefix_caching,
+            block_size=self.engine_config.block_size,
+            num_cpu_blocks=self.engine_config.num_cpu_blocks,
+            num_gpu_blocks=self.engine_config.num_gpu_blocks,
+            cache_max_entry_count=self.engine_config.cache_max_entry_count,
+            max_prefill_token_num=self.engine_config.max_prefill_token_num,
+            enable_prefix_caching=self.engine_config.enable_prefix_caching,
         )
 
         if not os.path.exists(model_path):
-            model_path = get_model(model_path, engine_config.download_dir,
-                                   engine_config.revision)
+            model_path = get_model(model_path, self.engine_config.download_dir,
+                                   self.engine_config.revision)
         self.model_path = model_path
 
         with get_device_manager().context(self.device_context):
@@ -156,7 +161,7 @@ class Engine:
                 cache_config=cache_config,
                 trust_remote_code=trust_remote_code,
                 adapters=adapters,
-                tp=tp)
+                tp=self.tp)
 
         cache_config = self.model_agent.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
