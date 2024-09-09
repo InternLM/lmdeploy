@@ -196,7 +196,7 @@ class AsyncEngine(LogitsMixin):
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
             model_path, engine_config=backend_config, **kwargs)
-        self.backend_config = backend_config
+        self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = self.engine.config
 
     def _build_pytorch(
@@ -214,7 +214,7 @@ class AsyncEngine(LogitsMixin):
             'pytorch backend'
         self.engine = Engine(model_path=model_path,
                              engine_config=backend_config)
-        self.backend_config = backend_config
+        self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
     def __call__(self,
