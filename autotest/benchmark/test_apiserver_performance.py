@@ -22,12 +22,7 @@ def getModelList(tp_num):
     new_model_list = []
     for model in model_list:
         if model['backend'] == 'pytorch':
-            if 'Llama-3' in model['model'] and '70B' in model['model']:
-                model[
-                    'extra'] = '--max-batch-size 256 --cache-max-entry-count 0.65'  # noqa: E501
-            else:
-                model[
-                    'extra'] = '--max-batch-size 256 --cache-max-entry-count 0.7'  # noqa: E501
+            model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.7'
         elif 'Llama-2' in model['model']:
             model[
                 'extra'] = '--max-batch-size 256 --cache-max-entry-count 0.95'
