@@ -36,6 +36,7 @@ env:
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'}}
+  FAIL_CONFIG: ${{ github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
 
 jobs:
   linux-build:
@@ -133,9 +134,9 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/allure-results/.pytest_cache autotest
       - name: Run other benchmark
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m gpu_num_2 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m gpu_num_4 --lf --alluredir=${{env.REPORT_DIR}}/allure-results
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m gpu_num_2 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m gpu_num_4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results
       - name: Clear workfile
         if: always()
         run: |
