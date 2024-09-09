@@ -118,41 +118,42 @@ class Engine:
                  trust_remote_code: bool = True) -> None:
 
         if engine_config is None:
-            self.engine_config = PytorchEngineConfig()
+            engine_config = PytorchEngineConfig()
         else:
-            self.engine_config = copy.deepcopy(engine_config)
-        check_env(self.engine_config.device_type)
+            engine_config = copy.deepcopy(engine_config)
+        check_env(engine_config.device_type)
         check_model(model_path, trust_remote_code)
-        if self.engine_config.max_batch_size is None:
-            self.engine_config.max_batch_size = get_max_batch_size(
-                self.engine_config.device_type)
-        if self.engine_config.adapters is not None:
-            check_adapters(list(self.engine_config.adapters.values()))
+        if engine_config.max_batch_size is None:
+            engine_config.max_batch_size = get_max_batch_size(
+                engine_config.device_type)
+        if engine_config.adapters is not None:
+            check_adapters(list(engine_config.adapters.values()))
 
-        self.tp = self.engine_config.tp
+        self.engine_config = engine_config
+        self.tp = engine_config.tp
 
         self.device_context = DeviceContext(
-            device_type=self.engine_config.device_type)
+            device_type=engine_config.device_type)
 
         scheduler_config = SchedulerConfig(
-            max_batches=self.engine_config.max_batch_size,
-            max_session_len=self.engine_config.session_len,
-            prefill_interval=self.engine_config.prefill_interval)
+            max_batches=engine_config.max_batch_size,
+            max_session_len=engine_config.session_len,
+            prefill_interval=engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
-        adapters = self.engine_config.adapters
+        adapters = engine_config.adapters
         cache_config = CacheConfig(
-            block_size=self.engine_config.block_size,
-            num_cpu_blocks=self.engine_config.num_cpu_blocks,
-            num_gpu_blocks=self.engine_config.num_gpu_blocks,
-            cache_max_entry_count=self.engine_config.cache_max_entry_count,
-            max_prefill_token_num=self.engine_config.max_prefill_token_num,
-            enable_prefix_caching=self.engine_config.enable_prefix_caching,
+            block_size=engine_config.block_size,
+            num_cpu_blocks=engine_config.num_cpu_blocks,
+            num_gpu_blocks=engine_config.num_gpu_blocks,
+            cache_max_entry_count=engine_config.cache_max_entry_count,
+            max_prefill_token_num=engine_config.max_prefill_token_num,
+            enable_prefix_caching=engine_config.enable_prefix_caching,
         )
 
         if not os.path.exists(model_path):
-            model_path = get_model(model_path, self.engine_config.download_dir,
-                                   self.engine_config.revision)
+            model_path = get_model(model_path, engine_config.download_dir,
+                                   engine_config.revision)
         self.model_path = model_path
 
         with get_device_manager().context(self.device_context):
