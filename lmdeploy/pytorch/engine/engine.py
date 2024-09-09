@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import copy
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -9,7 +10,8 @@ import torch
 
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                ResponseType)
-from lmdeploy.utils import get_logger, get_model, logging_timer
+from lmdeploy.utils import (get_logger, get_max_batch_size, get_model,
+                            logging_timer)
 
 from ..adapter.adapter import AdapterManager, SchedulerAdapter
 from ..check_env import check_adapters, check_env, check_model
@@ -116,15 +118,18 @@ class Engine:
                  trust_remote_code: bool = True) -> None:
         if engine_config is None:
             engine_config = PytorchEngineConfig()
+        else:
+            engine_config = copy.deepcopy(engine_config)
         check_env(engine_config.device_type)
         check_model(model_path, trust_remote_code)
+        if engine_config.max_batch_size is None:
+            engine_config.max_batch_size = get_max_batch_size(
+                engine_config.device_type)
         if engine_config.adapters is not None:
             check_adapters(list(engine_config.adapters.values()))
 
         self.engine_config = engine_config
-        tp = engine_config.tp
-
-        self.tp = tp
+        self.tp = engine_config.tp
 
         self.device_context = DeviceContext(
             device_type=engine_config.device_type)
@@ -156,7 +161,7 @@ class Engine:
                 cache_config=cache_config,
                 trust_remote_code=trust_remote_code,
                 adapters=adapters,
-                tp=tp)
+                tp=self.tp)
 
         cache_config = self.model_agent.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)

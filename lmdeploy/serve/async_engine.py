@@ -188,15 +188,10 @@ class AsyncEngine(LogitsMixin):
                                            PytorchEngineConfig]] = None,
             **kwargs):
         """Innter build method for turbomind backend."""
-        if backend_config is None:
-            backend_config = TurbomindEngineConfig()
-        assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
-            ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
-            'turbomind backend'
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
             model_path, engine_config=backend_config, **kwargs)
-        self.backend_config = backend_config
+        self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = self.engine.config
 
     def _build_pytorch(
@@ -207,14 +202,9 @@ class AsyncEngine(LogitsMixin):
             **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        if backend_config is None:
-            backend_config = PytorchEngineConfig()
-        assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
-            'use PytorchEngineConfig imported from lmdeploy.messages for ' \
-            'pytorch backend'
         self.engine = Engine(model_path=model_path,
                              engine_config=backend_config)
-        self.backend_config = backend_config
+        self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
     def __call__(self,
