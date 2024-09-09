@@ -158,6 +158,8 @@ def smooth_quant(model: str,
         model.save_pretrained(work_dir,
                               max_shard_size='2GB',
                               safe_serialization=False)
+        model.config.update(
+            dict(quantization_config=dict(quant_method='smooth_quant')))
     tokenizer.save_pretrained(work_dir)
 
     shutil.copy(MODEL_PATH_MAP[type(model).__name__], work_dir)
