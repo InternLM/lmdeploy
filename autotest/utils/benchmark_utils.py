@@ -247,8 +247,11 @@ def create_multi_level_directory(path):
 
 
 def get_max_cache_entry(model, backend):
-    if backend != 'turbomind':
-        return ''
+    if backend == 'pytorch':
+        if 'Llama-3' in model and '70B' in model:
+            return '--cache-max-entry-count 0.65'
+        else:
+            return '--cache-max-entry-count 0.7'
     if 'Llama-2' in model:
         return '--cache-max-entry-count 0.95'
     elif 'internlm2' in model:

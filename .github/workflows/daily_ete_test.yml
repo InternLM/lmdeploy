@@ -529,6 +529,8 @@ jobs:
         - /nvme/qa_test_models/offline_pkg:/nvme/qa_test_models/offline_pkg
         - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    env:
+      TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
     steps:
       - name: Setup systems
         run: |

@@ -21,10 +21,17 @@ def getModelList(tp_num):
     model_list = get_benchmark_model_list(tp_num, kvint_list=[4, 8])
     new_model_list = []
     for model in model_list:
-        if 'Llama-2' in model:
+        if model['backend'] == 'pytorch':
+            if 'Llama-3' in model['model'] and '70B' in model['model']:
+                model[
+                    'extra'] = '--max-batch-size 256 --cache-max-entry-count 0.65'  # noqa: E501
+            else:
+                model[
+                    'extra'] = '--max-batch-size 256 --cache-max-entry-count 0.7'  # noqa: E501
+        elif 'Llama-2' in model['model']:
             model[
                 'extra'] = '--max-batch-size 256 --cache-max-entry-count 0.95'
-        elif 'internlm2' in model:
+        elif 'internlm2' in model['model']:
             model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.9'
         else:
             model['extra'] = '--max-batch-size 256'
