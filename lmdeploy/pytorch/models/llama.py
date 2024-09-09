@@ -384,6 +384,8 @@ class LlamaForCausalLM(nn.Module):
         if self.config.num_hidden_layers >= 40:
             return False
 
+        return False
+
     def get_input_embeddings(self):
         """get input embeddings."""
         return self.model.get_input_embeddings()
