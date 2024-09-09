@@ -332,7 +332,6 @@ class MixtralForCausalLM(nn.Module):
         )
 
         logits = self.lm_head(hidden_states)
-        logits = logits.float()
         return logits
 
     def get_input_embeddings(self):

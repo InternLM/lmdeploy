@@ -46,7 +46,7 @@ def _update_cache_config(model_config: ModelConfig,
         runtime_cache_size = 0
         while max_prefill_token_num > 0:
             # lm_head output(2) + to float(4) + estimated misc(1) = 7
-            runtime_cache_size = int(max_prefill_token_num * vocal_size * 10)
+            runtime_cache_size = int(max_prefill_token_num * vocal_size * 7)
             num_available = (num_free_gpu_mem -
                              runtime_cache_size) * cache_max_entry_count
             if int(num_available) // cache_block_size >= 16:
