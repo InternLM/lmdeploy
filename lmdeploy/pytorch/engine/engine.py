@@ -116,7 +116,6 @@ class Engine:
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
-
         if engine_config is None:
             engine_config = PytorchEngineConfig()
         else:
