@@ -352,7 +352,7 @@ class InternLM2ForCausalLM(nn.Module):
         )
 
         logits = self.output(hidden_states)
-        logits = logits.float()
+        # logits = logits.float()
         return logits
 
     def get_input_embeddings(self):

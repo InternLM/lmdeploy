@@ -172,7 +172,7 @@ class CUDASingleGraphRunner:
         current_stream = torch.cuda.current_stream()
 
         # warmup
-        output = self.model(**padded_kwargs)
+        self.model(**padded_kwargs)
 
         self._graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self._graph,
@@ -190,7 +190,7 @@ class CUDASingleGraphRunner:
         self._fill_inputs(**kwargs)
         self._graph.replay()
 
-        output = self.output_buffers['logits'][:, :num_tokens].clone()
+        output = self.output_buffers['logits'][:, :num_tokens]
         return output
 
     def __del__(self):
