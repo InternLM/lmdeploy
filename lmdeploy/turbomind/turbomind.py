@@ -529,6 +529,7 @@ class TurboMindInstance:
                                        dtype=np.uint32),
             runtime_top_k=_broadcast_np(gen_config.top_k, np.uint32),
             runtime_top_p=_broadcast_np(gen_config.top_p, np.float32),
+            runtime_min_p=_broadcast_np(gen_config.min_p, np.float32),
             temperature=_broadcast_np(gen_config.temperature, np.float32),
             repetition_penalty=_broadcast_np(gen_config.repetition_penalty,
                                              np.float32),
@@ -564,7 +565,9 @@ class TurboMindInstance:
             stop_words = None
             bad_words.append(self.eos_id)
         else:
-            stop_words = gen_config.stop_token_ids
+            stop_words = gen_config.stop_token_ids or []
+            if self.eos_id not in stop_words:
+                stop_words.append(self.eos_id)
         stop_words = _construct_stop_or_bad_words(stop_words)
         bad_words = _construct_stop_or_bad_words(bad_words)
 

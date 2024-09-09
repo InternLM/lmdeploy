@@ -395,13 +395,8 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
         {"local_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &local_batch_size}},
     };
 
-    const std::vector<std::string> optional_inputs{"stop_words_list",
-                                                   "bad_words_list",
-                                                   "runtime_top_k",
-                                                   "runtime_top_p",
-                                                   "temperature",
-                                                   "repetition_penalty",
-                                                   "random_seed"};
+    const std::vector<std::string> optional_inputs{
+        "stop_words_list", "bad_words_list", "runtime_top_k", "runtime_top_p", "temperature", "repetition_penalty"};
     for (const auto& key : optional_inputs) {
         if (inputs->isExist(key)) {
             dynamic_decode_input_tensors.insert({key, inputs->at(key)});

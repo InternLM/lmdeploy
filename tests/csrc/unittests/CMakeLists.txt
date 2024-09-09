@@ -36,7 +36,8 @@ add_executable(unittest
     test_penalty_kernels.cu
     test_sampling_kernels.cu
     test_sampling_layer.cu
-    test_tensor.cu)
+    test_tensor.cu
+)
 
 # automatic discovery of unit tests
 target_link_libraries(unittest PUBLIC "${TORCH_LIBRARIES}" gtest_main)
@@ -63,7 +64,8 @@ target_link_libraries(  # Libs for test_sampling_layer
   unittest PUBLIC
     CUDA::cublas CUDA::cublasLt CUDA::cudart
     cublasMMWrapper memory_utils
-    DynamicDecodeLayer TopKSamplingLayer TopPSamplingLayer tensor cuda_utils logger)
+    DynamicDecodeLayer tensor cuda_utils logger
+)
 target_link_libraries(  # Libs for test_tensor
   unittest PUBLIC tensor cuda_utils logger)
 
