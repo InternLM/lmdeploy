@@ -3,9 +3,10 @@ from typing import Tuple
 
 import torch
 
+from lmdeploy.utils import get_logger
+
 from ..base import OpType
 from ..default import DefaultOpsBackend
-from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
