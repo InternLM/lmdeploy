@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import atexit
 import os
-import warnings
-from dataclasses import dataclass, field, fields
 from datetime import timedelta
 from typing import Any, Callable, Dict, List
 
@@ -10,23 +9,20 @@ import torch
 import torch.distributed as dist
 from torch import multiprocessing as mp
 
-from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.utils import get_logger
 
-from ..adapter.adapter import (AdapterWeightMap, SchedulerAdapter,
-                               get_indexed_lora_linears, get_loralinear_info,
-                               update_lora_linears)
-from ..config import CacheConfig, ModelConfig
+from ..adapter.adapter import AdapterWeightMap
+from ..backends import get_backend
+from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
-from ..models.patch import patch, update_model
+from ..model_inputs import ModelInputs
+from ..models.patch import (add_adapters, build_patched_model,
+                            update_custom_module_map)
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
-from .devices import get_current_device_utils
 
 logger = get_logger('lmdeploy')
-
-_PATCH_ARG_NAMES = ['context', 'use_origin']
 
 
 def _update_cache_config(model_config: ModelConfig,
@@ -113,353 +109,6 @@ def _update_cache_config(model_config: ModelConfig,
     logger.debug('block num: {}'.format(cache_config.num_gpu_blocks))
 
 
-@dataclass
-class AdapterInfo:
-    ranks: torch.LongTensor
-    scalings: torch.Tensor
-    rank_offsets: torch.LongTensor
-    target_modules: List[str]
-    max_rank_per_target: List[int]
-    max_rank: int
-
-    @classmethod
-    def from_adapters(cls, adapters: List[SchedulerAdapter]):
-        """from adapters."""
-        if len(adapters) == 0:
-            return None
-        target_modules = adapters[0].target_modules
-        max_rank = adapters[0].max_rank
-        ranks = [ada.rank for ada in adapters]
-        scalings = [ada.scaling for ada in adapters]
-        rank_offsets = [torch.from_numpy(ada.rank_offset) for ada in adapters]
-        ranks = torch.tensor(ranks)
-        scalings = torch.tensor(scalings)
-        rank_offsets = torch.stack(rank_offsets)
-        max_rank_per_target = ranks.max(0)[0].tolist()
-
-        return cls(
-            ranks=ranks,
-            scalings=scalings,
-            rank_offsets=rank_offsets,
-            target_modules=target_modules,
-            max_rank=max_rank,
-            max_rank_per_target=max_rank_per_target,
-        )
-
-    def split_by_targets(self):
-        """split by targets."""
-        ret = dict()
-        max_rank = self.max_rank
-        for idx, target in enumerate(self.target_modules):
-            r = self.ranks[:, idx]
-            scaling = self.scalings[:, idx]
-            r_off_start = idx * max_rank
-            r_off_end = r_off_start + max_rank
-            rank_offset = self.rank_offsets[:, r_off_start:r_off_end]
-            max_rank_per_target = [self.max_rank_per_target[idx]]
-            ret[target] = AdapterInfo(
-                r,
-                scaling,
-                rank_offset,
-                target_modules=[target],
-                max_rank=max_rank_per_target[0],
-                max_rank_per_target=max_rank_per_target,
-            )
-        return ret
-
-    def to_device(self, device: str):
-        """to device."""
-        out_dict = dict()
-        for f in fields(self):
-            k = f.name
-            v = getattr(self, k)
-            if isinstance(v, torch.Tensor):
-                v = v.to(device)
-            out_dict[k] = v
-
-        return AdapterInfo(**out_dict)
-
-
-@dataclass
-class VisionModelInputs:
-    """Vision model inputs."""
-    history_lengths: torch.LongTensor = None
-    history_image_nums: torch.LongTensor = None
-    history_image_token_lengths: torch.LongTensor = None
-    input_embeddings: List[List[torch.Tensor]] = None
-    input_embedding_ranges: List[torch.LongTensor] = None
-    input_embedding_indexing: torch.BoolTensor = None
-
-    def to_device(self, device: str):
-        """to device."""
-        out_dict = dict()
-        for f in fields(self):
-            k = f.name
-            v = getattr(self, k)
-            if isinstance(v, torch.Tensor):
-                v = v.to(device)
-            elif k == 'input_embedding_ranges' and v is not None:
-                v = [e.to(device) for e in v]
-            elif k == 'input_embeddings' and v is not None:
-                v = [[e.to(device) for e in li] for li in v]
-            out_dict[k] = v
-
-        return VisionModelInputs(**out_dict)
-
-    def get_inputs(self, history_lengths: torch.Tensor,
-                   seq_lengths: torch.Tensor):
-        """get vision embedding inputs."""
-        input_embeddings = None
-        input_embedding_indexing = None
-        if self.input_embeddings is not None and len(
-                self.input_embeddings) > 0:
-            input_embedding_li = []
-            for (his_len, seq_len, embeddings,
-                 emb_ranges) in zip(history_lengths, seq_lengths,
-                                    self.input_embeddings,
-                                    self.input_embedding_ranges):
-                for emb, (emb_start, emb_end) in zip(embeddings, emb_ranges):
-                    start = max(emb_start, his_len) - emb_start
-                    end = min(emb_end, his_len + seq_len) - emb_start
-                    if 0 <= start < end:
-                        input_embedding_li.append(emb[start:end])
-            # has embeddings
-            if len(input_embedding_li) > 0:
-                input_embeddings = torch.cat(input_embedding_li, dim=0)
-                device = input_embeddings.device
-                starts = history_lengths - self.history_lengths
-                ends = starts + seq_lengths
-                input_embedding_indexing = torch.cat([
-                    indexing[s:e] for indexing, s, e in zip(
-                        self.input_embedding_indexing, starts, ends)
-                ],
-                                                     dim=0)
-                index_ranges = torch.arange(input_embedding_indexing.numel(),
-                                            device=device)
-                input_embedding_indexing = index_ranges[
-                    input_embedding_indexing]
-        return input_embeddings, input_embedding_indexing
-
-
-@dataclass
-class ModelInputs:
-    """Input of the model."""
-    input_ids: torch.LongTensor
-    seq_length: torch.LongTensor
-    history_lengths: torch.LongTensor
-    block_offsets: torch.LongTensor
-    max_q_seq_length: int
-    max_history_length: int
-    is_decoding: bool
-    num_ignored_history: torch.LongTensor
-    local_adapter_ids: torch.LongTensor = None
-    adapter_info: AdapterInfo = None
-    meta: Any = None
-    vision_inputs: VisionModelInputs = None
-
-    def update(self, input_ids: torch.LongTensor):
-        """update input ids."""
-        assert self.is_decoding
-        self.history_lengths = self.history_lengths + 1
-        self.max_history_length = self.max_history_length + 1
-        if input_ids.dim() == 1:
-            input_ids = input_ids[None, :]
-        self.input_ids = input_ids
-        return self
-
-    def split(self, split_size: int, block_size: int):
-        """split inputs."""
-        assert len(
-            self.seq_length) == 1, ('Can not perform split on batched input.')
-        assert split_size % block_size == 0, (
-            'split_size should be multi of block_size.')
-
-        input_ids = self.input_ids
-        if input_ids.numel() < split_size:
-            return self
-
-        num_blocks = split_size // block_size
-        overlap = (self.history_lengths[0] % block_size != 0)
-        max_seq_len = self.seq_length[0].item()
-        ret = []
-        block_start = 0
-        for i in range(0, max_seq_len, split_size):
-            start = i
-            end = min(max_seq_len, i + split_size)
-            block_end = block_start + num_blocks
-            if overlap:
-                block_end += 1
-
-            block_offsets = self.block_offsets
-            inp = ModelInputs(
-                input_ids=self.input_ids[:, start:end],
-                seq_length=input_ids.new_tensor([end - start]),
-                block_offsets=block_offsets,
-                history_lengths=self.history_lengths + start,
-                max_q_seq_length=end - start,
-                max_history_length=self.max_history_length + start,
-                is_decoding=self.is_decoding,
-                num_ignored_history=self.num_ignored_history,
-                local_adapter_ids=self.local_adapter_ids,
-                adapter_info=self.adapter_info,
-                meta=self.meta,
-                vision_inputs=self.vision_inputs,
-            )
-            ret.append(inp)
-            block_start += num_blocks
-
-        return ret
-
-    def to_device(self, device: str):
-        """to device."""
-        out_dict = dict()
-        for f in fields(self):
-            k = f.name
-            v = getattr(self, k)
-            if isinstance(v, torch.Tensor):
-                v = v.to(device)
-            elif isinstance(v, VisionModelInputs):
-                v = v.to_device(device)
-            elif isinstance(v, AdapterInfo):
-                v = v.to_device(device)
-            out_dict[k] = v
-
-        return ModelInputs(**out_dict)
-
-
-@dataclass
-class StepContext:
-    """context of Model.
-
-    patched model might need extra information to perform inference. This
-    dataclass provide these infos and tools.
-    """
-    inputs: ModelInputs
-    block_offsets: torch.LongTensor
-    position_ids: torch.LongTensor
-    position_ids_1d: torch.LongTensor
-    q_start_loc: torch.LongTensor
-    attention_mask: torch.LongTensor
-    history_lengths: torch.LongTensor
-    q_seq_length: torch.LongTensor
-    kv_seq_length: torch.LongTensor
-    max_q_seq_length: int
-    max_kv_seq_length: int
-    kv_caches: List
-    is_decoding: bool
-    world_size: int = 1
-    local_adapter_ids: torch.LongTensor = None
-    adapter_params: Dict[str, AdapterInfo] = None
-    input_embeddings: torch.Tensor = None
-    input_embedding_indexing: torch.Tensor = None
-
-    _outputs: Dict = field(default_factory=dict)
-
-    @classmethod
-    def new(
-        cls,
-        inputs: ModelInputs,
-        world_size: int = 1,
-        device: str = 'cuda',
-        kv_caches: List = None,
-        cache_config: CacheConfig = None,
-    ):
-        """build step context.
-
-        Args:
-            inputs (ModelInputs): packaged model inputs.
-            world_size (int): The distribution world size.
-            device (str): The device of the tensors.
-        """
-        q_seq_length = inputs.seq_length
-        max_q_seq_length = inputs.max_q_seq_length
-        history_lengths = inputs.history_lengths
-
-        # for vlm
-        input_embeddings, input_embedding_indexing = None, None
-        if (inputs.vision_inputs is not None
-                and inputs.vision_inputs.input_embeddings is not None):
-            input_embeddings, input_embedding_indexing = \
-                inputs.vision_inputs.get_inputs(history_lengths, q_seq_length)
-
-        batch_size = len(q_seq_length)
-        device = q_seq_length.device
-
-        # q_start_loc and kv_seq_length
-        if inputs.is_decoding:
-            q_start_loc = torch.arange(0, batch_size, device=device)
-            attention_mask = torch.ones_like(q_seq_length)[:, None]
-            position_ids = history_lengths.unsqueeze(-1)
-        else:
-            q_start_loc = q_seq_length.cumsum(0) - q_seq_length
-            mask_range = torch.arange(max_q_seq_length, device=device)[None, :]
-            attention_mask = (mask_range < q_seq_length[:, None]).long()
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids += history_lengths.unsqueeze(-1)
-
-        # position ids 1d
-        position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
-                                                  device)
-        # seq_len + history_length
-        kv_seq_length = q_seq_length + history_lengths
-        max_kv_seq_length = max_q_seq_length + inputs.max_history_length
-
-        window_size = getattr(cache_config, 'window_size', 0)
-        if window_size > 0:
-            kv_seq_length -= inputs.num_ignored_history
-
-        adapter_params = None
-        if inputs.adapter_info is not None:
-            adapter_params = inputs.adapter_info.split_by_targets()
-
-        ret = StepContext(inputs=inputs,
-                          block_offsets=inputs.block_offsets,
-                          position_ids=position_ids,
-                          position_ids_1d=position_ids_1d,
-                          input_embeddings=input_embeddings,
-                          input_embedding_indexing=input_embedding_indexing,
-                          attention_mask=attention_mask,
-                          q_start_loc=q_start_loc,
-                          history_lengths=inputs.history_lengths,
-                          q_seq_length=inputs.seq_length,
-                          kv_seq_length=kv_seq_length,
-                          max_q_seq_length=max_q_seq_length,
-                          max_kv_seq_length=max_kv_seq_length,
-                          kv_caches=kv_caches,
-                          is_decoding=inputs.is_decoding,
-                          world_size=world_size,
-                          local_adapter_ids=inputs.local_adapter_ids,
-                          adapter_params=adapter_params)
-
-        ret = get_current_device_utils().update_step_context(ret)
-        return ret
-
-    @classmethod
-    def get_position_ids_1d(cls,
-                            position_ids: torch.LongTensor,
-                            seq_length: torch.LongTensor,
-                            device: str = 'cuda'):
-        """get 1d position_ids."""
-        if position_ids.size(0) == 1 or position_ids.size(1) == 1:
-            position_ids_1d = position_ids.flatten()
-        else:
-            position_ids_1d = [
-                ids[:l] for ids, l in zip(position_ids.cpu(), seq_length.cpu())
-            ]
-            position_ids_1d = torch.cat(position_ids_1d).to(device)
-        return position_ids_1d
-
-    def set_output(self, key, value):
-        """set output."""
-        self._outputs[key] = value
-
-    def get_output(self, key):
-        """get output."""
-        if key in self._outputs:
-            return self._outputs[key]
-        return None
-
-
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict,
                    swap_out_map: dict):
     """perform cache swapping."""
@@ -477,8 +126,9 @@ def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict,
             event.wait()
 
 
+@torch.inference_mode()
 def model_forward(
-    patched_model: torch.nn.Module,
+    model: torch.nn.Module,
     inputs: ModelInputs,
     cache_engine: CacheEngine,
     world_size: int = 1,
@@ -486,90 +136,40 @@ def model_forward(
 ):
     """perform model forward."""
     stream = stream or torch.cuda.current_stream()
-    with torch.inference_mode(), torch.cuda.stream(stream):
+    with torch.cuda.stream(stream):
         # forward
         inputs = inputs.to_device('cuda')
-        context = StepContext.new(
+        ctx_mgr = model.ctx_mgr
+        context = ctx_mgr.build_context(
             inputs=inputs,
             world_size=world_size,
             kv_caches=cache_engine.gpu_cache,
-            cache_config=cache_engine.cache_config,
         )
-        output = patched_model.patched_forward(
-            input_ids=inputs.input_ids,
-            position_ids=context.position_ids,
-            attention_mask=context.attention_mask,
-            past_key_values=cache_engine.gpu_cache,
-            return_dict=True,
-            output_attentions=False,
-            output_hidden_states=False,
-            use_origin=False,
-            context=context,
-        )
-    return dict(logits=output['logits'], custom_outputs=context._outputs)
+        if inputs.adapter_info is not None:
+            inputs.adapter_info.update_offsets(model.rank_offsets)
+        with ctx_mgr.context(context):
+            input_dict = model.prepare_inputs_for_generation(
+                past_key_values=cache_engine.gpu_cache,
+                context=context,
+            )
+            output = model(**input_dict)
+    return dict(logits=output)
 
 
-def _load_adapters(hf_model: torch.nn.Module,
-                   adapters: Dict[str, str],
-                   device_map: str = 'cpu'):
-    """load adapters."""
-    if not adapters:
-        return
-    for name, path in adapters.items():
-        logger.info(f'load adapter <{name}> from "{path}".')
-        hf_model.load_adapter(path, name, device_map=device_map)
+def _get_indexed_lora_linears(model):
+    """get indexed lora linears."""
+    from ..adapter.adapter import get_indexed_lora_linears
+    if hasattr(model, 'get_model'):
+        model = model.get_model()
+    return get_indexed_lora_linears(model)
 
 
-def _add_adapters(hf_model: torch.nn.Module, adapters: Dict[str, str]):
-    """add adapters."""
-    if not adapters:
-        return
-    from peft import PeftConfig, inject_adapter_in_model
-    for name, path in adapters.items():
-        config = PeftConfig.from_pretrained(path)
-        inject_adapter_in_model(config, model=hf_model, adapter_name=name)
-
-
-def _remove_unused_modules(hf_model: torch.nn.Module, model_cfg: ModelConfig):
-    """remove unused modules."""
-    if model_cfg.unused_modules is not None and len(
-            model_cfg.unused_modules) > 0:
-        for mod in model_cfg.unused_modules:
-            has_mod = True
-            parts = mod.split('.')
-            mod_path = 'hf_model'
-            for p in parts:
-                if eval(f'hasattr({mod_path}, "{p}")'):
-                    mod_path = f'{mod_path}.{p}'
-                else:
-                    has_mod = False
-                    break
-            if has_mod:
-                exec(f'del {mod_path}')
-    return hf_model
-
-
-def _unparam_lora_weight(model: torch.nn.Module):
-    """unparam lora weight.
-
-    We don't want to move weight of lora to gpu.
-    """
-    from peft.tuners.lora import Linear as LoRALinear
-
-    def _tensorize_weight(linear):
-        """tensorize weight."""
-        w = linear.weight
-        del linear.weight
-        linear.weight = w.data
-
-    for _, mod in model.named_modules():
-        if isinstance(mod, LoRALinear):
-            lora_A = mod.lora_A
-            lora_B = mod.lora_B
-            for linear in lora_A.values():
-                _tensorize_weight(linear)
-            for linear in lora_B.values():
-                _tensorize_weight(linear)
+def _get_lora_target_info(model, adapters: Dict[str, str]):
+    """get lora linear info."""
+    from ..adapter.adapter import get_lora_target_info
+    if hasattr(model, 'get_model'):
+        model = model.get_model()
+    return get_lora_target_info(model, adapters)
 
 
 SwapMap = Dict[int, int]
@@ -582,7 +182,7 @@ class AutoModelAgent:
         self.model_config = model_config
         self.cache_config = cache_config
 
-    def get_loralinear_info(self):
+    def get_lora_target_info(self):
         """get lora linear info."""
         raise NotImplementedError('Not implemented')
 
@@ -616,20 +216,6 @@ class AutoModelAgent:
         """
         raise NotImplementedError('Not implemented.')
 
-    @classmethod
-    def from_pretrained(cls,
-                        pretrained_model_name_or_path: str,
-                        cache_config: CacheConfig,
-                        trust_remote_code: bool,
-                        adapters: Dict[str, str] = None,
-                        tp: int = 1):
-        """from pretrained."""
-        return build_model_agent(pretrained_model_name_or_path,
-                                 cache_config=cache_config,
-                                 trust_remote_code=trust_remote_code,
-                                 adapters=adapters,
-                                 tp=tp)
-
 
 class BaseModelAgent(AutoModelAgent):
     """Base model agent.
@@ -647,56 +233,50 @@ class BaseModelAgent(AutoModelAgent):
                  model_path: str,
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
+                 backend_config: BackendConfig,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True):
         super().__init__(model_config=model_config, cache_config=cache_config)
-        torch_dtype = model_config.dtype
+        device = 'cuda'
+        self.backend_config = backend_config
+        self._adapters = adapters
 
-        self.patched_model = self._build_model(
-            model_path,
-            torch_dtype=torch_dtype,
-            adapters=adapters,
-            trust_remote_code=trust_remote_code)
+        self.patched_model = self._build_model(model_path, device=device)
 
         _update_cache_config(model_config, cache_config)
 
+        backend = get_backend()
+        self.patched_model = backend.build_graph_runner(
+            self.patched_model,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            device=device)
+
         self.cache_engine = CacheEngine(cache_config, model_config)
+
+        self._target_infos = None
+        if adapters is not None:
+            self._target_infos = add_adapters(self.patched_model,
+                                              self.cache_engine.gpu_cache,
+                                              adapters=adapters)
+
         self.stream = torch.cuda.Stream()
 
-    def _build_model(self,
-                     model_path: str,
-                     torch_dtype: torch.dtype,
-                     adapters: Dict[str, str] = None,
-                     trust_remote_code: bool = True):
+    def _build_model(self, model_path: str, device: torch.device = 'cuda'):
         """build patched model."""
-        device = 'cuda'
-        with LoadNoInit(), warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            hf_model = self.model_config.auto_model_cls.from_pretrained(
-                model_path,
-                torch_dtype=torch_dtype,
-                device_map=device,
-                trust_remote_code=trust_remote_code,
-                **self.model_config.init_kwargs)
-            hf_model.eval()
-            hf_model.config.use_cache = True
-            # build for vlm model
-            _remove_unused_modules(hf_model, self.model_config)
-
-        if adapters:
-            _load_adapters(hf_model, adapters)
-
-        patched_model = patch(hf_model, _PATCH_ARG_NAMES)
-        update_model(patched_model)
-
-        if adapters:
-            _unparam_lora_weight(patched_model)
-
+        custom_module_map = self.model_config.custom_module_map
+        if custom_module_map is not None:
+            update_custom_module_map(custom_module_map)
+        logger.info('build model.')
+        patched_model = build_patched_model(self.model_config, device=device)
+        logger.info('loading weights.')
+        load_model_weights(patched_model, model_path, device=device)
         return patched_model
 
-    def get_loralinear_info(self):
+    def get_lora_target_info(self):
         """get lora linear info."""
-        return get_loralinear_info(self.patched_model)
+        return self._target_infos
 
     def get_block_numel(self):
         """get block nelement."""
@@ -706,15 +286,11 @@ class BaseModelAgent(AutoModelAgent):
     def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """paging adapter."""
         logger.info('paging adapters.')
-        lora_linears = get_indexed_lora_linears(self.patched_model)
         cpu_caches = self.cache_engine.cpu_cache
-        num_blocks = self.cache_engine.num_cpu_blocks
-        cpu_caches = [(kcache.view(num_blocks,
-                                   -1), vcache.view(num_blocks, -1))
+        cpu_caches = [(kcache.flatten(1, -1), vcache.flatten(1, -1))
                       for kcache, vcache in cpu_caches]
         for weight_map in weight_maps:
-            weight_map.cache_adapter(lora_linears, cpu_caches)
-        update_lora_linears(lora_linears, weight_maps, device='cuda')
+            weight_map.cache_adapter(cpu_caches)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
@@ -762,47 +338,17 @@ class BaseModelAgent(AutoModelAgent):
         return output
 
 
-def _get_model_memory_usage(model: torch.nn.Module) -> int:
-    """get model memory usage."""
-    size = 0
-    for _, param in model.named_parameters():
-        size += param.element_size() * param.numel()
-    for _, buf in model.named_buffers():
-        size += buf.element_size() * param.numel()
-    return size
-
-
-def _create_device_map(model: torch.nn.Module,
-                       world_size: int,
-                       device_map: dict = None):
-    """Distribute params to each devices."""
-    free_mems = [get_gpu_memory(gpu_id)[0] for gpu_id in range(world_size)]
-    free_mems = torch.tensor(free_mems)
-    if device_map is None:
-        device_map = dict()
-    for name, param in model.named_parameters():
-        device_id = free_mems.argmax().item()
-        device_map[name] = device_id
-        free_mems[device_id] -= param.numel() * param.element_size()
-    for name, param in model.named_buffers():
-        device_id = free_mems.argmax().item()
-        device_map[name] = device_id
-        free_mems[device_id] -= param.numel() * param.element_size()
-    return device_map
-
-
 @torch.inference_mode()
 def _tp_build_model(
     rank: int,
     model_path: str,
     model_config: ModelConfig,
     cache_config: CacheConfig,
+    backend_config: BackendConfig,
     adapters: Dict[str, str],
     world_size: int,
-    trust_remote_code=True,
 ):
     """build tensor parallel model."""
-    from accelerate import init_empty_weights
 
     patched_model = None
     cache_engine = None
@@ -831,63 +377,53 @@ def _tp_build_model(
         return config_list[0]
 
     try:
-        torch_dtype = model_config.dtype
-        device_map = None
-        with init_empty_weights(), warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            model = model_config.auto_model_cls.from_pretrained(
-                model_path,
-                torch_dtype=torch_dtype,
-                trust_remote_code=trust_remote_code,
-                **model_config.init_kwargs)
-            # build for vlm model
-            _remove_unused_modules(model, model_config)
-            if rank == 0:
-                device_map = _create_device_map(model, world_size)
-        _add_adapters(model, adapters)
-        if rank == 0:
-            # adapter would remove weight of linear.
-            device_map = _create_device_map(model, world_size, device_map)
+        device_map = torch.device('cuda')
 
-        model.eval()
-        model.config.use_cache = True
-
-        patched_model = patch(
-            model,
-            extra_args=_PATCH_ARG_NAMES,
-            rank=rank,
-            world_size=world_size,
-        )
-        load_model_weights(patched_model,
-                           model_path,
-                           adapters,
-                           rank=rank,
-                           world_size=world_size,
-                           device='cuda')
+        custom_module_map = model_config.custom_module_map
+        if custom_module_map is not None:
+            update_custom_module_map(custom_module_map)
         if rank == 0:
-            logger.debug('Updating model.')
-        update_model(patched_model)
+            logger.info('build model.')
+        patched_model = build_patched_model(model_config, device=device_map)
+        if rank == 0:
+            logger.info('loading weights.')
+        load_model_weights(patched_model, model_path, device=device_map)
 
         _update_cache_config(model_config,
                              cache_config,
                              gpu_id=rank,
                              world_size=world_size)
+
+        backend = get_backend()
+        patched_model = backend.build_graph_runner(
+            patched_model,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            device='cuda')
+
         cache_config = _broadcast_config(cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,
                                    rank=rank,
                                    world_size=world_size)
+        target_infos = None
+        if adapters is not None:
+            target_infos = add_adapters(patched_model,
+                                        cache_engine.gpu_cache,
+                                        adapters=adapters)
+
     except Exception as e:
         raise e
 
-    return patched_model, cache_engine, cache_config
+    return patched_model, cache_engine, cache_config, target_infos
 
 
 def _broadcast_inputs(rank: int, inputs: Any, stream: torch.cuda.Stream):
     """get input tensor parallel."""
     # broadcast meta info
     if rank != 0:
-        inputs = [None, None, None]
+        inputs = [None, None, None, None]
 
     with torch.cuda.stream(stream):
         dist.broadcast_object_list(inputs)
@@ -897,17 +433,16 @@ def _broadcast_inputs(rank: int, inputs: Any, stream: torch.cuda.Stream):
 @torch.inference_mode()
 def _tp_paging_adapters(
     rank: int,
-    patched_model: torch.nn.Module,
     cache_engine: CacheEngine,
-    weight_map: AdapterWeightMap = None,
+    weight_maps: AdapterWeightMap = None,
 ):
     """tp paging adapters."""
 
-    def __get_weight_map():
+    def __get_weight_map(weight_maps):
         """get weight map."""
         if rank == 0:
-            assert weight_map is not None
-            dist_obj = [weight_map]
+            assert weight_maps is not None
+            dist_obj = [weight_maps]
         else:
             dist_obj = [None]
         dist.broadcast_object_list(dist_obj)
@@ -915,20 +450,14 @@ def _tp_paging_adapters(
 
     def __paging(weight_maps):
         """paging."""
-        lora_linears = get_indexed_lora_linears(patched_model)
         cpu_caches = cache_engine.cpu_cache
-        num_blocks = cache_engine.num_cpu_blocks
-        cpu_caches = [(kcache.view(num_blocks,
-                                   -1), vcache.view(num_blocks, -1))
+        cpu_caches = [(kcache.flatten(1, -1), vcache.flatten(1, -1))
                       for kcache, vcache in cpu_caches]
         for weight_map in weight_maps:
-            weight_map.cache_adapter(lora_linears, cpu_caches)
-        update_lora_linears(lora_linears, weight_maps, device='cuda')
+            weight_map.cache_adapter(cpu_caches)
 
-    weight_maps = __get_weight_map()
+    weight_maps = __get_weight_map(weight_maps)
 
-    if rank == 0:
-        logger.info('tp paging adapters.')
     if len(weight_maps) > 0:
         __paging(weight_maps)
 
@@ -938,9 +467,10 @@ def _tp_model_loop(
     model_path: str,
     model_config: ModelConfig,
     cache_config: CacheConfig,
+    backend_config: BackendConfig,
     adapters: Dict[str, str],
     world_size: int,
-    trust_remote_code=True,
+    trust_remote_code: bool = True,
 ):
     """Start model loops for tensor parallel model inference.
 
@@ -955,24 +485,23 @@ def _tp_model_loop(
         world_size (int): The distribution world size.
     """
     stream = torch.cuda.Stream()
-    patched_model, cache_engine, _ = _tp_build_model(
-        rank,
-        model_path,
-        model_config,
-        cache_config,
-        adapters,
-        world_size=world_size,
-        trust_remote_code=trust_remote_code)
+    patched_model, cache_engine, _, _ = _tp_build_model(rank,
+                                                        model_path,
+                                                        model_config,
+                                                        cache_config,
+                                                        backend_config,
+                                                        adapters=adapters,
+                                                        world_size=world_size)
 
     if adapters:
-        _tp_paging_adapters(rank,
-                            patched_model,
-                            cache_engine=cache_engine,
-                            weight_map=None)
+        _tp_paging_adapters(rank, cache_engine=cache_engine, weight_maps=None)
 
     while True:
-        inputs, swap_in_map, swap_out_map = _broadcast_inputs(
+        inputs, swap_in_map, swap_out_map, exit_flag = _broadcast_inputs(
             rank, None, stream)
+
+        if exit_flag:
+            break
 
         cache_swapping(cache_engine,
                        swap_in_map=swap_in_map,
@@ -1066,6 +595,7 @@ class TPModelAgent(AutoModelAgent):
                  model_path: str,
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
+                 backend_config: BackendConfig,
                  world_size: int,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True) -> None:
@@ -1088,29 +618,34 @@ class TPModelAgent(AutoModelAgent):
 
         self.mp_ctx = mp.get_context('spawn')
         self.world_size = world_size
+        self.backend_config = backend_config
 
         self._start_sub_process(model_path,
                                 model_config=model_config,
                                 cache_config=cache_config,
+                                backend_config=backend_config,
                                 adapters=adapters,
                                 world_size=world_size,
                                 trust_remote_code=trust_remote_code)
 
-        model, cache_engine, cache_config = self._build_model(
+        model, cache_engine, cache_config, target_infos = self._build_model(
             model_path=model_path,
             model_config=model_config,
             cache_config=cache_config,
+            backend_config=backend_config,
             adapters=adapters,
             world_size=world_size,
-            trust_remote_code=trust_remote_code,
         )
         self.patched_model = model
         self.cache_config = cache_config
         self.cache_engine = cache_engine
+        self._target_infos = target_infos
         self.stream = torch.cuda.Stream()
 
     def _start_sub_process(self, model_path: str, model_config: ModelConfig,
-                           cache_config: CacheConfig, adapters: Dict[str, str],
+                           cache_config: CacheConfig,
+                           backend_config: BackendConfig, adapters: Dict[str,
+                                                                         str],
                            world_size: int, trust_remote_code: bool):
         """Start tensor parallel sub process."""
         port = _find_available_port()
@@ -1130,6 +665,7 @@ class TPModelAgent(AutoModelAgent):
                 (model_path, ),
                 dict(model_config=model_config,
                      cache_config=cache_config,
+                     backend_config=backend_config,
                      adapters=adapters,
                      world_size=world_size,
                      trust_remote_code=trust_remote_code),
@@ -1153,6 +689,8 @@ class TPModelAgent(AutoModelAgent):
             if dist.is_initialized():
                 dist.destroy_process_group()
             raise e
+        # Please see Note [Exit By Sending Exit Flag]
+        atexit.register(_exit_by_sending_exit_flag, rank, self)
 
     @torch.inference_mode()
     def _build_model(
@@ -1160,28 +698,28 @@ class TPModelAgent(AutoModelAgent):
         model_path: str,
         model_config: ModelConfig,
         cache_config: CacheConfig,
+        backend_config: BackendConfig,
         adapters: Dict[str, str],
         world_size: int,
-        trust_remote_code=True,
     ):
         """build model."""
         _check_context_alive(self.mp_context)
         rank = 0
-        model, cache_engine, cache_config = _tp_build_model(
+        model, cache_engine, cache_config, target_infos = _tp_build_model(
             rank,
             model_path=model_path,
             model_config=model_config,
             cache_config=cache_config,
+            backend_config=backend_config,
             adapters=adapters,
             world_size=world_size,
-            trust_remote_code=trust_remote_code,
         )
 
-        return model, cache_engine, cache_config
+        return model, cache_engine, cache_config, target_infos
 
-    def get_loralinear_info(self):
+    def get_lora_target_info(self):
         """get lora linear info."""
-        return get_loralinear_info(self.patched_model)
+        return self._target_infos
 
     def get_block_numel(self):
         """get block nelement."""
@@ -1194,15 +732,16 @@ class TPModelAgent(AutoModelAgent):
             return
         _check_context_alive(self.mp_context)
         rank = 0
-        _tp_paging_adapters(rank, self.patched_model, self.cache_engine,
-                            weight_maps)
+        logger.info('paging adapters.')
+        _tp_paging_adapters(rank, self.cache_engine, weight_maps)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
         """forward impl."""
         _check_context_alive(self.mp_context)
         rank = 0
-        _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
+        exit_flag = False
+        _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map, exit_flag],
                           self.stream)
         cache_swapping(self.cache_engine,
                        swap_in_map=swap_in_map,
@@ -1248,24 +787,58 @@ class TPModelAgent(AutoModelAgent):
         return output
 
 
+def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):
+    """[Note] Exit By Sending Exit Flag: the registration to `atexit` of this
+    function should be called after importing torch.multiprocessing and the
+    initialization of distributed process group."""
+    if not hasattr(agent, 'stream'):
+        # agent is not initialized, just exits normally
+        if hasattr(agent, 'patched_model'):
+            del agent.patched_model
+        return
+
+    import sys
+    if agent.backend_config.device_type == 'ascend' \
+            and 'uvicorn.server' in sys.modules:
+        # Workaround for CLI serve mode with device_type ascend:
+        # using uvicorn server causes ascend low-level backend of subprocesses
+        # corrupted, and using _broadcast_inputs in this case leads to
+        # main process hanging, just exits normally
+        del agent.patched_model
+        return
+
+    # send exit_flag to all subprocess relying on all subprocess are alive
+    # and wait at _broadcast_inputs
+    exit_flag = True
+    _broadcast_inputs(rank, [None, None, None, exit_flag], agent.stream)
+    agent.stream.synchronize()
+
+    del agent.patched_model
+
+
 def build_model_agent(model_path: str,
                       cache_config: CacheConfig,
+                      backend_config: BackendConfig,
                       trust_remote_code: bool,
                       adapters: Dict[str, str] = None,
-                      tp: int = 1):
+                      tp: int = 1,
+                      custom_module_map: str = None):
     """create model agent."""
     model_config = ModelConfig.from_pretrained(
         model_path, trust_remote_code=trust_remote_code)
+    model_config.custom_module_map = custom_module_map
     if tp == 1:
         model_agent = BaseModelAgent(model_path,
                                      model_config=model_config,
                                      cache_config=cache_config,
+                                     backend_config=backend_config,
                                      adapters=adapters,
                                      trust_remote_code=trust_remote_code)
     else:
         model_agent = TPModelAgent(model_path,
                                    model_config=model_config,
                                    cache_config=cache_config,
+                                   backend_config=backend_config,
                                    world_size=tp,
                                    adapters=adapters,
                                    trust_remote_code=trust_remote_code)

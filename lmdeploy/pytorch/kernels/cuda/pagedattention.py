@@ -18,6 +18,20 @@ TRITON_VERSION = version.parse(triton.__version__)
 
 assert TRITON_VERSION >= version.parse('2.1.0')
 
+if TRITON_VERSION >= version.parse('3.0.0'):
+
+    @triton.jit
+    def tanh(x):
+        """tanh."""
+        return 2 * tl.sigmoid(2 * x) - 1
+
+    fast_expf = tl.math.exp
+    fast_dividef = tl.math.fdiv
+else:
+    tanh = tl.math.tanh
+    fast_expf = tl.math.fast_expf
+    fast_dividef = tl.math.fast_dividef
+
 
 @triton.autotune(configs=[
     triton.Config({}, num_stages=2, num_warps=16),
@@ -99,9 +113,9 @@ def _fwd_grouped_split_kernel(
     BLOCK_DMODEL1: tl.constexpr,
 ):
     """first step kernel of split k attention."""
-    cur_batch = tl.program_id(0)
-    cur_kv_head = tl.program_id(1)
-    split_k_id = tl.program_id(2)
+    cur_batch = tl.program_id(2)
+    cur_kv_head = tl.program_id(0)
+    split_k_id = tl.program_id(1)
 
     if BLOCK_H < kv_group_num:
         HEAD_PER_CTA: tl.constexpr = BLOCK_H
@@ -172,9 +186,11 @@ def _fwd_grouped_split_kernel(
         kv_min_loc = tl.maximum(history_len - window_size, 0)
 
     loop_start = start_block_id * BLOCK_N
+    block_offset_ptrs += start_block_id
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        b_offset = tl.load(block_offset_ptrs + start_n // BLOCK_N)
+        b_offset = tl.load(block_offset_ptrs)
+        block_offset_ptrs += 1
 
         # -- compute qk ----
         k = tl.load(k_ptrs + b_offset * stride_kp)
@@ -193,7 +209,7 @@ def _fwd_grouped_split_kernel(
         qk *= sm_scale
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
-            qk = tl.math.tanh(qk)
+            qk = tanh(qk)
             qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
         if start_n + BLOCK_N > history_len or window_size > 0:
@@ -208,8 +224,8 @@ def _fwd_grouped_split_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl.math.fast_expf(qk - m_i_new[:, None])
-        alpha = tl.math.fast_expf(m_i - m_i_new)
+        p = fast_expf(qk - m_i_new[:, None])
+        alpha = fast_expf(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
 
         # -- update output accumulator --
@@ -350,9 +366,9 @@ def _fwd_grouped_split_quant_kernel(
     BLOCK_DMODEL1: tl.constexpr,
 ):
     """first step kernel of split k attention."""
-    cur_batch = tl.program_id(0)
-    cur_kv_head = tl.program_id(1)
-    split_k_id = tl.program_id(2)
+    cur_batch = tl.program_id(2)
+    cur_kv_head = tl.program_id(0)
+    split_k_id = tl.program_id(1)
 
     if BLOCK_H < kv_group_num:
         HEAD_PER_CTA: tl.constexpr = BLOCK_H
@@ -489,7 +505,7 @@ def _fwd_grouped_split_quant_kernel(
         qk *= sm_scale
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
-            qk = tl.math.tanh(qk)
+            qk = tanh(qk)
             qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
         if start_n + BLOCK_N > history_len or window_size > 0:
@@ -504,8 +520,8 @@ def _fwd_grouped_split_quant_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl.math.fast_expf(qk - m_i_new[:, None])
-        alpha = tl.math.fast_expf(m_i - m_i_new)
+        p = fast_expf(qk - m_i_new[:, None])
+        alpha = fast_expf(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
 
         # -- update output accumulator --
@@ -582,7 +598,7 @@ def _reduce_split_kernel(
     l_k = tl.load(Acc + offs_mi + 1)
 
     m_max = tl.max(m_k, 0)
-    alpha = tl.math.fast_expf(m_k - m_max)
+    alpha = fast_expf(m_k - m_max)
     acc_k = acc_k * alpha[:, None]
     l_k = l_k * alpha
 
@@ -727,9 +743,11 @@ def _fwd_kernel(
         start_block_id = tl.maximum(history_len - window_size, 0) // BLOCK_N
         kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
     kv_start_loc = start_block_id * BLOCK_N
+    block_offset_ptrs += start_block_id
     for start_n in range(kv_start_loc, kv_seqlen, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        b_offset = tl.load(block_offset_ptrs + start_n // BLOCK_N)
+        b_offset = tl.load(block_offset_ptrs)
+        block_offset_ptrs += 1
 
         # -- compute qk ----
         k = tl.load(k_ptrs + b_offset * stride_kp)
@@ -748,7 +766,7 @@ def _fwd_kernel(
         qk *= sm_scale
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
-            qk = tl.math.tanh(qk)
+            qk = tanh(qk)
             qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
         if start_n + BLOCK_N > history_len or window_size > 0:
@@ -765,8 +783,8 @@ def _fwd_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl.math.fast_expf(qk - m_i_new[:, None])
-        alpha = tl.math.fast_expf(m_i - m_i_new)
+        p = fast_expf(qk - m_i_new[:, None])
+        alpha = fast_expf(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
         # -- update output accumulator --
         # scale acc
@@ -779,7 +797,7 @@ def _fwd_kernel(
         l_i = l_i_new
         m_i = m_i_new
 
-    acc = tl.math.fast_dividef(acc, l_i[:, None])
+    acc = fast_dividef(acc, l_i[:, None])
     # initialize pointers to output
     off_o = ((q_start_loc + offs_m[:, None]) * stride_obs +
              cur_head * stride_oh + offs_dv[None, :] * stride_od)
@@ -928,9 +946,11 @@ def _fwd_kernel_quant(
         start_block_id = tl.maximum(history_len - window_size, 0) // BLOCK_N
         kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
     kv_start_loc = start_block_id * BLOCK_N
+    block_offset_ptrs += start_block_id
     for start_n in range(kv_start_loc, kv_seqlen, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        b_offset = tl.load(block_offset_ptrs + start_n // BLOCK_N)
+        b_offset = tl.load(block_offset_ptrs)
+        block_offset_ptrs += 1
 
         # -- compute qk ----
         k = tl.load(K + off_k + b_offset * stride_kp)
@@ -974,7 +994,7 @@ def _fwd_kernel_quant(
         qk *= sm_scale
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
-            qk = tl.math.tanh(qk)
+            qk = tanh(qk)
             qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
         if start_n + BLOCK_N > history_len or window_size > 0:
@@ -991,8 +1011,8 @@ def _fwd_kernel_quant(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl.math.fast_expf(qk - m_i_new[:, None])
-        alpha = tl.math.fast_expf(m_i - m_i_new)
+        p = fast_expf(qk - m_i_new[:, None])
+        alpha = fast_expf(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
         # -- update output accumulator --
         # scale acc
@@ -1005,7 +1025,7 @@ def _fwd_kernel_quant(
         l_i = l_i_new
         m_i = m_i_new
 
-    acc = tl.math.fast_dividef(acc, l_i[:, None])
+    acc = fast_dividef(acc, l_i[:, None])
     # initialize pointers to output
     off_o = ((q_start_loc + offs_m[:, None]) * stride_obs +
              cur_head * stride_oh + offs_dv[None, :] * stride_od)
@@ -1205,7 +1225,11 @@ def paged_attention_fwd(
         p2_kv_group_num = triton.next_power_of_2(kv_group_num)
         BLOCK_H = max(16, min(BLOCK, p2_kv_group_num))
         grid_1 = triton.cdiv(head, min(BLOCK_H, kv_group_num))
-        grid = (batch, grid_1, SPLIT_K)
+        grid = (
+            grid_1,
+            SPLIT_K,
+            batch,
+        )
         if quant_policy > 0:
             _fwd_grouped_split_quant_kernel[grid](
                 q,

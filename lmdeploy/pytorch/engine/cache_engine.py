@@ -4,6 +4,7 @@ from typing import Dict, List, Literal, Tuple
 
 import torch
 
+from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, ModelConfig
@@ -80,14 +81,39 @@ class CacheEngine:
         return self.cache_config.num_cpu_blocks
 
     @classmethod
-    def _get_block_shape_impl(cls,
-                              model_config: ModelConfig,
-                              block_size: int,
-                              head_size: int,
-                              world_size: int = 1,
-                              quant_policy: Literal[0, 4, 8] = 0,
-                              local: bool = True):
+    def _get_key_block_shape_impl(cls,
+                                  model_config: ModelConfig,
+                                  block_size: int,
+                                  head_size: int,
+                                  world_size: int = 1,
+                                  quant_policy: Literal[0, 4, 8] = 0,
+                                  local: bool = True):
         """get single block shape."""
+        attn_backend = get_backend()
+        dtype = model_config.dtype
+        num_heads = model_config.num_key_value_heads
+        if local and not model_config.multi_query_attention:
+            assert num_heads % world_size == 0, \
+                f'num_heads: {num_heads}, world_size: {world_size}'
+            num_heads = num_heads // world_size
+        if quant_policy == 4:  # pack head_dim to uint8
+            assert head_size % 2 == 0, \
+                f'head_size: {head_size}, quant_policy: {quant_policy}'
+            head_size = head_size // 2
+        return attn_backend.get_k_block_shape(block_size, num_heads, head_size,
+                                              dtype)
+
+    @classmethod
+    def _get_value_block_shape_impl(cls,
+                                    model_config: ModelConfig,
+                                    block_size: int,
+                                    head_size: int,
+                                    world_size: int = 1,
+                                    quant_policy: Literal[0, 4, 8] = 0,
+                                    local: bool = True):
+        """get single block shape."""
+        attn_backend = get_backend()
+        dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
         if local and not model_config.multi_query_attention:
             assert num_heads % world_size == 0, \
@@ -98,14 +124,15 @@ class CacheEngine:
                 f'head_size: {head_size}, quant_policy: {quant_policy}'
             head_size = head_size // 2
 
-        return (block_size, num_heads, head_size)
+        return attn_backend.get_v_block_shape(block_size, num_heads, head_size,
+                                              dtype)
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of key block."""
         head_size = self.model_config.k_head_dim
         if head_size is None:
             head_size = self.model_config.head_dim
-        return self._get_block_shape_impl(
+        return self._get_key_block_shape_impl(
             self.model_config,
             block_size=self.block_size,
             head_size=head_size,
@@ -120,7 +147,7 @@ class CacheEngine:
         head_size = self.model_config.v_head_dim
         if head_size is None:
             head_size = self.model_config.head_dim
-        return self._get_block_shape_impl(
+        return self._get_value_block_shape_impl(
             self.model_config,
             block_size=self.block_size,
             head_size=head_size,
@@ -264,7 +291,7 @@ class CacheEngine:
             key_head_size = model_config.head_dim
         if value_head_size is None:
             value_head_size = model_config.head_dim
-        key_shape = cls._get_block_shape_impl(
+        key_shape = cls._get_key_block_shape_impl(
             model_config,
             block_size=block_size,
             head_size=key_head_size,
@@ -272,7 +299,7 @@ class CacheEngine:
             local=True,
             quant_policy=quant_policy,
         )
-        value_shape = cls._get_block_shape_impl(
+        value_shape = cls._get_value_block_shape_impl(
             model_config,
             block_size=block_size,
             head_size=value_head_size,

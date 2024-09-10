@@ -23,18 +23,17 @@ logger = get_logger('lmdeploy')
 
 def get_names_from_model(model_path: str, model_name: str = None):
     """Get model name and chat template name from workspace model."""
-    from configparser import ConfigParser
     triton_model_path = os.path.join(model_path, 'triton_models', 'weights')
     if not os.path.exists(triton_model_path):
         chat_template_name = best_match_model(model_path)
     else:
         # `model_path` refers to a turbomind model, reading
         # chat_template_name from the config
-        ini_path = os.path.join(triton_model_path, 'config.ini')
-        with open(ini_path, 'r') as f:
-            parser = ConfigParser()
-            parser.read_file(f)
-        chat_template_name = parser['llama']['chat_template']
+        config_path = os.path.join(triton_model_path, 'config.yaml')
+        with open(config_path, 'r') as f:
+            import yaml
+            config = yaml.safe_load(f)
+        chat_template_name = config['model_config']['chat_template']
     model_name = model_name if model_name else model_path
     return model_name, chat_template_name
 
@@ -189,15 +188,10 @@ class AsyncEngine(LogitsMixin):
                                            PytorchEngineConfig]] = None,
             **kwargs):
         """Innter build method for turbomind backend."""
-        if backend_config is None:
-            backend_config = TurbomindEngineConfig()
-        assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
-            ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
-            'turbomind backend'
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
             model_path, engine_config=backend_config, **kwargs)
-        self.backend_config = backend_config
+        self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = self.engine.config
 
     def _build_pytorch(
@@ -208,14 +202,9 @@ class AsyncEngine(LogitsMixin):
             **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        if backend_config is None:
-            backend_config = PytorchEngineConfig()
-        assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
-            'use PytorchEngineConfig imported from lmdeploy.messages for ' \
-            'pytorch backend'
         self.engine = Engine(model_path=model_path,
                              engine_config=backend_config)
-        self.backend_config = backend_config
+        self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
     def __call__(self,

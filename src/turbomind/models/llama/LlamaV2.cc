@@ -212,18 +212,54 @@ void LlamaV2<T>::forwardUnified(T*               out,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    invokeInputIdsEmbeddingLookupPosEncoding(decoder_input,
-                                             nullptr,  // processed somewhere else
-                                             weights_->pre_decoder_embedding_table,
-                                             static_cast<T*>(nullptr),
-                                             pPromptTuningParam<T>{},
-                                             input_ids,
-                                             0,  // only used for position encoding
-                                             token_num,
-                                             token_num,
-                                             1,
-                                             hidden_units_,
-                                             stream_);
+    if (tensor_para_.world_size_ == 1) {
+        invokeInputIdsEmbeddingLookupPosEncoding(decoder_input,
+                                                 nullptr,  // processed somewhere else
+                                                 weights_->pre_decoder_embedding_table,
+                                                 static_cast<T*>(nullptr),
+                                                 pPromptTuningParam<T>{},
+                                                 input_ids,
+                                                 0,  // only used for position encoding
+                                                 token_num,
+                                                 token_num,
+                                                 1,
+                                                 hidden_units_,
+                                                 stream_);
+        sync_check_cuda_error();
+    }
+    else {
+        const size_t local_hidden_units = hidden_units_ / tensor_para_.world_size_;
+        invokeInputIdsEmbeddingLookupPosEncoding(decoder_output + tensor_para_.rank_ * token_num * local_hidden_units,
+                                                 nullptr,  // processed somewhere else
+                                                 weights_->pre_decoder_embedding_table,
+                                                 static_cast<T*>(nullptr),
+                                                 pPromptTuningParam<T>{},
+                                                 input_ids,
+                                                 0,  // only used for position encoding
+                                                 token_num,
+                                                 token_num,
+                                                 1,
+                                                 local_hidden_units,
+                                                 stream_);
+        sync_check_cuda_error();
+
+        {
+            NcclGuard nccl_guard(tensor_para_, stream_);
+            ftNcclAllGather(decoder_output,                                        // send_buf
+                            decoder_output,                                        // recv_buf
+                            token_num * hidden_units_ / tensor_para_.world_size_,  // data_size
+                            tensor_para_.rank_,
+                            tensor_para_,
+                            stream_);
+
+            sync_check_cuda_error();
+        }
+
+        invokeInPlaceTranspose102(
+            decoder_input, decoder_output, tensor_para_.world_size_, token_num, local_hidden_units, false, stream_);
+
+        sync_check_cuda_error();
+    }
 
     count_and_fix(decoder_input, token_num * hidden_units_, "embedding", 1);
 
@@ -299,8 +335,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                               batch_size,
                               hidden_units_,  // k
                               &alpha,
-                              weights_->post_decoder_embedding_kernel
-                                  + tensor_para_.rank_ * local_vocab_size * hidden_units_,
+                              weights_->post_decoder_embedding_kernel,
                               data_type,
                               hidden_units_,  // k
                               decoder_output,
@@ -360,13 +395,8 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
         {"local_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &local_batch_size}},
     };
 
-    const std::vector<std::string> optional_inputs{"stop_words_list",
-                                                   "bad_words_list",
-                                                   "runtime_top_k",
-                                                   "runtime_top_p",
-                                                   "temperature",
-                                                   "repetition_penalty",
-                                                   "random_seed"};
+    const std::vector<std::string> optional_inputs{
+        "stop_words_list", "bad_words_list", "runtime_top_k", "runtime_top_p", "temperature", "repetition_penalty"};
     for (const auto& key : optional_inputs) {
         if (inputs->isExist(key)) {
             dynamic_decode_input_tensors.insert({key, inputs->at(key)});

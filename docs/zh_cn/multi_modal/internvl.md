@@ -64,7 +64,7 @@ from lmdeploy.vl.constants import IMAGE_TOKEN
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 messages = [
     dict(role='user', content=[
-        dict(type='text', text=f'<img>{IMAGE_TOKEN}{IMAGE_TOKEN}</img>\nDescribe the two images in detail.'),
+        dict(type='text', text=f'{IMAGE_TOKEN}{IMAGE_TOKEN}\nDescribe the two images in detail.'),
         dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image1.jpg')),
         dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image2.jpg'))
     ])
@@ -90,7 +90,7 @@ from lmdeploy.vl.constants import IMAGE_TOKEN
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 messages = [
     dict(role='user', content=[
-        dict(type='text', text=f'Image-1: <img>{IMAGE_TOKEN}</img>\nImage-2: <img>{IMAGE_TOKEN}</img>\nDescribe the two images in detail.'),
+        dict(type='text', text=f'Image-1: {IMAGE_TOKEN}\nImage-2: {IMAGE_TOKEN}\nDescribe the two images in detail.'),
         dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image1.jpg')),
         dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image2.jpg'))
     ])
@@ -151,7 +151,7 @@ imgs = load_video(video_path, num_segments=8)
 
 question = ''
 for i in range(len(imgs)):
-    question = question + f'Frame{i+1}: <img>{IMAGE_TOKEN}</img>\n'
+    question = question + f'Frame{i+1}: {IMAGE_TOKEN}\n'
 
 question += 'What is the red panda doing?'
 
