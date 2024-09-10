@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from lmdeploy.utils import get_max_batch_size
+
 from .cli import CLI
 from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
                     convert_args, get_chat_template, get_lora_adapters)
@@ -202,6 +204,8 @@ class SubCliServe:
         from lmdeploy.messages import (PytorchEngineConfig,
                                        TurbomindEngineConfig)
         from lmdeploy.serve.gradio.app import run
+        max_batch_size = args.max_batch_size if args.max_batch_size \
+            else get_max_batch_size(args.device)
         backend = args.backend
 
         if backend != 'pytorch' and ':' not in args.model_path_or_server:
@@ -210,7 +214,7 @@ class SubCliServe:
         if backend == 'pytorch':
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
-                max_batch_size=args.max_batch_size,
+                max_batch_size=max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
                 session_len=args.session_len,
@@ -220,7 +224,7 @@ class SubCliServe:
         else:
             backend_config = TurbomindEngineConfig(
                 tp=args.tp,
-                max_batch_size=args.max_batch_size,
+                max_batch_size=max_batch_size,
                 session_len=args.session_len,
                 model_format=args.model_format,
                 quant_policy=args.quant_policy,
@@ -243,6 +247,8 @@ class SubCliServe:
         """Serve LLMs with restful api using fastapi."""
         from lmdeploy.archs import autoget_backend
         from lmdeploy.serve.openai.api_server import serve as run_api_server
+        max_batch_size = args.max_batch_size if args.max_batch_size \
+            else get_max_batch_size(args.device)
         backend = args.backend
         if backend != 'pytorch':
             # set auto backend mode
@@ -253,7 +259,7 @@ class SubCliServe:
             adapters = get_lora_adapters(args.adapters)
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
-                max_batch_size=args.max_batch_size,
+                max_batch_size=max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
                 session_len=args.session_len,
@@ -265,7 +271,7 @@ class SubCliServe:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(
                 tp=args.tp,
-                max_batch_size=args.max_batch_size,
+                max_batch_size=max_batch_size,
                 session_len=args.session_len,
                 model_format=args.model_format,
                 quant_policy=args.quant_policy,

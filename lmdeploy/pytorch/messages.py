@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.messages import EngineGenerationConfig, LogitsProcessor
+from lmdeploy.messages import GenerationConfig, LogitsProcessor
 from lmdeploy.utils import get_logger
 
 from .block import LogicalTokenBlocks
@@ -38,6 +38,7 @@ class SamplingParam:
     """Sampling parameter."""
     top_p: float = 1.0
     top_k: int = 1
+    min_p: float = 0.0
     temperature: float = 0.8
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
@@ -46,29 +47,36 @@ class SamplingParam:
     bad_words: List[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
+    response_format: Optional[str] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
 
     @classmethod
-    def from_gen_config(self, gen_config: EngineGenerationConfig):
+    def from_gen_config(self, gen_config: GenerationConfig):
         """from gen config."""
         min_new_tokens = gen_config.min_new_tokens or 0
 
-        stop_words = gen_config.stop_words or []
-        bad_words = gen_config.bad_words or []
+        stop_words = gen_config.stop_token_ids or []
+        bad_words = gen_config.bad_token_ids or []
         if gen_config.ignore_eos:
             bad_words += stop_words
             stop_words = []
 
         top_k = gen_config.top_k
         top_p = gen_config.top_p
+        min_p = gen_config.min_p
         temperature = gen_config.temperature
         repetition_penalty = gen_config.repetition_penalty
         max_new_tokens = gen_config.max_new_tokens
+        response_format = gen_config.response_format
 
         if top_p < 0 or top_p > 1.0:
             logger.warning('`top_p` has to be a float > 0 and < 1'
                            f' but is {top_p}')
             top_p = 1.0
+        if min_p < 0 or min_p > 1.0:
+            logger.warning('`min_p` has to be a float > 0 and < 1'
+                           f' but is {min_p}')
+            min_p = 0.0
         if temperature == 0:
             logger.warning('`temperature` is 0, set to 1e-6')
             temperature = 1e-6
@@ -91,12 +99,14 @@ class SamplingParam:
             min_new_tokens = 0
         return SamplingParam(top_p=top_p,
                              top_k=top_k,
+                             min_p=min_p,
                              temperature=temperature,
                              repetition_penalty=repetition_penalty,
                              ignore_eos=gen_config.ignore_eos,
                              random_seed=gen_config.random_seed,
                              stop_words=stop_words,
                              bad_words=bad_words,
+                             response_format=response_format,
                              max_new_tokens=max_new_tokens,
                              min_new_tokens=min_new_tokens,
                              logits_processors=gen_config.logits_processors)

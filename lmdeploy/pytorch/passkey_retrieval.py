@@ -3,7 +3,7 @@ import argparse
 import os
 import random
 
-from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig
 from lmdeploy.model import MODELS
 from lmdeploy.tokenizer import Tokenizer
 
@@ -33,7 +33,7 @@ class LLM(object):
         self.generator = self.tm_model.create_instance()
         self.model = MODELS.get(model_name)()
         seed = random.getrandbits(64)
-        self.gen_config = EngineGenerationConfig(
+        self.gen_config = GenerationConfig(
             max_new_tokens=32,
             top_k=40,
             top_p=0.8,

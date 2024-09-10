@@ -5,13 +5,13 @@ import json
 import os
 import random
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from itertools import count
 from queue import Empty, Queue
 from threading import Thread
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
-                               PytorchEngineConfig, Response,
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response,
                                TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.utils import LogitsMixin, _get_event_loop
@@ -23,18 +23,17 @@ logger = get_logger('lmdeploy')
 
 def get_names_from_model(model_path: str, model_name: str = None):
     """Get model name and chat template name from workspace model."""
-    from configparser import ConfigParser
     triton_model_path = os.path.join(model_path, 'triton_models', 'weights')
     if not os.path.exists(triton_model_path):
         chat_template_name = best_match_model(model_path)
     else:
         # `model_path` refers to a turbomind model, reading
         # chat_template_name from the config
-        ini_path = os.path.join(triton_model_path, 'config.ini')
-        with open(ini_path, 'r') as f:
-            parser = ConfigParser()
-            parser.read_file(f)
-        chat_template_name = parser['llama']['chat_template']
+        config_path = os.path.join(triton_model_path, 'config.yaml')
+        with open(config_path, 'r') as f:
+            import yaml
+            config = yaml.safe_load(f)
+        chat_template_name = config['model_config']['chat_template']
     model_name = model_name if model_name else model_path
     return model_name, chat_template_name
 
@@ -189,15 +188,10 @@ class AsyncEngine(LogitsMixin):
                                            PytorchEngineConfig]] = None,
             **kwargs):
         """Innter build method for turbomind backend."""
-        if backend_config is None:
-            backend_config = TurbomindEngineConfig()
-        assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
-            ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
-            'turbomind backend'
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
             model_path, engine_config=backend_config, **kwargs)
-        self.backend_config = backend_config
+        self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = self.engine.config
 
     def _build_pytorch(
@@ -208,14 +202,9 @@ class AsyncEngine(LogitsMixin):
             **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        if backend_config is None:
-            backend_config = PytorchEngineConfig()
-        assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
-            'use PytorchEngineConfig imported from lmdeploy.messages for ' \
-            'pytorch backend'
         self.engine = Engine(model_path=model_path,
                              engine_config=backend_config)
-        self.backend_config = backend_config
+        self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
     def __call__(self,
@@ -290,17 +279,15 @@ class AsyncEngine(LogitsMixin):
         self.running_session_ids.add(session_id)
         return generator
 
-    def batch_infer(
-            self,
-            prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-            gen_config: Optional[Union[GenerationConfig,
-                                       List[GenerationConfig],
-                                       EngineGenerationConfig,
-                                       List[EngineGenerationConfig]]] = None,
-            do_preprocess: bool = True,
-            adapter_name: Optional[str] = None,
-            use_tqdm: bool = False,
-            **kwargs):
+    def batch_infer(self,
+                    prompts: Union[List[str], str, List[Dict],
+                                   List[List[Dict]]],
+                    gen_config: Optional[Union[GenerationConfig,
+                                               List[GenerationConfig]]] = None,
+                    do_preprocess: bool = True,
+                    adapter_name: Optional[str] = None,
+                    use_tqdm: bool = False,
+                    **kwargs):
         """Inference a batch of prompts.
 
         Args:
@@ -321,13 +308,10 @@ class AsyncEngine(LogitsMixin):
         assert isinstance(prompts, List), 'prompts should be a list'
         if gen_config is None:
             gen_config = GenerationConfig()
-        # set random if it is not set
-        if not isinstance(gen_config, List) and gen_config.random_seed is None:
-            gen_config.random_seed = random.getrandbits(64)
         if not isinstance(gen_config, List):
             gen_config = [gen_config] * len(prompts)
-        assert len(prompts) == len(gen_config),\
-                'input gen_confg length differs from the length of prompts' # noqa
+        assert len(prompts) == len(gen_config), \
+                'input gen_confg length differs from the length of prompts'  # noqa
         prompt_num = len(prompts)
         session_ids = [next(self._session_id) for _ in range(prompt_num)]
         outputs = [
@@ -377,9 +361,7 @@ class AsyncEngine(LogitsMixin):
             self,
             prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
             gen_config: Optional[Union[GenerationConfig,
-                                       List[GenerationConfig],
-                                       EngineGenerationConfig,
-                                       List[EngineGenerationConfig]]] = None,
+                                       List[GenerationConfig]]] = None,
             do_preprocess: bool = True,
             adapter_name: Optional[str] = None,
             **kwargs):
@@ -402,13 +384,10 @@ class AsyncEngine(LogitsMixin):
         assert isinstance(prompts, List), 'prompts should be a list'
         if gen_config is None:
             gen_config = GenerationConfig()
-        # set random if it is not set
-        if not isinstance(gen_config, List) and gen_config.random_seed is None:
-            gen_config.random_seed = random.getrandbits(64)
         if not isinstance(gen_config, List):
             gen_config = [gen_config] * len(prompts)
-        assert len(prompts) == len(gen_config),\
-                'input gen_confg length differs from the length of prompts' # noqa
+        assert len(prompts) == len(gen_config), \
+                'input gen_confg length differs from the length of prompts'  # noqa
         session_ids = [next(self._session_id) for _ in range(len(prompts))]
         outputs = Queue()
         generators = []
@@ -478,8 +457,7 @@ class AsyncEngine(LogitsMixin):
             self,
             messages,
             session_id: int,
-            gen_config: Optional[Union[GenerationConfig,
-                                       EngineGenerationConfig]] = None,
+            gen_config: Optional[GenerationConfig] = None,
             tools: Optional[List[object]] = None,
             stream_response: bool = True,
             sequence_start: bool = True,
@@ -508,11 +486,17 @@ class AsyncEngine(LogitsMixin):
             self.id2step[str(session_id)] = step
         if gen_config is None:
             gen_config = GenerationConfig()
-        if type(gen_config) is GenerationConfig:
-            gen_config = EngineGenerationConfig.From(gen_config,
-                                                     self.tokenizer)
-        if gen_config.stop_words is None:
-            gen_config.stop_words = self.stop_words
+        else:
+            gen_config = deepcopy(gen_config)
+        gen_config.convert_stop_bad_words_to_ids(self.tokenizer)
+        if gen_config.stop_token_ids is None:
+            gen_config.stop_token_ids = self.stop_words
+        if not gen_config.do_sample:
+            # greedy decode
+            gen_config.top_k = 1
+            # avoid unnecessary process
+            gen_config.temperature = 1.0
+            gen_config.repetition_penalty = 1.0
         # set random if it is not set and sequence_start is True
         if gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
@@ -641,8 +625,7 @@ class AsyncEngine(LogitsMixin):
     def chat(self,
              prompt: str,
              session=None,
-             gen_config: Optional[Union[GenerationConfig,
-                                        EngineGenerationConfig]] = None,
+             gen_config: Optional[GenerationConfig] = None,
              do_preprocess: bool = True,
              **kwargs) -> Session:
         """Chat.

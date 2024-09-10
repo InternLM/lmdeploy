@@ -160,10 +160,12 @@ class ArgumentHelper:
     def max_batch_size(parser):
         """Add argument max_batch_size to parser."""
 
-        return parser.add_argument('--max-batch-size',
-                                   type=int,
-                                   default=128,
-                                   help='Maximum batch size')
+        return parser.add_argument(
+            '--max-batch-size',
+            type=int,
+            default=None,
+            help='Maximum batch size. If not specified, the engine will '
+            'automatically set it according to the device')
 
     @staticmethod
     def quant_policy(parser, default: int = 0):

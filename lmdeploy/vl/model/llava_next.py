@@ -75,7 +75,9 @@ class LlavaNextVisionModel(VisonModel):
         from transformers.models.llava_next.modeling_llava_next import \
             image_size_to_num_patches
         """forward."""
-        processed_inputs = self.processor(images, return_tensors='pt')
+        processed_inputs = self.processor(images,
+                                          return_tensors='pt',
+                                          input_data_format='channels_last')
         pixel_values = processed_inputs['pixel_values'].to(
             device=self.model.device, dtype=self.model.dtype)
         image_sizes = processed_inputs['image_sizes'].to(
