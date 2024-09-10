@@ -296,8 +296,6 @@ class MixtralModel(nn.Module):
 class MixtralForCausalLM(nn.Module):
     """mixture model for causalLM."""
 
-    support_cuda_graph = True
-
     def __init__(self,
                  config: Any,
                  ctx_mgr: StepContextManager,
@@ -333,6 +331,17 @@ class MixtralForCausalLM(nn.Module):
 
         logits = self.lm_head(hidden_states)
         return logits
+
+    def support_cuda_graph(
+        self,
+        input_ids: torch.Tensor,
+        **kwargs,
+    ):
+        """support cudagraph."""
+        seq_lens = input_ids.size(1)
+        if seq_lens <= 512:
+            return True
+        return False
 
     def get_input_embeddings(self):
         """get input embeddings."""

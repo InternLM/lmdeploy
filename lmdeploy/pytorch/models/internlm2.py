@@ -307,8 +307,6 @@ class InternLM2Model(nn.Module):
 class InternLM2ForCausalLM(nn.Module):
     """rewrote model of InternLM2ForCausalLM."""
 
-    support_cuda_graph = True
-
     packed_modules_mapping = {
         'gate_up_proj': [
             'w1',
@@ -353,6 +351,17 @@ class InternLM2ForCausalLM(nn.Module):
 
         logits = self.output(hidden_states)
         return logits
+
+    def support_cuda_graph(
+        self,
+        input_ids: torch.Tensor,
+        **kwargs,
+    ):
+        """support cudagraph."""
+        seq_lens = input_ids.size(1)
+        if seq_lens <= 512:
+            return True
+        return False
 
     def get_input_embeddings(self):
         """get input embeddings."""
