@@ -26,8 +26,10 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/08\] 🔥🔥 LMDeploy现已集成至 [modelscope/swift](https://github.com/modelscope/swift)，成为 VLMs 推理的默认加速引擎
-- \[2024/07\] 🎉🎉 支持 Llama3.1 8B 和 70B 模型，以及工具调用功能
+- \[2024/09\] LMDeploy PyTorchEngine 增加了对 [华为 Ascend](docs/zh_cn/get_started/ascend/get_started.md) 的支持。支持的模型请见[这里](docs/zh_cn/supported_models/ascend.md)
+- \[2024/09\] 通过引入 CUDA Graph，LMDeploy PyTorchEngine 在 Llama3-8B 推理上实现了 1.3 倍的加速
+- \[2024/08\] LMDeploy现已集成至 [modelscope/swift](https://github.com/modelscope/swift)，成为 VLMs 推理的默认加速引擎
+- \[2024/07\] 支持 Llama3.1 8B 和 70B 模型，以及工具调用功能
 - \[2024/07\] 支持 [InternVL2](docs/zh_cn/multi_modal/internvl.md) 全系列模型，[InternLM-XComposer2.5](docs/zh_cn/multi_modal/xcomposer2d5.md) 模型和 InternLM2.5 的 [function call 功能](docs/zh_cn/llm/api_server_tools.md)
 - \[2024/06\] PyTorch engine 支持了 DeepSeek-V2 和若干 VLM 模型推理, 比如 CogVLM2，Mini-InternVL，LlaVA-Next
 - \[2024/05\] 在多 GPU 上部署 VLM 模型时，支持把视觉部分的模型均分到多卡上
