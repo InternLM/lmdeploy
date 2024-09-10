@@ -143,6 +143,7 @@ class Engine:
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
             enable_prefix_caching=engine_config.enable_prefix_caching,
+            quant_policy=engine_config.quant_policy,
         )
 
         if not os.path.exists(model_path):

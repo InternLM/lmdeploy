@@ -196,6 +196,7 @@ class PytorchEngineConfig:
     device_type: str = 'cuda'
     download_dir: str = None
     revision: str = None
+    quant_policy: Literal[0, 4, 8] = 4
 
     def __post_init__(self):
         """Check input validation."""
@@ -205,6 +206,7 @@ class PytorchEngineConfig:
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
         assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
+        assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.device_type in [
             'cuda', 'ascend'
         ], (f'invalid device_type: {self.device_type}')

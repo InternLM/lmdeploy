@@ -128,6 +128,11 @@ class PatchedInternLM2Attention(nn.Module):
             kv_seq_length=kv_seq_length,
             max_q_seq_length=max_q_seq_length,
             block_offsets=block_offsets,
+            k_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[3],
+            quant_policy=0 if len(past_key_value) == 2 else past_key_value[4],
         )
 
         attn_output = query_states
@@ -141,7 +146,13 @@ class PatchedInternLM2Attention(nn.Module):
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
             max_seqlen=max_q_seq_length,
+            k_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[3],
+            quant_policy=0 if len(past_key_value) == 2 else past_key_value[4],
         )
+        # print(attn_output.sum())
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
 
         attn_output = self.wo(attn_output)
