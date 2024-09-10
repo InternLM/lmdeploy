@@ -21,7 +21,6 @@
 
 #include "src/turbomind/layers/BaseLayer.h"
 #include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
-#include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
 
 namespace turbomind {
 
@@ -31,26 +30,12 @@ protected:
     void allocateBuffer() override;
     void freeBuffer() override;
     void initialize();
-    bool hasDiffRuntimeArgs(TensorMap* input_tensors);
-
-    DynamicDecodeBaseLayer* topk_decode_;
-    DynamicDecodeBaseLayer* topp_decode_;
 
     size_t          vocab_size_;
     size_t          vocab_size_padded_;
     cudaDeviceProp* cuda_device_prop_;
 
-    // List of argument names which can have different values in runtime
-    // and does not support a batched version of kernel in beam search.
-    const std::vector<std::string> runtime_arg_names_ = {"beam_search_diversity_rate",
-                                                         "temperature",
-                                                         "len_penalty",
-                                                         "repetition_penalty",
-                                                         "presence_penalty",
-                                                         "min_length"};
-
-    bool has_diff_runtime_args_ = false;
-    int* h_pinned_finished_sum_ = nullptr;
+    std::vector<std::unique_ptr<DynamicDecodeBaseLayer>> layers_;
 
 public:
     DynamicDecodeLayer(size_t           vocab_size,

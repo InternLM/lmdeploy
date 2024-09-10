@@ -67,12 +67,24 @@ def _filter_topp_sorted_(scores: torch.Tensor,
     return scores
 
 
+def _filter_minp_sorted_(scores: torch.Tensor,
+                         minp: torch.Tensor,
+                         filter_value: float = -float('inf')):
+    """filter minp on sorted scores."""
+    softmax_scores = scores.softmax(-1)
+    top_probs, _ = softmax_scores.max(dim=-1, keepdim=True)
+    scaled_min_p = minp.unsqueeze(dim=1) * top_probs
+    mask = softmax_scores < scaled_min_p
+    scores.masked_fill_(mask, filter_value)
+    return scores
+
+
 def _multinomial_sampling(scores: torch.Tensor,
                           seeds: torch.LongTensor,
                           offsets: torch.LongTensor,
                           indices: torch.LongTensor = None):
     """sampling."""
-    from lmdeploy.pytorch.kernels import multinomial_sampling
+    from lmdeploy.pytorch.nn.multinomial_sampling import multinomial_sampling
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
@@ -118,6 +130,7 @@ class SamplingInputs:
     repetition_penalty: torch.Tensor = None
     top_k: torch.LongTensor = None
     top_p: torch.Tensor = None
+    min_p: torch.Tensor = None
     random_seeds: int = None
     random_offsets: int = None
     max_top_k: int = 1
@@ -133,6 +146,7 @@ class SamplingInputs:
         repetition_penalty = [None] * batch_size
         top_k = [None] * batch_size
         top_p = [None] * batch_size
+        min_p = [None] * batch_size
         bad_words = [None] * batch_size
         stop_words = [None] * batch_size
         random_seeds = [torch.seed() & 0xffffffff] * batch_size
@@ -148,6 +162,7 @@ class SamplingInputs:
                 repetition_penalty[idx] = param.repetition_penalty
                 top_k[idx] = param.top_k
                 top_p[idx] = param.top_p
+                min_p[idx] = param.min_p
                 random_offsets[idx] = seq.random_offsets
                 response_formats[idx] = param.response_format
                 if param.random_seed is not None:
@@ -170,6 +185,15 @@ class SamplingInputs:
             else:
                 top_p = torch.tensor(top_p)
             return top_p, min_top_p
+
+        def __get_minp(min_p):
+            """get minp."""
+            max_min_p = max(min_p)
+            if max_min_p == 0.0:
+                min_p = None
+            else:
+                min_p = torch.Tensor(min_p)
+            return min_p
 
         def __get_bad_words(bad_words):
             """get bad words."""
@@ -205,11 +229,13 @@ class SamplingInputs:
         if max_top_k == 1:
             top_k = None
             top_p, min_top_p = None, 1.0
+            min_p = None
             random_seeds = None
             random_offsets = None
         else:
             top_k = torch.tensor(top_k)
             top_p, min_top_p = __get_topp(top_p)
+            min_p = __get_minp(min_p)
             random_seeds = torch.tensor(random_seeds)
             random_offsets = torch.tensor(random_offsets)
 
@@ -220,6 +246,7 @@ class SamplingInputs:
             repetition_penalty=repetition_penalty,
             top_k=top_k,
             top_p=top_p,
+            min_p=min_p,
             random_seeds=random_seeds,
             random_offsets=random_offsets,
             response_formats=tuple(response_formats),
@@ -331,6 +358,10 @@ class FusedLogitsProcessor(LogitsWarper):
             if top_p is not None:
                 scores = _filter_topp_sorted_(scores, top_p)
 
+            min_p = sampling_inputs.min_p
+            if min_p is not None:
+                scores = _filter_minp_sorted_(scores, min_p)
+
             softmax_scores = scores.softmax(1)
 
             softmax_scores = softmax_scores[:, :max_topk]
@@ -349,9 +380,8 @@ class FusedLogitsProcessor(LogitsWarper):
             if max_topk <= 0:
                 scores, indices = logits.sort(1, descending=True)
             else:
-                scores = torch.zeros_like(logits)
-                indices = torch.zeros_like(logits, dtype=torch.int64)
                 topk_scores, topk_indices = logits.topk(max_topk, dim=1)
+                scores = logits.fill_(0)  # (seq, vocalb_size)
                 scores[..., :max_topk] = topk_scores
-                indices[..., :max_topk] = topk_indices
+                indices = topk_indices  # (seq, max_topk)
             return __random_sampling(scores, indices)

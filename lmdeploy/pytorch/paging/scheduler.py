@@ -49,7 +49,7 @@ class Scheduler:
         self.actived_adapters: Set[str] = set()
 
         if adapter_manager is None:
-            adapter_manager = AdapterManager(dict(), 0)
+            adapter_manager = AdapterManager(dict(), dict(), 0)
         self.adapter_manager = adapter_manager
 
         self.block_manager = build_block_manager(cache_config, adapter_manager)

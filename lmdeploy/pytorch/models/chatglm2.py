@@ -1,405 +1,578 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# Adapted from https://huggingface.co/THUDM/chatglm2-6b/blob/main/modeling_chatglm.py   # noqa: E501
-
-from typing import List, Optional, Tuple
+from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
-import torch.distributed as dist
-import torch.nn as nn
-import torch.utils.checkpoint
-from transformers.modeling_outputs import (BaseModelOutputWithPast,
-                                           CausalLMOutputWithPast)
+from torch import nn
+from transformers.configuration_utils import PretrainedConfig
 
-from ..kernels import fill_kv_cache, paged_attention_fwd
-from ..weight_loader.dist_utils import (colwise_split_parallelize_linear,
-                                        rowwise_parallelize_linear)
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
+                                 SiluAndMul, build_rotary_embedding)
+from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
+                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-
-class PatchedRMSNorm(nn.Module):
-    """Rewrite RMSNorm."""
-
-    def forward(self, hidden_states):
-        """forward."""
-        # torch.nn.functional.normalize based implementation might leads
-        # to wrong output
-        from ..kernels import rms_norm
-
-        ret = rms_norm(hidden_states, self.weight, self.eps)
-        return ret
+LANGUAGE_TOKEN_TYPE = 0
+VISION_TOKEN_TYPE = 1
 
 
-def split_tensor_along_last_dim(
-    tensor: torch.Tensor,
-    num_partitions: int,
-    contiguous_split_chunks: bool = False,
-) -> List[torch.Tensor]:
-    """Split a tensor along its last dimension.
-
-    Arguments:
-        tensor: input tensor.
-        num_partitions: number of partitions to split the tensor
-        contiguous_split_chunks: If True, make each chunk contiguous
-                                 in memory.
-
-    Returns:
-        A list of Tensors
-    """
-    tensor_list = tensor.chunk(num_partitions, dim=-1)
-    if contiguous_split_chunks:
-        return tuple(chunk.contiguous() for chunk in tensor_list)
-
-    return tensor_list
+def get_vision_expert_mask(token_type_ids: torch.LongTensor):
+    vision_token_mask = torch.zeros_like(token_type_ids, dtype=torch.bool)
+    vision_token_mask[:, :-1] = (token_type_ids[:, :-1]
+                                 == VISION_TOKEN_TYPE) & (token_type_ids[:, 1:]
+                                                          == VISION_TOKEN_TYPE)
+    language_token_mask = ~vision_token_mask
+    return vision_token_mask, language_token_mask
 
 
-def apply_rotary_pos_emb(x: torch.Tensor,
-                         rope_cache: torch.Tensor) -> torch.Tensor:
-    # x: [b, sq, np, hn]
-    # rope_cache: [b, sq, dim/4, 2]
-    sq, hn = x.size(1), x.size(-1)
-    xslice = x[..., :hn // 2]
-    rope_cache = rope_cache[:, :sq]
-    xshaped = xslice.unflatten(-1, (-1, 2))
-    rope_cache = rope_cache.unsqueeze(2)
-
-    # inplace
-    torch.stack(
-        [
-            xshaped[..., 0] * rope_cache[..., 0] -
-            xshaped[..., 1] * rope_cache[..., 1],
-            xshaped[..., 1] * rope_cache[..., 0] +
-            xshaped[..., 0] * rope_cache[..., 1],
-        ],
-        -1,
-        out=xshaped,
-    )
-    return x
+def build_position_ids(x: torch.BoolTensor) -> torch.LongTensor:
+    tmp = x.clone()
+    # image boi eoi token as LANGUAGE_TOKEN_TYPE
+    is_boi_eoi = torch.zeros_like(x, dtype=torch.bool)
+    is_boi_eoi[:, 1:] |= (tmp[:, 1:] == VISION_TOKEN_TYPE) & (
+        tmp[:, :-1] == LANGUAGE_TOKEN_TYPE)
+    is_boi_eoi[:, 0] |= (tmp[:, 0] == VISION_TOKEN_TYPE)
+    is_boi_eoi[:, :-1] |= (tmp[:, :-1] == VISION_TOKEN_TYPE) & (
+        tmp[:, 1:] == LANGUAGE_TOKEN_TYPE)
+    is_boi_eoi[:, -1] |= (tmp[:, -1] == VISION_TOKEN_TYPE)
+    tmp[is_boi_eoi] = LANGUAGE_TOKEN_TYPE
+    # final position ids
+    y = torch.zeros_like(x, dtype=torch.long)
+    y[:, 1:] = (tmp[:, 1:] == LANGUAGE_TOKEN_TYPE) | (
+        (tmp[:, 1:] == VISION_TOKEN_TYPE) &
+        (tmp[:, :-1] == LANGUAGE_TOKEN_TYPE))
+    y = y.cumsum(dim=-1)
+    return y
 
 
-class PatchedSelfAttention(nn.Module):
+def _get_cogvlm_position_ids(context):
+    """get cogvlm position_ids."""
+    q_seqlens = context.q_seqlens
+    history_lengths = context.kv_seqlens - q_seqlens
+    vision_input_info = context.vision_inputs
+    position_id_offsets = (vision_input_info.history_image_token_lengths -
+                           vision_input_info.history_image_nums * 3)
+    lang_ids = None
+    vis_ids = None
+    if context.is_decoding:
+        position_ids = history_lengths - position_id_offsets
+    else:
+        if vision_input_info.input_embeddings is not None and len(
+                vision_input_info.input_embeddings) > 0:
+            starts = history_lengths - vision_input_info.history_lengths
+            ends = starts + q_seqlens
+            token_type_ids = vision_input_info.input_embedding_indexing.to(
+                torch.int)
+            history_position_lengths = (vision_input_info.history_lengths -
+                                        position_id_offsets)
+            position_ids_all = (history_position_lengths[:, None] +
+                                build_position_ids(token_type_ids))
+            position_ids = torch.cat([
+                pids[s:e]
+                for (pids, s, e) in zip(position_ids_all, starts, ends)
+            ])
+            vision_token_mask_all, _ = get_vision_expert_mask(token_type_ids)
+            vision_token_mask = torch.cat([
+                masks[s:e]
+                for (masks, s, e) in zip(vision_token_mask_all, starts, ends)
+            ])
+            mask_indexing = torch.arange(vision_token_mask.shape[-1],
+                                         device=vision_token_mask.device)
+            vis_ids = mask_indexing[vision_token_mask]
+            lang_ids = mask_indexing[~vision_token_mask]
+
+        else:
+            position_ids = context.attention_mask.long().cumsum(-1) - 1
+            position_ids += (history_lengths -
+                             position_id_offsets).unsqueeze(-1)
+            device = position_ids.device
+            position_ids_1d = [
+                ids[:l] for ids, l in zip(position_ids.cpu(), q_seqlens.cpu())
+            ]
+            position_ids = torch.cat(position_ids_1d).to(device)
+
+    return position_ids, lang_ids, vis_ids
+
+
+class SelfAttention(torch.nn.Module):
     """Parallel self-attention layer abstract class.
 
     Self-attention layer takes input with size [s, b, h] and returns output of
     the same size.
     """
 
-    def _load_weights(self, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
-        sections = [
-            self.num_attention_heads_per_partition *
-            self.hidden_size_per_attention_head,
-            self.num_multi_query_groups_per_partition *
-            self.hidden_size_per_attention_head,
-            self.num_multi_query_groups_per_partition *
-            self.hidden_size_per_attention_head,
-        ]
-        colwise_split_parallelize_linear(self.query_key_value,
-                                         sections,
-                                         loader,
-                                         rank=rank,
-                                         world_size=world_size,
-                                         prefix='query_key_value')
-        rowwise_parallelize_linear(self.dense,
-                                   loader,
-                                   rank=rank,
-                                   world_size=world_size,
-                                   prefix='dense')
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
 
-    @classmethod
-    def _distribute_output_fn(cls, outputs, **kwargs):
-        """Distribution output hook."""
-        dist.all_reduce(outputs[0])
-        return outputs
+        self.projection_size = config.kv_channels * config.num_attention_heads
+        self.num_attention_heads = config.num_attention_heads
+        self.num_kv_heads = self.num_attention_heads
+        self.head_size = (self.projection_size // config.num_attention_heads)
+        self.multi_query_attention = config.multi_query_attention
+        if self.multi_query_attention:
+            self.num_kv_heads = config.multi_query_group_num
+        self.query_key_value = build_qkv_proj(
+            config.hidden_size,
+            num_q_heads=self.num_attention_heads,
+            num_kv_heads=self.num_kv_heads,
+            head_size=self.head_size,
+            bias=config.add_bias_linear or config.add_qkv_bias,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+        )
 
-    def _contiguous_batching_forward(
+        # apply rotary
+        self.apply_rotary_pos_emb = ApplyRotaryEmb()
+
+        # attention
+        self.attn_fwd = Attention(
+            self.num_attention_heads,
+            self.head_size,
+            num_kv_heads=self.num_kv_heads,
+        )
+
+        # o_proj
+        self.dense = build_rowwise_linear(self.projection_size,
+                                          config.hidden_size,
+                                          bias=config.add_bias_linear,
+                                          quant_config=quantization_config,
+                                          dtype=dtype,
+                                          device=device,
+                                          is_tp=True)
+
+    @staticmethod
+    def _extract_rope(states: torch.Tensor):
+        """extract rope."""
+        rope = states.chunk(2, -1)[0]
+        rope = rope.unflatten(-1, (-1, 2))
+        rope = rope.transpose(-2, -1).flatten(-2, -1).contiguous()
+        return rope
+
+    @staticmethod
+    def _fill_rope(states: torch.Tensor, rope: torch.Tensor):
+        """fill rope."""
+        rope_part = states.chunk(2, -1)[0]
+        rope = rope.unflatten(-1, (2, -1))
+        rope = rope.transpose(-2, -1).flatten(-2, -1)
+        rope_part.copy_(rope)
+        return states
+
+    def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Optional[torch.Tensor] = None,
-        kv_cache: Optional[Tuple[torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        # hidden_states: [b, sq, h]
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        attn_metadata: Any = None,
+    ):
+        """Rewrite of LlamaAttention.forward."""
+        # qkv proj
+        qkv_states = self.query_key_value(hidden_states)
+        # (-1, heads, head_dim)
+        qkv_states = qkv_states.flatten(0, -2)
+        (query_states, key_states,
+         value_states) = self.query_key_value.split_qkv(qkv_states)
 
-        # =================================================
-        # Pre-allocate memory for key-values for inference.
-        # =================================================
-        # =====================
-        # Query, Key, and Value
-        # =====================
-
-        # Attention heads [b, sq, h] --> [b, sq, (np * 3 * hn)]
-
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
-
-        context = self.context.context
-        max_q_seq_length = context.max_q_seq_length
-        q_start_loc = context.q_start_loc
-        q_seq_length = context.q_seq_length
-        kv_seq_length = context.kv_seq_length
-        block_offsets = context.block_offsets
-
-        mixed_x_layer = self.query_key_value(hidden_states)
-
-        if self.multi_query_attention:
-            (query_layer, key_layer, value_layer) = mixed_x_layer.split(
-                [
-                    self.num_attention_heads_per_partition *
-                    self.hidden_size_per_attention_head // world_size,
-                    self.num_multi_query_groups_per_partition *
-                    self.hidden_size_per_attention_head // world_size,
-                    self.num_multi_query_groups_per_partition *
-                    self.hidden_size_per_attention_head // world_size,
-                ],
-                dim=-1,
-            )
-            query_layer = query_layer.unflatten(
-                -1, (-1, self.hidden_size_per_attention_head))
-            key_layer = key_layer.unflatten(
-                -1, (-1, self.hidden_size_per_attention_head))
-            value_layer = value_layer.unflatten(
-                -1, (-1, self.hidden_size_per_attention_head))
-        else:
-            new_tensor_shape = mixed_x_layer.size()[:-1] + (
-                self.num_attention_heads_per_partition // world_size,
-                3 * self.hidden_size_per_attention_head,
-            )
-            mixed_x_layer = mixed_x_layer.view(*new_tensor_shape)
-
-            # [b, sq, np, 3 * hn] --> 3 [b, sq, np, hn]
-            (query_layer, key_layer,
-             value_layer) = split_tensor_along_last_dim(mixed_x_layer, 3)
-
-        # apply relative positional encoding (rotary embedding)
-        query_layer = apply_rotary_pos_emb(query_layer, rotary_pos_emb)
-        key_layer = apply_rotary_pos_emb(key_layer, rotary_pos_emb)
-
-        # adjust key and value for inference
-        cache_k, cache_v = kv_cache
-        fill_kv_cache(
-            key_layer[0],
-            value_layer[0],
-            cache_k,
-            cache_v,
-            q_start_loc,
-            q_seq_length,
-            kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_q_seq_length,
-            block_offsets=block_offsets,
+        # apply rotary embedding
+        cos, sin = rotary_pos_emb
+        q_rope = self._extract_rope(query_states)
+        k_rope = self._extract_rope(key_states)
+        q_rope, k_rope = self.apply_rotary_pos_emb(
+            q_rope,
+            k_rope,
+            cos,
+            sin,
+            inplace=True,
         )
+        query_states = self._fill_rope(query_states, q_rope)
+        key_states = self._fill_rope(key_states, k_rope)
 
-        # ==================================
-        # core attention computation
-        # ==================================
-
-        context_layer = query_layer
-        paged_attention_fwd(query_layer,
-                            cache_k,
-                            cache_v,
-                            context_layer,
-                            block_offsets,
-                            q_start_loc=q_start_loc,
-                            q_seqlens=q_seq_length,
-                            kv_seqlens=kv_seq_length,
-                            max_seqlen=max_q_seq_length)
-
-        context_layer = context_layer.flatten(-2)
-
-        # =================
-        # Output. [b, sq, h]
-        # =================
-        output = self.dense(context_layer)
-
-        return output, kv_cache
-
-    def forward(self,
-                hidden_states,
-                attention_mask,
-                rotary_pos_emb,
-                kv_cache=None,
-                use_cache=True,
-                output_attentions=False,
-                **kwargs):
-        return self._contiguous_batching_forward(
-            hidden_states,
-            rotary_pos_emb,
-            kv_cache,
+        # attention
+        attn_output = self.attn_fwd(
+            query_states,
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            attn_metadata,
+            inplace=True,
         )
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
+
+        # o proj
+        attn_output = self.dense(attn_output)
+        return attn_output
 
 
 class MLP(nn.Module):
+    """mlp."""
 
-    def _load_weights(self, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
-        w_pack_out = self.dense_h_to_4h.out_features
-        sections = [w_pack_out // 2] * 2
-        colwise_split_parallelize_linear(self.dense_h_to_4h,
-                                         sections,
-                                         loader,
-                                         rank=rank,
-                                         world_size=world_size,
-                                         prefix='dense_h_to_4h')
-        rowwise_parallelize_linear(self.dense_4h_to_h,
-                                   loader,
-                                   rank=rank,
-                                   world_size=world_size,
-                                   prefix='dense_4h_to_h')
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
 
-    @classmethod
-    def _distribute_output_fn(cls, outputs, **kwargs):
-        """Distribution output hook."""
-        dist.all_reduce(outputs)
+        self.add_bias = config.add_bias_linear
+        # gate up
+        self.dense_h_to_4h = build_merged_colwise_linear(
+            config.hidden_size,
+            [config.ffn_hidden_size, config.ffn_hidden_size],
+            bias=self.add_bias,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            is_tp=True,
+        )
+
+        # silu and mul
+        self.act_fn = SiluAndMul(inplace=True)
+
+        # down
+        self.dense_4h_to_h = build_rowwise_linear(
+            config.ffn_hidden_size,
+            config.hidden_size,
+            bias=self.add_bias,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=True)
+
+    def forward(self, x):
+        """forward."""
+        gate_up = self.dense_h_to_4h(x)
+        act = self.act_fn(gate_up)
+        return self.dense_4h_to_h(act)
+
+
+class GLMBlock(torch.nn.Module):
+    """A single transformer layer.
+
+    Transformer layer takes input with size [s, b, h] and returns an output of
+    the same size.
+    """
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 layer_number: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.layer_number = layer_number
+        self.apply_residual_connection_post_layernorm = \
+            config.apply_residual_connection_post_layernorm
+        assert not self.apply_residual_connection_post_layernorm
+
+        quantization_config = getattr(config, 'quantization_config', None)
+
+        # build attention layer
+        self.self_attention = SelfAttention(config, dtype=dtype, device=device)
+
+        # builf MLP
+        self.mlp = MLP(config, dtype=dtype, device=device)
+
+        # build input layer norm
+        self.input_layernorm = RMSNorm(config.hidden_size,
+                                       config.layernorm_epsilon,
+                                       quant_config=quantization_config,
+                                       dtype=dtype,
+                                       device=device)
+
+        # build attention layer norm
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size,
+            config.layernorm_epsilon,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: Optional[List[torch.FloatTensor]],
+        residual: Optional[torch.Tensor] = None,
+        attn_metadata: Any = None,
+    ):
+
+        if residual is None:
+            residual = hidden_states
+            layernorm_output = self.input_layernorm(hidden_states)
+        else:
+            layernorm_output, residual = self.input_layernorm(
+                hidden_states, residual)
+
+        # Self Attention
+        layernorm_input = self.self_attention(
+            hidden_states=layernorm_output,
+            rotary_pos_emb=rotary_pos_emb,
+            past_key_value=past_key_value,
+            attn_metadata=attn_metadata,
+        )
+
+        # Fully Connected
+        layernorm_output, residual = self.post_attention_layernorm(
+            layernorm_input, residual)
+        mlp_output = self.mlp(layernorm_output)
+
+        outputs = (mlp_output, residual)
         return outputs
 
 
-class PatchedChatGLMModel(nn.Module):
+class GLMTransformer(nn.Module):
+    """Transformer class."""
 
-    def _contiguous_batching_forward(
-            self,
-            input_ids,
-            position_ids: Optional[torch.Tensor] = None,
-            attention_mask: Optional[torch.BoolTensor] = None,
-            full_attention_mask: Optional[torch.BoolTensor] = None,
-            past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
-                                            ...]] = None,
-            inputs_embeds: Optional[torch.Tensor] = None):
-        assert input_ids is not None
-        context = self.context.context
-        # get inputs from context
-        vision_embeddings = context.input_embeddings
-        vision_embedding_indexing = context.input_embedding_indexing
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        self.num_layers = config.num_layers
+        self.post_layer_norm = config.post_layer_norm
 
-        output_hidden_states = False
-        use_cache = True
+        def build_layer(layer_number):
+            """build layer."""
+            return GLMBlock(config, layer_number, dtype=dtype, device=device)
 
-        batch_size, seq_length = input_ids.shape
+        self.layers = torch.nn.ModuleList(
+            [build_layer(i + 1) for i in range(self.num_layers)])
 
-        if inputs_embeds is None:
-            inputs_embeds = self.embedding(input_ids)
+        if self.post_layer_norm:
+            assert config.rmsnorm
+            self.final_layernorm = RMSNorm(config.hidden_size,
+                                           config.layernorm_epsilon,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device)
 
-        if vision_embeddings is not None and len(vision_embeddings) > 0:
-            # multi-modality
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+    def _get_layer(self, layer_number: int):
+        """get layer."""
+        return self.layers[layer_number]
 
-        hidden_states = inputs_embeds
+    def forward(
+        self,
+        hidden_states: torch.LongTensor,
+        rotary_pos_emb: List[torch.Tensor],
+        past_key_values: Optional[List[torch.FloatTensor]],
+        attn_metadata: Any,
+    ):
+        """forward."""
+        residual = None
+        for index in range(self.num_layers):
+            layer = self._get_layer(index)
+            hidden_states, residual = layer(
+                hidden_states,
+                rotary_pos_emb,
+                past_key_value=past_key_values[index],
+                residual=residual,
+                attn_metadata=attn_metadata,
+            )
 
-        if getattr(self, 'pre_seq_len', None) is not None:
-            if past_key_values is None:
-                past_key_values = self.get_prompt(batch_size=batch_size,
-                                                  device=input_ids.device,
-                                                  dtype=inputs_embeds.dtype)
-
-        # Rotary positional embeddings
-        rotary_pos_emb = self.rotary_pos_emb(self.seq_length)
-        # glm-4v
-        if getattr(self, 'vision', None) is not None:
-            from .cogvlm import _get_cogvlm_position_ids
-            position_ids_1d = _get_cogvlm_position_ids(context)
-        else:
-            position_ids_1d = context.position_ids_1d
-
-        rotary_pos_emb = rotary_pos_emb[position_ids_1d[None]]
-
-        # Run encoder.
-        (hidden_states, presents, all_hidden_states,
-         all_self_attentions) = self.encoder(
-             inputs_embeds,
-             full_attention_mask,
-             rotary_pos_emb=rotary_pos_emb,
-             kv_caches=past_key_values,
-             use_cache=use_cache,
-             output_hidden_states=output_hidden_states)
-
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=presents,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attentions,
-        )
-
-    def forward(self,
-                input_ids,
-                position_ids: Optional[torch.Tensor] = None,
-                attention_mask: Optional[torch.BoolTensor] = None,
-                full_attention_mask: Optional[torch.BoolTensor] = None,
-                past_key_values: Optional[Tuple[Tuple[torch.Tensor,
-                                                      torch.Tensor],
-                                                ...]] = None,
-                inputs_embeds: Optional[torch.Tensor] = None,
-                use_cache: Optional[bool] = None,
-                output_hidden_states: Optional[bool] = None,
-                return_dict: Optional[bool] = None,
-                **kwargs):
-        return self._contiguous_batching_forward(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            full_attention_mask=full_attention_mask,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-        )
+        if self.post_layer_norm:
+            hidden_states, _ = self.final_layernorm(hidden_states, residual)
+        return hidden_states
 
 
-class PatchedEmbedding(nn.Module):
+class Embedding(nn.Module):
+    """Language model embeddings."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        # Word embeddings (parallel).
+        self.word_embeddings = nn.Embedding(config.padded_vocab_size,
+                                            self.hidden_size,
+                                            dtype=dtype,
+                                            device=device)
+        self.fp32_residual_connection = config.fp32_residual_connection
 
     def forward(self, input_ids):
         """Rewrite to not transpose hidden_statens for all models."""
         # Embeddings.
-        words_embeddings = self.word_embeddings(input_ids)
-        embeddings = words_embeddings
-        # If the input flag for fp32 residual connection is set,
-        # convert for float.
+        embeddings = self.word_embeddings(input_ids)
         if self.fp32_residual_connection:
             embeddings = embeddings.float()
         return embeddings
 
 
-class PatchedChatGLMForConditionalGeneration(nn.Module):
+class ChatGLMModel(nn.Module):
 
-    def forward(self,
-                input_ids: Optional[torch.Tensor] = None,
-                position_ids: Optional[torch.Tensor] = None,
-                attention_mask: Optional[torch.Tensor] = None,
-                past_key_values: Optional[Tuple[torch.FloatTensor]] = None,
-                inputs_embeds: Optional[torch.Tensor] = None,
-                labels: Optional[torch.Tensor] = None,
-                use_cache: Optional[bool] = None,
-                output_attentions: Optional[bool] = None,
-                output_hidden_states: Optional[bool] = None,
-                return_dict: Optional[bool] = None,
-                return_last_logit: Optional[bool] = False,
-                **kwargs):
-        """rewrite to not transpose logits for all models."""
-        transformer_outputs = self.transformer(
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.embedding = Embedding(config, dtype=dtype, device=device)
+
+        # build rotary embedding
+        emb_type = RopeType.LinearScaling
+        rotary_dim = (config.hidden_size // config.num_attention_heads
+                      if config.kv_channels is None else config.kv_channels)
+        rope_max_pos_emb = 1 << 20
+        rope_base = 10000 * getattr(config, 'rope_ratio', 1.0)
+        self.rotary_pos_emb = build_rotary_embedding(
+            rotary_dim // 2,
+            rope_max_pos_emb,
+            rope_base,
+            emb_type=emb_type,
+        )
+
+        # build encoder
+        self.encoder = GLMTransformer(config, dtype=dtype, device=device)
+
+        # output_layers
+        self.output_layer = build_rowwise_linear(config.hidden_size,
+                                                 config.padded_vocab_size,
+                                                 bias=False,
+                                                 dtype=dtype,
+                                                 device=device)
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        attn_metadata: Any = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+    ):
+        """forward."""
+
+        # token embedding
+        if inputs_embeds is None:
+            inputs_embeds = self.embedding(input_ids)
+
+        hidden_states = inputs_embeds
+
+        # rotary embedding
+        cos, sin = self.rotary_pos_emb(hidden_states, position_ids)
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+
+        hidden_states = self.encoder(
+            hidden_states,
+            rotary_pos_emb=rotary_pos_emb,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+        )
+
+        return hidden_states
+
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.embedding
+
+
+class ChatGLMForConditionalGeneration(nn.Module):
+    """rewrote model of LlamaForCausalLM."""
+
+    support_cuda_graph = True
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 ctx_mgr: StepContextManager,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.config = config
+        self.ctx_mgr = ctx_mgr
+        # build Model
+        self.transformer = ChatGLMModel(config, dtype=dtype, device=device)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: List[List[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
+        """model forward, return logits."""
+        hidden_states = self.transformer(
             input_ids=input_ids,
             position_ids=position_ids,
-            attention_mask=attention_mask,
             past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
 
-        hidden_states = transformer_outputs[0]
-        if return_last_logit:
-            hidden_states = hidden_states[-1:]
-        lm_logits = self.transformer.output_layer(hidden_states)
+        logits = self.transformer.output_layer(hidden_states)
+        logits = logits.float()
+        return logits
 
-        loss = None
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.transformer.get_input_embeddings()
 
-        if not return_dict:
-            output = (lm_logits, ) + transformer_outputs[1:]
-            return ((loss, ) + output) if loss is not None else output
+    def prepare_inputs_for_generation(
+        self,
+        past_key_values: List[List[torch.Tensor]],
+        inputs_embeds: Optional[torch.Tensor] = None,
+        context: StepContext = None,
+    ):
+        """prepare input."""
+        # get input_ids, position_ids and attention metadatas
+        input_ids = context.input_ids
+        position_ids = context.position_ids
+        attn_metadata = context.attn_metadata
+        if context.vision_inputs is not None:
+            position_ids = _get_cogvlm_position_ids(context)[0][None]
 
-        return CausalLMOutputWithPast(
-            loss=loss,
-            logits=lm_logits,
-            past_key_values=transformer_outputs.past_key_values,
-            hidden_states=transformer_outputs.hidden_states,
-            attentions=transformer_outputs.attentions,
+        # process vision embeddings
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            if inputs_embeds is None:
+                inputs_embeds = self.get_input_embeddings()(input_ids)
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
+
+        # inputs of forward
+        return dict(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
         )
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        """load weights."""
+        # modify from vllm
+
+        params_dict = dict(self.named_parameters())
+        for name, loaded_weight in weights:
+            if 'transformer.vision' in name:
+                continue
+            if 'rotary_pos_emb.inv_freq' in name:
+                continue
+            if ('rotary_pos_emb.cos_cached' in name
+                    or 'rotary_pos_emb.sin_cached' in name):
+                continue
+            if (self.config.tie_word_embeddings
+                    and 'output_layer.weight' in name):
+                continue
+            if '.query_key_value' in name:
+                param = params_dict[name]
+                q, k, v = param.weight_spliter(loaded_weight)
+                load_weight(param, q, shard_id='q')
+                load_weight(param, k, shard_id='k')
+                load_weight(param, v, shard_id='v')
+            elif '.dense_h_to_4h' in name:
+                param = params_dict[name]
+                gate, up = param.weight_spliter(loaded_weight)
+                load_weight(param, gate, shard_id=0)
+                load_weight(param, up, shard_id=1)
+            else:
+                param = params_dict[name]
+                load_weight(param, loaded_weight)

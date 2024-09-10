@@ -52,8 +52,9 @@ class LlavaHfVisionModel(VisonModel):
     @torch.no_grad()
     def forward(self, images: List[Image]) -> List[torch.Tensor]:
         """forward."""
-        pixel_values = self.processor(images,
-                                      return_tensors='pt')['pixel_values']
+        pixel_values = self.processor(
+            images, return_tensors='pt',
+            input_data_format='channels_last')['pixel_values']
         pixel_values = pixel_values.to(device=self.model.device,
                                        dtype=self.model.dtype)
         image_outputs = self.model.vision_tower.forward(

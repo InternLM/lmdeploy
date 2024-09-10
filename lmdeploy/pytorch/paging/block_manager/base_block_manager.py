@@ -248,7 +248,7 @@ class BaseBlockManager:
         self.block_tables: Dict[int, BlockTable] = {}
 
         if adapter_manager is None:
-            adapter_manager = AdapterManager(dict(), 0)
+            adapter_manager = AdapterManager(dict(), dict(), 0)
         self.adapter_manager = adapter_manager
 
     @classmethod

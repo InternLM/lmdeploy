@@ -765,6 +765,9 @@ class Llama3(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
+        # reject InternVL2-Llama3-76B
+        if 'internvl2' in model_path.lower():
+            return None
         if 'llama-3-' in model_path.lower() or 'llama3-' in model_path.lower():
             return 'llama3'
 

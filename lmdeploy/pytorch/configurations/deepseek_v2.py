@@ -19,7 +19,6 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
         v_head_dim = 0
         num_attention_heads = hf_config.num_attention_heads
         num_key_value_heads = 1
-        init_kwargs = dict(attn_implementation='eager')
         return ModelConfig(hidden_size=hf_config.hidden_size,
                            num_layers=hf_config.num_hidden_layers,
                            num_attention_heads=num_attention_heads,
@@ -30,5 +29,4 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
                            k_head_dim=k_head_dim,
                            v_head_dim=v_head_dim,
                            vocab_size=hf_config.vocab_size,
-                           multi_query_attention=True,
-                           init_kwargs=init_kwargs)
+                           multi_query_attention=True)

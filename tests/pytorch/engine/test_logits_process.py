@@ -1,7 +1,7 @@
 import torch
 from transformers.generation.logits_process import (
-    RepetitionPenaltyLogitsProcessor, TemperatureLogitsWarper,
-    TopKLogitsWarper, TopPLogitsWarper)
+    MinPLogitsWarper, RepetitionPenaltyLogitsProcessor,
+    TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper)
 
 
 def test_process_temperature():
@@ -103,4 +103,22 @@ def test_filter_topp_sorted():
     gt = torch.cat(gt)
 
     out = _filter_topp_sorted_(scores, top_p)
+    torch.testing.assert_close(out, gt)
+
+
+def test_filter_minp_sorted():
+    from lmdeploy.pytorch.engine.logits_process import _filter_minp_sorted_
+
+    batch_size = 4
+    num_tokens = 16
+    scores = torch.rand(batch_size, num_tokens).sort(1, descending=True)[0]
+    min_p = torch.rand(batch_size)
+
+    gt = []
+    for score, p in zip(scores, min_p):
+        warper = MinPLogitsWarper(p.item())
+        gt.append(warper(None, score[None].clone()))
+    gt = torch.cat(gt)
+
+    out = _filter_minp_sorted_(scores, min_p)
     torch.testing.assert_close(out, gt)

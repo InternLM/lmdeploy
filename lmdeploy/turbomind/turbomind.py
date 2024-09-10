@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import copy
 import json
 import os.path as osp
 import sys
@@ -18,7 +19,7 @@ import lmdeploy
 from lmdeploy.messages import (EngineOutput, GenerationConfig, ResponseType,
                                TurbomindEngineConfig)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger, get_model
+from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from .deploy.config import TurbomindModelConfig
 from .supported_models import is_supported
@@ -67,12 +68,14 @@ class TurboMind:
 
     Args:
         model_path (str): the path of turbomind's model
-        model_source (int): model source
-        model_format (str): needed when model_path is a hf model and not
-            managed by lmdeploy
-        group_size (int): needed when model_path is a hf model and not
-            managed by lmdeploy
-        tp (int): tensor parallel
+        mode_name (str): the name of the served model
+        chat_template_name (str): the name of the chat template, which is
+            supposed to be a builtin chat template defined in
+            `lmdeploy/model.py`
+        engine_config (TurbomindEngineConfig): the config of the inference
+            engine
+        model_source (int): the source of the model, which is either
+            turbomind model, or a transformers model
     """
 
     def __init__(self,
@@ -85,24 +88,28 @@ class TurboMind:
         self.model_name = model_name
         self.chat_template_name = chat_template_name
 
-        tp = 1 if engine_config is None else engine_config.tp
-        assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
-        self.gpu_count = tp
+        _engine_config = copy.deepcopy(engine_config)
+        if _engine_config is None:
+            _engine_config = TurbomindEngineConfig()
+        if _engine_config.max_batch_size is None:
+            _engine_config.max_batch_size = get_max_batch_size('cuda')
+
+        self.gpu_count = _engine_config.tp
 
         if model_source == ModelSource.WORKSPACE:
             tokenizer_model_path = osp.join(model_path, 'triton_models',
                                             'tokenizer')
             self.tokenizer = Tokenizer(tokenizer_model_path)
-            self.model_comm = self._from_workspace(model_path=model_path,
-                                                   engine_config=engine_config)
+            self.model_comm = self._from_workspace(
+                model_path=model_path, engine_config=_engine_config)
         else:
             if not osp.exists(model_path):
-                model_path = get_model(model_path, engine_config.download_dir,
-                                       engine_config.revision)
+                model_path = get_model(model_path, _engine_config.download_dir,
+                                       _engine_config.revision)
             self.tokenizer = Tokenizer(model_path)
             self.model_comm = self._from_hf(model_source=model_source,
                                             model_path=model_path,
-                                            engine_config=engine_config)
+                                            engine_config=_engine_config)
 
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
             ranks = [
@@ -529,6 +536,7 @@ class TurboMindInstance:
                                        dtype=np.uint32),
             runtime_top_k=_broadcast_np(gen_config.top_k, np.uint32),
             runtime_top_p=_broadcast_np(gen_config.top_p, np.float32),
+            runtime_min_p=_broadcast_np(gen_config.min_p, np.float32),
             temperature=_broadcast_np(gen_config.temperature, np.float32),
             repetition_penalty=_broadcast_np(gen_config.repetition_penalty,
                                              np.float32),
@@ -564,7 +572,9 @@ class TurboMindInstance:
             stop_words = None
             bad_words.append(self.eos_id)
         else:
-            stop_words = gen_config.stop_token_ids
+            stop_words = gen_config.stop_token_ids or []
+            if self.eos_id not in stop_words:
+                stop_words.append(self.eos_id)
         stop_words = _construct_stop_or_bad_words(stop_words)
         bad_words = _construct_stop_or_bad_words(bad_words)
 

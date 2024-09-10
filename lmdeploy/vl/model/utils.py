@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import inspect
 import os
 import sys
 from contextlib import contextmanager
@@ -104,7 +105,7 @@ def hack_import_with(src: List[str], dst: str = 'torch'):
         sys.modules.pop(item, None)
 
 
-def _set_func(origin_func_path: str,
+def _set_func(origin_func_path: Union[str, None],
               rewrite_func: Callable,
               origin_func: Callable = None):
     """Replace old function with the new function.
@@ -115,22 +116,19 @@ def _set_func(origin_func_path: str,
         origin_func (Callable): function to replace
     """
     # import module
-    split_path = origin_func_path.split('.')
-    for i in range(len(split_path), 0, -1):
-        try:
-            exec('import {}'.format('.'.join(split_path[:i])))
-            break
-        except Exception:
-            continue
+    if isinstance(origin_func_path, str):
+        split_path = origin_func_path.split('.')
+        for i in range(len(split_path), 0, -1):
+            try:
+                exec('import {}'.format('.'.join(split_path[:i])))
+                break
+            except Exception:
+                continue
 
-    method_class = False
-    if len(split_path) > 1:
-        module_or_class = eval('.'.join(split_path[:-1]))
-        if isinstance(module_or_class, type):
-            method_class = True
+        origin_func = eval(origin_func_path) \
+            if origin_func is None else origin_func
 
-    origin_func = eval(origin_func_path) \
-        if origin_func is None else origin_func
+    method_class = inspect.ismethod(origin_func)
 
     # replace method
     if not method_class:
@@ -146,23 +144,34 @@ def _set_func(origin_func_path: str,
                 for i, v in enumerate(ref):
                     if id(v) == obj_id:
                         ref[i] = rewrite_func
-    exec(f'{origin_func_path} = rewrite_func')
+    if isinstance(origin_func_path, str):
+        exec(f'{origin_func_path} = rewrite_func')
+    elif method_class:
+        raise NotImplementedError
+
     return origin_func
 
 
 @contextmanager
-def rewrite_ctx(origin_func_path: List[str], rewrite_func: List[Callable]):
+def rewrite_ctx(origin_func_path: List[Union[str, Callable]],
+                rewrite_func: List[Callable]):
     """rewrite context."""
     assert len(origin_func_path) == len(rewrite_func)
     origin_func_list = []
     for (func_path, dst_func) in zip(origin_func_path, rewrite_func):
-        origin_func = _set_func(func_path, dst_func)
+        if isinstance(func_path, Callable):
+            origin_func = _set_func(None, dst_func, func_path)
+        else:
+            origin_func = _set_func(func_path, dst_func)
         origin_func_list.append(origin_func)
     yield
     for (func_path, dst_func, origin_func) in zip(origin_func_path,
                                                   rewrite_func,
                                                   origin_func_list):
-        _set_func(func_path, origin_func, dst_func)
+        if isinstance(func_path, Callable):
+            _set_func(None, origin_func, dst_func)
+        else:
+            _set_func(func_path, origin_func, dst_func)
 
 
 def add_device_hook(module: torch.nn.Module,

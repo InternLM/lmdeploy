@@ -30,6 +30,11 @@ class GenerationConfig:
             tokens with top_p probability mass
         top_k (int): An alternative to sampling with temperature, where
             the model considers the top_k tokens with the highest probability
+        min_p (float): Minimum token probability, which will be scaled by the
+            probability of the most likely token. It must be a value between
+            0 and 1. Typical values are in the 0.01-0.2 range, comparably
+            selective as setting `top_p` in the 0.99-0.8 range (use the
+            opposite of normal `top_p` values)
         temperature (float): Sampling temperature
         repetition_penalty (float): Penalty to prevent the model from
             generating repeated words or phrases. A value larger than
@@ -59,6 +64,7 @@ class GenerationConfig:
     do_sample: bool = False
     top_p: float = 1.0
     top_k: int = 50
+    min_p: float = 0.0
     temperature: float = 0.8
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
@@ -102,6 +108,8 @@ class GenerationConfig:
         assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
+        assert 0 <= self.min_p <= 1, \
+            f'min_p should be in range [0, 1], but found {self.min_p}'
 
 
 @pydantic_dataclass
@@ -115,7 +123,8 @@ class TurbomindEngineConfig:
             If it is not specified, i.e. None, it will be extracted from the input model
         tp (int): the number of GPU cards used in tensor parallelism, default to 1
         session_len (int): the max session length of a sequence, default to None
-        max_batch_size (int): the max batch size during inference, default to 128
+        max_batch_size (int): the max batch size during inference. If it is not specified,
+            the engine will automatically set it according to the device
         cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
             For versions of lmdeploy between `v0.2.0` and `v0.2.1`, it defaults to 0.5, depicting the percentage of TOTAL GPU memory to be allocated to the k/v cache.
             For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8, signifying the percentage of FREE GPU memory to be reserved for the k/v cache
@@ -135,7 +144,7 @@ class TurbomindEngineConfig:
     model_format: Optional[str] = None
     tp: int = 1
     session_len: Optional[int] = None
-    max_batch_size: int = 128
+    max_batch_size: int = None
     cache_max_entry_count: float = 0.8
     cache_chunk_size: int = -1
     cache_block_seq_len: int = 64
@@ -152,7 +161,6 @@ class TurbomindEngineConfig:
     def __post_init__(self):
         """Check input validation."""
         assert self.tp >= 1, 'tp must be a positive integer'
-        assert self.max_batch_size >= 1, 'max_batch_size must be a positive integer'  # noqa
         assert self.cache_max_entry_count > 0 and self.cache_max_entry_count < 1, 'invalid cache_max_entry_count'  # noqa
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
@@ -167,7 +175,8 @@ class PytorchEngineConfig:
     Args:
         tp (int): Tensor Parallelism. default 1.
         session_len (int): Max session length. Default None.
-        max_batch_size (int): Max batch size. Default 128.
+        max_batch_size (int): Max batch size. If it is not specified,
+            the engine will automatically set it according to the device
         cache_max_entry_count (float): the percentage of gpu memory occupied
             by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
             it defaults to 0.8, signifying the percentage of FREE GPU memory
@@ -192,7 +201,7 @@ class PytorchEngineConfig:
     """
     tp: int = 1
     session_len: int = None
-    max_batch_size: int = 128
+    max_batch_size: int = None
     cache_max_entry_count: float = 0.8
     prefill_interval: int = 16
     block_size: int = 64
@@ -203,13 +212,14 @@ class PytorchEngineConfig:
     thread_safe: bool = False
     enable_prefix_caching: bool = False
     device_type: str = 'cuda'
+    eager_mode: bool = False
+    custom_module_map: str = None
     download_dir: str = None
     revision: str = None
 
     def __post_init__(self):
         """Check input validation."""
         assert self.tp >= 1, 'invalid tp'
-        assert self.max_batch_size >= 1, 'invalid max_batch_size'
         assert self.cache_max_entry_count > 0 and self.cache_max_entry_count < 1, 'invalid cache_max_entry_count'  # noqa
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
         assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
