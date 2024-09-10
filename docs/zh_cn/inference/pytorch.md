@@ -47,28 +47,6 @@ ModelAgent 有两个重要组件：
 1. patched_model 是更新后的 transformer 模型，更新后的模型添加了各种功能的支持，包括更高性能的子模块实现、TP、量化等等
 2. cache_engine 是缓存的分配与交换模块。它接收来自 scheduler 的交换请求，执行 host-device 间显存交换，adapter 加载等工作
 
-## Patching
-
-为了降低接入模型的门槛，我们实现了一套简单的 patch 机制来简化实现的替换。
-
-以 Llama 模型的 LlamaAttention.forward 为例，我们可以重新写一个 forward 的实现：
-
-```python
-class CustomLlamaAttention(nn.Module):
-    def forward(self, ...):
-        # custom forward
-```
-
-然后在 `lmdeploy.pytorch.models.module_map` 中注册模块的映射
-
-```python
-MODULE_MAP.update({
-'transformers.models.llama.modeling_llama.LlamaAttention':
-'qualname.to.CustomLlamaAttention'})
-```
-
-经过 patch 后的模型就会使用新的 forward 实现。TP、量化等功能也依赖 patch 机制，请阅读 [lmdeploy.pytorch 新模型支持](../advance/pytorch_new_model.md) 了解更多细节。
-
 ## 特性
 
 - **Continuous Batching**: 由于输入序列的长度不一样，batching 通常需要对输入进行 padding，这种 padding 会导致后续运算的计算量增加、影响速度，也会使得显存的占用大幅增加。遵循许多其他成熟框架的方案，lmdeploy.pytorch 采用了 continuous batching 的方式对输入做了连续化处理，避免了多余的资源占用。

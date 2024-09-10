@@ -281,7 +281,7 @@ class RequestSender:
         """send request asynchronize."""
         return self.batched_send_async(req_types=[req_type], data=[data])[0]
 
-    async def async_recv_any(self, que_timeout: float = None) -> Response:
+    async def async_recv_any(self) -> Response:
         """receive any response."""
         self._prefetch_resps()
         for req_id in self.resp_dict:
@@ -290,9 +290,9 @@ class RequestSender:
                 return ret
         return await self._async_resp_get()
 
-    def recv_any(self, que_timeout: float = None) -> Response:
+    def recv_any(self) -> Response:
         """receive any response."""
-        coro = self.async_recv_any(que_timeout)
+        coro = self.async_recv_any()
         return self.run_until_complete(coro)
 
     def recv_all(self, req_id: int, block: bool = True):
@@ -301,9 +301,7 @@ class RequestSender:
         resps = self.resp_dict.pop(req_id, [])
         return resps
 
-    async def async_recv(self,
-                         req_id: int,
-                         que_timeout: float = None) -> Response:
+    async def async_recv(self, req_id: int) -> Response:
         """receive response of given request id async."""
         ret = self._pop_resp(req_id, default=None)
         if ret is not None:
@@ -317,13 +315,13 @@ class RequestSender:
             else:
                 return resp
 
-    def recv(self, req_id: int, que_timeout: float = None) -> Response:
+    def recv(self, req_id: int) -> Response:
         """receive response of given request id.
 
         Different behavior in threadsafe mode.
         """
         if not self.is_thread_safe():
-            coro = self.async_recv(req_id, que_timeout)
+            coro = self.async_recv(req_id)
             return self.run_until_complete(coro)
 
         ret = self._pop_resp(req_id, default=None)
@@ -338,21 +336,15 @@ class RequestSender:
             else:
                 return resp
 
-    async def async_send(self,
-                         req_type: RequestType,
-                         data: Any,
-                         que_timeout: float = None):
+    async def async_send(self, req_type: RequestType, data: Any):
         """send and receive synchronize."""
         req_id = await self.async_send_async(req_type, data)
-        return await self.async_recv(req_id, que_timeout=que_timeout)
+        return await self.async_recv(req_id)
 
-    def send(self,
-             req_type: RequestType,
-             data: Any,
-             que_timeout: float = None) -> Response:
+    def send(self, req_type: RequestType, data: Any) -> Response:
         """send and receive synchronize."""
         req_id = self.send_async(req_type, data)
-        return self.recv(req_id, que_timeout=que_timeout)
+        return self.recv(req_id)
 
     def response_callback(self, resp: Response):
         """response callback."""

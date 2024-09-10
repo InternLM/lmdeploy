@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from dataclasses import dataclass
+from typing import Any, List
 
 import torch
-from transformers import AutoModelForCausalLM
 
 
 def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
@@ -38,6 +37,13 @@ def _update_torch_dtype(config: 'ModelConfig', default: str = 'float16'):
 
 
 @dataclass
+class BackendConfig:
+    """backend config."""
+    eager_mode: bool = True
+    device_type: str = 'cuda'
+
+
+@dataclass
 class SchedulerConfig:
     """Config of scheduler."""
 
@@ -53,6 +59,7 @@ class SchedulerConfig:
 class CacheConfig:
     """Config of key value cache."""
 
+    max_batches: int
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
@@ -89,11 +96,8 @@ class ModelConfig:
     multi_query_attention: bool = False
     vocab_size: int = 40000
     hf_config: Any = None
-    init_kwargs: Dict[str, Any] = field(default_factory=dict)
-    model_arch: str = None
-    unused_modules: List[str] = None
-    auto_model_cls: Any = AutoModelForCausalLM
     cogvlm_style: bool = False
+    custom_module_map: str = None
 
     def get_head_size(self):
         """get head size."""
@@ -107,6 +111,10 @@ class ModelConfig:
         from transformers import AutoConfig
         hf_config = AutoConfig.from_pretrained(
             pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
+        if getattr(hf_config, 'model_type', None) in ['phi3']:
+            # phi3 + trust_remote_code leads to error when tp.
+            hf_config = AutoConfig.from_pretrained(
+                pretrained_model_name_or_path)
         return cls.from_hf_config(hf_config, pretrained_model_name_or_path)
 
     @classmethod
@@ -123,8 +131,6 @@ class ModelConfig:
             assert model_config.head_dim is not None
             model_config.v_head_dim = model_config.head_dim
 
-        model_arch = model_config.hf_config.architectures[0]
-        model_config.model_arch = model_arch
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config)
 

@@ -55,6 +55,7 @@ def _fill_kv_cache_kernel(
     BlockOffsets,
     num_heads: tl.constexpr,
     head_dim: tl.constexpr,
+    head_dim_v: tl.constexpr,
     stride_kss,
     stride_ksh,
     stride_ksd,
@@ -122,7 +123,8 @@ def _fill_kv_cache_kernel(
 
         if BLOCK_DV > 0:
             dv_off = tl.arange(0, BLOCK_DV)
-            maskv = (h_off[:, None] < num_heads) & (dv_off[None, :] < head_dim)
+            maskv = (h_off[:, None] < num_heads) & (dv_off[None, :] <
+                                                    head_dim_v)
             v = tl.load(vs_ptr + sidx * stride_vss +
                         h_off[:, None] * stride_vsh +
                         dv_off[None, :] * stride_vsd,
@@ -162,6 +164,7 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
         block_offsets,
         num_heads=num_heads,
         head_dim=head_dim,
+        head_dim_v=head_dim_v,
         stride_kss=k_states.stride(-3),
         stride_ksh=k_states.stride(-2),
         stride_ksd=k_states.stride(-1),

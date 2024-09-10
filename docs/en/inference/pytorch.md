@@ -47,28 +47,6 @@ ModelAgent consists of two components:
 1. \`**patched_model**: : This is the transformer model after patching. In comparison to the original model, the patched model incorporates additional features such as Tensor Parallelism, quantization, and high-performance kernels.
 2. **cache_engine**: This component manages the caches. It receives commands from the Scheduler and performs host-device page swaps. Only GPU blocks are utilized for caching key/value pairs and adapters.
 
-## Patching
-
-In order to facilitate the deployment of a new model, we have developed a tool to patch the modules.
-
-For example, if we want to reimplement the forward method of `LlamaAttention`:
-
-```python
-class CustomLlamaAttention(nn.Module):
-    def forward(self, ...):
-        # custom forward
-```
-
-We register the implementation above into `lmdeploy.pytorch.models.module_map`:
-
-```python
-MODULE_MAP.update({
-'transformers.models.llama.modeling_llama.LlamaAttention':
-'qualname.to.CustomLlamaAttention'})
-```
-
-`ModelAgent` would then load and patch `LlamaAttention` with `CustomLlamaAttention` while leaving everything else unchanged. You can perform inference with the new implementation. For more detail about model patching, please refer to [support new model](../advance/pytorch_new_model.md) .
-
 ## Features
 
 `lmdeploy.pytorch` supports new features including:

@@ -2,10 +2,11 @@
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch import Tensor
 
 from ..block import LogicalTokenBlocks
@@ -16,34 +17,89 @@ def _div_up(a, b):
     return (a + b - 1) // b
 
 
-def _cache_weight(cache: Tensor, weight: Tensor, rank_offset: Tensor):
-    """cache weight."""
-    assert weight.dim() == 2
-    assert rank_offset.dim() == 1
-
-    cache = cache.view(-1)
-    rank, feat_size = weight.size()
-    assert cache.size(-1) >= feat_size, ('cache.size(-1) >= feat_size failed.')
-    assert rank <= rank_offset.size(0), ('rank <= rank_offset.size(0) failed.')
-    for r in range(rank):
-        r_off = rank_offset[r]
-        cache[r_off:r_off + feat_size] = weight[r]
-
-
-def _get_named_loralinears(model: torch.nn.Module):
-    """get all named loralinear."""
-    from peft.tuners.lora import Linear as LoRALinear
-    from peft.tuners.lora.awq import AwqLoraLinear
-    named_loralinear: Dict[str, torch.nn.Module] = dict()
-    for name, module in model.named_modules():
-        if isinstance(module, (LoRALinear, AwqLoraLinear)):
-            named_loralinear[name] = module
-    return named_loralinear
+def get_ranks_and_scalings(target_name: str,
+                           cfgs: Iterable,
+                           device: torch.device = None):
+    """get ranks and scalings."""
+    ranks = []
+    scalings = []
+    for cfg in cfgs:
+        if target_name not in cfg.target_modules:
+            ranks.append(0)
+            scalings.append(1)
+            continue
+        ranks.append(cfg.r)
+        scalings.append(float(cfg.lora_alpha / cfg.r))
+    ranks = torch.tensor(ranks, device=device)
+    scalings = torch.tensor(scalings, device=device)
+    return ranks, scalings
 
 
-def _get_layer_index(key: str, config: Any):
+def find_all_target(model: torch.nn.Module, target_name: str):
+    """find all targets."""
+    # find packed name
+    packed_name = target_name
+    pack_idx = None
+    packed_modules_mapping = getattr(model, 'packed_modules_mapping', dict())
+    for name, sub_names in packed_modules_mapping.items():
+        if target_name in sub_names:
+            pack_idx = sub_names.index(target_name)
+            packed_name = name
+            break
+
+    found_mods = []
+    name_postfix = f'.{packed_name}'
+    for name, mod in model.named_modules():
+        if not name.endswith(name_postfix):
+            continue
+        found_mods.append((name, mod))
+
+    return found_mods, pack_idx
+
+
+def get_max_ranks_per_block(block_numel: int, rank_stride: int):
+    assert block_numel >= rank_stride, (
+        'LoRA Adapter requires larger block_size.')
+    return block_numel // rank_stride
+
+
+def get_ranks_per_block(block_numel: int, rank_stride: int, rank: int):
+    """ranks per blocks."""
+    max_ranks_per_block = get_max_ranks_per_block(block_numel, rank_stride)
+    return min(rank, max_ranks_per_block)
+
+
+def get_num_required_blocks(block_numel: int, rank_stride: int, rank: int):
+    """get num required blocks."""
+    ranks_per_block = get_ranks_per_block(block_numel, rank_stride, rank)
+    if rank == 0:
+        return 0
+    return _div_up(rank, ranks_per_block)
+
+
+def get_inblock_offset(block_numel: int, rank_stride: int, rank: int):
+    """in block offset."""
+    ranks_per_block = get_ranks_per_block(block_numel, rank_stride, rank)
+    num_required_blocks = get_num_required_blocks(block_numel, rank_stride,
+                                                  rank)
+    ret = np.arange(ranks_per_block) * rank_stride
+    ret = ret.repeat(num_required_blocks)[:rank]
+    return ret
+
+
+def get_block_idx_per_rank(block_numel: int, rank_stride: int, rank: int):
+    """out block idx."""
+    ranks_per_block = get_ranks_per_block(block_numel, rank_stride, rank)
+    num_required_blocks = get_num_required_blocks(block_numel, rank_stride,
+                                                  rank)
+    ret = np.arange(num_required_blocks)
+    ret = ret[:, None].repeat(ranks_per_block, 1)
+    ret = ret.flatten()[:rank]
+    return ret
+
+
+def get_layer_index(key: str, layers_pattern: str = None):
     """get layer index of the lora linear."""
-    layers_pattern = getattr(config, 'layers_pattern', None)
     if isinstance(layers_pattern, str):
         layers_pattern = [layers_pattern]
     if layers_pattern is None or len(layers_pattern) == 0:
@@ -57,193 +113,133 @@ def _get_layer_index(key: str, config: Any):
                 return int(layer_index[1])
 
 
-def get_indexed_lora_linears(model: torch.nn.Module):
-    """get indexed lora linear."""
-    named_linears = _get_named_loralinears(model)
-
-    config = None
-    peft_config = getattr(model, 'peft_config', dict())
-    if len(peft_config) > 0:
-        config = next(iter(peft_config.values()))
-
-    indexed_linears = dict()
-    for name, layer in named_linears.items():
-        index = _get_layer_index(name, config)
-        target = name.split('.')[-1]
-        indexed_linears.setdefault(index, dict())
-        indexed_linears[index][target] = layer
-    return indexed_linears
-
-
-def update_lora_linears(lora_linears: Dict,
-                        weight_maps: List['AdapterWeightMap'],
-                        device: str = 'cuda'):
-    """update lora linears."""
-
-    def __update_linear(linear, idx, target_name, adapter_names):
-        """update linear."""
-        linear.layer_idx = idx
-        linear.target_name = target_name
-        for name in adapter_names:
-            if name in linear.lora_A:
-                linear.lora_A.pop(name)
-                linear.lora_B.pop(name)
-
-    adapter_names = [weight_map.adapter_name for weight_map in weight_maps]
-
-    for idx, lora_linear in lora_linears.items():
-        for target, linear in lora_linear.items():
-            __update_linear(linear,
-                            idx,
-                            target_name=target,
-                            adapter_names=adapter_names)
-
-
 @dataclass
-class LoRALinearInfo:
+class LoRATargetInfo:
     """lora linear info."""
-    ranks: Dict[str, int]
-    scalings: Dict[str, int]
-    target_names: List[str]
     in_features: int
     out_features: int
+    colwise: bool
     rank_stride: int = field(default=0, init=False)
 
     def __post_init__(self):
         """post init."""
         self.rank_stride = max(self.in_features, self.out_features)
 
-    @classmethod
-    def from_loralinear(cls, linear: torch.nn.Module):
-        """create from lora linear."""
-        from peft.tuners.lora import Linear as LoRALinear
-        from peft.tuners.lora.awq import AwqLoraLinear
-        assert isinstance(linear, (LoRALinear, AwqLoraLinear))
 
-        ranks = linear.r
-        scalings = linear.scaling
-        in_features = linear.base_layer.in_features
-        out_features = linear.base_layer.out_features
-        return cls(
-            ranks=ranks,
-            scalings=scalings,
-            target_names=list(ranks.keys()),
-            in_features=in_features,
-            out_features=out_features,
-        )
+def _get_rank_and_world():
+    """get rank and world size."""
+    rank = 0
+    world_size = 1
+    if dist.is_initialized():
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
 
-    def max_ranks_per_block(self, block_numel: int):
-        assert block_numel >= self.rank_stride, (
-            'LoRA Adapter raquires larger block_size.')
-        return block_numel // self.rank_stride
-
-    def ranks_per_block(self, block_numel: int, adapter_name: str):
-        """ranks per blocks."""
-        max_ranks_per_block = self.max_ranks_per_block(block_numel)
-        rank = self.ranks.get(adapter_name, 0)
-        return min(rank, max_ranks_per_block)
-
-    def num_required_blocks(self, block_numel: int, adapter_name: str):
-        """get num required blocks."""
-        ranks_per_block = self.ranks_per_block(block_numel, adapter_name)
-        rank = self.ranks.get(adapter_name, 0)
-        if rank == 0:
-            return 0
-        return _div_up(rank, ranks_per_block)
-
-    def inblock_offset(self, block_numel: int, adapter_name: str):
-        """in block offset."""
-        rank = self.ranks.get(adapter_name, 0)
-        ranks_per_block = self.ranks_per_block(block_numel, adapter_name)
-        num_required_blocks = self.num_required_blocks(block_numel,
-                                                       adapter_name)
-        ret = np.arange(ranks_per_block) * self.rank_stride
-        ret = ret.repeat(num_required_blocks)[:rank]
-        return ret
-
-    def block_idx_per_rank(self, block_numel: int, adapter_name: str):
-        """out block idx."""
-        rank = self.ranks.get(adapter_name, 0)
-        ranks_per_block = self.ranks_per_block(block_numel, adapter_name)
-        num_required_blocks = self.num_required_blocks(block_numel,
-                                                       adapter_name)
-        ret = np.arange(num_required_blocks)
-        ret = ret[:, None].repeat(ranks_per_block, 1)
-        ret = ret.flatten()[:rank]
-        return ret
-
-
-def get_loralinear_info(model: torch.nn.Module):
-    """get loralinear info."""
-    indexed_lora_linears = get_indexed_lora_linears(model)
-    if len(indexed_lora_linears) == 0:
-        return dict()
-    lora_linears = indexed_lora_linears[0]
-    infos = dict()
-    for target_name, linear in lora_linears.items():
-        infos[target_name] = LoRALinearInfo.from_loralinear(linear)
-    return infos
+    return rank, world_size
 
 
 @dataclass
 class AdapterWeightMap:
     adapter_name: str
+    path: str
     rank: List[int]
     rank_offset: np.ndarray
     max_rank: int
     target_modules: List[str]
+    colwise: List[bool]
 
-    @classmethod
-    def cache_lora_a(cls, cache: Tensor, weight: Tensor, rank_offset: Tensor):
-        """cache lora a weight."""
-        return _cache_weight(cache, weight, rank_offset)
+    @staticmethod
+    def _get_weight(weight: torch.Tensor, is_lora_a: bool, is_col: bool,
+                    rank: int, world_size: int):
+        """get sliced weight."""
+        if world_size == 1:
+            return weight
 
-    @classmethod
-    def cache_lora_b(cls, cache: Tensor, weight: Tensor, rank_offset: Tensor):
-        """cache lora b weight."""
-        return _cache_weight(cache, weight.t(), rank_offset)
+        if not is_col and is_lora_a:
+            # rowwise
+            weight = weight.chunk(world_size, dim=1)[rank]
+        else:
+            # colwise
+            weight = weight.chunk(world_size, dim=0)[rank]
+        return weight
 
-    def cache_lora_linear(self, lora_linear: Dict[str, torch.nn.Module],
-                          cache_a: Tensor, cache_b: Tensor):
-        """cache lora linear."""
-        name = self.adapter_name
-        target_modules = self.target_modules
-        rank_offset = self.rank_offset.reshape(-1, self.max_rank)
-        for tidx, target in enumerate(target_modules):
-            linear = lora_linear[target]
-            if not (name in linear.lora_A and name in linear.lora_B):
-                continue
-            linear_a = linear.lora_A[name]
-            linear_b = linear.lora_B[name]
-            weight_a = linear_a.weight
-            weight_b = linear_b.weight
-            assert weight_a is not None
-            assert weight_b is not None
-            r_offset = rank_offset[tidx]
-            self.cache_lora_a(cache_a, weight_a, r_offset)
-            self.cache_lora_b(cache_b, weight_b, r_offset)
+    @staticmethod
+    def _fill_a_cache(weight: torch.Tensor, cache: torch.Tensor,
+                      rank_off: torch.Tensor):
+        """fill a cache."""
+        num_ranks, feat_size = weight.shape
 
-    def cache_adapter(self, lora_linears: Dict, caches: List[List[Tensor]]):
+        for rank in range(num_ranks):
+            off = rank_off[rank]
+            cache[off:off + feat_size].copy_(weight[rank])
+
+    @staticmethod
+    def _fill_b_cache(weight: torch.Tensor, cache: torch.Tensor,
+                      rank_off: torch.Tensor):
+        """fill a cache."""
+        feat_size, num_ranks = weight.shape
+
+        for rank in range(num_ranks):
+            off = rank_off[rank]
+            cache[off:off + feat_size].copy_(weight[:, rank])
+
+    def cache_adapter(self, caches: List[List[Tensor]]):
         """cache all linear."""
-        assert len(lora_linears) == len(caches), (
-            'len(lora_linears) == len(caches)')
+        if self.path is None:
+            return
+        checkpoint_path = f'{self.path}/adapter_model.bin'
+        state_dict = torch.load(checkpoint_path, map_location='cpu')
 
-        for idx, lora_linear in lora_linears.items():
-            cache_a, cache_b = caches[idx]
-            self.cache_lora_linear(lora_linear, cache_a, cache_b)
+        dist_rank, world_size = _get_rank_and_world()
+
+        target_modules = self.target_modules
+        target_map = dict(
+            (name, idx) for idx, name in enumerate(target_modules))
+        num_targets = len(target_modules)
+        rank_offset = self.rank_offset.view(num_targets, -1)
+        for key, weight in state_dict.items():
+            layer_idx = get_layer_index(key, None)
+            a_cache, b_cache = caches[layer_idx]
+            a_cache = a_cache.view(-1)
+            b_cache = b_cache.view(-1)
+
+            split_key = key.split('.')
+            assert split_key[-1] == 'weight'
+            target_name = split_key[-3]
+            if split_key[-2] == 'lora_A':
+                is_lora_a = True
+            elif split_key[-2] == 'lora_B':
+                is_lora_a = False
+            else:
+                raise RuntimeError(f'Unexpected key: {key}')
+
+            target_id = target_map[target_name]
+            rank_off = rank_offset[target_id]
+            is_col = self.colwise[target_id]
+            weight = self._get_weight(weight,
+                                      is_lora_a,
+                                      is_col,
+                                      rank=dist_rank,
+                                      world_size=world_size)
+            if is_lora_a:
+                self._fill_a_cache(weight, a_cache, rank_off)
+            else:
+                self._fill_b_cache(weight, b_cache, rank_off)
 
 
 @dataclass
 class SchedulerAdapter:
     """lora adapter."""
 
+    adapter_id: int
     adapter_name: str
     rank: List[int]
     scaling: List[int]
     target_modules: List[str]
+    target_infos: List[LoRATargetInfo]
     logical_blocks: LogicalTokenBlocks
     inblock_offset: np.ndarray
     block_idx_per_rank: np.ndarray
+    adapter_path: str = None
     block_stride: int = 0
     max_rank: int = 0
     num_required_blocks: int = 0
@@ -251,46 +247,57 @@ class SchedulerAdapter:
     _active: bool = field(default=False, init=False)
 
     @classmethod
-    def new(cls, adapter_name: str, linear_infos: Dict[str, LoRALinearInfo],
+    def new(cls, adapter_id: int, adapter_name: str, adapter_path: str,
+            adapter_cfg: Any, target_infos: Dict[str, LoRATargetInfo],
             block_numel: int, max_rank: int):
         """new."""
 
-        target_modules = list(linear_infos.keys())
+        target_modules = list(target_infos.keys())
 
         rank = []
         scaling = []
-        for linear in linear_infos.values():
-            ranks = linear.ranks
-            rank.append(ranks.get(adapter_name, 0))
-            scaling.append(linear.scalings.get(adapter_name, 1.0))
-
         inblock_offset = [np.empty((0, ), dtype=np.int64)]
         block_idx_per_rank = [np.empty((0, ), dtype=np.int64)]
         num_required_blocks = 0
         for target_name in target_modules:
-            linear = linear_infos[target_name]
-            ib_offset = linear.inblock_offset(block_numel, adapter_name)
+
+            # get rank and scaling
+            r = 0
+            s = 1.0
+            if target_name in adapter_cfg.target_modules:
+                r = adapter_cfg.r
+                if r != 0:
+                    s = adapter_cfg.lora_alpha / r
+            rank.append(r)
+            scaling.append(s)
+
+            info = target_infos[target_name]
+            rank_stride = info.rank_stride
+            ib_offset = get_inblock_offset(block_numel, rank_stride, r)
             pad_ib_offset = np.zeros((max_rank, ), dtype=np.int64)
             pad_ib_offset[:ib_offset.shape[0]] = ib_offset
             inblock_offset.append(pad_ib_offset)
-            bidx_p_rank = linear.block_idx_per_rank(
-                block_numel, adapter_name) + num_required_blocks
+            bidx_p_rank = get_block_idx_per_rank(block_numel, rank_stride,
+                                                 r) + num_required_blocks
             pad_bidx_p_rank = np.zeros((max_rank, ), dtype=np.int64)
             pad_bidx_p_rank[:bidx_p_rank.shape[0]] = bidx_p_rank
             block_idx_per_rank.append(pad_bidx_p_rank)
-            num_required_blocks += linear.num_required_blocks(
-                block_numel, adapter_name)
+            num_required_blocks += get_num_required_blocks(
+                block_numel, rank_stride, r)
         inblock_offset = np.concatenate(inblock_offset)
         block_idx_per_rank = np.concatenate(block_idx_per_rank)
 
         ret = cls(
+            adapter_id=adapter_id,
             adapter_name=adapter_name,
             rank=rank,
             scaling=scaling,
             target_modules=target_modules,
+            target_infos=target_infos,
             logical_blocks=LogicalTokenBlocks(),
             inblock_offset=inblock_offset,
             block_idx_per_rank=block_idx_per_rank,
+            adapter_path=adapter_path,
             block_stride=block_numel,
             max_rank=max_rank,
             num_required_blocks=num_required_blocks,
@@ -324,39 +331,76 @@ class SchedulerAdapter:
     def build_weight_map(self):
         """build weight map."""
         assert self.rank_offset is not None
+        colwise = [
+            self.target_infos[name].colwise for name in self.target_modules
+        ]
         return AdapterWeightMap(
             adapter_name=self.name,
+            path=self.adapter_path,
             rank=self.rank,
             rank_offset=self.rank_offset,
             max_rank=self.max_rank,
             target_modules=self.target_modules,
+            colwise=colwise,
         )
+
+
+class NoneLoraConfig:
+
+    def __init__(self):
+        self.r = 0
+        self.lora_alpha = 8
+        self.target_modules = []
 
 
 class AdapterManager:
     """adapter manager."""
 
-    def __init__(self, linear_infos: Dict[str, LoRALinearInfo],
-                 block_numel: int):
-        self.linear_infos = linear_infos
+    def __init__(self, adapters: Dict[str, str],
+                 target_infos: Dict[str, LoRATargetInfo], block_numel: int):
+        self.target_infos = target_infos
         self.block_numel = block_numel
-        self._adapters: Dict[str, SchedulerAdapter] = dict()
+        if adapters is None:
+            adapters = dict()
 
+        self.adapter_paths = dict(
+            (name, path) for name, path in adapters.items())
+        self.adapter_paths[None] = None
+
+        self.adapter_cfgs = self._get_adapter_cfgs(adapters)
+
+        adapter_names = list(adapters.keys())
+        self.adapter_id_map = dict(
+            (name, idx + 1) for idx, name in enumerate(adapter_names))
+        self.adapter_id_map[None] = 0
+
+        self._adapters: Dict[str, SchedulerAdapter] = dict()
         self.max_rank = self._get_max_rank()
         self._add_non_adapter()
+
+    @staticmethod
+    def _get_adapter_cfgs(adapters: Dict[str, str]):
+        """get adapter cfgs."""
+        if len(adapters) == 0:
+            return {None: NoneLoraConfig()}
+        from peft import PeftConfig
+        adapter_cfgs = dict((name, PeftConfig.from_pretrained(path))
+                            for name, path in adapters.items())
+        adapter_cfgs[None] = NoneLoraConfig()
+        return adapter_cfgs
 
     def _get_max_rank(self):
         """get max rank."""
         max_rank = 0
-        for linear in self.linear_infos.values():
-            ranks = linear.ranks
-            if len(ranks) > 0:
-                max_rank = max(max_rank, max(ranks.values()))
+        for cfg in self.adapter_cfgs.values():
+            max_rank = max(max_rank, cfg.r)
         return max_rank
 
     def _add_non_adapter(self):
         """add non adapter."""
-        self.add_adapter(None)
+        adapter = self.add_adapter(None)
+        rank_offset = adapter.inblock_offset.copy()
+        adapter.update_rank_offset(rank_offset)
 
     def _register_adapter(self, adapter: SchedulerAdapter):
         """register adapter."""
@@ -374,9 +418,15 @@ class AdapterManager:
 
     def add_adapter(self, adapter_name: str):
         """add adapter."""
+        adapter_id = self.adapter_id_map[adapter_name]
+        adapter_cfg = self.adapter_cfgs[adapter_name]
+        adapter_path = self.adapter_paths[adapter_name]
         adapter = SchedulerAdapter.new(
+            adapter_id,
             adapter_name,
-            self.linear_infos,
+            adapter_path,
+            adapter_cfg,
+            self.target_infos,
             self.block_numel,
             max_rank=self.max_rank,
         )

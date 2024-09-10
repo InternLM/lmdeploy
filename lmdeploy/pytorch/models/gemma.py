@@ -1,241 +1,483 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Optional, Tuple, Union
+import math
+from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
-import torch.distributed as dist
 from torch import nn
-from transformers.modeling_outputs import BaseModelOutputWithPast
+from transformers.configuration_utils import PretrainedConfig
 
-from ..kernels import fill_kv_cache, fused_rotary_emb, paged_attention_fwd
-from ..weight_loader.dist_utils import (colwise_parallelize_linear,
-                                        rowwise_parallelize_linear)
-
-
-class PatchedGemmaRMSNorm(nn.Module):
-    """Rewrite RMSNorm."""
-
-    def forward(self, x):
-        """forward."""
-        # torch.nn.functional.normalize based implementation might leads
-        # to wrong output
-        from ..kernels import rms_norm
-        ret = rms_norm(x.contiguous(), self.weight + 1, self.eps)
-
-        return ret
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, GeluAndMul,
+                                 RMSNorm, RopeType, build_rotary_embedding)
+from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
+                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 
-def _make_inv_freq(self, device: torch.device):
-    if self.inv_freq is None:
-        self.inv_freq = 1.0 / (self.base**(torch.arange(
-            0, self.dim, 2, dtype=torch.int64, device=device).float() /
-                                           self.dim))
+class GemmaAttention(nn.Module):
+    """Rewrite module of GemmaAttention."""
 
+    def __init__(self,
+                 config: PretrainedConfig,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.layer_idx = layer_idx
+        quantization_config = getattr(config, 'quantization_config', None)
+        num_heads = config.num_attention_heads
+        num_key_value_heads = config.num_key_value_heads
+        hidden_size = config.hidden_size
+        head_dim = config.head_dim
 
-class PatchedGemmaAttention(nn.Module):
+        # packed qkv
+        self.qkv_proj = build_qkv_proj(
+            hidden_size,
+            num_q_heads=num_heads,
+            num_kv_heads=num_key_value_heads,
+            head_size=head_dim,
+            bias=config.attention_bias,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+        )
 
-    def _load_weights(self, loader, rank: int, world_size: int,
-                      device: torch.device):
-        """load weights."""
-        for mod_name in ['q_proj', 'k_proj', 'v_proj']:
-            colwise_parallelize_linear(getattr(self, mod_name),
-                                       loader,
-                                       rank=rank,
-                                       world_size=world_size,
-                                       prefix=mod_name)
-        rowwise_parallelize_linear(self.o_proj,
-                                   loader,
-                                   rank=rank,
-                                   world_size=world_size,
-                                   prefix='o_proj')
+        # rotary embedding
+        self.apply_rotary_pos_emb = ApplyRotaryEmb()
 
-    @classmethod
-    def _distribute_output_fn(cls, outputs, **kwargs):
-        """Distribution output hook."""
-        dist.all_reduce(outputs[0])
-        return outputs
+        # attention
+        self.scaling = 1 / math.sqrt(config.head_dim)
+        if hasattr(config, 'query_pre_attn_scalar'):
+            self.scaling = config.query_pre_attn_scalar**-0.5
+        self.sliding_window = (getattr(config, 'sliding_window', -1)
+                               if not bool(layer_idx % 2) else -1)
+        logit_softcapping = getattr(config, 'attn_logit_softcapping', None)
+        self.attn_fwd = Attention(num_heads,
+                                  head_dim,
+                                  scale=self.scaling,
+                                  num_kv_heads=num_key_value_heads,
+                                  sliding_window=self.sliding_window,
+                                  logit_softcapping=logit_softcapping)
 
-    def _contiguous_batching_forward_impl(
+        # o_proj
+        self.o_proj = build_rowwise_linear(num_heads * head_dim,
+                                           hidden_size,
+                                           bias=config.attention_bias,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=True)
+
+    def forward(
         self,
         hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        attention_mask: Optional[torch.Tensor] = None,
-        world_size: int = 1,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """Rewrite implementation of forward.
+        attn_metadata: Any = None,
+    ):
+        """Rewrite of LlamaAttention.forward."""
+        # qkv proj
+        qkv_states = self.qkv_proj(hidden_states)
+        # (-1, heads, head_dim)
+        qkv_states = qkv_states.flatten(0, -2)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(
+            qkv_states)
 
-        Add continuous batching support. Add paged attention support. TP
-        support.
-        """
-        context = self.context.context
-        kv_seq_length = context.kv_seq_length
-        q_seq_length = context.q_seq_length
-        q_start_loc = context.q_start_loc
-        block_offsets = context.block_offsets
-        max_q_seq_length = context.max_q_seq_length
+        # apply rotary embedding
+        cos, sin = rotary_pos_emb
+        query_states, key_states = self.apply_rotary_pos_emb(
+            query_states,
+            key_states,
+            cos,
+            sin,
+            inplace=True,
+        )
 
-        num_heads = self.num_heads // world_size
-        num_kv_heads = self.num_key_value_heads // world_size
-        head_dim = self.head_dim
-        hidden_size = num_heads * head_dim
-
-        def __qkv_proj(hidden_states):
-            """qkv proj."""
-            query_states = self.q_proj(hidden_states)
-            key_states = self.k_proj(hidden_states)
-            value_states = self.v_proj(hidden_states)
-
-            return query_states, key_states, value_states
-
-        def __rotary_emb_fn(query_states, key_states, value_states):
-            scaling_factor = 1.0
-            _make_inv_freq(self.rotary_emb, query_states.device)
-            inv_freq = self.rotary_emb.inv_freq
-            query_states, key_states = fused_rotary_emb(
-                query_states[None],
-                key_states[None],
-                context.position_ids_1d[None],
-                inv_freq=inv_freq,
-                scaling_factor=scaling_factor,
-                out_q=query_states[None],
-                out_k=key_states[None])
-            return query_states[0], key_states[0], value_states
-
-        query_states, key_states, value_states = __qkv_proj(hidden_states)
-
-        query_states = query_states.view(-1, num_heads, head_dim)
-        key_states = key_states.view(-1, num_kv_heads, head_dim)
-        value_states = value_states.view(-1, num_kv_heads, head_dim)
-
-        query_states, key_states, value_states = __rotary_emb_fn(
-            query_states, key_states, value_states)
-
-        fill_kv_cache(
+        # attention
+        attn_output = self.attn_fwd(
+            query_states,
             key_states,
             value_states,
             past_key_value[0],
             past_key_value[1],
-            q_start_loc,
-            q_seq_length,
-            kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_q_seq_length,
-            block_offsets=block_offsets,
+            attn_metadata,
+            inplace=True,
         )
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
 
-        logit_softcapping = getattr(self.config, 'attn_logit_softcapping',
-                                    None)
-        window_size = getattr(self, 'sliding_window', None)
-        sm_scale = getattr(self, 'scaling', None)
-        attn_output = query_states
-        paged_attention_fwd(
-            query_states,
-            past_key_value[0],
-            past_key_value[1],
-            attn_output,
-            block_offsets,
-            q_start_loc=q_start_loc,
-            q_seqlens=q_seq_length,
-            kv_seqlens=kv_seq_length,
-            max_seqlen=max_q_seq_length,
-            window_size=window_size,
-            sm_scale=sm_scale,
-            logit_softcapping=logit_softcapping,
-        )
-        attn_output = attn_output.reshape(*hidden_states.shape[:-1],
-                                          hidden_size)
-
+        # o proj
         attn_output = self.o_proj(attn_output)
+        return attn_output
 
-        return attn_output, None, past_key_value
+
+class GemmaMLP(nn.Module):
+    """mlp."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        # gate up
+        self.gate_up_proj = build_merged_colwise_linear(
+            config.hidden_size,
+            [config.intermediate_size, config.intermediate_size],
+            bias=False,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            is_tp=True,
+        )
+
+        hidden_activation = config.hidden_activation
+        if hidden_activation is None:
+            hidden_activation = 'gelu_pytorch_tanh'
+            assert hidden_activation == 'gelu_pytorch_tanh'
+        self.act_fn = GeluAndMul(approximate='tanh')
+
+        # down
+        self.down_proj = build_rowwise_linear(config.intermediate_size,
+                                              config.hidden_size,
+                                              bias=False,
+                                              quant_config=quantization_config,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True)
+
+    def forward(self, x):
+        """forward."""
+        gate_up = self.gate_up_proj(x)
+        act = self.act_fn(gate_up)
+        out = self.down_proj(act)
+        return out
+
+
+class GemmaDecoderLayer(nn.Module):
+    """llama decoder layer."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.layer_idx = layer_idx
+        quantization_config = getattr(config, 'quantization_config', None)
+
+        # build attention layer
+        self.self_attn = GemmaAttention(config,
+                                        layer_idx,
+                                        dtype=dtype,
+                                        device=device)
+
+        # builf MLP
+        self.mlp = GemmaMLP(config, dtype=dtype, device=device)
+
+        # build input layer norm
+        self.input_layernorm = RMSNorm(config.hidden_size,
+                                       config.rms_norm_eps,
+                                       quant_config=quantization_config,
+                                       dtype=dtype,
+                                       device=device)
+
+        # build attention layer norm
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device)
+
+        self.model_type = config.model_type
+        if self.model_type == 'gemma2':
+            self.pre_feedforward_layernorm = RMSNorm(
+                config.hidden_size,
+                config.rms_norm_eps,
+                quant_config=quantization_config,
+                dtype=dtype,
+                device=device)
+            self.post_feedforward_layernorm = RMSNorm(
+                config.hidden_size,
+                config.rms_norm_eps,
+                quant_config=quantization_config,
+                dtype=dtype,
+                device=device)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
-        **kwargs,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
-               Optional[Tuple[torch.Tensor]]]:
-        """Rewrite of forward."""
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
-        return self._contiguous_batching_forward_impl(
-            hidden_states,
-            position_ids,
-            past_key_value,
-            output_attentions,
-            attention_mask=attention_mask,
-            world_size=world_size,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: Optional[List[torch.FloatTensor]],
+        residual: Optional[torch.Tensor] = None,
+        attn_metadata: Any = None,
+    ):
+
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(
+                hidden_states, residual)
+
+        # Self Attention
+        hidden_states = self.self_attn(
+            hidden_states=hidden_states,
+            rotary_pos_emb=rotary_pos_emb,
+            past_key_value=past_key_value,
+            attn_metadata=attn_metadata,
         )
 
+        # Fully Connected
 
-class PatchedGemmaModel(nn.Module):
+        if self.model_type == 'gemma2':
+            hidden_states = self.post_attention_layernorm(hidden_states)
+            hidden_states, residual = self.pre_feedforward_layernorm(
+                hidden_states, residual)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = self.post_feedforward_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.post_attention_layernorm(
+                hidden_states, residual)
+            hidden_states = self.mlp(hidden_states)
 
-    def _continuous_batching_forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
-        """Rewrite implementation of LlamaModel.forward."""
-        output_attentions = False
-        use_cache = True
-        # Attention mask is not necessary in continuous batching
-        attention_mask = None
+        outputs = (hidden_states, residual)
+        return outputs
 
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
 
-        hidden_states = inputs_embeds
-        # This is Gemma only!
-        hidden_states = hidden_states * (self.config.hidden_size**0.5)
-        for idx, decoder_layer in enumerate(self.layers):
+class GemmaModel(nn.Module):
+    """model."""
 
-            past_key_value = (past_key_values[idx]
-                              if past_key_values is not None else None)
-            layer_outputs = decoder_layer(
-                hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_value,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-            )
-            hidden_states = layer_outputs[0]
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.config = config
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+        quantization_config = getattr(config, 'quantization_config', None)
 
-        hidden_states = self.norm(hidden_states)
+        self.embed_tokens = nn.Embedding(config.vocab_size,
+                                         config.hidden_size,
+                                         self.padding_idx,
+                                         dtype=dtype,
+                                         device=device)
 
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=past_key_values,
-            hidden_states=None,
-            attentions=None,
+        # build all decode layers
+        self.layers = nn.ModuleList([
+            GemmaDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            for layer_idx in range(config.num_hidden_layers)
+        ])
+
+        # build norm
+        self.norm = RMSNorm(config.hidden_size,
+                            config.rms_norm_eps,
+                            quant_config=quantization_config,
+                            dtype=dtype,
+                            device=device)
+
+        # build rotary embedding
+        rope_scaling = getattr(config, 'rope_scaling', None)
+        emb_type = RopeType.LinearScaling
+        scaling_factor = 1.0
+        if rope_scaling is not None:
+            rope_type = rope_scaling['rope_type']
+            if rope_type == 'linear':
+                emb_type = RopeType.LinearScaling
+            if rope_type == 'dynamic':
+                emb_type = RopeType.DynamicNTKScaling
+            else:
+                raise RuntimeError(f'Unsupported rope type: {rope_type}')
+            scaling_factor = rope_scaling.get('scaling_factor', scaling_factor)
+
+        rope_dim = config.head_dim
+        rope_max_pos_emb = config.max_position_embeddings
+        rope_base = config.rope_theta
+        self.rotary_emb = build_rotary_embedding(
+            rope_dim,
+            rope_max_pos_emb,
+            rope_base,
+            scaling_factor,
+            emb_type=emb_type,
         )
 
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
+        attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        **kwargs,
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
+    ):
         """Rewrite of LlamaModel.forward."""
-        return self._continuous_batching_forward(
-            input_ids,
-            position_ids,
-            past_key_values,
-            inputs_embeds,
+
+        # token embedding
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = inputs_embeds
+        hidden_states = hidden_states * (self.config.hidden_size**0.5)
+
+        # rotary embedding
+        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+
+        # decoding
+        residual = None
+        for idx, decoder_layer in enumerate(self.layers):
+            past_key_value = past_key_values[idx]
+            hidden_states, residual = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                residual=residual,
+                attn_metadata=attn_metadata,
+            )
+
+        # norm
+        hidden_states, _ = self.norm(hidden_states, residual)
+
+        return hidden_states
+
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.embed_tokens
+
+
+class GemmaForCausalLM(nn.Module):
+    """ModelForCausalLM."""
+
+    support_cuda_graph = True
+
+    packed_modules_mapping = {
+        'qkv_proj': [
+            'q_proj',
+            'k_proj',
+            'v_proj',
+        ],
+        'gate_up_proj': [
+            'gate_proj',
+            'up_proj',
+        ],
+    }
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 ctx_mgr: StepContextManager,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.config = config
+        self.ctx_mgr = ctx_mgr
+        # build model
+        self.model = GemmaModel(config, dtype=dtype, device=device)
+        # build lm_head
+        self.lm_head = build_rowwise_linear(config.hidden_size,
+                                            config.vocab_size,
+                                            bias=False,
+                                            dtype=dtype,
+                                            device=device)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: List[List[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
+        """model forward, return logits."""
+        hidden_states = self.model(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
         )
+
+        logits = self.lm_head(hidden_states)
+        logits = logits.float()
+        return logits
+
+    def get_input_embeddings(self):
+        """get input embeddings."""
+        return self.model.get_input_embeddings()
+
+    def prepare_inputs_for_generation(
+        self,
+        past_key_values: List[List[torch.Tensor]],
+        inputs_embeds: Optional[torch.Tensor] = None,
+        context: StepContext = None,
+    ):
+        """prepare input."""
+        # get input_ids, position_ids and attention metadatas
+        input_ids = context.input_ids
+        position_ids = context.position_ids
+        attn_metadata = context.attn_metadata
+
+        # process vision embeddings
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            if inputs_embeds is None:
+                inputs_embeds = self.get_input_embeddings()(input_ids)
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
+
+        # inputs of forward
+        return dict(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+        )
+
+    def update_weights(self):
+        """update weights."""
+        self.lm_head.weight = self.model.embed_tokens.weight
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        """load weights."""
+        # modify from vllm
+        stacked_params_mapping = [
+            # (param_name, shard_name, shard_id)
+            ('.qkv_proj', '.q_proj', 'q'),
+            ('.qkv_proj', '.k_proj', 'k'),
+            ('.qkv_proj', '.v_proj', 'v'),
+            ('.gate_up_proj', '.gate_proj', 0),
+            ('.gate_up_proj', '.up_proj', 1),
+        ]
+        norm_layers = [
+            '.norm', '.input_layernorm', '.post_attention_layernorm',
+            'pre_feedforward_layernorm', 'post_feedforward_layernorm'
+        ]
+
+        params_dict = dict(self.named_parameters())
+        for name, loaded_weight in weights:
+            if 'rotary_emb.inv_freq' in name:
+                continue
+            if ('rotary_emb.cos_cached' in name
+                    or 'rotary_emb.sin_cached' in name):
+                continue
+            if 'lm_head' in name:
+                continue
+            for (param_name, weight_name, shard_id) in stacked_params_mapping:
+                if weight_name not in name:
+                    continue
+                name = name.replace(weight_name, param_name)
+                param = params_dict[name]
+                load_weight(param, loaded_weight, shard_id=shard_id)
+                break
+            else:
+                for weight_name in norm_layers:
+                    if weight_name not in name:
+                        continue
+                    loaded_weight += 1
+                    break
+                param = params_dict[name]
+                load_weight(param, loaded_weight)

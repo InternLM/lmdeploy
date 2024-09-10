@@ -84,7 +84,7 @@ def _multinomial_sampling(scores: torch.Tensor,
                           offsets: torch.LongTensor,
                           indices: torch.LongTensor = None):
     """sampling."""
-    from lmdeploy.pytorch.kernels import multinomial_sampling
+    from lmdeploy.pytorch.nn.multinomial_sampling import multinomial_sampling
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
@@ -380,9 +380,8 @@ class FusedLogitsProcessor(LogitsWarper):
             if max_topk <= 0:
                 scores, indices = logits.sort(1, descending=True)
             else:
-                scores = torch.zeros_like(logits)
-                indices = torch.zeros_like(logits, dtype=torch.int64)
                 topk_scores, topk_indices = logits.topk(max_topk, dim=1)
+                scores = logits.fill_(0)  # (seq, vocalb_size)
                 scores[..., :max_topk] = topk_scores
-                indices[..., :max_topk] = topk_indices
+                indices = topk_indices  # (seq, max_topk)
             return __random_sampling(scores, indices)
