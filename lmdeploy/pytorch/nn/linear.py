@@ -589,9 +589,12 @@ class W8A8Linear(nn.Module):
         if loaded_weight.dim() == 2 and param.dtype == torch.int8:
             weight = loaded_weight.chunk(world_size, 1)[rank]
             return default_weight_loader(param, weight)
+        elif loaded_weight.dim() == 2 and loaded_weight.size(1) == 1:
+            # scaling
+            return default_weight_loader(param, loaded_weight)
         else:
             # bias
-            if rank == 0:
+            if rank != 0:
                 loaded_weight = torch.zeros_like(loaded_weight)
             return default_weight_loader(param, loaded_weight)
 
