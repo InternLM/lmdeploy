@@ -8,13 +8,8 @@ def fill_kv_cache(
     value_states: Tensor,
     key_caches: Tensor,
     value_caches: Tensor,
-    q_start_loc: Tensor,
-    q_seq_length: Tensor,
-    kv_seq_length: Tensor,
-    max_q_seq_length: int,
-    block_offsets: Tensor,
-    context: None,
+    kv_start_indices: Tensor,
 ):
     """fill key/value state to cache for paged attention."""
-    ext_ops.fill_kv_cache(key_states, value_states, key_caches, value_caches,
-                          context.kv_start_indices)
+    return ext_ops.fill_kv_cache(key_states, value_states, key_caches,
+                                 value_caches, kv_start_indices)
