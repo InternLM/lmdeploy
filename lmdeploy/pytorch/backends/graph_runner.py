@@ -3,14 +3,22 @@ from typing import List
 
 import torch
 
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext
 
 
 class GraphRunner:
     """graph runner."""
 
-    def __init__(self, model: torch.nn.Module, **kwargs):
+    def __init__(self, model: torch.nn.Module, model_config: ModelConfig,
+                 cache_config: CacheConfig, backend_config: BackendConfig,
+                 device: torch.device, **kwargs):
         self.model = model
+        self.ctx_mgr = model.ctx_mgr
+        self.device = device
+        self.model_config = model_config
+        self.cache_config = cache_config
+        self.backend_config = backend_config
 
     def __call__(self, **kwargs):
         """call graph runner forward."""

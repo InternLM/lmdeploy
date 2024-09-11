@@ -134,6 +134,7 @@ class Llama3RotaryEmbeddingImpl(RotaryEmbeddingImpl):
 
         inv_freq = self.inv_freq
         factor = self.scaling_factor
+
         wavelen = 2 * math.pi / inv_freq
         # wavelen < high_freq_wavelen: do nothing
         # wavelen > low_freq_wavelen: divide by factor
@@ -149,7 +150,8 @@ class Llama3RotaryEmbeddingImpl(RotaryEmbeddingImpl):
                                                             low_freq_wavelen)
         inv_freq_llama = torch.where(is_medium_freq, smoothed_inv_freq,
                                      inv_freq_llama)
-        self.register_buffer('inv_freq_llama', inv_freq_llama)
+        self.scaling_factor = 1.0
+        self.register_buffer('inv_freq', inv_freq_llama)
 
 
 def yarn_find_correction_dim(num_rotations,

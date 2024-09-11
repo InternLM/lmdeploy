@@ -8,7 +8,8 @@ from ..multinomial_sampling import (MultinomialSamplingBuilder,
 class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):
     """multinomial sampling implementation api."""
 
-    def forward(scores: torch.Tensor,
+    def forward(self,
+                scores: torch.Tensor,
                 seeds: torch.LongTensor,
                 offsets: torch.LongTensor,
                 indices: torch.Tensor = None):
