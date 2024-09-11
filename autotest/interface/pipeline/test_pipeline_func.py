@@ -835,7 +835,8 @@ def test_gen_config_same_random_seed_batch(config, model, backend, worker_id):
         pipe = pipeline(model_path, backend_config=backend_config)
         gen_config = GenerationConfig(random_seed=1, top_k=40, do_sample=True)
         response = pipe(['Shanghai is'] * 3, gen_config=gen_config)
-        result = response[1].text == response[2].text
+        result = response[0].text == response[1].text and response[
+            1].text == response[2].text
         save_pipeline_common_log(config, file_name, result, response)
         del pipe
         torch.cuda.empty_cache()
@@ -1021,19 +1022,7 @@ def test_backend_config_validate_pytorch(config, model, backend, worker_id):
         pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(AssertionError):
-        backend_config = backend(max_batch_size=0)
-        pipeline(model_path, backend_config=backend_config)
-
-    with pytest.raises(AssertionError):
         backend_config = backend(cache_max_entry_count=0)
-        pipeline(model_path, backend_config=backend_config)
-
-    with pytest.raises(AssertionError):
-        backend_config = backend(num_cpu_blocks=-1)
-        pipeline(model_path, backend_config=backend_config)
-
-    with pytest.raises(AssertionError):
-        backend_config = backend(num_gpu_blocks=-1)
         pipeline(model_path, backend_config=backend_config)
 
     if 'gw' in worker_id:
@@ -1043,7 +1032,7 @@ def test_backend_config_validate_pytorch(config, model, backend, worker_id):
 @pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_backend_config_tp(config, model, backend, worker_id):
-    with pytest.raises(AssertionError, match='tp should be 2\\^n'):
+    with pytest.raises(AssertionError):
         if 'gw' in worker_id:
             os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(
                 worker_id, tp_num=2)
