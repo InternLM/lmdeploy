@@ -41,7 +41,7 @@ DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:v0.1 \
 以下是在安装了 Ascend Docker Runtime 的情况下，启动用于华为昇腾设备的容器的示例：
 
 ```bash
-docker run -e ASCEND_VISIBLE_DEVICES=0 --net host -td --entry-point bash --name lmdeploy_ascend_demo \
+docker run -e ASCEND_VISIBLE_DEVICES=0 --net host -td --entrypoint bash --name lmdeploy_ascend_demo \
     lmdeploy-aarch64-ascend:v0.1  # docker_image_sha_or_name
 ```
 
