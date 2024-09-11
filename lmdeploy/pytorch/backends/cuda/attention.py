@@ -71,9 +71,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
-        k_scales_zeros: torch.Tensor=None,
-        v_scales_zeros: torch.Tensor=None,
-        quant_policy: Literal[0, 4, 8]=0,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
+        quant_policy: Literal[0, 4, 8] = 0,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
@@ -138,6 +138,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 max_input_len=max_q_seqlen,
                 head_offset=self.alibi_head_offset,
                 num_heads=self.alibi_num_heads,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                quant_policy=quant_policy,
             )
 
         return attn_output

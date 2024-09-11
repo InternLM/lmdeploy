@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Literal
+
 import torch
 from torch import nn
 
@@ -60,9 +61,9 @@ class Attention(nn.Module):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
-        k_scales_zeros: torch.Tensor=None,
-        v_scales_zeros: torch.Tensor=None,
-        quant_policy: Literal[0, 4, 8]=0,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
+        quant_policy: Literal[0, 4, 8] = 0,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""

@@ -496,8 +496,8 @@ def _fwd_grouped_split_quant_kernel(
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
             vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
 
-        k = (k - kz) * ks
-        v = (v - vz) * vs
+        k = ((k - kz) * ks).to(q.dtype)
+        v = ((v - vz) * vs).to(q.dtype)
         qk = tl.zeros([BLOCK_H, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
@@ -985,8 +985,8 @@ def _fwd_kernel_quant(
             vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
 
         # k = tl.view(k, (ks.shape[0], ks.shape[1]))
-        v = (v - vz) * vs
-        k = (k - kz) * ks
+        v = ((v - vz) * vs).to(q.dtype)
+        k = ((k - kz) * ks).to(q.dtype)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
