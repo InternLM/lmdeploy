@@ -39,7 +39,7 @@ for usage. It is recommended to install Ascend Docker Runtime.
 Here is an example of starting container for Huawei Ascend device with Ascend Docker Runtime installed:
 
 ```bash
-docker run -e ASCEND_VISIBLE_DEVICES=0 --net host -td --entry-point bash --name lmdeploy_ascend_demo \
+docker run -e ASCEND_VISIBLE_DEVICES=0 --net host -td --entrypoint bash --name lmdeploy_ascend_demo \
     lmdeploy-aarch64-ascend:v0.1  # docker_image_sha_or_name
 ```
 
