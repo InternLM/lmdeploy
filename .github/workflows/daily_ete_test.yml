@@ -530,8 +530,6 @@ jobs:
         - /nvme/qa_test_models/offline_pkg:/nvme/qa_test_models/offline_pkg
         - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-    env:
-      TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
     steps:
       - name: Setup systems
         run: |
@@ -551,10 +549,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
-      - name: Install pytorch
-        run: |
-          python3 -m pip cache dir
-          python3 -m pip install torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
