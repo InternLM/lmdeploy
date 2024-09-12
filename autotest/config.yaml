@@ -61,6 +61,7 @@ turbomind_chat_model:
 
 pytorch_chat_model:
     - meta-llama/Meta-Llama-3-8B-Instruct
+    - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
@@ -203,6 +204,7 @@ turbomind_quatization:
 pytorch_quatization:
     awq:
         - meta-llama/Meta-Llama-3-8B-Instruct
+        - meta-llama/Meta-Llama-3-1-8B-Instruct
         - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm2_5-7b-chat
         - internlm/internlm2_5-20b-chat

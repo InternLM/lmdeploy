@@ -6,68 +6,72 @@ from opencompass.models import (LmdeployPytorchModel, TurboMindModel,
 
 with read_base():
     # choose a list of datasets
-    from .datasets.bbh.bbh_gen_5b92b0 import bbh_datasets  # noqa: F401, E501
-    from .datasets.ceval.ceval_gen_2daf24 import \
+    from opencompass.configs.datasets.bbh.bbh_gen_5b92b0 import \
+        bbh_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.ceval.ceval_gen_2daf24 import \
         ceval_datasets  # noqa: F401, E501
-    from .datasets.cmmlu.cmmlu_gen_c13365 import \
+    from opencompass.configs.datasets.cmmlu.cmmlu_gen_c13365 import \
         cmmlu_datasets  # noqa: F401, E501
-    from .datasets.crowspairs.crowspairs_gen_381af0 import \
+    from opencompass.configs.datasets.crowspairs.crowspairs_gen_381af0 import \
         crowspairs_datasets  # noqa: F401, E501
-    from .datasets.GaokaoBench.GaokaoBench_no_subjective_gen_4c31db import \
+    from opencompass.configs.datasets.GaokaoBench.GaokaoBench_no_subjective_gen_4c31db import \
         GaokaoBench_datasets  # noqa: F401, E501
-    from .datasets.gpqa.gpqa_gen_4baadb import \
+    from opencompass.configs.datasets.gpqa.gpqa_gen_4baadb import \
         gpqa_datasets  # noqa: F401, E501
-    from .datasets.gsm8k.gsm8k_gen_1d7fe4 import \
+    from opencompass.configs.datasets.gsm8k.gsm8k_gen_1d7fe4 import \
         gsm8k_datasets  # noqa: F401, E501
-    from .datasets.hellaswag.hellaswag_10shot_gen_e42710 import \
+    from opencompass.configs.datasets.hellaswag.hellaswag_10shot_gen_e42710 import \
         hellaswag_datasets  # noqa: F401, E501
-    from .datasets.humaneval.humaneval_gen_8e312c import \
+    from opencompass.configs.datasets.humaneval.humaneval_gen_8e312c import \
         humaneval_datasets  # noqa: F401, E501
-    from .datasets.IFEval.IFEval_gen_3321a3 import \
+    from opencompass.configs.datasets.IFEval.IFEval_gen_3321a3 import \
         ifeval_datasets  # noqa: F401, E501
-    from .datasets.math.math_0shot_gen_393424 import \
+    from opencompass.configs.datasets.math.math_0shot_gen_393424 import \
         math_datasets  # noqa: F401, E501
-    from .datasets.mbpp.sanitized_mbpp_gen_a0fc46 import \
+    from opencompass.configs.datasets.mbpp.sanitized_mbpp_gen_a0fc46 import \
         sanitized_mbpp_datasets  # noqa: F401, E501
-    from .datasets.mmlu.mmlu_gen_4d595a import \
+    from opencompass.configs.datasets.mmlu.mmlu_gen_4d595a import \
         mmlu_datasets  # noqa: F401, E501
-    from .datasets.nq.nq_open_1shot_gen_01cf41 import \
+    from opencompass.configs.datasets.nq.nq_open_1shot_gen_01cf41 import \
         nq_datasets  # noqa: F401, E501
-    from .datasets.race.race_gen_69ee4f import \
+    from opencompass.configs.datasets.race.race_gen_69ee4f import \
         race_datasets  # noqa: F401, E501
-    from .datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import \
+    from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import \
         TheoremQA_datasets  # noqa: F401, E501
-    from .datasets.triviaqa.triviaqa_wiki_1shot_gen_eaf81e import \
+    from opencompass.configs.datasets.triviaqa.triviaqa_wiki_1shot_gen_eaf81e import \
         triviaqa_datasets  # noqa: F401, E501
-    from .datasets.winogrande.winogrande_5shot_gen_b36770 import \
+    from opencompass.configs.datasets.winogrande.winogrande_5shot_gen_b36770 import \
         winogrande_datasets  # noqa: F401, E501
     # read hf models
-    from .models.baichuan.hf_baichuan2_7b_chat import \
+    from opencompass.configs.models.baichuan.hf_baichuan2_7b_chat import \
         models as hf_baichuan2_chat_7b  # noqa: F401, E501
-    from .models.gemma.hf_gemma_7b_it import \
+    from opencompass.configs.models.gemma.hf_gemma_7b_it import \
         models as hf_gemma_chat_7b  # noqa: F401, E501
-    from .models.hf_internlm.hf_internlm2_chat_7b import \
+    from opencompass.configs.models.hf_internlm.hf_internlm2_chat_7b import \
         models as hf_internlm2_chat_7b  # noqa: F401, E501
-    from .models.hf_internlm.hf_internlm2_chat_20b import \
+    from opencompass.configs.models.hf_internlm.hf_internlm2_chat_20b import \
         models as hf_internlm2_chat_20b  # noqa: F401, E501
-    from .models.hf_internlm.hf_internlm_chat_7b import \
+    from opencompass.configs.models.hf_internlm.hf_internlm_chat_7b import \
         models as hf_internlm_chat_7b  # noqa: F401, E501
-    from .models.hf_internlm.hf_internlm_chat_20b import \
+    from opencompass.configs.models.hf_internlm.hf_internlm_chat_20b import \
         models as hf_internlm_chat_20b  # noqa: F401, E501
-    from .models.hf_llama.hf_llama2_7b_chat import \
+    from opencompass.configs.models.hf_llama.hf_llama2_7b_chat import \
         models as hf_llama2_chat_7b  # noqa: F401, E501
-    from .models.hf_llama.hf_llama3_8b_instruct import \
+    from opencompass.configs.models.hf_llama.hf_llama3_8b_instruct import \
         models as hf_llama_3_8b_instruct  # noqa: F401, E501
-    from .models.mistral.hf_mistral_7b_instruct_v0_1 import \
+    from opencompass.configs.models.mistral.hf_mistral_7b_instruct_v0_1 import \
         models as hf_mistral_chat_7b  # noqa: F401, E501
-    from .models.mistral.hf_mixtral_8x7b_instruct_v0_1 import \
+    from opencompass.configs.models.mistral.hf_mixtral_8x7b_instruct_v0_1 import \
         models as hf_mixtral_chat_8x7b  # noqa: F401, E501
-    from .models.qwen.hf_qwen1_5_7b_chat import \
+    from opencompass.configs.models.qwen.hf_qwen1_5_7b_chat import \
         models as hf_qwen1_5_chat_7b  # noqa: F401, E501
-    from .models.qwen.hf_qwen_7b_chat import \
+    from opencompass.configs.models.qwen.hf_qwen2_7b_instruct import \
+        models as hf_qwen2_7b_instruct  # noqa: F401, E501
+    from opencompass.configs.models.qwen.hf_qwen_7b_chat import \
         models as hf_qwen_chat_7b  # noqa: F401, E501
     # and output the results in a chosen format
-    from .summarizers.medium import summarizer  # noqa: F401, E501
+    from opencompass.configs.summarizers.medium import \
+        summarizer  # noqa: F401, E501
 
 internlm_meta_template = dict(round=[
     dict(role='HUMAN', begin='<|User|>:', end='\n'),

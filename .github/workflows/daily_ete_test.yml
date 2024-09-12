@@ -159,104 +159,104 @@ jobs:
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
         run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
+          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'quantization'))
         run: |
-          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - convert
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'convert'))
         run: |
-          pytest autotest/tools/convert -m 'not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/convert -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - chat workspace
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
         run: |
-          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - chat hf torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'chat'))
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - pipeline turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - pipeline torch
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
-        run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - pipeline turbomind vl
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful turbomind
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - restful turbomind vl
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'restful'))
-        run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful workspace
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
         run: |
-          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - restful turbomind vl
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'restful'))
+        run: |
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - pipeline torch
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
+        run: |
+          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'restful'))
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - local testcase
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
         run: |
-          pytest /local_case/issue_regression ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}|| true
+          pytest /local_case/issue_regression --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}|| true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()
@@ -338,7 +338,7 @@ jobs:
       - name: Test lmdeploy - restful api
         timeout-minutes: 75
         run: |
-          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}}' ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
         if: always()
@@ -359,7 +359,7 @@ jobs:
       - name: Test lmdeploy - restful api - base
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
         if: always()
@@ -428,13 +428,13 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - interface pipeline case
         run: |
-          pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_4 and not pr_test' -n 2 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()
@@ -551,13 +551,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
+      - name: Install pytorch
+        run: |
+          python3 -m pip cache dir
+          python3 -m pip install torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install -e /root/packages/AutoAWQ_kernels
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
