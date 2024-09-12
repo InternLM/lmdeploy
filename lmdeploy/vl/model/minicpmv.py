@@ -42,7 +42,8 @@ class MiniCPMVModel(VisonModel):
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=[
-                    'Idefics2EncoderLayer', 'Resampler', 'SiglipEncoderLayer'],
+                    'Idefics2EncoderLayer', 'Resampler', 'SiglipEncoderLayer'
+                ],
                 dtype=torch.half)
 
         model.resampler.pos_embed = model.resampler.pos_embed.to(
