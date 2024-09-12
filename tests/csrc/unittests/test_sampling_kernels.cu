@@ -506,22 +506,22 @@ TYPED_TEST_SUITE(TopPMinPFilterTest, FloatType);
 
 TYPED_TEST(TopPMinPFilterTest, OnlyTopP)
 {
-    float top_ps[] = {0.0f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f};
+    float top_ps[] = {0.8f, 0.82f, 0.84f, 0.86f, 0.88f, 0.90f, 0.92f, 0.94f, 0.96f, 0.98f, 1.0f};
     float min_ps[] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     this->runTest(sizeof(top_ps) / sizeof(float), top_ps, min_ps, 200);
 };
 
 TYPED_TEST(TopPMinPFilterTest, OnlyMinP)
 {
-    float min_ps[] = {0.0f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f};
-    float top_ps[] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+    float min_ps[] = {0.0f, 0.002f, 0.004f, 0.006f, 0.008f, 0.01f, 0.012f, 0.014f, 0.016f, 0.018f, 0.02f};
+    float top_ps[] = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
     this->runTest(sizeof(top_ps) / sizeof(float), top_ps, min_ps, 200);
 };
 
 TYPED_TEST(TopPMinPFilterTest, MixedTopPMinP)
 {
-    float min_ps[] = {0.0f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f};
-    float top_ps[] = {1.f, 0.9f, 0.8f, 0.7f, 0.6f, 0.5f, 0.4f, 0.3f, 0.2f, 0.1f, 0.f};
+    float min_ps[] = {0.0f, 0.002f, 0.004f, 0.006f, 0.008f, 0.01f, 0.012f, 0.014f, 0.016f, 0.018f, 0.02f};
+    float top_ps[] = {0.8f, 0.82f, 0.84f, 0.86f, 0.88f, 0.90f, 0.92f, 0.94f, 0.96f, 0.98f, 1.0f};
     this->runTest(sizeof(top_ps) / sizeof(float), top_ps, min_ps, 200);
 };
 
