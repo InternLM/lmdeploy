@@ -402,6 +402,8 @@ class QWenLMHeadModel(nn.Module):
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
+            if 'visual' in name:
+                continue
             if 'rotary_pos_emb.inv_freq' in name:
                 continue
             if ('rotary_pos_emb.cos_cached' in name

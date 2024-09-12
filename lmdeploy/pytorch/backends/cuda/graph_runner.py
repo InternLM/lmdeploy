@@ -95,10 +95,14 @@ class CUDASingleGraphRunner:
         context.kv_seqlens = self.input_buffers['kv_seqlens']
         context.q_start_loc = self.input_buffers['q_start_loc']
 
-    def _fill_inputs(self, input_ids: torch.Tensor, position_ids: torch.Tensor,
-                     past_key_values: List, attn_metadata: Any,
+    def _fill_inputs(self,
+                     input_ids: torch.Tensor,
+                     position_ids: torch.Tensor,
+                     past_key_values: List,
+                     attn_metadata: Any,
                      inputs_embeds: torch.Tensor,
-                     mrope_position_ids: torch.Tensor, **kwargs):
+                     mrope_position_ids: torch.Tensor = None,
+                     **kwargs):
         """fill input."""
         is_decoding = self.is_decoding
         block_offsets = attn_metadata.block_offsets

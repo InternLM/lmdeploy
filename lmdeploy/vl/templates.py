@@ -263,7 +263,8 @@ class Qwen2VLChatTemplateWrapper(VLChatTemplateWrapper):
                     torch.arange(text_len).expand(3, -1) + st_idx)
                 st_idx += text_len
             mrope_position_ids = torch.cat(mrope_position_ids, dim=-1)
-            mrope_position_delta = st_idx - seq_len
+            mrope_position_delta = torch.tensor([st_idx - seq_len],
+                                                dtype=torch.long)
 
         return mrope_position_ids, mrope_position_delta
 
