@@ -9,7 +9,6 @@ tp_config:
     internlm2-chat-20b: 2
     Baichuan2-13B-Chat: 2
     Mixtral-8x7B-Instruct-v0.1: 2
-    internlm2-20b: 2
     Qwen-VL-Chat: 2
     llava-v1.5-13b: 2
     internlm2_5-20b-chat: 2
