@@ -131,6 +131,7 @@ jobs:
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
+          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
       - name: Setup paths for evaluation

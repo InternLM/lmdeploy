@@ -128,6 +128,7 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           mkdir ${{env.REPORT_DIR}}/allure-results/.pytest_cache -p

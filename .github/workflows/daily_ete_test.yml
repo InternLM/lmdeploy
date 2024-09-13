@@ -147,6 +147,7 @@ jobs:
           pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
       - name: Check env
         run: |
+          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           cp -r /root/lora .
@@ -318,6 +319,7 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -421,6 +423,7 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -493,6 +496,7 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
@@ -574,6 +578,7 @@ jobs:
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
+          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
