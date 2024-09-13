@@ -119,12 +119,12 @@ jobs:
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
-          python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |

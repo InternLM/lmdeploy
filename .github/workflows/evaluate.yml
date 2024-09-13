@@ -121,7 +121,7 @@ jobs:
           python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |
