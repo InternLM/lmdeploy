@@ -106,7 +106,7 @@ RUN echo "source /usr/local/Ascend/ascend-toolkit/set_env.sh" >> ~/.bashrc && \
 # timm is required for internvl2 model
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install transformers>=4.41.0 timm && \
-    pip3 install dlinfer-ascend==0.1.0
+    pip3 install dlinfer-ascend==0.1.0.post1
 
 # lmdeploy
 FROM build_temp as copy_temp
