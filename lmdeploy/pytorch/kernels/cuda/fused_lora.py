@@ -11,7 +11,15 @@ def get_autotune_config():
             {
                 'BLOCK_SIZE_M': 64,
                 'BLOCK_SIZE_N': 256,
-                'BLOCK_SIZE_K': 32
+                'BLOCK_SIZE_K': 128
+            },
+            num_stages=4,
+            num_warps=4),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 16,
+                'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_K': 128
             },
             num_stages=4,
             num_warps=4),
@@ -148,11 +156,11 @@ def fused_lora(input: torch.Tensor, lora_a: torch.Tensor, lora_b: torch.Tensor,
     assert input.dim() == 2
     batch_size = seq_lens.numel()
     M, K = input.shape
-    BLOCK_SIZE_R = max(16, max_rank)
     N = lora_b.size(1)
 
     output = torch.empty((M, N), dtype=input.dtype, device=input.device)
 
+    BLOCK_SIZE_R = max(16, max_rank)
     _fused_lora_kernel[grid](
         input,
         lora_a,

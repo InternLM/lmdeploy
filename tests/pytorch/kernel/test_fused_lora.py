@@ -19,8 +19,8 @@ class TestFusedLoRA:
         yield 16
 
     @pytest.fixture
-    def seq_lens(self):
-        yield torch.tensor([2, 4, 6, 8]).cuda()
+    def seq_lens(self, request):
+        yield torch.tensor(request.param).cuda()
 
     @pytest.fixture
     def ranks(self):
@@ -84,6 +84,11 @@ class TestFusedLoRA:
 
         yield torch.cat(out)
 
+    @pytest.mark.parametrize('seq_lens', [
+        (2, 4, 6, 8),
+        (1, 1, 1, 1),
+    ],
+                             indirect=True)
     def test_fused_lora(self, input, fused_lora_a, fused_lora_b, start_loc,
                         seq_lens, adapter_ids, scaling, ranks, gt):
         max_seq_len = max(seq_lens).item()
