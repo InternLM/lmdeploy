@@ -50,17 +50,18 @@ class TritonLoRAImpl(LoRAImpl):
         """forward."""
         lora_input = self._make_packed_lora_input(x, ctx_mgr)
 
-        lora_out = fused_lora(lora_input.x,
-        lora_A,
-        lora_B,
-        scaling=adapter_info.scalings,
-        rank_start=adapter_info.rank_offsets,
-        ranks=adapter_info.ranks,
-        seq_start=lora_input.q_start_loc,
-        seq_lens=lora_input.q_seqlens,
-        adapter_ids=lora_input.adapter_ids,
-        max_rank=adapter_info.max_rank,
-        max_seqlen=lora_input.max_seq_len,
+        lora_out = fused_lora(
+            lora_input.x,
+            lora_A,
+            lora_B,
+            scaling=adapter_info.scalings,
+            rank_start=adapter_info.rank_offsets,
+            ranks=adapter_info.ranks,
+            seq_start=lora_input.q_start_loc,
+            seq_lens=lora_input.q_seqlens,
+            adapter_ids=lora_input.adapter_ids,
+            max_rank=adapter_info.max_rank,
+            max_seqlen=lora_input.max_seq_len,
         )
 
         base_slice = adapter_info.base_slice

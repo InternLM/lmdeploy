@@ -86,7 +86,8 @@ class LoRA(nn.Module):
                  base_slice: slice,
                  ctx_mgr: Any = None,
                  colwise: bool = True,
-                 is_tp: bool = True):
+                 is_tp: bool = True,
+                 lora_b_spliter: Any = None):
         super().__init__()
         self.adapter_info = AdapterInfo(
             in_features=in_features,
@@ -107,6 +108,7 @@ class LoRA(nn.Module):
         self.is_tp = is_tp
         self.ctx_mgr = ctx_mgr
         self.colwise = colwise
+        self.lora_b_spliter = lora_b_spliter
 
     def forward(self, x, base_output=None):
         """forward of loraA@loraB."""
@@ -141,12 +143,19 @@ class LoRA(nn.Module):
         r_end = r_start + rank
         param_r = param.data[r_start:r_end]
 
-        loaded_weight = loaded_weight.t()
         if self.is_tp and self.colwise:
             world_size, rank = get_world_rank()
-            loaded_weight = loaded_weight.chunk(world_size, dim=1)[rank]
+            if self.lora_b_spliter is not None:
+                loaded_weights = self.lora_b_spliter(loaded_weight)
+                new_weights = []
+                for w in loaded_weights:
+                    w = w.chunk(world_size, dim=0)[rank]
+                    new_weights.append(w)
+                loaded_weight = torch.cat(new_weights, dim=0)
+            else:
+                loaded_weight = loaded_weight.chunk(world_size, dim=0)[rank]
 
-        param_r.copy_(loaded_weight)
+        param_r.copy_(loaded_weight.t())
 
 
 class AwqLinear(nn.Module):
@@ -1029,6 +1038,9 @@ class MergedBaseLinear(BaseLinear):
         """weight spliter."""
         return loaded_weight.split(self.split_section, dim=0)
 
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
+        return loaded_weight.split(self.split_section, dim=0)
+
 
 class QKVBaseLinear(MergedBaseLinear, QKVMixin):
     """qkv base linear."""
@@ -1105,6 +1117,9 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
             return q, k, v
         else:
             raise RuntimeError(f'Unsupported layout: {layout}')
+
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
+        return loaded_weight.split(self.qkv_split_section, dim=0)
 
 
 def build_linear(in_features: int,

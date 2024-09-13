@@ -417,8 +417,8 @@ class BaichuanForCausalLM(nn.Module):
                 break
             else:
                 if '.W_pack' in name:
-                    q, k, v = loaded_weight.chunk(3, 0)
                     param = params_dict[name]
+                    q, k, v = param.weight_spliter(loaded_weight)
                     load_weight(param, q, shard_id='q')
                     load_weight(param, k, shard_id='k')
                     load_weight(param, v, shard_id='v')

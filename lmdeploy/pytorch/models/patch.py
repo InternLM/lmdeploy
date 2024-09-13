@@ -263,10 +263,12 @@ def add_adapters(model: torch.nn.Module,
             if pack_idx is None:
                 base_slice = slice(0, mod.out_features)
                 out_features = mod.out_features
+                lora_b_spliter = getattr(mod, 'weight_spliter_lora_b', None)
             else:
                 prev_feats = sum(mod.all_out_features[:pack_idx])
                 out_features = mod.all_out_features[pack_idx]
                 base_slice = slice(prev_feats, prev_feats + out_features)
+                lora_b_spliter = None
             lora_a = torch.empty((sum_rank, in_features),
                                  dtype=dtype,
                                  device=device)
@@ -285,6 +287,7 @@ def add_adapters(model: torch.nn.Module,
                 ctx_mgr=ctx_mgr,
                 colwise=colwise,
                 is_tp=mod.is_tp,
+                lora_b_spliter=lora_b_spliter,
             )
             mod.lora_adapters[target_name] = lora
 

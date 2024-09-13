@@ -1,6 +1,5 @@
 import pytest
 import torch
-from torch.nn.utils.rnn import pad_sequence
 
 from lmdeploy.pytorch.kernels.cuda.fused_lora import fused_lora
 
@@ -85,16 +84,16 @@ class TestFusedLoRA:
 
         yield torch.cat(out)
 
-    def test_fused_lora(self, input, fused_lora_a, fused_lora_b,
-                   start_loc, seq_lens, adapter_ids, scaling,
-                   ranks, gt):
+    def test_fused_lora(self, input, fused_lora_a, fused_lora_b, start_loc,
+                        seq_lens, adapter_ids, scaling, ranks, gt):
         max_seq_len = max(seq_lens).item()
         max_rank = max(ranks).item()
         rank_offset = ranks.cumsum(0) - ranks
 
-
         output = fused_lora(
-            input, fused_lora_a, fused_lora_b,
+            input,
+            fused_lora_a,
+            fused_lora_b,
             scaling=scaling,
             rank_start=rank_offset,
             ranks=ranks,
