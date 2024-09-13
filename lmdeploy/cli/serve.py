@@ -221,6 +221,7 @@ class SubCliServe:
                 session_len=args.session_len,
                 enable_prefix_caching=args.enable_prefix_caching,
                 device_type=args.device,
+                quant_policy=args.quant_policy,
                 max_prefill_token_num=args.max_prefill_token_num)
         else:
             backend_config = TurbomindEngineConfig(
@@ -267,6 +268,7 @@ class SubCliServe:
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
                 device_type=args.device,
+                quant_policy=args.quant_policy,
                 max_prefill_token_num=args.max_prefill_token_num)
         else:
             from lmdeploy.messages import TurbomindEngineConfig

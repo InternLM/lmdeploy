@@ -491,7 +491,7 @@ def _fwd_grouped_split_quant_kernel(
             if quant_policy == 4:
                 k1 = _unpack_kv_int4_transposed(k1)
                 k1 = tl.view(k1, (k1.shape[0] * k1.shape[1], k1.shape[2]))
-            k1 = (k1 - kz) * ks
+            k1 = ((k1 - kz) * ks).to(q.dtype)
 
         if shared_kv:
             v = tl.trans(k)
@@ -976,7 +976,7 @@ def _fwd_kernel_quant(
             if quant_policy == 4:
                 k1 = _unpack_kv_int4_transposed(k1)
                 k1 = tl.view(k1, (k1.shape[0] * k1.shape[1], k1.shape[2]))
-            k1 = (k1 - kz) * ks
+            k1 = ((k1 - kz) * ks).to(q.dtype)
 
         if shared_kv:
             v = tl.trans(k)
