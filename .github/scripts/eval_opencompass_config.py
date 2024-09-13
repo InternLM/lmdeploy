@@ -121,7 +121,7 @@ qwen1_5_meta_template = dict(
              end='<|im_end|>\n',
              generate=True),
     ],
-    eos_token_id=151645,
+    eos_token_id=[151645, 151643],
 )
 
 baichuan2_meta_template = dict(round=[
@@ -206,7 +206,7 @@ gen_config_template = dict(top_k=1,
 qwen_gen_config_template = dict(top_k=1,
                                 top_p=0.8,
                                 temperature=1.0,
-                                stop_words=[151645],
+                                stop_words=[151645, 151643],
                                 max_new_tokens=MAX_NEW_TOKENS)
 
 tokenizer_kwargs_template = dict(padding_side='left',
@@ -549,6 +549,19 @@ tb_qwen2_7b_instruct = dict(
     batch_size=128,
     run_cfg=dict(num_gpus=1),
 )
+
+pt_qwen2_7b_instruct = dict(type=LmdeployPytorchModel,
+                            abbr='pt_qwen2_7b_instruct',
+                            path='Qwen/Qwen2-7B-Instruct',
+                            engine_config=pt_engine_config_template_max_bs_128,
+                            gen_config=gen_config_template,
+                            max_out_len=MAX_NEW_TOKENS,
+                            max_seq_len=MAX_SESSION_LEN,
+                            batch_size=128,
+                            concurrency=128,
+                            meta_template=qwen1_5_meta_template,
+                            run_cfg=run_cfg_tp1_template,
+                            end_str='<|im_end|>')
 
 tb_qwen2_7b_instruct_4bits = deepcopy(tb_qwen2_7b_instruct)
 tb_qwen2_7b_instruct_kvint4 = deepcopy(tb_qwen2_7b_instruct)

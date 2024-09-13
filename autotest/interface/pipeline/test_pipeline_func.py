@@ -1022,7 +1022,19 @@ def test_backend_config_validate_pytorch(config, model, backend, worker_id):
         pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(AssertionError):
+        backend_config = backend(max_batch_size=0)
+        pipeline(model_path, backend_config=backend_config)
+
+    with pytest.raises(AssertionError):
         backend_config = backend(cache_max_entry_count=0)
+        pipeline(model_path, backend_config=backend_config)
+
+    with pytest.raises(AssertionError):
+        backend_config = backend(num_cpu_blocks=-1)
+        pipeline(model_path, backend_config=backend_config)
+
+    with pytest.raises(AssertionError):
+        backend_config = backend(num_gpu_blocks=-1)
         pipeline(model_path, backend_config=backend_config)
 
     if 'gw' in worker_id:
