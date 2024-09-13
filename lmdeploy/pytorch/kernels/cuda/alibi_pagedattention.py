@@ -497,7 +497,7 @@ def _fwd_split_kernel_quant(
         )
         if quant_policy == 4:
             k = _unpack_kv_int4(k)
-            k = tl.reshape(k, (k.shape[0], k.shape[1] * k.shape[2]))
+            k = tl.view(k, (k.shape[0], k.shape[1] * k.shape[2]))
         ks = tl.load(
             ksz_ptrs + b_offset[:, None] * stride_kszbs,
             mask=mask,
@@ -516,7 +516,7 @@ def _fwd_split_kernel_quant(
         )
         if quant_policy == 4:
             v = _unpack_kv_int4(v)
-            v = tl.reshape(v, (v.shape[0], v.shape[1] * v.shape[2]))
+            v = tl.view(v, (v.shape[0], v.shape[1] * v.shape[2]))
         vs = tl.load(
             vsz_ptrs + b_offset[:, None] * stride_vszbs,
             mask=mask,
@@ -684,7 +684,7 @@ def _fwd_kernel_quant(
         )
         if quant_policy == 4:
             k = _unpack_kv_int4_transposed(k)
-            k = tl.reshape(k, (k.shape[0] * k.shape[1], k.shape[2]))
+            k = tl.view(k, (k.shape[0] * k.shape[1], k.shape[2]))
         ks = tl.load(
             ksz_ptrs + b_offset[None, :] * stride_kszbs,
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
@@ -703,7 +703,7 @@ def _fwd_kernel_quant(
         )
         if quant_policy == 4:
             v = _unpack_kv_int4(v)
-            v = tl.reshape(v, (v.shape[0], v.shape[1] * v.shape[2]))
+            v = tl.view(v, (v.shape[0], v.shape[1] * v.shape[2]))
         vs = tl.load(
             vsz_ptrs + b_offset[:, None] * stride_vszbs,
             mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
