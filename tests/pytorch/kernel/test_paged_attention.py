@@ -2,6 +2,8 @@ import math
 
 import pytest
 import torch
+import triton
+from packaging import version
 
 
 def _conti_input(data, seq_lens):
@@ -451,6 +453,9 @@ class TestPagedAttentionInt8(TestPagedAttention):
             torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
 
 
+@pytest.mark.skipif(
+    reason='int4 only support triton greater than 2.3.0',
+    condition=version.parse(triton.__version__) < version.parse('2.3.0'))
 class TestPagedAttentionInt4(TestPagedAttentionInt8):
 
     @pytest.fixture

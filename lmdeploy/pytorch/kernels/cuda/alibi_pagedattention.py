@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .pagedattention import _unpack_kv_int4
+from .pagedattention import _unpack_kv_int4, _unpack_kv_int4_transposed
 from .triton_utils import get_kernel_meta, wrap_jit_func
 
 assert triton.__version__ >= '2.1.0'
@@ -683,10 +683,8 @@ def _fwd_kernel_quant(
             other=0.0,
         )
         if quant_policy == 4:
-            k = tl.trans(k)
-            k = _unpack_kv_int4(k)
-            k = tl.reshape(k, (k.shape[0], k.shape[1] * k.shape[2]))
-            k = tl.trans(k)
+            k = _unpack_kv_int4_transposed(k)
+            k = tl.reshape(k, (k.shape[0] * k.shape[1], k.shape[2]))
         ks = tl.load(
             ksz_ptrs + b_offset[None, :] * stride_kszbs,
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,

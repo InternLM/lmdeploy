@@ -252,6 +252,7 @@ def _fwd_grouped_split_kernel(
 
 @triton.jit
 def _unpack_kv_int4(k):
+    """k with shape [head_num, head_dim]"""
     k1 = k - (k >> 4) * 16
     k2 = k >> 4
     k = tl.zeros((k.shape[0], 2, k.shape[1]), dtype=tl.uint8)
@@ -261,6 +262,21 @@ def _unpack_kv_int4(k):
     k2 = tl.broadcast_to(k2, k.shape)
     k = tl.where(tl.arange(0, 2)[None, :, None] == 1, k, k1)
     k = tl.where(tl.arange(0, 2)[None, :, None] == 0, k, k2)
+    return k
+
+
+@triton.jit
+def _unpack_kv_int4_transposed(k):
+    """k with shape [head_dim, head_num]"""
+    k1 = k - (k >> 4) * 16
+    k2 = k >> 4
+    k = tl.zeros((2, k.shape[0], k.shape[1]), dtype=tl.uint8)
+    k1 = tl.expand_dims(k1, 0)
+    k2 = tl.expand_dims(k2, 0)
+    k1 = tl.broadcast_to(k1, k.shape)
+    k2 = tl.broadcast_to(k2, k.shape)
+    k = tl.where(tl.arange(0, 2)[:, None, None] == 1, k, k1)
+    k = tl.where(tl.arange(0, 2)[:, None, None] == 0, k, k2)
     return k
 
 
@@ -466,19 +482,15 @@ def _fwd_grouped_split_quant_kernel(
         # k = tl.load(k_ptrs + b_offset * stride_kp)
         k = tl.load(K + off_k + b_offset * stride_kp)
         if quant_policy == 4:
-            k = tl.trans(k)
-            k = _unpack_kv_int4(k)
-            k = tl.reshape(k, (k.shape[0], k.shape[1] * k.shape[2]))
-            k = tl.trans(k)
+            k = _unpack_kv_int4_transposed(k)
+            k = tl.reshape(k, (k.shape[0] * k.shape[1], k.shape[2]))
         ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
         kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
         if BLOCK_DMODEL1 != 0:
             k1 = tl.load(K + off_k1 + b_offset * stride_kp)
             if quant_policy == 4:
-                k1 = tl.trans(k1)
-                k1 = _unpack_kv_int4(k1)
-                k1 = tl.reshape(k1, (k1.shape[0], k1.shape[1] * k1.shape[2]))
-                k1 = tl.trans(k1)
+                k1 = _unpack_kv_int4_transposed(k1)
+                k1 = tl.reshape(k1, (k1.shape[0] * k1.shape[1], k1.shape[2]))
             k1 = (k1 - kz) * ks
 
         if shared_kv:
@@ -955,19 +967,15 @@ def _fwd_kernel_quant(
         # -- compute qk ----
         k = tl.load(K + off_k + b_offset * stride_kp)
         if quant_policy == 4:
-            k = tl.trans(k)
-            k = _unpack_kv_int4(k)
-            k = tl.reshape(k, (k.shape[0], k.shape[1] * k.shape[2]))
-            k = tl.trans(k)
+            k = _unpack_kv_int4_transposed(k)
+            k = tl.reshape(k, (k.shape[0] * k.shape[1], k.shape[2]))
         ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
         kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
         if BLOCK_DMODEL1 != 0:
             k1 = tl.load(K + off_k1 + b_offset * stride_kp)
             if quant_policy == 4:
-                k1 = tl.trans(k1)
-                k1 = _unpack_kv_int4(k1)
-                k1 = tl.reshape(k1, (k1.shape[0], k1.shape[1] * k1.shape[2]))
-                k1 = tl.trans(k1)
+                k1 = _unpack_kv_int4_transposed(k1)
+                k1 = tl.reshape(k1, (k1.shape[0] * k1.shape[1], k1.shape[2]))
             k1 = (k1 - kz) * ks
 
         if shared_kv:
