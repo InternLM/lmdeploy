@@ -13,22 +13,21 @@ from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
 from lmdeploy.utils import (get_logger, get_max_batch_size, get_model,
                             logging_timer)
 
-from ..adapter.adapter import AdapterManager, SchedulerAdapter
+from ..adapter.adapter import AdapterManager
 from ..check_env import check_adapters, check_env, check_model
 from ..config import BackendConfig, CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
 from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
-from ..model_inputs import AdapterInfo, ModelInputs, VisionModelInputs
+from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
-from .model_agent import AutoModelAgent, build_model_agent
+from .model_agent import build_model_agent
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
 
 SeqList = List[SchedulerSequence]
-AdapterList = List[SchedulerAdapter]
 
 _EMPTY_TOKEN = np.empty((0, ), dtype=np.int64)
 
@@ -61,33 +60,12 @@ class InferOutput:
     logits: torch.Tensor = None
 
 
-def _paging_adapters(adapters: dict, model_agent: AutoModelAgent,
-                     scheduler: Scheduler):
-    adapters = adapters or dict()
-    weight_maps = []
-    adapter_manager = scheduler.adapter_manager
-    non_adapter = adapter_manager.get_adapter(None)
-    weight_maps.append(non_adapter.build_weight_map())
-    for name in adapters:
-        weight_map = scheduler.add_adapter(name)
-        weight_map.rank_offset = torch.tensor(weight_map.rank_offset)
-        weight_maps.append(weight_map)
-    model_agent.paging_adapters(weight_maps)
-
-
 def _tensorlize_block_offsets(block_offsets):
     """tensorlize block_offsets."""
     from torch.nn.utils.rnn import pad_sequence
     block_offsets = [torch.from_numpy(off) for off in block_offsets]
     block_offsets = pad_sequence(block_offsets, batch_first=True)
     return block_offsets
-
-
-def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
-    """get adapter ids."""
-    adapter_names_map = dict((ada.name, ada.adapter_id) for ada in adapters)
-    adapter_ids = [adapter_names_map[seq.adapter_name] for seq in seqs]
-    return adapter_ids
 
 
 def _check_finish(scheduler: Scheduler, current_iter: int):
@@ -127,8 +105,9 @@ class Engine:
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(
                 engine_config.device_type)
-        if engine_config.adapters is not None:
-            check_adapters(list(engine_config.adapters.values()))
+        adapters = engine_config.adapters
+        if adapters is not None:
+            check_adapters(list(adapters.values()))
 
         self.engine_config = engine_config
         self.tp = engine_config.tp
@@ -142,7 +121,6 @@ class Engine:
             prefill_interval=engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
-        adapters = engine_config.adapters
         cache_config = CacheConfig(
             max_batches=engine_config.max_batch_size,
             block_size=engine_config.block_size,
@@ -175,13 +153,7 @@ class Engine:
 
         cache_config = self.model_agent.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
-        self.scheduler = Scheduler(scheduler_config, cache_config,
-                                   self.adapter_manager)
-
-        if adapters:
-            _paging_adapters(adapters,
-                             model_agent=self.model_agent,
-                             scheduler=self.scheduler)
+        self.scheduler = Scheduler(scheduler_config, cache_config)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -238,12 +210,7 @@ class Engine:
         self._seq_length_buf = torch.ones(max_batches, dtype=torch.long)
 
     def _build_adapter_manager(self, adapters):
-        if adapters is not None and len(adapters) > 0:
-            linear_infos = self.model_agent.get_lora_target_info()
-        else:
-            linear_infos = dict()
-        block_numel = self.model_agent.get_block_numel()
-        return AdapterManager(adapters, linear_infos, block_numel)
+        return AdapterManager(adapters)
 
     def _bind_request_manager(self):
         """bind request manager."""
@@ -380,13 +347,11 @@ class Engine:
         return self.tp
 
     @logging_timer('CreateModelInputs', logger)
-    def create_model_inputs(self, messages: SeqList, adapters: AdapterList,
-                            is_prefill: bool):
+    def create_model_inputs(self, messages: SeqList, is_prefill: bool):
         """create model inputs from messages.
 
         Args:
             messages (SeqList): The input messages.
-            adapters (AdapterList): Adapters.
         """
         history_lengths = [msg.history_len for msg in messages]
         history_lengths = torch.tensor(history_lengths)
@@ -412,11 +377,11 @@ class Engine:
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
         local_adapter_ids = None
-        adapter_info = None
         if self.adapter_manager.num_adapters() > 1:
-            local_adapter_ids = _get_adapter_ids(messages, adapters)
+            adapter_names = [msg.adapter_name for msg in messages]
+            local_adapter_ids = self.adapter_manager.get_adapter_ids(
+                adapter_names)
             local_adapter_ids = seq_length.new_tensor(local_adapter_ids)
-            adapter_info = AdapterInfo.from_adapters(adapters)
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
@@ -491,7 +456,6 @@ class Engine:
             is_decoding=is_decoding,
             num_ignored_history=num_ignored_history,
             local_adapter_ids=local_adapter_ids,
-            adapter_info=adapter_info,
             vision_inputs=vision_embedding_inputs,
         )
 
@@ -831,14 +795,12 @@ class Engine:
                 schedule_output = self.scheduler.schedule(
                     is_prefill=is_prefill, prealloc_size=prefill_interval)
                 running: SeqList = schedule_output.running
-                adapters = schedule_output.adapters
                 loop_count = 1 if is_prefill else (prefill_interval - 1)
                 if len(running) == 0:
                     raise NoRunningSeqs()
 
                 # create inputs
-                inputs = self.create_model_inputs(running, adapters,
-                                                  is_prefill)
+                inputs = self.create_model_inputs(running, is_prefill)
                 sampling_inputs = SamplingInputs.from_sampling_params(running)
                 all_ids = __gather_all_ids(running, sampling_inputs)
                 guided_input_ids = __gather_guided_input_ids(

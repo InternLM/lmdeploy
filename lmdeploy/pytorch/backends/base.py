@@ -20,7 +20,7 @@ class OpType(Enum):
     GeluAndMul = auto()
     RMSNorm = auto()
     LayerNorm = auto()
-    SLoRA = auto()
+    LoRA = auto()
     LinearW8A8 = auto()
     RMSNormW8A8 = auto()
     MultinomialSampling = auto()

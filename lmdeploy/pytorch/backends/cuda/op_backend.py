@@ -32,9 +32,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.RMSNorm:
             from .norm import TritonRMSNormBuilder
             return TritonRMSNormBuilder
-        elif layer_type == OpType.SLoRA:
-            from .slora import TritonSLoRABuilder
-            return TritonSLoRABuilder
+        elif layer_type == OpType.LoRA:
+            from .lora import TritonLoRABuilder
+            return TritonLoRABuilder
         elif layer_type == OpType.LinearW8A8:
             from .qmodules import TritonLinearW8A8Builder
             return TritonLinearW8A8Builder
