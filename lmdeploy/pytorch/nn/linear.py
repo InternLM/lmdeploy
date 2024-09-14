@@ -558,6 +558,9 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
         else:
             raise RuntimeError(f'Unsupported layout: {layout}')
 
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
+        return loaded_weight.split(self.qkv_split_section_s, dim=0)
+
 
 class W8A8Linear(nn.Module):
     """w8a8 linear."""
@@ -770,6 +773,9 @@ class MergedW8A8Linear(W8A8Linear):
         """weight spliter."""
         return loaded_weight.split(self.split_section, dim=0)
 
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
+        return loaded_weight.split(self.split_section, dim=0)
+
 
 class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
     """qkv w8a8 linear."""
@@ -831,6 +837,9 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
             return q, k, v
         else:
             raise RuntimeError(f'Unsupported layout: {layout}')
+
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
+        return loaded_weight.split(self.qkv_split_section, dim=0)
 
 
 class BaseLinear(nn.Module):
