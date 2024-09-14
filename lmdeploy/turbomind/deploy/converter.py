@@ -130,9 +130,11 @@ def get_output_model_registered_name_and_config(model_path: str,
             'float16', 'bfloat16', 'int4'
         ] else 'float16'
     elif dtype in ['float16', 'bfloat16']:
-        assert weight_type != 'int4', f'the model {model_path} is a 4bit ' \
-            f'weight quantized model but user specifies dtype {dtype}'
-        weight_type = dtype
+        if weight_type == 'int4':
+            logger.warn(f'The model {model_path} is a quantized model, so the '
+                        f'specified data type {dtype} is ignored')
+        else:
+            weight_type = dtype
     else:
         assert 0, 'unsupported specified data type {dtype}'
 
@@ -281,6 +283,7 @@ def get_tm_model(model_path,
 def main(model_name: str,
          model_path: str,
          model_format: str = 'hf',
+         dtype: str = 'auto',
          chat_template: str = None,
          tokenizer_path: str = None,
          dst_path: str = 'workspace',
@@ -299,6 +302,10 @@ def main(model_name: str,
             llama format, 'hf' means huggingface model, and 'awq', `gptq`
             means models quantized by `autoawq` and `autogptq` respectively.
             The default value is hf
+        dtype (str): data type for model weights and activations. It can be
+            one of the following values, ['auto', 'float16', 'bfloat16']
+            The `auto` option will use FP16 precision for FP32 and FP16
+            models, and BF16 precision for BF16 models.
         chat_template (str): the name of the built-in chat template.
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
@@ -345,7 +352,9 @@ def main(model_name: str,
 
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
-    engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format)
+    engine_config = TurbomindEngineConfig(tp=tp,
+                                          model_format=model_format,
+                                          dtype=dtype)
     tm_model = get_tm_model(model_path, model_name, chat_template,
                             engine_config, group_size, tm_weight_path)
     tm_model.export()
