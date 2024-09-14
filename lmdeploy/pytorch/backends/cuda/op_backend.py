@@ -44,6 +44,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.MultinomialSampling:
             from .multinomial_sampling import TritonMultinomialSamplingBuilder
             return TritonMultinomialSamplingBuilder
+        elif layer_type == OpType.SiluAndMul:
+            from .activation import TritonSiluAndMulBuilder
+            return TritonSiluAndMulBuilder
         elif layer_type == OpType.LinearW4A16:
             from awq.modules.linear.gemm import AWQ_INSTALLED
             if AWQ_INSTALLED:
