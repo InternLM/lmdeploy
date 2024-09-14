@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
+from .activation import silu_and_mul
 from .triton_utils import get_kernel_meta, wrap_jit_func
 
 
@@ -351,8 +352,14 @@ def fused_moe(hidden_states: torch.Tensor,
     )
 
     # activate
-    gate_cache, up_cache = intermediate_cache1.chunk(2, -1)
-    gate_cache = F.silu(gate_cache, inplace=True) * up_cache
+    if intermediate_cache1.size(-1) % 2048 == 0:
+        unflat_size = intermediate_cache1.shape[:-2]
+        intermediate_cache1 = intermediate_cache1.flatten(0, -2)
+        gate_cache = silu_and_mul(intermediate_cache1)
+        gate_cache = gate_cache.unflatten(0, unflat_size)
+    else:
+        gate_cache, up_cache = intermediate_cache1.chunk(2, -1)
+        gate_cache = F.silu(gate_cache, inplace=True) * up_cache
 
     if full_exp:
         intermediate_cache2 = hidden_states.new_empty((M, topk, w2.shape[1]))

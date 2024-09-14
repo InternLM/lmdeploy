@@ -15,7 +15,7 @@ class TestSiluAndMul:
     @pytest.fixture
     def x(self, seqlen, feat_size):
         yield torch.rand(seqlen, feat_size, dtype=torch.float16, device='cuda')
-    
+
     @pytest.fixture
     def gt(self, x):
         gate, up = x.chunk(2, -1)
