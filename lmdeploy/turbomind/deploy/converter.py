@@ -85,7 +85,7 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
 
 
 def get_output_model_registered_name_and_config(model_path: str,
-                                                model_format: str,
+                                                model_format: str, dtype: str,
                                                 group_size: int):
     """Get the registered name of the turbomind model and its configuration
     according to the input model path, format and user-input config. The name
@@ -95,11 +95,12 @@ def get_output_model_registered_name_and_config(model_path: str,
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
             ['meta_llama',  'hf', 'awq', 'gptq']
+        dtype (str): the data type of the model's weights and activations
         group_size (int): the size of group used by awq model
     """
     register_name = 'tm'
     turbomind_model_arch = 'llama'
-    weight_type = 'fp16'
+    weight_type = 'float16'
 
     config = TurbomindModelConfig.from_dict()
 
@@ -114,16 +115,26 @@ def get_output_model_registered_name_and_config(model_path: str,
             group_size = 128 if group_size == 0 else group_size
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
-            TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16', torch.float16: 'fp16'}
-            weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'fp16')
+            TORCH_DTYPE_MAP = {
+                torch.bfloat16: 'bfloat16',
+                torch.float16: 'float16'
+            }
+            weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'float16')
 
             # Qwen-1 didn't set torch_dtype. It used bf16 as default
             if model_arch == 'QWenLMHeadModel':
-                weight_type = 'bf16'
-            if not torch.cuda.is_bf16_supported():
-                print(
-                    'Device does not support bfloat16. Set float16 forcefully')
-                weight_type = 'fp16'
+                weight_type = 'bfloat16'
+
+    if dtype == 'auto':
+        weight_type = weight_type if weight_type in [
+            'float16', 'bfloat16', 'int4'
+        ] else 'float16'
+    elif dtype in ['float16', 'bfloat16']:
+        assert weight_type != 'int4', f'the model {model_path} is a 4bit ' \
+            f'weight quantized model but user specifies dtype {dtype}'
+        weight_type = dtype
+    else:
+        assert 0, 'unsupported specified data type {dtype}'
 
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type
@@ -251,6 +262,7 @@ def get_tm_model(model_path,
         get_output_model_registered_name_and_config(
             model_path=model_path,
             model_format=engine_config.model_format,
+            dtype=engine_config.dtype,
             group_size=group_size)
 
     tm_cfg.model_config.chat_template = chat_template_name

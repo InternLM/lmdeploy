@@ -117,30 +117,58 @@ class TurbomindEngineConfig:
     """TurboMind Engine config.
 
     Args:
-        model_format (str): the layout of the deployed model. It can be one of the following values [hf, meta_llama, awq, gptq],
-            `hf` meaning huggingface model(.bin, .safetensors), `meta_llama` being meta llama's format(.pth),
-            `awq` and `gptq` meaning the quantized model by AWQ and GPTQ, respectively.
-            If it is not specified, i.e. None, it will be extracted from the input model
-        tp (int): the number of GPU cards used in tensor parallelism, default to 1
-        session_len (int): the max session length of a sequence, default to None
-        max_batch_size (int): the max batch size during inference. If it is not specified,
-            the engine will automatically set it according to the device
-        cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
-            For versions of lmdeploy between `v0.2.0` and `v0.2.1`, it defaults to 0.5, depicting the percentage of TOTAL GPU memory to be allocated to the k/v cache.
-            For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8, signifying the percentage of FREE GPU memory to be reserved for the k/v cache
-        cache_chunk_size (int): The policy to apply for KV block from the block manager, default to -1.
-        cache_block_seq_len (int): the length of the token sequence in a k/v block, default to 64
-        enable_prefix_caching (bool): enable cache prompts for block reuse, default to False
-        quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
-        rope_scaling_factor (float): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
+        dtype (str): data type for model weights and activations. It can be
+            one of the following values, ['auto', 'float16', 'bfloat16']
+            The `auto` option will use FP16 precision for FP32 and FP16
+            models, and BF16 precision for BF16 models.
+        model_format (str): the layout of the deployed model. It can be one
+            of the following values [hf, meta_llama, awq, gptq],`hf` meaning
+            huggingface model(.bin, .safetensors), `meta_llama` being
+            meta llama's format(.pth), `awq` and `gptq` meaning the quantized
+            model by AWQ and GPTQ, respectively. If it is not specified,
+            i.e. None, it will be extracted from the input model
+        tp (int): the number of GPU cards used in tensor parallelism,
+            default to 1
+        session_len (int): the max session length of a sequence, default to
+            None
+        max_batch_size (int): the max batch size during inference. If it is
+            not specified, the engine will automatically set it according to
+            the device
+        cache_max_entry_count (float): the percentage of gpu memory occupied
+            by the k/v cache.
+            For versions of lmdeploy between `v0.2.0` and `v0.2.1`, it
+            defaults to 0.5, depicting the percentage of TOTAL GPU memory to
+            be allocated to the k/v cache.
+            For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8,
+            signifying the percentage of FREE GPU memory to be reserved for
+            the k/v cache
+        cache_chunk_size (int): The policy to apply for KV block from
+            the block manager, default to -1.
+        cache_block_seq_len (int): the length of the token sequence in
+            a k/v block, default to 64
+        enable_prefix_caching (bool): enable cache prompts for block reuse,
+            default to False
+        quant_policy (int): default to 0. When k/v is quantized into 4 or 8
+            bit, set it to 4 or 8, respectively
+        rope_scaling_factor (float): scaling factor used for dynamic ntk,
+            default to 0. TurboMind follows the implementation of transformer
+            LlamaAttention
         use_logn_attn (bool): whether or not to use log attn: default to False
-        download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
-        revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
-        max_prefill_token_num(int): the number of tokens each iteration during prefill, default to 8192
-        num_tokens_per_iter(int): the number of tokens processed in each forward pass. Working with `max_prefill_iters` enables "Dynamic SplitFuse"-like scheduling
-        max_prefill_iters(int): the max number of forward pass during prefill stage
-    """  # noqa: E501
+        download_dir (str): Directory to download and load the weights,
+            default to the default cache directory of huggingface.
+        revision (str): The specific model version to use. It can be a branch
+            name, a tag name, or a commit id. If unspecified, will use the
+            default version.
+        max_prefill_token_num(int): the number of tokens each iteration during
+            prefill, default to 8192
+        num_tokens_per_iter(int): the number of tokens processed in each
+            forward pass. Working with `max_prefill_iters` enables the
+            "Dynamic SplitFuse"-like scheduling
+        max_prefill_iters(int): the max number of forward pass during prefill
+            stage
+    """
 
+    dtype: str = 'auto'
     model_format: Optional[str] = None
     tp: int = 1
     session_len: Optional[int] = None
@@ -160,11 +188,14 @@ class TurbomindEngineConfig:
 
     def __post_init__(self):
         """Check input validation."""
+        assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
-        assert self.cache_max_entry_count > 0 and self.cache_max_entry_count < 1, 'invalid cache_max_entry_count'  # noqa
+        assert 0 < self.cache_max_entry_count < 1, \
+            'invalid cache_max_entry_count'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
-        assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
+        assert self.max_prefill_token_num >= 0, \
+            'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
 
 
@@ -173,6 +204,10 @@ class PytorchEngineConfig:
     """PyTorch Engine Config.
 
     Args:
+        dtype (str): data type for model weights and activations. It can be
+            one of the following values, ['auto', 'float16', 'bfloat16']
+            The `auto` option will use FP16 precision for FP32 and FP16
+            models, and BF16 precision for BF16 models.
         tp (int): Tensor Parallelism. default 1.
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
@@ -199,6 +234,7 @@ class PytorchEngineConfig:
             It can be a branch name, a tag name, or a commit id.
             If unspecified, will use the default version.
     """
+    dtype: str = 'auto'
     tp: int = 1
     session_len: int = None
     max_batch_size: int = None
@@ -219,10 +255,13 @@ class PytorchEngineConfig:
 
     def __post_init__(self):
         """Check input validation."""
+        assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
-        assert self.cache_max_entry_count > 0 and self.cache_max_entry_count < 1, 'invalid cache_max_entry_count'  # noqa
+        assert 0 < self.cache_max_entry_count < 1, \
+            'invalid cache_max_entry_count'
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
-        assert self.max_prefill_token_num >= 0, 'invalid max_prefill_token_num'
+        assert self.max_prefill_token_num >= 0, \
+            'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.device_type in [
             'cuda', 'ascend'
