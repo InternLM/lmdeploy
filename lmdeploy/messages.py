@@ -54,10 +54,29 @@ class GenerationConfig:
             in the decoding. Default to be True.
         logprobs (int): Number of log probabilities to return per output token.
         response_format (Dict): Only pytorch backend support formatting
-            response. Examples: `{"type": "json_schema", "json_schema": {"name":"test","schema": {"properties": {"name": {"type": "string"}}, "required": ["name"], "type": "object"}}}`
-            or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
+        response. Examples:
+            {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test",
+                    "schema": {
+                    "properties": {
+                        "name": {
+                        "type": "string"
+                        }
+                    },
+                    "required": ["name"],
+                    "type": "object"
+                    }
+                }
+            }
+        or,
+            {
+                "type": "regex_schema",
+                "regex_schema": "call me [A-Za-z]{1,10}"
+            }
         logits_processors (List[Callable]): Custom logit processors.
-    """  # noqa
+    """
 
     n: int = 1
     max_new_tokens: int = 512
