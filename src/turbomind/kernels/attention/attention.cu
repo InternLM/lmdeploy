@@ -33,7 +33,9 @@ void dispatchAttention(const AttentionParams<T>& params)
         }
         else {
             if (params.arch < 80) {
-                TM_LOG_ERROR("CUDA architecture sm%d does not support data type 'bfloat16'. Please specify dtype 'float16'", params.arch);
+                TM_LOG_ERROR(
+                    "CUDA architecture sm%d does not support data type 'bfloat16'. Please specify dtype 'float16'",
+                    params.arch);
             }
         }
     }
