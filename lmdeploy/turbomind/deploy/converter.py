@@ -136,7 +136,7 @@ def get_output_model_registered_name_and_config(model_path: str,
         else:
             weight_type = dtype
     else:
-        assert 0, 'unsupported specified data type {dtype}'
+        assert 0, f'unsupported specified data type {dtype}'
 
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type

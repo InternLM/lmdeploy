@@ -247,6 +247,10 @@ class PytorchEngineConfig:
         thread_safe (bool): thread safe engine instance.
         enable_prefix_caching (bool): Enable token match and sharing caches.
         device_type (str): The inference device type, options ['cuda']
+        eager_mode (bool): Enable "eager" mode or not
+        custom_module_map (Dict): nn module map customized by users. Once
+            provided, the original nn modules of the model will be
+            substituted by the mapping ones
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
         revision (str): The specific model version to use.
@@ -268,7 +272,7 @@ class PytorchEngineConfig:
     enable_prefix_caching: bool = False
     device_type: str = 'cuda'
     eager_mode: bool = False
-    custom_module_map: str = None
+    custom_module_map: Dict[str, str] = None
     download_dir: str = None
     revision: str = None
 
