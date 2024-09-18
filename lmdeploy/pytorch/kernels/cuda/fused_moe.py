@@ -353,7 +353,7 @@ def fused_moe(hidden_states: torch.Tensor,
 
     # activate
     if intermediate_cache1.size(-1) % 2048 == 0:
-        unflat_size = intermediate_cache1.shape[:-2]
+        unflat_size = intermediate_cache1.shape[:-1]
         intermediate_cache1 = intermediate_cache1.flatten(0, -2)
         gate_cache = silu_and_mul(intermediate_cache1)
         gate_cache = gate_cache.unflatten(0, unflat_size)
