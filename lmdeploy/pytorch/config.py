@@ -38,7 +38,7 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         if dtype == 'auto':
             torch_dtype = torch_dtype if torch_dtype in [
                 torch.float16, torch.bfloat16
-            ] else 'float16'
+            ] else torch.float16
         else:
             torch_dtype = dtype
     config.dtype = eval(f'torch.{torch_dtype}')
