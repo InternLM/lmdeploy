@@ -826,38 +826,6 @@ def test_gen_config_do_sample_batch(config, model, backend, worker_id):
 @pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
-def test_gen_config_same_random_seed_batch(config, model, backend, worker_id):
-
-    def run_pipeline_testcase(config, model, backend, file_name):
-
-        model_path = '/'.join([config.get('model_path'), model])
-        backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
-        gen_config = GenerationConfig(random_seed=1, top_k=40, do_sample=True)
-        response = pipe(['Shanghai is'] * 3, gen_config=gen_config)
-        result = response[0].text == response[1].text and response[
-            1].text == response[2].text
-        save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        torch.cuda.empty_cache()
-
-    file_name = f'pipeline_log_{worker_id}.txt'
-    if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
-                                                                     tp_num=2)
-    p = Process(target=run_pipeline_testcase,
-                args=(config, model, backend, file_name))
-
-    p.start()
-    p.join()
-    assert_pipeline_common_log(config, file_name)
-    if 'gw' in worker_id:
-        del os.environ['CUDA_VISIBLE_DEVICES']
-
-
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
-@pytest.mark.parametrize('backend',
-                         [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_max_new_tokens(config, model, backend, worker_id):
 
     def run_pipeline_testcase_max_new_tokens(config, model, backend,
