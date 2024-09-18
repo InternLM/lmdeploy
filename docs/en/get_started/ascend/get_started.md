@@ -1,61 +1,53 @@
-# Get Started with Huawei Ascend (Atlas 800T A2）
+# Get Started with Huawei Ascend (Atlas 800T A2)
 
 The usage of lmdeploy on a Huawei Ascend device is almost the same as its usage on CUDA with PytorchEngine in lmdeploy.
 Please read the original [Get Started](../get_started.md) guide before reading this tutorial.
 
 ## Installation
 
+We highly recommend that users build a Docker image for streamlined environment setup.
+
+Git clone the source code of lmdeploy and the Dockerfile locates in the `docker` directory:
+
+```shell
+git clone https://github.com/InternLM/lmdeploy.git
+cd lmdeploy
+```
+
 ### Environment Preparation
 
-#### Drivers and Firmware
+The Docker version is supposed to be no less than `18.03`. And `Ascend Docker Runtime` should be installed by following [the official guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/.clusterschedulingig/dlug_installation_012.html).
 
-The host machine needs to install the Huawei driver and firmware version 23.0.3, refer to
+#### Ascend Drivers, Firmware and CANN
+
+The target machine needs to install the Huawei driver and firmware version 23.0.3, refer to
 [CANN Driver and Firmware Installation](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/80RC1alpha003/softwareinst/instg/instg_0019.html)
 and [download resources](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=8.0.RC3.alpha001&driver=1.0.0.2.alpha).
 
-#### CANN
+And the CANN (version 8.0.RC3.alpha001) software packages should also be downloaded from [Ascend Resource Download Center](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC3.alpha001) themselves. Make sure to place the `Ascend-cann-kernels-910b*.run` and `Ascend-cann-toolkit*-aarch64.run` under the root directory of lmdeploy source code
 
-File `docker/Dockerfile_aarch64_ascend` does not provide Ascend CANN installation package, users need to download the CANN (version 8.0.RC3.alpha001) software packages from [Ascend Resource Download Center](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC3.alpha001) themselves. And place the Ascend-cann-kernels-910b\*.run and Ascend-cann-toolkit\*-aarch64.run under the directory where the docker build command is executed.
+#### Build Docker Image
 
-#### Docker
-
-Building the aarch64_ascend image requires Docker >= 18.03
-
-#### Reference Command for Building the Image
-
-The following reference command for building the image is based on the lmdeploy source code root directory as the current directory, and the CANN-related installation packages are also placed under this directory.
+Run the following command in the root directory of lmdeploy to build the image:
 
 ```bash
-DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:v0.1 \
+DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:latest \
     -f docker/Dockerfile_aarch64_ascend .
 ```
 
-This image will install lmdeploy to `/workspace/lmdeploy` directory using `pip install --no-build-isolation -e .` command.
-
-#### Using the Image
-
-You can refer to the [documentation](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc1/clusterscheduling/dockerruntimeug/dlruntime_ug_013.html)
-for usage. It is recommended to install Ascend Docker Runtime.
-Here is an example of starting container for Huawei Ascend device with Ascend Docker Runtime installed:
+If the following command executes without any errors, it indicates that the environment setup is successful.
 
 ```bash
-docker run -e ASCEND_VISIBLE_DEVICES=0 --net host -td --entry-point bash --name lmdeploy_ascend_demo \
-    lmdeploy-aarch64-ascend:v0.1  # docker_image_sha_or_name
+docker run -e ASCEND_VISIBLE_DEVICES=0 --rm --name lmdeploy -t lmdeploy-aarch64-ascend:latest lmdeploy check_env
 ```
 
-#### Pip install
-
-If you have lmdeploy installed and all Huawei environments are ready, you can run the following command to enable lmdeploy to run on Huawei Ascend devices. (Not necessary if you use the Docker image.)
-
-```bash
-pip install dlinfer-ascend
-```
+For more information about running the Docker client on Ascend devices, please refer to the [guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc1/clusterscheduling/dockerruntimeug/dlruntime_ug_013.html)
 
 ## Offline batch inference
 
 ### LLM inference
 
-Set `device_type="ascend"`  in the `PytorchEngineConfig`:
+Set `device_type="ascend"` in the `PytorchEngineConfig`:
 
 ```python
 from lmdeploy import pipeline

@@ -66,6 +66,16 @@ class CLI(object):
             default=None,
             help='the name of the built-in chat template, which can be '
             'overviewed by `lmdeploy list`')
+        parser.add_argument(
+            '--dtype',
+            type=str,
+            default='auto',
+            choices=['auto', 'float16', 'bfloat16'],
+            help='data type for model weights and activations. '
+            'The "auto" option will use FP16 precision '
+            'for FP32 and FP16 models, and BF16 precision '
+            'for BF16 models. This option will be ignored if '
+            'the model is a quantized model')
         parser.set_defaults(run=CLI.convert)
 
     @staticmethod
@@ -113,6 +123,7 @@ class CLI(object):
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
         # common engine args
+        dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -121,6 +132,7 @@ class CLI(object):
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
+        tb_group._group_actions.append(dtype_act)
         tb_group._group_actions.append(tp_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(cache_max_entry_act)
@@ -245,6 +257,7 @@ class CLI(object):
 
             adapters = get_lora_adapters(args.adapters)
             engine_config = PytorchEngineConfig(
+                dtype=args.dtype,
                 tp=args.tp,
                 session_len=args.session_len,
                 cache_max_entry_count=args.cache_max_entry_count,

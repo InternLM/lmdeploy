@@ -108,6 +108,8 @@ class Engine:
         adapters = engine_config.adapters
         if adapters is not None:
             check_adapters(list(adapters.values()))
+        assert engine_config.dtype in ['auto', 'float16', 'bfloat16'], \
+            f'unsupported specified data type {engine_config.dtype}'
 
         self.engine_config = engine_config
         self.tp = engine_config.tp
@@ -149,6 +151,7 @@ class Engine:
                 trust_remote_code=trust_remote_code,
                 adapters=adapters,
                 tp=self.tp,
+                dtype=engine_config.dtype,
                 custom_module_map=engine_config.custom_module_map)
 
         cache_config = self.model_agent.cache_config

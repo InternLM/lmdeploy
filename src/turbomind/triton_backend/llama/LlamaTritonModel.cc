@@ -49,14 +49,14 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
     int               tensor_para_size           = ft_instance_hyperparameter["tensor_para_size"].as<int>();
     std::string       model_dir                  = ft_instance_hyperparameter["model_dir"].as<std::string>();
 
-    if (data_type == "half" || data_type == "fp16") {
+    if (data_type == "half" || data_type == "fp16" || data_type == "float16") {
         return std::make_shared<LlamaTritonModel<half>>(
             ft_instance_hyperparameter["tensor_para_size"].as<int>(),
             ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
             ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
             model_dir);
     }
-    else if (data_type == "bf16") {
+    else if (data_type == "bf16" || data_type == "bfloat16") {
 #ifdef ENABLE_BF16
         return std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
             ft_instance_hyperparameter["tensor_para_size"].as<int>(),
@@ -278,10 +278,10 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engines_.resize(device_count);
 
     const std::string weight_type_str = model_reader["weight_type"].as<std::string>();
-    if (weight_type_str == "fp16") {
+    if (weight_type_str == "fp16" || weight_type_str == "float16") {
         weight_type_ = ft::WeightType::kFP16;
     }
-    else if (weight_type_str == "bf16") {
+    else if (weight_type_str == "bf16" || weight_type_str == "bfloat16") {
         weight_type_ = ft::WeightType::kBF16;
     }
     else if (weight_type_str == "fp32") {

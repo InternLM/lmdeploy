@@ -738,10 +738,22 @@ def build_model_agent(model_path: str,
                       trust_remote_code: bool,
                       adapters: Dict[str, str] = None,
                       tp: int = 1,
+                      dtype: str = 'auto',
                       custom_module_map: str = None):
-    """create model agent."""
+    """create model agent.
+
+    Args:
+        model_path (str): the path of the input model
+        cache_config (CacheConfig): config of kv cache
+        backend_config (BackendConfig): config of backend devices
+        trust_remote_code (bool): To use the remote modeling code or not
+        adapters (Dict): lora adapters
+        tp (int): the number of devices to be used in tensor parallelism
+        dtype (str): the data type of model weights and activations
+        custom_module_map (str): customized nn module map
+    """
     model_config = ModelConfig.from_pretrained(
-        model_path, trust_remote_code=trust_remote_code)
+        model_path, trust_remote_code=trust_remote_code, dtype=dtype)
     model_config.custom_module_map = custom_module_map
     if tp == 1:
         model_agent = BaseModelAgent(model_path,
