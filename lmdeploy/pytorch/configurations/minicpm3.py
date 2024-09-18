@@ -4,7 +4,7 @@ from lmdeploy.pytorch.config import ModelConfig
 from .builder import AutoModelConfigBuilder
 
 
-class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
+class MiniCPM3ModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
     def condition(cls, hf_config):
