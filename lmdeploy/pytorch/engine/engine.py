@@ -127,6 +127,8 @@ class Engine:
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(
                 engine_config.device_type)
+        assert engine_config.max_batch_size > 0, 'max_batch_size should be' \
+            f' greater than 0, but got {engine_config.max_batch_size}'
         if engine_config.adapters is not None:
             check_adapters(list(engine_config.adapters.values()))
         assert engine_config.dtype in ['auto', 'float16', 'bfloat16'], \
