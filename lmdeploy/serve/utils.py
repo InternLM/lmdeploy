@@ -216,7 +216,7 @@ class LogitsMixin:
                                        steps=steps,
                                        sequence_start=(i == 0),
                                        sequence_end=(i == n_max_iter - 1))
-            _logits = _logits.cpu()
+            _logits = _logits.float().cpu()
             padding_token_id = -100
             target_ids = [(x + [padding_token_id])[1:] for x in _input_ids]
             target_ids = [
