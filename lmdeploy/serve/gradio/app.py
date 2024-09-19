@@ -35,7 +35,8 @@ def run(model_path_or_server: str,
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         share (bool): whether to create a publicly shareable link for the app,
-        max_log_len (int):
+        max_log_len (int): Max number of prompt characters or prompt tokens
+            being printed in log. Default: Unlimited
     """
     if ':' in model_path_or_server:
         from lmdeploy.serve.gradio.api_server_backend import run_api_server
