@@ -30,7 +30,7 @@ def check_env_deeplink(device_type: str):
 def try_import_deeplink(device_type: str):
     """import dlinfer if specific device_type is set."""
     deeplink_device_type_list = [
-        'ascend',
+        'ascend', 'maca'
     ]
     if device_type in deeplink_device_type_list:
         logger = get_logger('lmdeploy')

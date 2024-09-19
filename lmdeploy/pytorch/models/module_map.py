@@ -8,6 +8,12 @@ ASCEND_MODULE_MAP = dict()
 
 DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP)
 
+# maca module
+MODULE_MAP = dict()
+MACA_MODULE_MAP = dict()
+
+DEVICE_SPECIAL_MODULE_MAP = dict(maca=MACA_MODULE_MAP)
+
 # llama
 MODULE_MAP.update({
     'LlamaForCausalLM':
