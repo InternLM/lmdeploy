@@ -31,7 +31,6 @@ from .triton_utils import get_kernel_meta, wrap_jit_func
     half_size=torch.int32,
     BLOCK=torch.int32,
     BLOCK_QH=torch.int32,
-    BLOCK_KH=torch.int32,
     BLOCK_N=torch.int32,
 ))
 @triton.jit(do_not_specialize=('seq_len', ))
@@ -58,11 +57,11 @@ def apply_rotary_pos_emb_qk_kernel(
     half_size: tl.constexpr,
     BLOCK: tl.constexpr,
     BLOCK_QH: tl.constexpr,
-    BLOCK_KH: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
     """apply rotary on key AND query kernel."""
     seq_block_id = tl.program_id(0)
+    head_id = tl.program_id(1)
 
     pos_offset = seq_block_id * BLOCK + tl.arange(0, BLOCK)
     pos_mask = pos_offset < seq_len
@@ -83,13 +82,18 @@ def apply_rotary_pos_emb_qk_kernel(
     sin_l = tl.load(SIN + cs_offset_l).to(q_elem_type)
     sin_h = tl.load(SIN + cs_offset_h).to(q_elem_type)
 
-    q_ptr = Q + pos_offset * stride_qs
-    qe_ptr = Q_EMB + pos_offset * stride_qes
-    ql_ptrs = q_ptr[:, None] + feat_offset_l[None, :] * stride_qd
-    qh_ptrs = q_ptr[:, None] + feat_offset_h[None, :] * stride_qd
-    qel_ptrs = qe_ptr[:, None] + feat_offset_l[None, :] * stride_qed
-    qeh_ptrs = qe_ptr[:, None] + feat_offset_h[None, :] * stride_qed
-    for _ in range(BLOCK_QH):
+    if head_id < BLOCK_QH:
+        q_ptr = Q + pos_offset * stride_qs
+        qe_ptr = Q_EMB + pos_offset * stride_qes
+        ql_ptrs = q_ptr[:, None] + feat_offset_l[None, :] * stride_qd
+        qh_ptrs = q_ptr[:, None] + feat_offset_h[None, :] * stride_qd
+        qel_ptrs = qe_ptr[:, None] + feat_offset_l[None, :] * stride_qed
+        qeh_ptrs = qe_ptr[:, None] + feat_offset_h[None, :] * stride_qed
+        ql_ptrs += head_id * stride_qh
+        qh_ptrs += head_id * stride_qh
+        qel_ptrs += head_id * stride_qeh
+        qeh_ptrs += head_id * stride_qeh
+
         q_l = tl.load(ql_ptrs)
         q_h = tl.load(qh_ptrs)
         qe_l = q_l * cos_l - q_h * sin_l
@@ -97,19 +101,18 @@ def apply_rotary_pos_emb_qk_kernel(
 
         tl.store(qel_ptrs, qe_l, mask=seq_mask)
         tl.store(qeh_ptrs, qe_h, mask=seq_mask)
-
-        ql_ptrs += stride_qh
-        qh_ptrs += stride_qh
-        qel_ptrs += stride_qeh
-        qeh_ptrs += stride_qeh
-
-    k_ptr = K + pos_offset * stride_ks
-    ke_ptr = K_EMB + pos_offset * stride_kes
-    kl_ptrs = k_ptr[:, None] + feat_offset_l[None, :] * stride_kd
-    kh_ptrs = k_ptr[:, None] + feat_offset_h[None, :] * stride_kd
-    kel_ptrs = ke_ptr[:, None] + feat_offset_l[None, :] * stride_ked
-    keh_ptrs = ke_ptr[:, None] + feat_offset_h[None, :] * stride_ked
-    for _ in range(BLOCK_KH):
+    else:
+        head_id = head_id - BLOCK_QH
+        k_ptr = K + pos_offset * stride_ks
+        ke_ptr = K_EMB + pos_offset * stride_kes
+        kl_ptrs = k_ptr[:, None] + feat_offset_l[None, :] * stride_kd
+        kh_ptrs = k_ptr[:, None] + feat_offset_h[None, :] * stride_kd
+        kel_ptrs = ke_ptr[:, None] + feat_offset_l[None, :] * stride_ked
+        keh_ptrs = ke_ptr[:, None] + feat_offset_h[None, :] * stride_ked
+        kl_ptrs += head_id * stride_kh
+        kh_ptrs += head_id * stride_kh
+        kel_ptrs += head_id * stride_keh
+        keh_ptrs += head_id * stride_keh
         k_l = tl.load(kl_ptrs)
         k_h = tl.load(kh_ptrs)
         ke_l = k_l * cos_l - k_h * sin_l
@@ -117,10 +120,6 @@ def apply_rotary_pos_emb_qk_kernel(
 
         tl.store(kel_ptrs, ke_l, mask=seq_mask)
         tl.store(keh_ptrs, ke_h, mask=seq_mask)
-        kl_ptrs += stride_kh
-        kh_ptrs += stride_kh
-        kel_ptrs += stride_keh
-        keh_ptrs += stride_keh
 
 
 def apply_rotary_pos_emb(q: Tensor,
@@ -162,7 +161,7 @@ def apply_rotary_pos_emb(q: Tensor,
     num_stages = 4
 
     kernel_meta = get_kernel_meta(q)
-    grid = [triton.cdiv(seq_len, BLOCK)]
+    grid = [triton.cdiv(seq_len, BLOCK), num_heads_q + num_heads_k]
     apply_rotary_pos_emb_qk_kernel[grid](q,
                                          k,
                                          cos,
@@ -185,7 +184,6 @@ def apply_rotary_pos_emb(q: Tensor,
                                          half_size=half_size,
                                          BLOCK=BLOCK,
                                          BLOCK_QH=num_heads_q,
-                                         BLOCK_KH=num_heads_k,
                                          BLOCK_N=BLOCK_N,
                                          num_warps=num_warps,
                                          num_stages=num_stages,

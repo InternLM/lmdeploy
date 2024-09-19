@@ -13,7 +13,7 @@ def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
     xf = x.to(tl.float32)
 
     var = tl.sum(xf * xf, 0) * float(1.0 / N_COLS)
-    out = xf / tl.sqrt(var + eps)
+    out = xf * tl.math.rsqrt(var + eps)
     out = (w * out).to(x.dtype)
     return out
 
@@ -75,12 +75,13 @@ def add_rms_norm_kernel(input, weight, residual, output, out_residual,
     res = tl.load(res_ptr + offsets, mask=offsets < N_COLS)
 
     new_x = x + res
+    out_res_ptr = out_residual + prog_id * residual_row_stride
+    tl.store(out_res_ptr + offsets, new_x, mask=offsets < N_COLS)
+
     out = _compute_rms_norm(new_x, w, eps, N_COLS)
 
     out_ptr = output + prog_id * input_row_stride
     tl.store(out_ptr + offsets, out, mask=offsets < N_COLS)
-    out_res_ptr = out_residual + prog_id * residual_row_stride
-    tl.store(out_res_ptr + offsets, new_x, mask=offsets < N_COLS)
 
 
 def rms_norm(hidden_states: Tensor,
