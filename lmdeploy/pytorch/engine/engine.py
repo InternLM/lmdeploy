@@ -574,7 +574,7 @@ class Engine:
 
             def gather(self, output):
                 """gather."""
-                logits = output['logits']
+                logits = output['hidden_states']
 
                 if not return_logits:
                     self._out_logits = logits
@@ -625,18 +625,25 @@ class Engine:
             for inp in new_inputs:
                 tmp_out = await __forward(inp)
                 logits_gather.gather(tmp_out)
-                tmp_out.pop('logits', None)
-            tmp_out['logits'] = logits_gather.get_logits()
+                tmp_out.pop('hidden_states', None)
+            tmp_out['hidden_states'] = logits_gather.get_logits()
             return tmp_out
 
         if inputs.input_ids.numel() <= max_prefill_token_num:
             ret = await __forward(inputs)
             if not return_logits and not inputs.is_decoding:
                 last_token_loc = inputs.seq_length.cumsum(0) - 1
-                ret['logits'] = ret['logits'][:, last_token_loc]
-            return ret
+                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
         else:
-            return await __long_context_single_forward(inputs)
+            ret = await __long_context_single_forward(inputs)
+            if not return_logits and not inputs.is_decoding:
+                last_token_loc = [-1]
+                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
+
+        hidden_states = ret.pop('hidden_states')
+        logits = self.model_agent.get_logits(hidden_states)
+        ret['logits'] = logits
+        return ret
 
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor,
                             logits: torch.Tensor, stopped: torch.Tensor):

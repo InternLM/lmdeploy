@@ -152,7 +152,7 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-    return dict(logits=output)
+    return dict(hidden_states=output)
 
 
 def _get_indexed_lora_linears(model):
@@ -213,6 +213,10 @@ class AutoModelAgent:
             swap_in_map (SwapMap): Cache maps to swap in.
             swap_out_map (SwapMap): Cache maps to swap out.
         """
+        raise NotImplementedError('Not implemented.')
+
+    def get_logits(self, hidden_states: torch.Tensor):
+        """get logits of model output."""
         raise NotImplementedError('Not implemented.')
 
 
@@ -335,6 +339,10 @@ class BaseModelAgent(AutoModelAgent):
         await asyncio.get_event_loop().run_in_executor(None,
                                                        self.stream.synchronize)
         return output
+
+    def get_logits(self, hidden_states: torch.Tensor):
+        """get logits of model output."""
+        return self.patched_model.get_logits(hidden_states)
 
 
 @torch.inference_mode()
@@ -784,6 +792,10 @@ class TPModelAgent(AutoModelAgent):
         await asyncio.get_event_loop().run_in_executor(None,
                                                        self.stream.synchronize)
         return output
+
+    def get_logits(self, hidden_states: torch.Tensor):
+        """get logits of model output."""
+        return self.patched_model.get_logits(hidden_states)
 
 
 def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):

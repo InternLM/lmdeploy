@@ -28,6 +28,12 @@ class GraphRunner:
         """get model."""
         return self.model
 
+    def get_logits(self, hidden_states: torch.Tensor):
+        """get logits of model output."""
+        if not hasattr(self.model, 'get_logits'):
+            return hidden_states
+        return self.model.get_logits(hidden_states)
+
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],

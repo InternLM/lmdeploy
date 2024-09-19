@@ -42,6 +42,10 @@ class LlavaForConditionalGeneration(nn.Module):
                                            position_ids=position_ids,
                                            attn_metadata=attn_metadata)
 
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.language_model.get_logits(hidden_states)
+
     def get_input_embeddings(self):
         """get input embeddings."""
         return self.language_model.get_input_embeddings()
