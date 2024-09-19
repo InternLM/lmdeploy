@@ -293,7 +293,7 @@ class MiniCPMAttention(nn.Module):
         value_states, q_nope, k_nope, q_pe, k_pe = self._qkv_proj(
             hidden_states, num_heads=num_heads)
 
-        kv_seq_len = int(attn_metadata.kv_seqlens.sum())
+        kv_seq_len = int(attn_metadata.kv_seqlens.max())
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
         query_states = k_pe.new_empty(bsz, self.num_heads, q_len,
