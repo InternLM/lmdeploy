@@ -29,4 +29,4 @@ class MiniCPM3ModelConfigBuilder(AutoModelConfigBuilder):
                            k_head_dim=k_head_dim,
                            v_head_dim=v_head_dim,
                            vocab_size=hf_config.vocab_size,
-                           multi_query_attention=True)
+                           multi_query_attention=False)
