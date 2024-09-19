@@ -138,6 +138,7 @@ class MiniCPMLongRoPE(MiniCPMRotaryEmbedding):
                              persistent=False)
 
 
+# TODO use MLA and longrope of pytorch engine
 class MiniCPMAttention(nn.Module):
     """minicpm3 attention."""
 
