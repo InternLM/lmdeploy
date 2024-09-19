@@ -120,6 +120,7 @@ template<typename T>
 void check(T result, char const* const func, const char* const file, int const line)
 {
     if (result) {
+        TM_LOG_ERROR("[TM][ERROR] CUDA runtime error: %s, %s:%d", _cudaGetErrorEnum(result), file, line);
         throw std::runtime_error(std::string("[TM][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " "
                                  + file + ":" + std::to_string(line) + " \n");
     }
@@ -138,6 +139,7 @@ inline void syncAndCheck(const char* const file, int const line)
             cudaDeviceSynchronize();
             cudaError_t result = cudaGetLastError();
             if (result) {
+                TM_LOG_ERROR("[TM][ERROR] CUDA runtime error: %s, %s:%d", _cudaGetErrorEnum(result), file, line);
                 throw std::runtime_error(std::string("[TM][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result))
                                          + " " + file + ":" + std::to_string(line) + " \n");
             }
@@ -149,6 +151,7 @@ inline void syncAndCheck(const char* const file, int const line)
     cudaDeviceSynchronize();
     cudaError_t result = cudaGetLastError();
     if (result) {
+        TM_LOG_ERROR("[TM][ERROR] CUDA runtime error: %s, %s:%d", _cudaGetErrorEnum(result), file, line);
         throw std::runtime_error(std::string("[TM][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " "
                                  + file + ":" + std::to_string(line) + " \n");
     }
@@ -200,6 +203,7 @@ void check_abs_mean_val(const T* result, const int size);
 
 [[noreturn]] inline void throwRuntimeError(const char* const file, int const line, std::string const& info = "")
 {
+    TM_LOG_ERROR("[TM][ERROR] %s Assertion fail: %s:%d", info, file, line);
     throw std::runtime_error(std::string("[TM][ERROR] ") + info + " Assertion fail: " + file + ":"
                              + std::to_string(line) + " \n");
 }
