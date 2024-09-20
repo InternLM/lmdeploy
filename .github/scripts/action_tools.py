@@ -240,7 +240,8 @@ def generate_benchmark_report(report_path: str):
     subfolders = [f.path for f in os.scandir(report_path) if f.is_dir()]
     for dir_path in subfolders:
         second_subfolders = [
-            f.path for f in os.scandir(dir_path) if f.is_dir()
+            f.path for f in sorted(os.scandir(dir_path), key=lambda x: x.name)
+            if f.is_dir()
         ]
         for sec_dir_path in second_subfolders:
             model = sec_dir_path.replace(report_path + '/', '')
@@ -248,7 +249,9 @@ def generate_benchmark_report(report_path: str):
             _append_summary('-' * 25 + model + '-' * 25 + '\n')
 
             benchmark_subfolders = [
-                f.path for f in os.scandir(sec_dir_path) if f.is_dir()
+                f.path
+                for f in sorted(os.scandir(sec_dir_path), key=lambda x: x.name)
+                if f.is_dir()
             ]
             for backend_subfolder in benchmark_subfolders:
                 benchmark_type = backend_subfolder.replace(

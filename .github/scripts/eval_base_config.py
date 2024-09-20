@@ -27,6 +27,8 @@ with read_base():
         models as hf_baichuan_7b  # noqa: F401, E501
     from opencompass.configs.models.gemma.hf_gemma_7b import \
         models as hf_gemma_7b  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.hf_internlm2_5_7b import \
+        models as hf_internlm2_5_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.hf_internlm2_7b import \
         models as hf_internlm2_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.hf_internlm2_20b import \

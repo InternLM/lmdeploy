@@ -44,8 +44,12 @@ with read_base():
     # read models
     from opencompass.configs.models.baichuan.hf_baichuan2_7b_chat import \
         models as hf_baichuan2_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.gemma.hf_gemma_7b_it import \
-        models as hf_gemma_chat_7b  # noqa: F401, E501
+    from opencompass.configs.models.gemma.hf_gemma2_9b_it import \
+        models as hf_gemma2_9b_it  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.hf_internlm2_5_7b_chat import \
+        models as hf_internlm2_5_7b_chat  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.hf_internlm2_5_20b_chat import \
+        models as hf_internlm2_5_20b_chat  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.hf_internlm2_chat_7b import \
         models as hf_internlm2_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.hf_internlm2_chat_20b import \
@@ -66,6 +70,8 @@ with read_base():
         models as lmdeploy_internlm_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.hf_llama2_7b_chat import \
         models as hf_llama2_chat_7b  # noqa: F401, E501
+    from opencompass.configs.models.hf_llama.hf_llama3_1_8b_instruct import \
+        models as hf_llama3_1_8b_instruct  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.hf_llama3_8b_instruct import \
         models as hf_llama_3_8b_instruct  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.lmdeploy_llama2_7b_chat import \
@@ -80,6 +86,8 @@ with read_base():
         models as hf_mixtral_chat_8x7b  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen1_5_7b_chat import \
         models as hf_qwen1_5_chat_7b  # noqa: F401, E501
+    from opencompass.configs.models.qwen.hf_qwen1_5_moe_a2_7b_chat import \
+        models as hf_qwen1_5_moe_a2_7b_chat  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen2_7b_instruct import \
         models as hf_qwen2_7b_instruct  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen_7b_chat import \
