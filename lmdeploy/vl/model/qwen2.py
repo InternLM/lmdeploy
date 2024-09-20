@@ -32,6 +32,9 @@ class Qwen2VLModel(VisonModel):
         with init_empty_weights():
             config = self.hf_config
             config.quantization_config = {}  # disable vision part quantization
+            # disable accelerate check_tied_parameters_in_config
+            # for Qwen2-VL-2B-Instruct
+            config.tie_word_embeddings = False
 
             from transformers import Qwen2VLForConditionalGeneration
             model = Qwen2VLForConditionalGeneration._from_config(config)
