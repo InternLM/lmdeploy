@@ -13,132 +13,12 @@ from lmdeploy.pytorch.nn import (Attention, RMSNorm, RopeType, SiluAndMul,
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
                                         build_merged_colwise_linear,
                                         build_rowwise_linear)
+from lmdeploy.pytorch.nn.rotary_embedding import (ApplyRotaryEmb,
+                                                  LongRoPEScalingParameters)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., :x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2:]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
-    """Applies Rotary Position Embedding to the query and key tensors."""
-    orig_dtype = k.dtype
-    cos = cos[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
-    sin = sin[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
-    q_fp32 = q.to(dtype=torch.float32, device=q.device)
-    k_fp32 = k.to(dtype=torch.float32, device=k.device)
-    q_embed = (q_fp32 * cos) + (rotate_half(q_fp32) * sin)
-    k_embed = (k_fp32 * cos) + (rotate_half(k_fp32) * sin)
-    return q_embed.to(dtype=orig_dtype), k_embed.to(dtype=orig_dtype)
-
-
-class MiniCPMRotaryEmbedding(nn.Module):
-
-    def __init__(self,
-                 dim,
-                 max_position_embeddings=2048,
-                 base=10000,
-                 device=None):
-        super().__init__()
-
-        self.dim = dim
-        self.max_position_embeddings = max_position_embeddings
-        self.base = base
-        inv_freq = 1.0 / (self.base**(
-            torch.arange(0, self.dim, 2).float().to(device) / self.dim))
-        self.register_buffer('inv_freq', inv_freq, persistent=False)
-
-        # Build here to make `torch.jit.trace` work.
-        self._set_cos_sin_cache(seq_len=max_position_embeddings,
-                                device=self.inv_freq.device,
-                                dtype=torch.float32)
-
-    def _set_cos_sin_cache(self, seq_len, device, dtype):
-        self.max_seq_len_cached = seq_len
-        t = torch.arange(self.max_seq_len_cached,
-                         device=device,
-                         dtype=self.inv_freq.dtype)
-        freqs = torch.outer(t, self.inv_freq)
-        # Different from paper, but it uses a different permutation in
-        # order to obtain the same calculation
-        emb = torch.cat((freqs, freqs), dim=-1)
-
-        self.register_buffer('cos_cached',
-                             emb.cos().to(dtype),
-                             persistent=False)
-        self.register_buffer('sin_cached',
-                             emb.sin().to(dtype),
-                             persistent=False)
-
-    def forward(self, x, seq_len=None):
-        # x: [bs, num_attention_heads, seq_len, head_size]
-        if seq_len > self.max_seq_len_cached:
-            self._set_cos_sin_cache(seq_len=seq_len,
-                                    device=x.device,
-                                    dtype=x.dtype)
-
-        return (
-            self.cos_cached[:seq_len].to(dtype=x.dtype),
-            self.sin_cached[:seq_len].to(dtype=x.dtype),
-        )
-
-
-class MiniCPMLongRoPE(MiniCPMRotaryEmbedding):
-    """MiniCPMRotaryEmbedding extended with Dynamic NTK scaling.
-
-    Credits to the Reddit users /u/bloc97 and /u/emozilla
-    """
-
-    def __init__(self,
-                 dim,
-                 max_position_embeddings=2048,
-                 base=10000,
-                 device=None,
-                 short_factor=None,
-                 long_factor=None,
-                 original_max_position_embeddings=None):
-        self.short_factor = short_factor
-        self.long_factor = long_factor
-        self.original_max_position_embeddings = original_max_position_embeddings  # noqa
-        scale = (max_position_embeddings /
-                 self.original_max_position_embeddings)
-        self.scaling_factor = math.sqrt(
-            1 +
-            math.log(scale) / math.log(self.original_max_position_embeddings))
-        super().__init__(dim, max_position_embeddings, base, device)
-
-    def _set_cos_sin_cache(self, seq_len, device, dtype):
-        self.max_seq_len_cached = seq_len
-        t = torch.arange(self.max_seq_len_cached,
-                         device=device,
-                         dtype=self.inv_freq.dtype)
-        if seq_len > self.original_max_position_embeddings:
-            ext_factors = torch.tensor(self.long_factor,
-                                       dtype=torch.float32,
-                                       device=device)
-        else:
-            ext_factors = torch.tensor(self.short_factor,
-                                       dtype=torch.float32,
-                                       device=device)
-
-        freqs = torch.mul(
-            torch.outer(t, 1.0 / ext_factors).to(device=device),
-            self.inv_freq.to(device=device).to(dtype))
-        # Different from paper, but it uses a different permutation
-        # in order to obtain the same calculation
-        emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer('cos_cached',
-                             emb.cos().to(dtype) * self.scaling_factor,
-                             persistent=False)
-        self.register_buffer('sin_cached',
-                             emb.sin().to(dtype) * self.scaling_factor,
-                             persistent=False)
-
-
-# TODO use MLA and longrope of pytorch engine
+# TODO use MLA of pytorch engine
 class MiniCPMAttention(nn.Module):
     """minicpm3 attention."""
 
@@ -212,33 +92,7 @@ class MiniCPMAttention(nn.Module):
             is_tp=False,
         )
 
-        # build rotary embedding
-        emb_type = RopeType.LinearScaling
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        rope_scaling = config.rope_scaling
-        if rope_scaling is not None:
-            scaling_type = rope_scaling['type']
-            assert scaling_type in ['longrope', 'su']
-            emb_type = RopeType.LongRoPEScaling
-            ori_pos_emb = getattr(config, 'original_max_position_embeddings',
-                                  rope_max_pos_emb)
-            self.rotary_emb = MiniCPMLongRoPE(
-                self.qk_rope_head_dim,
-                rope_max_pos_emb,
-                rope_base,
-                short_factor=rope_scaling['short_factor'],
-                long_factor=rope_scaling['long_factor'],
-                original_max_position_embeddings=ori_pos_emb,
-            )
-        else:
-            self.rotary_emb = build_rotary_embedding(
-                rope_dim,
-                rope_max_pos_emb,
-                rope_base,
-                emb_type=emb_type,
-            )
+        self.apply_rotary_pos_emb = ApplyRotaryEmb()
         self.softmax_scale = self.q_head_dim**(-0.5)
         self.attn_fwd = Attention(self.num_heads,
                                   config.kv_lora_rank + self.qk_rope_head_dim,
@@ -254,32 +108,10 @@ class MiniCPMAttention(nn.Module):
             is_tp=True,
         )
 
-    def _qkv_proj(self, hidden_states: torch.Tensor, num_heads: int):
-        """qkv proj."""
-        bsz, q_len, _ = hidden_states.size()
-
-        q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
-        q = q.view(bsz, q_len, num_heads, self.q_head_dim).transpose(1, 2)
-        q_nope, q_pe = torch.split(
-            q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
-
-        compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-        compressed_kv, k_pe = torch.split(
-            compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-        k_pe = k_pe.view(bsz, q_len, 1, self.qk_rope_head_dim).transpose(1, 2)
-        kv = (self.kv_b_proj(self.kv_a_layernorm(compressed_kv)).view(
-            bsz, q_len, num_heads,
-            self.qk_nope_head_dim + self.v_head_dim).transpose(1, 2))
-
-        k_nope, value_states = torch.split(
-            kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
-
-        return value_states, q_nope, k_nope, q_pe, k_pe
-
     def forward(
         self,
         hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor],
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         attn_metadata: Any = None,
     ):
@@ -291,18 +123,39 @@ class MiniCPMAttention(nn.Module):
         bsz, q_len, _ = hidden_states.size()
 
         # qkv_proj
-        value_states, q_nope, k_nope, q_pe, k_pe = self._qkv_proj(
-            hidden_states, num_heads=num_heads)
+        bsz, q_len, _ = hidden_states.size()
 
-        kv_seq_len = int(attn_metadata.kv_seqlens.max())
-        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
-        query_states = k_pe.new_empty(bsz, self.num_heads, q_len,
+        q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
+        q = q.view(bsz, q_len, num_heads, self.q_head_dim)
+        q_nope, q_pe = torch.split(
+            q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+
+        compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
+        compressed_kv, k_pe = torch.split(
+            compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+        k_pe = k_pe.view(bsz, q_len, 1, self.qk_rope_head_dim)
+        kv = (self.kv_b_proj(self.kv_a_layernorm(compressed_kv)).view(
+            bsz, q_len, num_heads, self.qk_nope_head_dim + self.v_head_dim))
+
+        k_nope, value_states = torch.split(
+            kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+
+        # apply rotary embedding
+        cos, sin = rotary_pos_emb
+        q_pe, k_pe = self.apply_rotary_pos_emb(
+            q_pe,
+            k_pe,
+            cos,
+            sin,
+            inplace=True,
+        )
+
+        query_states = k_pe.new_empty(bsz, q_len, self.num_heads,
                                       self.q_head_dim)
         query_states[:, :, :, :self.qk_nope_head_dim] = q_nope
         query_states[:, :, :, self.qk_nope_head_dim:] = q_pe
 
-        key_states = k_pe.new_empty(bsz, self.num_heads, q_len,
+        key_states = k_pe.new_empty(bsz, q_len, self.num_heads,
                                     self.q_head_dim)
         key_states[:, :, :, :self.qk_nope_head_dim] = k_nope
         key_states[:, :, :, self.qk_nope_head_dim:] = k_pe
@@ -310,10 +163,6 @@ class MiniCPMAttention(nn.Module):
         if self.q_head_dim != self.v_head_dim:
             value_states = torch.nn.functional.pad(
                 value_states, [0, self.q_head_dim - self.v_head_dim])
-
-        query_states = query_states.transpose(1, 2).contiguous()
-        key_states = key_states.transpose(1, 2).contiguous()
-        value_states = value_states.transpose(1, 2).contiguous()
 
         attn_output = self.attn_fwd(
             query_states,
@@ -411,7 +260,7 @@ class MiniCPMDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor],
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[List[torch.FloatTensor]],
         attn_metadata: Any = None,
     ):
@@ -422,7 +271,7 @@ class MiniCPMDecoderLayer(nn.Module):
         # Self Attention
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
-            position_ids=position_ids,
+            rotary_pos_emb=rotary_pos_emb,
             past_key_value=past_key_value,
             attn_metadata=attn_metadata,
         )
@@ -471,6 +320,37 @@ class MiniCPM3Model(nn.Module):
                             config.rms_norm_eps,
                             dtype=dtype,
                             device=device)
+        # build rotary embedding
+        emb_type = RopeType.LinearScaling
+        rope_dim = config.qk_rope_head_dim
+        rope_max_pos_emb = config.max_position_embeddings
+        rope_base = config.rope_theta
+        rope_scaling = config.rope_scaling
+        if rope_scaling is not None:
+            scaling_type = rope_scaling['type']
+            assert scaling_type in ['longrope', 'su']
+            emb_type = RopeType.LongRoPEScaling
+            ori_pos_emb = getattr(config, 'original_max_position_embeddings',
+                                  rope_max_pos_emb)
+
+            longrope_params = LongRoPEScalingParameters(
+                short_factor=rope_scaling['short_factor'],
+                long_factor=rope_scaling['long_factor'],
+                original_max_position_embeddings=ori_pos_emb)
+            self.rotary_emb = build_rotary_embedding(
+                rope_dim,
+                rope_max_pos_emb,
+                rope_base,
+                longrope_params=longrope_params,
+                emb_type=emb_type,
+            )
+        else:
+            self.rotary_emb = build_rotary_embedding(
+                rope_dim,
+                rope_max_pos_emb,
+                rope_base,
+                emb_type=emb_type,
+            )
 
     def forward(
         self,
@@ -488,12 +368,16 @@ class MiniCPM3Model(nn.Module):
 
         hidden_states = inputs_embeds
 
+        # rotary embedding
+        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
         # decoding
         for idx, decoder_layer in enumerate(self.layers):
             past_key_value = past_key_values[idx]
             hidden_states, _ = decoder_layer(
                 hidden_states,
-                position_ids=position_ids,
+                rotary_pos_emb=rotary_pos_emb,
                 past_key_value=past_key_value,
                 attn_metadata=attn_metadata,
             )
@@ -511,7 +395,7 @@ class MiniCPM3Model(nn.Module):
 class MiniCPM3ForCausalLM(nn.Module):
     """rewrote model of MiniCPM3ForCausalLM."""
 
-    support_cuda_graph = False
+    support_cuda_graph = True
 
     packed_modules_mapping = {
         'gate_up_proj': [
