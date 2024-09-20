@@ -61,6 +61,6 @@ with read_base():
     from opencompass.configs.summarizers.medium import \
         summarizer  # noqa: F401, E501
 
-tb_qwen1_5_7b = deepcopy(*lmdeploy_qwen1_5_7b)
-tb_qwen2_7b = deepcopy(*lmdeploy_qwen2_7b)
-tb_internlm2_5_7b = deepcopy(*lmdeploy_internlm2_5_7b)
+turbomind_qwen1_5_7b = deepcopy(*lmdeploy_qwen1_5_7b)
+turbomind_qwen2_7b = deepcopy(*lmdeploy_qwen2_7b)
+turbomind_internlm2_5_7b = deepcopy(*lmdeploy_internlm2_5_7b)

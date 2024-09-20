@@ -166,93 +166,97 @@ MAX_SESSION_LEN = 2048
 MAX_NEW_TOKENS = 1024
 
 # ===== Configs for internlm/internlm-chat-7b =====
-tb_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
-tb_internlm_chat_7b_4bits = deepcopy(*lmdeploy_internlm_chat_7b)
-pt_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
-pt_internlm_chat_7b['meta_template'] = internlm_meta_template
+turbomind_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
+turbomind_internlm_chat_7b_4bits = deepcopy(*lmdeploy_internlm_chat_7b)
+pytorch_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
+pytorch_internlm_chat_7b['meta_template'] = internlm_meta_template
 
 # ===== Configs for internlm/internlm2-chat-7b =====
-tb_internlm2_chat_7b = deepcopy(*lmdeploy_internlm2_chat_7b)
-tb_internlm2_chat_7b_4bits = deepcopy(*lmdeploy_internlm2_chat_7b)
-tb_internlm2_chat_7b_kvint4 = deepcopy(*lmdeploy_internlm2_chat_7b)
-tb_internlm2_chat_7b_kvint8 = deepcopy(*lmdeploy_internlm2_chat_7b)
-pt_internlm2_chat_7b = deepcopy(*lmdeploy_internlm2_chat_7b)
-pt_internlm2_chat_7b['meta_template'] = internlm2_meta_template
+internlm2_chat_7b = deepcopy(*lmdeploy_internlm2_chat_7b)
+turbomind_internlm2_chat_7b_4bits = deepcopy(*lmdeploy_internlm2_chat_7b)
+turbomind_internlm2_chat_7b_kvint4 = deepcopy(*lmdeploy_internlm2_chat_7b)
+turbomind_internlm2_chat_7b_kvint8 = deepcopy(*lmdeploy_internlm2_chat_7b)
+pytorch_internlm2_chat_7b = deepcopy(*lmdeploy_internlm2_chat_7b)
+pytorch_internlm2_chat_7b['meta_template'] = internlm2_meta_template
 
 # ===== Configs for internlm/internlm2_5_7b_chat =====
-tb_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-tb_internlm2_5_7b_chat_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-tb_internlm2_5_7b_chat_kvint4 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-tb_internlm2_5_7b_chat_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-tb_internlm2_5_7b_chat_batch1 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-pt_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-pt_internlm2_5_7b_chat['meta_template'] = internlm2_meta_template
+turbomind_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm2_5_7b_chat_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm2_5_7b_chat_kvint4 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm2_5_7b_chat_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm2_5_7b_chat_batch1 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+pytorch_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+pytorch_internlm2_5_7b_chat['meta_template'] = internlm2_meta_template
 
 # ===== Configs for internlm/internlm2_5_20b_chat =====
-tb_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
-tb_internlm2_5_20b_chat_4bits = deepcopy(*lmdeploy_internlm2_5_20b_chat)
-tb_internlm2_5_20b_chat_kvint4 = deepcopy(*lmdeploy_internlm2_5_20b_chat)
-tb_internlm2_5_20b_chat_kvint8 = deepcopy(*lmdeploy_internlm2_5_20b_chat)
-pt_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
-pt_internlm2_5_20b_chat['meta_template'] = internlm2_meta_template
+turbomind_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
+turbomind_internlm2_5_20b_chat_4bits = deepcopy(*lmdeploy_internlm2_5_20b_chat)
+turbomind_internlm2_5_20b_chat_kvint4 = deepcopy(
+    *lmdeploy_internlm2_5_20b_chat)
+turbomind_internlm2_5_20b_chat_kvint8 = deepcopy(
+    *lmdeploy_internlm2_5_20b_chat)
+pytorch_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
+pytorch_internlm2_5_20b_chat['meta_template'] = internlm2_meta_template
 
 # ===== Configs for internlm/internlm2_chat_20b =====
-tb_internlm2_chat_20b = deepcopy(*lmdeploy_internlm2_chat_20b)
-tb_internlm2_chat_20b_4bits = deepcopy(*lmdeploy_internlm2_chat_20b)
-tb_internlm2_chat_20b_kvint4 = deepcopy(*lmdeploy_internlm2_chat_20b)
-tb_internlm2_chat_20b_kvint8 = deepcopy(*lmdeploy_internlm2_chat_20b)
-pt_internlm2_chat_20b = deepcopy(*lmdeploy_internlm2_chat_20b)
-pt_internlm2_chat_20b['meta_template'] = internlm2_meta_template
+turbomind_internlm2_chat_20b = deepcopy(*lmdeploy_internlm2_chat_20b)
+turbomind_internlm2_chat_20b_4bits = deepcopy(*lmdeploy_internlm2_chat_20b)
+turbomind_internlm2_chat_20b_kvint4 = deepcopy(*lmdeploy_internlm2_chat_20b)
+turbomind_internlm2_chat_20b_kvint8 = deepcopy(*lmdeploy_internlm2_chat_20b)
+pytorch_internlm2_chat_20b = deepcopy(*lmdeploy_internlm2_chat_20b)
+pytorch_internlm2_chat_20b['meta_template'] = internlm2_meta_template
 
 # ===== Configs for Qwen/Qwen1.5-7B-Chat =====
-tb_qwen1_5_7b_chat = deepcopy(*lmdeploy_qwen1_5_7b_chat)
-tb_qwen1_5_7b_chat_4bits = deepcopy(*lmdeploy_qwen1_5_7b_chat)
-tb_qwen1_5_7b_chat_kvint4 = deepcopy(*lmdeploy_qwen1_5_7b_chat)
-tb_qwen1_5_7b_chat_kvint8 = deepcopy(*lmdeploy_qwen1_5_7b_chat)
-pt_qwen1_5_7b_chat = deepcopy(*lmdeploy_qwen1_5_7b_chat)
-pt_qwen1_5_7b_chat['meta_template'] = qwen1_5_meta_template
+turbomind_qwen1_5_7b_chat = deepcopy(*lmdeploy_qwen1_5_7b_chat)
+turbomind_qwen1_5_7b_chat_4bits = deepcopy(*lmdeploy_qwen1_5_7b_chat)
+turbomind_qwen1_5_7b_chat_kvint4 = deepcopy(*lmdeploy_qwen1_5_7b_chat)
+turbomind_qwen1_5_7b_chat_kvint8 = deepcopy(*lmdeploy_qwen1_5_7b_chat)
+pytorch_qwen1_5_7b_chat = deepcopy(*lmdeploy_qwen1_5_7b_chat)
+pytorch_qwen1_5_7b_chat['meta_template'] = qwen1_5_meta_template
 
 # ===== Configs for Qwen/Qwen-7B-Chat =====
-tb_qwen_7b_chat = deepcopy(*lmdeploy_qwen_7b_chat)
-tb_qwen_7b_chat_4bits = deepcopy(*lmdeploy_qwen_7b_chat)
-tb_qwen_7b_chat_kvint4 = deepcopy(*lmdeploy_qwen_7b_chat)
-tb_qwen_7b_chat_kvint8 = deepcopy(*lmdeploy_qwen_7b_chat)
-pt_qwen_7b_chat = deepcopy(*lmdeploy_qwen_7b_chat)
-pt_qwen_7b_chat['meta_template'] = qwen_meta_template
+turbomind_qwen_7b_chat = deepcopy(*lmdeploy_qwen_7b_chat)
+turbomind_qwen_7b_chat_4bits = deepcopy(*lmdeploy_qwen_7b_chat)
+turbomind_qwen_7b_chat_kvint4 = deepcopy(*lmdeploy_qwen_7b_chat)
+turbomind_qwen_7b_chat_kvint8 = deepcopy(*lmdeploy_qwen_7b_chat)
+pytorch_qwen_7b_chat = deepcopy(*lmdeploy_qwen_7b_chat)
+pytorch_qwen_7b_chat['meta_template'] = qwen_meta_template
 
 # ===== Configs for meta-llama/Llama-2-7b-chat-hf =====
-tb_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)
-tb_llama2_7b_chat_4bits = deepcopy(*lmdeploy_llama2_7b_chat)
-tb_llama2_7b_chat_kvint4 = deepcopy(*lmdeploy_llama2_7b_chat)
-tb_llama2_7b_chat_kvint8 = deepcopy(*lmdeploy_llama2_7b_chat)
-pt_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)
-pt_llama2_7b_chat['meta_template'] = llama2_meta_template
+turbomind_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)
+turbomind_llama2_7b_chat_4bits = deepcopy(*lmdeploy_llama2_7b_chat)
+turbomind_llama2_7b_chat_kvint4 = deepcopy(*lmdeploy_llama2_7b_chat)
+turbomind_llama2_7b_chat_kvint8 = deepcopy(*lmdeploy_llama2_7b_chat)
+pytorch_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)
+pytorch_llama2_7b_chat['meta_template'] = llama2_meta_template
 
 # ===== Configs for meta-llama/Meta-Llama-3-8B-Instruct =====
-tb_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
-tb_llama3_8b_instruct_4bits = deepcopy(*lmdeploy_llama3_8b_instruct)
-tb_llama3_8b_instruct_kvint4 = deepcopy(*lmdeploy_llama3_8b_instruct)
-tb_llama3_8b_instruct_kvint8 = deepcopy(*lmdeploy_llama3_8b_instruct)
-pt_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
-pt_llama3_8b_instruct['meta_template'] = llama3_meta_template
+turbomind_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
+turbomind_llama3_8b_instruct_4bits = deepcopy(*lmdeploy_llama3_8b_instruct)
+turbomind_llama3_8b_instruct_kvint4 = deepcopy(*lmdeploy_llama3_8b_instruct)
+turbomind_llama3_8b_instruct_kvint8 = deepcopy(*lmdeploy_llama3_8b_instruct)
+pytorch_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
+pytorch_llama3_8b_instruct['meta_template'] = llama3_meta_template
 
 # ===== Configs for meta-llama/Meta-Llama-3.1-8B-Instruct =====
-tb_llama3_1_8b_instruct = deepcopy(*lmdeploy_llama3_1_8b_instruct)
-tb_llama3_1_8b_instruct_4bits = deepcopy(*lmdeploy_llama3_1_8b_instruct)
-tb_llama3_1_8b_instruct_kvint4 = deepcopy(*lmdeploy_llama3_1_8b_instruct)
-tb_llama3_1_8b_instruct_kvint8 = deepcopy(*lmdeploy_llama3_1_8b_instruct)
-pt_llama3_1_8b_instruct = deepcopy(*lmdeploy_llama3_1_8b_instruct)
-pt_llama3_1_8b_instruct['meta_template'] = llama3_meta_template
+turbomind_llama3_1_8b_instruct = deepcopy(*lmdeploy_llama3_1_8b_instruct)
+turbomind_llama3_1_8b_instruct_4bits = deepcopy(*lmdeploy_llama3_1_8b_instruct)
+turbomind_llama3_1_8b_instruct_kvint4 = deepcopy(
+    *lmdeploy_llama3_1_8b_instruct)
+turbomind_llama3_1_8b_instruct_kvint8 = deepcopy(
+    *lmdeploy_llama3_1_8b_instruct)
+pytorch_llama3_1_8b_instruct = deepcopy(*lmdeploy_llama3_1_8b_instruct)
+pytorch_llama3_1_8b_instruct['meta_template'] = llama3_meta_template
 
 # ===== Configs for Qwen/Qwen2-7B-Instruct =====
-tb_qwen2_7b_instruct = deepcopy(*lmdeploy_qwen2_7b_instruct)
-tb_qwen2_7b_instruct_4bits = deepcopy(*lmdeploy_qwen2_7b_instruct)
-tb_qwen2_7b_instruct_kvint4 = deepcopy(*lmdeploy_qwen2_7b_instruct)
-tb_qwen2_7b_instruct_kvint8 = deepcopy(*lmdeploy_qwen2_7b_instruct)
-pt_qwen2_7b_instruct = deepcopy(*lmdeploy_qwen2_7b_instruct)
-pt_qwen2_7b_instruct['meta_template'] = qwen1_5_meta_template
+turbomind_qwen2_7b_instruct = deepcopy(*lmdeploy_qwen2_7b_instruct)
+turbomind_qwen2_7b_instruct_4bits = deepcopy(*lmdeploy_qwen2_7b_instruct)
+turbomind_qwen2_7b_instruct_kvint4 = deepcopy(*lmdeploy_qwen2_7b_instruct)
+turbomind_qwen2_7b_instruct_kvint8 = deepcopy(*lmdeploy_qwen2_7b_instruct)
+pytorch_qwen2_7b_instruct = deepcopy(*lmdeploy_qwen2_7b_instruct)
+pytorch_qwen2_7b_instruct['meta_template'] = qwen1_5_meta_template
 
-for model in [v for k, v in locals().items() if k.startswith('tb_')]:
+for model in [v for k, v in locals().items() if k.startswith('turbomind_')]:
     model['engine_config']['max_batch_size'] = 128
     model['batch_size'] = 128
 
@@ -270,7 +274,7 @@ for model in [v for k, v in locals().items() if k.endswith('_kvint8')]:
     model['engine_config']['quant_policy'] = 8
     model['abbr'] = model['abbr'] + '_kvint8'
 
-for model in [v for k, v in locals().items() if k.startswith('pt_')]:
+for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['type'] = LmdeployPytorchModel
     model['abbr'] = model['abbr'].replace('turbomind', 'pytorch')
     model['engine_config']['max_batch_size'] = 64
@@ -278,11 +282,11 @@ for model in [v for k, v in locals().items() if k.startswith('pt_')]:
     model['batch_size'] = 64
     model['concurrency'] = 64
 
-tb_internlm2_5_7b_chat_batch1[
-    'abbr'] = tb_internlm2_5_7b_chat_batch1['abbr'] + '_batch1'
-tb_internlm2_5_7b_chat_batch1['engine_config']['max_batch_size'] = 64
-tb_internlm2_5_7b_chat_batch1['batch_size'] = 64
-tb_internlm2_5_7b_chat_batch1['concurrency'] = 64
+turbomind_internlm2_5_7b_chat_batch1[
+    'abbr'] = turbomind_internlm2_5_7b_chat_batch1['abbr'] + '_batch1'
+turbomind_internlm2_5_7b_chat_batch1['engine_config']['max_batch_size'] = 64
+turbomind_internlm2_5_7b_chat_batch1['batch_size'] = 64
+turbomind_internlm2_5_7b_chat_batch1['concurrency'] = 64
 
 basic_pytorch_chat_tp1 = dict(type=LmdeployPytorchModel,
                               engine_config=dict(session_len=MAX_SESSION_LEN,
@@ -296,13 +300,13 @@ basic_pytorch_chat_tp1 = dict(type=LmdeployPytorchModel,
                               run_cfg=dict(num_gpus=1))
 
 # ===== Configs for Qwen/Qwen1.5-MoE-A2.7B-Chat =====
-pt_qwen1_5_moe_2_7b_chat = deepcopy(basic_pytorch_chat_tp1)
-pt_qwen1_5_moe_2_7b_chat['abbr'] = 'pt_qwen1_5_moe_2_7b_chat'
-pt_qwen1_5_moe_2_7b_chat['path'] = 'Qwen/Qwen1.5-MoE-A2.7B-Chat'
-pt_qwen1_5_moe_2_7b_chat['meta_template'] = qwen1_5_meta_template
+pytorch_qwen1_5_moe_2_7b_chat = deepcopy(basic_pytorch_chat_tp1)
+pytorch_qwen1_5_moe_2_7b_chat['abbr'] = 'pytorch_qwen1_5_moe_2_7b_chat'
+pytorch_qwen1_5_moe_2_7b_chat['path'] = 'Qwen/Qwen1.5-MoE-A2.7B-Chat'
+pytorch_qwen1_5_moe_2_7b_chat['meta_template'] = qwen1_5_meta_template
 
 # ===== Configs for google/gemma2-7b-it =====
-pt_gemma_2_9b_it = deepcopy(basic_pytorch_chat_tp1)
-pt_gemma_2_9b_it['abbr'] = 'pt_gemma_2_9b_it'
-pt_gemma_2_9b_it['path'] = 'google/gemma-2-9b-it'
-pt_gemma_2_9b_it['meta_template'] = gemma_meta_template
+pytorch_gemma_2_9b_it = deepcopy(basic_pytorch_chat_tp1)
+pytorch_gemma_2_9b_it['abbr'] = 'pytorch_gemma_2_9b_it'
+pytorch_gemma_2_9b_it['path'] = 'google/gemma-2-9b-it'
+pytorch_gemma_2_9b_it['meta_template'] = gemma_meta_template
