@@ -93,6 +93,8 @@ class TurboMind:
             _engine_config = TurbomindEngineConfig()
         if _engine_config.max_batch_size is None:
             _engine_config.max_batch_size = get_max_batch_size('cuda')
+        assert _engine_config.max_batch_size > 0, 'max_batch_size should be' \
+            f' greater than 0, but got {_engine_config.max_batch_size}'
 
         self.gpu_count = _engine_config.tp
 
@@ -471,7 +473,9 @@ class TurboMindInstance:
             if item and isinstance(item[0], np.ndarray):
                 item = [torch.from_numpy(x).squeeze() for x in item]
             # convert to lookup table type
-            _MAP = dict(fp32=torch.float, bf16=torch.bfloat16)
+            _MAP = dict(float=torch.float,
+                        bfloat16=torch.bfloat16,
+                        float16=torch.float16)
             dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
             item = [x.to(dtype=dtype) for x in item]
             item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]

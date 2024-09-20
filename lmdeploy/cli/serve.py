@@ -48,6 +48,8 @@ class SubCliServe:
 
         # common args
         ArgumentHelper.backend(parser)
+        ArgumentHelper.max_log_len(parser)
+
         # model args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
@@ -59,6 +61,7 @@ class SubCliServe:
         pt_group = parser.add_argument_group('PyTorch engine arguments')
 
         # common engine args
+        dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
         ArgumentHelper.device(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
@@ -71,6 +74,7 @@ class SubCliServe:
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
+        tb_group._group_actions.append(dtype_act)
         tb_group._group_actions.append(tp_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
@@ -140,6 +144,7 @@ class SubCliServe:
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
         ArgumentHelper.model_name(parser)
+        ArgumentHelper.max_log_len(parser)
 
         # chat template args
         ArgumentHelper.chat_template(parser)
@@ -154,6 +159,7 @@ class SubCliServe:
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
         # common engine args
+        dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
@@ -165,6 +171,7 @@ class SubCliServe:
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
+        tb_group._group_actions.append(dtype_act)
         tb_group._group_actions.append(tp_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
@@ -217,6 +224,7 @@ class SubCliServe:
             backend = autoget_backend(args.model_path_or_server)
         if backend == 'pytorch':
             backend_config = PytorchEngineConfig(
+                dtype=args.dtype,
                 tp=args.tp,
                 max_batch_size=max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
@@ -227,6 +235,7 @@ class SubCliServe:
                 max_prefill_token_num=args.max_prefill_token_num)
         else:
             backend_config = TurbomindEngineConfig(
+                dtype=args.dtype,
                 tp=args.tp,
                 max_batch_size=max_batch_size,
                 session_len=args.session_len,
@@ -244,7 +253,8 @@ class SubCliServe:
             backend=backend,
             backend_config=backend_config,
             chat_template_config=chat_template_config,
-            share=args.share)
+            share=args.share,
+            max_log_len=args.max_log_len)
 
     @staticmethod
     def api_server(args):
@@ -262,6 +272,7 @@ class SubCliServe:
             from lmdeploy.messages import PytorchEngineConfig
             adapters = get_lora_adapters(args.adapters)
             backend_config = PytorchEngineConfig(
+                dtype=args.dtype,
                 tp=args.tp,
                 max_batch_size=max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
@@ -274,6 +285,7 @@ class SubCliServe:
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(
+                dtype=args.dtype,
                 tp=args.tp,
                 max_batch_size=max_batch_size,
                 session_len=args.session_len,
@@ -303,7 +315,8 @@ class SubCliServe:
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
                        ssl=args.ssl,
-                       proxy_url=args.proxy_url)
+                       proxy_url=args.proxy_url,
+                       max_log_len=args.max_log_len)
 
     @staticmethod
     def api_client(args):

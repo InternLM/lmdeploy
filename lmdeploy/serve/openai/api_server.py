@@ -972,6 +972,7 @@ def serve(model_path: str,
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
           proxy_url: Optional[str] = None,
+          max_log_len: int = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -997,7 +998,7 @@ def serve(model_path: str,
             `turbomind` backend.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
             config instance. Default to none.
-        chat_template_config (ChatTemplateConfig): chat template configuration.
+        chat_template_config (ChatTemplateConfig): chat template configuration
             Default to None.
         server_name (str): host ip for serving
         server_port (int): server port
@@ -1006,11 +1007,17 @@ def serve(model_path: str,
         allow_credentials (bool): whether to allow credentials for CORS
         allow_methods (List[str]): a list of allowed HTTP methods for CORS
         allow_headers (List[str]): a list of allowed HTTP headers for CORS
-        log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
-        api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
-            a single api_key. Default to None, which means no api key applied.
-        ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
-    """  # noqa E501
+        log_level(str): set log level whose value among [CRITICAL, ERROR,
+            WARNING, INFO, DEBUG]
+        api_keys (List[str] | str | None): Optional list of API keys. Accepts
+            string type as a single api_key. Default to None, which means no
+            api key applied.
+        ssl (bool): Enable SSL. Requires OS Environment variables
+            'SSL_KEYFILE' and 'SSL_CERTFILE'.
+        proxy_url (str): The proxy url to register the api_server.
+        max_log_len (int): Max number of prompt characters or prompt tokens
+            being printed in log. Default: Unlimited
+    """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
@@ -1041,6 +1048,7 @@ def serve(model_path: str,
         backend=backend,
         backend_config=backend_config,
         chat_template_config=chat_template_config,
+        max_log_len=max_log_len,
         **kwargs)
 
     if proxy_url is not None:

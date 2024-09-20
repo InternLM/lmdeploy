@@ -101,6 +101,19 @@ class ArgumentHelper:
             '`model_path` will be adopted')
 
     @staticmethod
+    def dtype(parser, default: str = 'auto'):
+        return parser.add_argument(
+            '--dtype',
+            type=str,
+            default=default,
+            choices=['auto', 'float16', 'bfloat16'],
+            help='data type for model weights and activations. '
+            'The "auto" option will use FP16 precision '
+            'for FP32 and FP16 models, and BF16 precision '
+            'for BF16 models. This option will be ignored if '
+            'the model is a quantized model')
+
+    @staticmethod
     def model_format(parser, default: str = None):
         return parser.add_argument(
             '--model-format',
@@ -465,3 +478,12 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='the vision model batch size')
+
+    @staticmethod
+    def max_log_len(parser):
+        return parser.add_argument(
+            '--max-log-len',
+            type=int,
+            default=None,
+            help='Max number of prompt characters or prompt tokens being'
+            'printed in log. Default: Unlimited')

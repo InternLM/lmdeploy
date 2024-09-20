@@ -1,4 +1,3 @@
-import allure
 import pytest
 from utils.benchmark_utils import restful_test
 from utils.config_utils import get_benchmark_model_list
@@ -22,10 +21,12 @@ def getModelList(tp_num):
     model_list = get_benchmark_model_list(tp_num, kvint_list=[4, 8])
     new_model_list = []
     for model in model_list:
-        if 'Llama-2' in model:
+        if model['backend'] == 'pytorch':
+            model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.8'
+        elif 'Llama-2' in model['model']:
             model[
                 'extra'] = '--max-batch-size 256 --cache-max-entry-count 0.95'
-        elif 'internlm2' in model:
+        elif 'internlm2' in model['model']:
             model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.9'
         else:
             model['extra'] = '--max-batch-size 256'
@@ -40,14 +41,11 @@ def getModelList(tp_num):
                          getModelList(tp_num=1),
                          indirect=True)
 def test_restful_tp1(config, run_id, prepare_environment, worker_id):
-    result, restful_log, msg = restful_test(config,
-                                            run_id,
-                                            prepare_environment,
-                                            worker_id=worker_id)
+    result, msg = restful_test(config,
+                               run_id,
+                               prepare_environment,
+                               worker_id=worker_id)
 
-    if restful_log is not None:
-        allure.attach.file(restful_log,
-                           attachment_type=allure.attachment_type.TEXT)
     assert result, msg
 
 
@@ -57,14 +55,11 @@ def test_restful_tp1(config, run_id, prepare_environment, worker_id):
                          getModelList(tp_num=2),
                          indirect=True)
 def test_restful_tp2(config, run_id, prepare_environment, worker_id):
-    result, restful_log, msg = restful_test(config,
-                                            run_id,
-                                            prepare_environment,
-                                            worker_id=worker_id)
+    result, msg = restful_test(config,
+                               run_id,
+                               prepare_environment,
+                               worker_id=worker_id)
 
-    if restful_log is not None:
-        allure.attach.file(restful_log,
-                           attachment_type=allure.attachment_type.TEXT)
     assert result, msg
 
 
@@ -74,14 +69,11 @@ def test_restful_tp2(config, run_id, prepare_environment, worker_id):
                          getModelList(tp_num=4),
                          indirect=True)
 def test_restful_tp4(config, run_id, prepare_environment, worker_id):
-    result, restful_log, msg = restful_test(config,
-                                            run_id,
-                                            prepare_environment,
-                                            worker_id=worker_id)
+    result, msg = restful_test(config,
+                               run_id,
+                               prepare_environment,
+                               worker_id=worker_id)
 
-    if restful_log is not None:
-        allure.attach.file(restful_log,
-                           attachment_type=allure.attachment_type.TEXT)
     assert result, msg
 
 
@@ -103,13 +95,10 @@ def test_restful_tp4(config, run_id, prepare_environment, worker_id):
 }],
                          indirect=True)
 def test_restful_func_tp2(config, run_id, prepare_environment, worker_id):
-    result, restful_log, msg = restful_test(config,
-                                            run_id,
-                                            prepare_environment,
-                                            worker_id=worker_id,
-                                            is_smoke=True)
+    result, msg = restful_test(config,
+                               run_id,
+                               prepare_environment,
+                               worker_id=worker_id,
+                               is_smoke=True)
 
-    if restful_log is not None:
-        allure.attach.file(restful_log,
-                           attachment_type=allure.attachment_type.TEXT)
     assert result, msg

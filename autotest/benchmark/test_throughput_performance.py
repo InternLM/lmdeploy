@@ -1,4 +1,3 @@
-import allure
 import pytest
 from utils.benchmark_utils import throughput_test
 from utils.config_utils import (get_benchmark_model_list,
@@ -10,16 +9,13 @@ from utils.config_utils import (get_benchmark_model_list,
 @pytest.mark.parametrize('run_config',
                          get_benchmark_model_list(tp_num=1, kvint_list=[4, 8]))
 def test_throughput_tp1(config, run_id, run_config, worker_id):
-    result, throughput_log, msg = throughput_test(
-        config,
-        run_id,
-        run_config,
-        cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=1),
-        worker_id=worker_id)
+    result, msg = throughput_test(config,
+                                  run_id,
+                                  run_config,
+                                  cuda_prefix=get_cuda_prefix_by_workerid(
+                                      worker_id, tp_num=1),
+                                  worker_id=worker_id)
 
-    if throughput_log is not None:
-        allure.attach.file(throughput_log,
-                           attachment_type=allure.attachment_type.TEXT)
     assert result, msg
 
 
@@ -28,16 +24,13 @@ def test_throughput_tp1(config, run_id, run_config, worker_id):
 @pytest.mark.parametrize('run_config',
                          get_benchmark_model_list(tp_num=2, kvint_list=[4, 8]))
 def test_throughput_tp2(config, run_id, run_config, worker_id):
-    result, throughput_log, msg = throughput_test(
-        config,
-        run_id,
-        run_config,
-        cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
-        worker_id=worker_id)
+    result, msg = throughput_test(config,
+                                  run_id,
+                                  run_config,
+                                  cuda_prefix=get_cuda_prefix_by_workerid(
+                                      worker_id, tp_num=2),
+                                  worker_id=worker_id)
 
-    if throughput_log is not None:
-        allure.attach.file(throughput_log,
-                           attachment_type=allure.attachment_type.TEXT)
     assert result, msg
 
 
@@ -46,16 +39,13 @@ def test_throughput_tp2(config, run_id, run_config, worker_id):
 @pytest.mark.parametrize('run_config',
                          get_benchmark_model_list(tp_num=4, kvint_list=[4, 8]))
 def test_throughput_tp4(config, run_id, run_config, worker_id):
-    result, throughput_log, msg = throughput_test(
-        config,
-        run_id,
-        run_config,
-        cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=4),
-        worker_id=worker_id)
+    result, msg = throughput_test(config,
+                                  run_id,
+                                  run_config,
+                                  cuda_prefix=get_cuda_prefix_by_workerid(
+                                      worker_id, tp_num=4),
+                                  worker_id=worker_id)
 
-    if throughput_log is not None:
-        allure.attach.file(throughput_log,
-                           attachment_type=allure.attachment_type.TEXT)
     assert result, msg
 
 
@@ -72,15 +62,12 @@ def test_throughput_tp4(config, run_id, run_config, worker_id):
     'tp_num': 2
 }])
 def test_throughput_func_tp2(config, run_id, run_config, worker_id):
-    result, throughput_log, msg = throughput_test(
-        config,
-        run_id,
-        run_config,
-        cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
-        worker_id=worker_id,
-        is_smoke=True)
+    result, msg = throughput_test(config,
+                                  run_id,
+                                  run_config,
+                                  cuda_prefix=get_cuda_prefix_by_workerid(
+                                      worker_id, tp_num=2),
+                                  worker_id=worker_id,
+                                  is_smoke=True)
 
-    if throughput_log is not None:
-        allure.attach.file(throughput_log,
-                           attachment_type=allure.attachment_type.TEXT)
     assert result, msg
