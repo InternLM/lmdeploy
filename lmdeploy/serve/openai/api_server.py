@@ -40,6 +40,9 @@ class VariableInterface:
     session_id: int = 0
     api_keys: Optional[List[str]] = None
     request_hosts = []
+    # following are for registering to proxy server
+    proxy_url: Optional[str] = None
+    api_server_url: Optional[str] = None
 
 
 app = FastAPI(docs_url='/')
@@ -926,6 +929,33 @@ async def chat_interactive_v1(request: GenerateRequest,
         return JSONResponse(ret)
 
 
+@app.on_event('startup')
+async def startup_event():
+    if VariableInterface.proxy_url is None:
+        return
+    try:
+        import requests
+        url = f'{VariableInterface.proxy_url}/nodes/add'
+        data = {
+            'url': VariableInterface.api_server_url,
+            'status': {
+                'models': get_model_list()
+            }
+        }
+        headers = {
+            'accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+        response = requests.post(url, headers=headers, json=data)
+
+        if response.status_code != 200:
+            raise HTTPException(status_code=400,
+                                detail='Service registration failed')
+        print(response.text)
+    except Exception as e:
+        print(f'Service registration failed: {e}')
+
+
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -941,6 +971,7 @@ def serve(model_path: str,
           log_level: str = 'ERROR',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
+          proxy_url: Optional[str] = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1012,6 +1043,9 @@ def serve(model_path: str,
         chat_template_config=chat_template_config,
         **kwargs)
 
+    if proxy_url is not None:
+        VariableInterface.proxy_url = proxy_url
+        VariableInterface.api_server_url = f'{http_or_https}://{server_name}:{server_port}'  # noqa
     for i in range(3):
         print(
             f'HINT:    Please open \033[93m\033[1m{http_or_https}://'

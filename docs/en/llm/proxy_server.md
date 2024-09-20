@@ -11,6 +11,8 @@ python3 -m lmdeploy.serve.proxy.proxy --server_name {server_name} --server_port 
 ```
 
 After startup is successful, the URL of the proxy service will also be printed by the script. Access this URL in your browser to open the Swagger UI.
+Subsequently, users can add it directly to the proxy service when starting the `api_server` service by using the `--proxy-url` command. For example:
+`lmdeploy serve api_server InternLM/internlm2-chat-1_8b --proxy-url http://0.0.0.0:10086`。
 
 ## API
 
@@ -29,6 +31,65 @@ APIs related to usage include:
 - /v1/completions
 
 The usage of these APIs is the same as that of api_server.
+
+### add, delete and query through commands
+
+```shell
+curl -X 'GET' \
+  'http://localhost:10086/nodes/status' \
+  -H 'accept: application/json'
+```
+
+```shell
+curl -X 'POST' \
+  'http://localhost:10086/nodes/add' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "url": "http://0.0.0.0:23333"
+}'
+```
+
+```shell
+curl -X 'POST' \
+  'http://localhost:10086/nodes/remove?node_url=http://0.0.0.0:23333' \
+  -H 'accept: application/json' \
+  -d ''
+```
+
+### add, delete and query through python
+
+```python
+# query all nodes
+import requests
+url = 'http://localhost:10086/nodes/status'
+headers = {'accept': 'application/json'}
+response = requests.get(url, headers=headers)
+print(response.text)
+```
+
+```python
+# add a new node
+import requests
+url = 'http://localhost:10086/nodes/add'
+headers = {
+    'accept': 'application/json',
+    'Content-Type': 'application/json'
+}
+data = {"url": "http://0.0.0.0:23333"}
+response = requests.post(url, headers=headers, json=data)
+print(response.text)
+```
+
+```python
+# delete a node
+import requests
+url = 'http://localhost:10086/nodes/remove'
+headers = {'accept': 'application/json',}
+params = {'node_url': 'http://0.0.0.0:23333',}
+response = requests.post(url, headers=headers, data='', params=params)
+print(response.text)
+```
 
 ## Dispatch Strategy
 
