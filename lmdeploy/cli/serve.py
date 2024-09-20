@@ -48,6 +48,8 @@ class SubCliServe:
 
         # common args
         ArgumentHelper.backend(parser)
+        ArgumentHelper.max_log_len(parser)
+
         # model args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
@@ -138,6 +140,7 @@ class SubCliServe:
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
         ArgumentHelper.model_name(parser)
+        ArgumentHelper.max_log_len(parser)
 
         # chat template args
         ArgumentHelper.chat_template(parser)
@@ -246,7 +249,8 @@ class SubCliServe:
             backend=backend,
             backend_config=backend_config,
             chat_template_config=chat_template_config,
-            share=args.share)
+            share=args.share,
+            max_log_len=args.max_log_len)
 
     @staticmethod
     def api_server(args):
@@ -306,7 +310,8 @@ class SubCliServe:
                        allow_headers=args.allow_headers,
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
-                       ssl=args.ssl)
+                       ssl=args.ssl,
+                       max_log_len=args.max_log_len)
 
     @staticmethod
     def api_client(args):

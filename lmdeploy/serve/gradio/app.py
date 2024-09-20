@@ -14,9 +14,9 @@ def run(model_path_or_server: str,
         backend_config: Optional[Union[PytorchEngineConfig,
                                        TurbomindEngineConfig]] = None,
         chat_template_config: Optional[ChatTemplateConfig] = None,
-        tp: int = 1,
         model_name: str = None,
         share: bool = False,
+        max_log_len: int = None,
         **kwargs):
     """chat with AI assistant through web ui.
 
@@ -34,8 +34,9 @@ def run(model_path_or_server: str,
             config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
-        tp (int): tensor parallel for Turbomind
-        share (bool): whether to create a publicly shareable link for the app
+        share (bool): whether to create a publicly shareable link for the app,
+        max_log_len (int): Max number of prompt characters or prompt tokens
+            being printed in log. Default: Unlimited
     """
     if ':' in model_path_or_server:
         from lmdeploy.serve.gradio.api_server_backend import run_api_server
@@ -61,7 +62,6 @@ def run(model_path_or_server: str,
                   chat_template_config=chat_template_config,
                   model_name=model_name,
                   batch_size=batch_size,
-                  tp=tp,
                   share=share,
                   **kwargs)
 
