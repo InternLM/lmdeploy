@@ -38,9 +38,18 @@ class CudaGraphMeta:
 class CudaGraphMixin:
     """mixin class to support cudagraph."""
 
-    def support_cudagraph(self, *args, **kwargs):
+    def support_cuda_graph(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: List[List[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
         """return True is model support cudagraph."""
-        return True
+        seq_lens = input_ids.size(1)
+        return seq_lens <= 256
 
     def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args,
                                **kwargs) -> BuffType:

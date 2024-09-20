@@ -12,6 +12,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 LANGUAGE_TOKEN_TYPE = 0
 VISION_TOKEN_TYPE = 1
 
@@ -471,10 +473,8 @@ class ChatGLMModel(nn.Module):
         return self.embedding
 
 
-class ChatGLMForConditionalGeneration(nn.Module):
+class ChatGLMForConditionalGeneration(nn.Module, CudaGraphMixin):
     """rewrote model of LlamaForCausalLM."""
-
-    support_cuda_graph = True
 
     def __init__(self,
                  config: PretrainedConfig,

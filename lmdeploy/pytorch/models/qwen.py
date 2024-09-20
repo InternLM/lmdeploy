@@ -12,6 +12,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class QWenAttention(torch.nn.Module):
     """Parallel self-attention layer abstract class.
@@ -304,10 +306,8 @@ class QWenModel(nn.Module):
         return self.wte
 
 
-class QWenLMHeadModel(nn.Module):
+class QWenLMHeadModel(nn.Module, CudaGraphMixin):
     """rewrote model."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'gate_up_proj': [

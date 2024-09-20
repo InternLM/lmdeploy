@@ -12,6 +12,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class InternLMAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
@@ -301,10 +303,8 @@ class InternLMModel(nn.Module):
         return self.embed_tokens
 
 
-class InternLMForCausalLM(nn.Module):
+class InternLMForCausalLM(nn.Module, CudaGraphMixin):
     """rewrote model of LlamaForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'qkv_proj': [

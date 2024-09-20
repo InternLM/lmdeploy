@@ -26,7 +26,7 @@ def next_power_of_2(n: int):
     return n
 
 
-def _false(self, *args, **kwargs):
+def _false(*args, **kwargs):
     """default value of not support cuda graph."""
     return False
 
