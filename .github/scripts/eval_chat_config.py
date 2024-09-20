@@ -172,7 +172,7 @@ pytorch_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
 pytorch_internlm_chat_7b['meta_template'] = internlm_meta_template
 
 # ===== Configs for internlm/internlm2-chat-7b =====
-internlm2_chat_7b = deepcopy(*lmdeploy_internlm2_chat_7b)
+turbomind_internlm2_chat_7b = deepcopy(*lmdeploy_internlm2_chat_7b)
 turbomind_internlm2_chat_7b_4bits = deepcopy(*lmdeploy_internlm2_chat_7b)
 turbomind_internlm2_chat_7b_kvint4 = deepcopy(*lmdeploy_internlm2_chat_7b)
 turbomind_internlm2_chat_7b_kvint8 = deepcopy(*lmdeploy_internlm2_chat_7b)
