@@ -124,8 +124,8 @@ def run_local(model_path: str,
               chat_template_config: Optional[ChatTemplateConfig] = None,
               server_name: str = '0.0.0.0',
               server_port: int = 6006,
-              tp: int = 1,
               share: bool = False,
+              max_log_len: int = None,
               **kwargs):
     """chat with AI assistant through web ui.
 
@@ -156,8 +156,9 @@ def run_local(model_path: str,
             "0.0.0.0". For huggingface space demo, it should be
             "huggingface-space".
         server_port (int): the port of gradio server
-        tp (int): tensor parallel for Turbomind
         share (bool): whether to create a publicly shareable link for the app
+        max_log_len (int): Max number of prompt characters or prompt tokens
+            being printed in log. Default: Unlimited
     """
     InterFace.async_engine = AsyncEngine(
         model_path=model_path,
@@ -165,7 +166,7 @@ def run_local(model_path: str,
         backend_config=backend_config,
         chat_template_config=chat_template_config,
         model_name=model_name,
-        tp=tp,
+        max_log_len=max_log_len,
         **kwargs)
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
