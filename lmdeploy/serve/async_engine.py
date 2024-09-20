@@ -11,6 +11,7 @@ from queue import Empty, Queue
 from threading import Thread
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response,
                                TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
@@ -125,6 +126,8 @@ class AsyncEngine(LogitsMixin):
             config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
+        max_log_len (int): Max number of prompt characters or prompt tokens
+            being printed in log. Default: Unlimited
     """
 
     def __init__(self,
@@ -134,6 +137,7 @@ class AsyncEngine(LogitsMixin):
                  backend_config: Optional[Union[TurbomindEngineConfig,
                                                 PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
+                 max_log_len: int = None,
                  **kwargs) -> None:
         logger.info(
             f'input backend={backend}, backend_config={backend_config}')
@@ -180,6 +184,7 @@ class AsyncEngine(LogitsMixin):
         for i in range(self.instance_num):
             self.gens_set.add(self.engine.create_instance())
         self._session_id = count(0)
+        self.request_logger = RequestLogger(max_log_len)
 
     def _build_turbomind(
             self,
@@ -501,11 +506,11 @@ class AsyncEngine(LogitsMixin):
         if gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
-            logger.warning(f"n({gen_config.n}) > 1 hasn't been supported yet. "
-                           f'Fallback to 1')
+            logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "
+                         f'Fallback to 1')
             gen_config.n = 1
         prompt = messages
-
+        self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
         prompt_input = await self._get_prompt_input(prompt,
                                                     do_preprocess,
                                                     sequence_start,
@@ -514,10 +519,11 @@ class AsyncEngine(LogitsMixin):
         prompt = prompt_input['prompt']
         input_ids = prompt_input['input_ids']
         finish_reason = None
-        logger.info(f'prompt={prompt!r}, '
-                    f'gen_config={gen_config}, '
-                    f'prompt_token_id={input_ids}, '
-                    f'adapter_name={adapter_name}.')
+        self.request_logger.log_inputs(session_id=session_id,
+                                       prompt=prompt,
+                                       prompt_token_ids=input_ids,
+                                       gen_config=gen_config,
+                                       adapter_name=adapter_name)
         logger.info(f'session_id={session_id}, '
                     f'history_tokens={self.id2step[str(session_id)]}, '
                     f'input_tokens={len(input_ids)}, '

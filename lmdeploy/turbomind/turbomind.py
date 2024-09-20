@@ -93,6 +93,8 @@ class TurboMind:
             _engine_config = TurbomindEngineConfig()
         if _engine_config.max_batch_size is None:
             _engine_config.max_batch_size = get_max_batch_size('cuda')
+        assert _engine_config.max_batch_size > 0, 'max_batch_size should be' \
+            f' greater than 0, but got {_engine_config.max_batch_size}'
 
         self.gpu_count = _engine_config.tp
 

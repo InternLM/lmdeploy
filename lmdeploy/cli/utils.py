@@ -478,3 +478,12 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='the vision model batch size')
+
+    @staticmethod
+    def max_log_len(parser):
+        return parser.add_argument(
+            '--max-log-len',
+            type=int,
+            default=None,
+            help='Max number of prompt characters or prompt tokens being'
+            'printed in log. Default: Unlimited')
