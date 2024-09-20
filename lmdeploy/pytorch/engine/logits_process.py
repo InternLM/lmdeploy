@@ -23,11 +23,11 @@ def _process_bad_words_(scores: torch.Tensor,
                         bad_words: torch.LongTensor,
                         filter_value: float = -float('inf')):
     """process bad words."""
-    batch_size = scores.size(0)
-    batch_idx = torch.arange(batch_size, device=scores.device)
-    filtered_scores = scores[batch_idx[:, None], bad_words]
-    filtered_scores[bad_words >= 0] = filter_value
-    scores[batch_idx[:, None], bad_words] = filtered_scores
+    mask = bad_words >= 0
+    bad_words = bad_words.where(mask, 0)
+    filtered_scores = scores.gather(1, bad_words)
+    filtered_scores[mask] = filter_value
+    scores.scatter_(1, bad_words, filtered_scores)
     return scores
 
 
@@ -364,9 +364,6 @@ class FusedLogitsProcessor(LogitsWarper):
 
             softmax_scores = scores.softmax(1)
 
-            softmax_scores = softmax_scores[:, :max_topk]
-            indices = indices[:, :max_topk]
-
             seeds = sampling_inputs.random_seeds
             offsets = sampling_inputs.random_offsets
             return _multinomial_sampling(softmax_scores, seeds, offsets,
@@ -380,8 +377,5 @@ class FusedLogitsProcessor(LogitsWarper):
             if max_topk <= 0:
                 scores, indices = logits.sort(1, descending=True)
             else:
-                topk_scores, topk_indices = logits.topk(max_topk, dim=1)
-                scores = logits.fill_(0)  # (seq, vocalb_size)
-                scores[..., :max_topk] = topk_scores
-                indices = topk_indices  # (seq, max_topk)
+                scores, indices = logits.topk(max_topk, dim=1)
             return __random_sampling(scores, indices)
