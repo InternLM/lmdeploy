@@ -13,14 +13,24 @@ on:
         description: 'Set branch or tag or commit id. Default is "main"'
         type: string
         default: 'main'
-      models:
+      chat_models:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[tb_internlm2_chat_7b, pt_internlm2_chat_7b, tb_internlm2_5_7b_chat, pt_internlm2_5_7b_chat, tb_internlm2_5_20b_chat, pt_internlm2_5_20b_chat, tb_qwen1_5_7b_chat, pt_qwen1_5_7b_chat, tb_llama_3_8b_instruct, pt_llama_3_8b_instruct, tb_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, tb_qwen2_7b_instruct, pt_qwen2_7b_instruct, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it, tb_internlm2_chat_7b_4bits, tb_internlm2_chat_7b_kvint4, tb_internlm2_chat_7b_kvint8, tb_internlm2_5_7b_chat_4bits, tb_internlm2_5_7b_chat_kvint4, tb_internlm2_5_7b_chat_kvint8, tb_internlm2_5_20b_chat_4bits, tb_internlm2_5_20b_chat_kvint4, tb_internlm2_5_20b_chat_kvint8, tb_qwen1_5_7b_chat_4bits, tb_qwen1_5_7b_chat_kvint4, tb_qwen1_5_7b_chat_kvint8, tb_llama_3_8b_instruct_4bits, tb_llama_3_8b_instruct_kvint4, tb_llama_3_8b_instruct_kvint8, tb_llama_3d1_8b_instruct_4bits, tb_llama_3d1_8b_instruct_kvint4, tb_llama_3d1_8b_instruct_kvint8, tb_qwen2_7b_instruct_4bits, tb_qwen2_7b_instruct_kvint8]'
-      datasets:
+        default: '[tb_internlm2_chat_7b, pt_internlm2_chat_7b, tb_internlm2_5_7b_chat, pt_internlm2_5_7b_chat, tb_internlm2_5_7b_chat_batch1, tb_internlm2_5_20b_chat, pt_internlm2_5_20b_chat, tb_qwen1_5_7b_chat, pt_qwen1_5_7b_chat, tb_llama2_7b_chat, pt_llama2_7b_chat, tb_llama3_8b_instruct, pt_llama3_8b_instruct, tb_llama3_1_8b_instruct, pt_llama3_1_8b_instruct, tb_qwen2_7b_instruct, pt_qwen2_7b_instruct, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it, tb_internlm2_chat_7b_4bits, tb_internlm2_chat_7b_kvint4, tb_internlm2_chat_7b_kvint8, tb_internlm2_5_7b_chat_4bits, tb_internlm2_5_7b_chat_kvint4, tb_internlm2_5_7b_chat_kvint8, tb_internlm2_5_20b_chat_4bits, tb_internlm2_5_20b_chat_kvint4, tb_internlm2_5_20b_chat_kvint8, tb_qwen1_5_7b_chat_4bits, tb_qwen1_5_7b_chat_kvint4, tb_qwen1_5_7b_chat_kvint8, tb_llama2_7b_chat_4bits, tb_llama2_7b_chat_kvint4, tb_llama2_7b_chat_kvint8, tb_llama3_8b_instruct_4bits, tb_llama3_8b_instruct_kvint4, tb_llama3_8b_instruct_kvint8, tb_llama3_1_8b_instruct_4bits, tb_llama3_1_8b_instruct_kvint4, tb_llama3_1_8b_instruct_kvint8, tb_qwen2_7b_instruct_4bits, tb_qwen2_7b_instruct_kvint4, tb_qwen2_7b_instruct_kvint8]'
+      chat_datasets:
         required: true
         description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
+        type: string
+        default: '[*mmlu_datasets, *gsm8k_datasets]'
+      base_models:
+        required: true
+        description: 'Tested TurboMind models list. eg. [tb_internlm2_5_7b, tb_qwen2_7b]'
+        type: string
+        default: '[tb_internlm2_5_7b, tb_qwen2_7b]'
+      baes_datasets:
+        required: true
+        description: 'Tested datasets list. eg. [*mmlu_datasets, *gsm8k_datasets]'
         type: string
         default: '[*mmlu_datasets, *gsm8k_datasets]'
       local_config:
@@ -28,11 +38,11 @@ on:
         description: 'Whether use local eval config'
         type: boolean
         default: false
-      devices:
+      offline_mode:
         required: true
-        description: 'CUDA_VISIBLE_DEVICES.'
-        type: string
-        default: '0,1,2,3,4,5,6,7'
+        description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
+        type: boolean
+        default: false
       dependency_pkgs:
         required: true
         description: 'Dependency packages, you can also set a specific version'
@@ -84,6 +94,10 @@ jobs:
     needs: linux-build
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 4320 # 72hours
+    strategy:
+      fail-fast: false
+      matrix:
+        evaluate_type: ['chat', 'base']
     container:
       image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -102,11 +116,16 @@ jobs:
           export TIME_STAMP="$(date +'%Y%m%d-%H%M%S')"
           echo "TIME_STAMP=$TIME_STAMP" >> $GITHUB_ENV
       - name: Clone repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v2
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Copy repository - offline
+        if: ${{inputs.offline_mode}}
+        run: cp -r /root/models/offline_pkg/lmdeploy/. .
       - name: Download Artifacts
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
@@ -115,13 +134,17 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install -e /root/packages/AutoAWQ_kernels
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip install -r requirements/test.txt
+      - name: Install lmdeploy - offline
+        if: ${{inputs.offline_mode}}
+        run: |
+          python3 -m pip install /root/models/offline_pkg/py310/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |
@@ -140,18 +163,23 @@ jobs:
           python3 .github/scripts/action_tools.py create_model_links /root/models .
       - name: Use local config
         if: ${{inputs.local_config}}
-        run: cp /nvme/qa_test_models/offline_pkg/eval_config.py .github/scripts/eval_opencompass_config.py
-      - name: Evaluate models
+        run: cp /root/models/offline_pkg/eval_config.py .github/scripts/eval_opencompass_config.py
+      - name: Evaluate chat models
+        if: matrix.evaluate_type == 'chat'
         run: |
-          echo ${{github.event.inputs.models}}
-          echo ${{github.event.inputs.devices}}
+          echo ${{github.event.inputs.chat_models}}
+          echo ${{github.event.inputs.chat_datasets}}
           export LMDEPLOY_DIR=$(pwd)
-          export CUDA_VISIBLE_DEVICES="${{github.event.inputs.devices}}"
 
-          python3 .github/scripts/action_tools.py evaluate \
-            --models "${{github.event.inputs.models}}" \
-            --datasets "${{github.event.inputs.datasets}}" \
-            --workspace /root/evaluation-reports/${{ github.run_id }}
+          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.chat_models}}" "${{github.event.inputs.chat_datasets}}" /root/evaluation-reports/${{ github.run_id }} chat
+      - name: Evaluate base models
+        if: matrix.evaluate_type == 'base'
+        run: |
+          echo ${{github.event.inputs.base_models}}
+          echo ${{github.event.inputs.baes_datasets}}
+          export LMDEPLOY_DIR=$(pwd)
+
+          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.base_models}}" "${{github.event.inputs.baes_datasets}}" /root/evaluation-reports/${{ github.run_id }} base
       - name: Clear workspace
         if: always()
         run: |

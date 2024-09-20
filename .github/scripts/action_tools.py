@@ -104,6 +104,7 @@ def _load_hf_results(test_results: dict, model_name: str):
 def evaluate(models: List[str],
              datasets: List[str],
              workspace: str,
+             evaluate_type: str,
              is_smoke: bool = False):
     """Evaluate models from lmdeploy using opencompass.
 
@@ -112,51 +113,37 @@ def evaluate(models: List[str],
         workspace: Working directory.
     """
     os.makedirs(workspace, exist_ok=True)
-    output_csv = os.path.join(workspace, 'results.csv')
+    output_csv = os.path.join(workspace, f'results_{evaluate_type}.csv')
+    if os.path.exists(output_csv):
+        os.remove(output_csv)
     num_model = len(models)
-    test_model_names = set()
     for idx, ori_model in enumerate(models):
         print()
         print(50 * '==')
         print(f'Start evaluating {idx+1}/{num_model} {ori_model} ...')
         model = ori_model.lower()
-        model_, precision = model.rsplit('_', 1)
-        do_lite = precision in ['4bits', 'kvint4', 'kvint8']
-        if do_lite:
-            model = model_
-        engine_type, model_ = model.split('_', 1)
-        if engine_type not in ['tb', 'pt', 'hf']:
-            engine_type = 'tb'
-        else:
-            model = model_
 
         opencompass_dir = os.path.abspath(os.environ['OPENCOMPASS_DIR'])
         lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
         config_path = os.path.join(
-            lmdeploy_dir, '.github/scripts/eval_opencompass_config.py')
+            lmdeploy_dir, f'.github/scripts/eval_{evaluate_type}_config.py')
         config_path_new = os.path.join(opencompass_dir, 'configs',
                                        'eval_lmdeploy.py')
         if os.path.exists(config_path_new):
             os.remove(config_path_new)
         shutil.copy(config_path, config_path_new)
-        target_model = f'{engine_type}_{model}'
-        if do_lite:
-            target_model = target_model + f'_{precision}'
+
         cfg = Config.fromfile(config_path_new)
-        if not hasattr(cfg, target_model):
-            logging.error(
-                f'Model {target_model} not found in configuration file')
+        if not hasattr(cfg, model):
+            logging.error(f'Model {model} not found in configuration file')
             continue
-        if engine_type != 'hf':
-            model_cfg = cfg[target_model]
-            hf_model_path = model_cfg['path']
-            if not os.path.exists(hf_model_path):
-                logging.error(f'Model path not exists: {hf_model_path}')
-                continue
-            logging.info(
-                f'Start evaluating {target_model} ...\\nn{model_cfg}\n\n')
-        else:
-            hf_model_path = target_model
+
+        model_cfg = cfg[model]
+        hf_model_path = model_cfg['path']
+        if not os.path.exists(hf_model_path):
+            logging.error(f'Model path not exists: {hf_model_path}')
+            continue
+        logging.info(f'Start evaluating {model} ...\\nn{model_cfg}\n\n')
 
         with open(config_path_new, 'a') as f:
             f.write(f'\ndatasets = {datasets}\n')
@@ -164,12 +151,12 @@ def evaluate(models: List[str],
                 f.write('\nfor d in datasets:\n')
                 f.write("    if d['reader_cfg'] is not None:\n")
                 f.write("        d['reader_cfg']['test_range'] = '[0:50]'\n")
-            if engine_type == 'hf':
-                f.write(f'\nmodels = [ *{target_model} ]\n')
+            if model.startswith('hf'):
+                f.write(f'\nmodels = [ *{model} ]\n')
             else:
-                f.write(f'\nmodels = [ {target_model} ]\n')
+                f.write(f'\nmodels = [ {model} ]\n')
 
-        work_dir = os.path.join(workspace, target_model)
+        work_dir = os.path.join(workspace, model)
         cmd_eval = [
             f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
         ]
@@ -213,32 +200,18 @@ def evaluate(models: List[str],
                 model_results['crows_pairs'] = acc
         logging.info(f'\n{hf_model_path}\n{model_results}')
         dataset_names = list(model_results.keys())
-        prec = precision if do_lite else '-'
 
-        row = ','.join([model, engine_type, prec] +
-                       [str(task_duration_seconds)] +
+        row = ','.join([model, str(task_duration_seconds)] +
                        [model_results[_] for _ in dataset_names])
-        hf_res_row = None
-        if hf_model_path not in test_model_names:
-            test_model_names.add(hf_model_path)
-            hf_res = _load_hf_results(model_results, hf_model_path)
-            if hf_res:
-                hf_metrics = [
-                    hf_res[d] if d in hf_res else '-' for d in dataset_names
-                ]
-                hf_res_row = ','.join([model, 'hf', '-', '-'] + hf_metrics)
+
         if not os.path.exists(output_csv):
             with open(output_csv, 'w') as f:
-                header = ','.join(['Model', 'Engine', 'Precision'] +
-                                  ['task_duration_secs'] + dataset_names)
+                header = ','.join(['Model', 'task_duration_secs'] +
+                                  dataset_names)
                 f.write(header + '\n')
-                if hf_res_row:
-                    f.write(hf_res_row + '\n')
                 f.write(row + '\n')
         else:
             with open(output_csv, 'a') as f:
-                if hf_res_row:
-                    f.write(hf_res_row + '\n')
                 f.write(row + '\n')
 
     # write to github action summary
