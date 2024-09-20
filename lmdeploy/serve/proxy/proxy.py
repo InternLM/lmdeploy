@@ -116,7 +116,7 @@ class NodeManager:
         """
         if status is None:
             status = self.nodes.get(node_url, Status())
-        if status.models is not None:  # force register directly
+        if status.models != []:  # force register directly
             self.nodes[node_url] = status
             self.update_config_file()
             return
