@@ -35,6 +35,7 @@ def main(model_path: str,
          temperature: float = 0.8,
          repetition_penalty: float = 1.0,
          cap: str = 'chat',
+         dtype: str = 'auto',
          tp: int = 1,
          model_format: str = None,
          quant_policy: int = 0,
@@ -57,20 +58,31 @@ def main(model_path: str,
         top_p (int): sampling top p.
         temperature (float): sampling temperature.
         repetition_penalty (float): parameter to penalize repetition
-        cap (str): the capability of a model. For example, codellama has the ability among ['completion', 'infilling', 'chat', 'python']
+        cap (str): the capability of a model. For example, codellama has the
+            ability among ['completion', 'infilling', 'chat', 'python']
+        dtype (str): data type for model weights and activations. It can be
+            one of the following values, ['auto', 'float16', 'bfloat16']
+            The `auto` option will use FP16 precision for FP32 and FP16
+            models, and BF16 precision for BF16 models.
         tp (int): GPU number used in tensor parallelism
-        model_format (str): the layout of the deployed model. It can be one of the following values [hf, llama, awq]
-        quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
-        cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
-        cache_block_seq_len (int): the length of the token sequence in a k/v block, default to 64
-        rope_scaling_factor (float): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
+        model_format (str): the layout of the deployed model. It can be one
+            of the following values [hf, llama, awq]
+        quant_policy (int): default to 0. When k/v is quantized into 4 or 8
+            bit, set it to 4 or 8, respectively
+        cache_max_entry_count (float): the percentage of gpu memory occupied
+            by the k/v cache.
+        cache_block_seq_len (int): the length of the token sequence in a k/v
+            block, default to 64
+        rope_scaling_factor (float): scaling factor used for dynamic ntk,
+            default to 0. TurboMind follows the implementation of transformer
+            LlamaAttention
         enable_prefix_caching (bool): whether enable prefix caching
         session_len (int): the length input output tokens
         stream_output (bool): indicator for streaming output or not
         request_output_len (int): output token nums
         chat_template_config (ChatTemplateConfig): chat template config
         kwargs (dict): unused args
-    """  # noqa: E 501
+    """
 
     # chat template
     _, chat_template_name = get_names_from_model(model_path)
@@ -96,6 +108,7 @@ def main(model_path: str,
         enable_prefix_caching=enable_prefix_caching,
         quant_policy=quant_policy,
         rope_scaling_factor=rope_scaling_factor,
+        dtype=dtype,
         tp=tp)
     print('engine_cfg:\n', engine_cfg, sep='', flush=True)
 

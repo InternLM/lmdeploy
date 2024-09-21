@@ -28,13 +28,10 @@ def tprint(*args, **kwargs):
 def _weight_dtype_map(weight_type: str, default=None):
     """map literal data type to torch dtype."""
 
-    _WEIGHT_DTYPE_MAP = dict(
-        int4=torch.float16,
-        fp16=torch.float16,
-        fp32=torch.float16,
-        bf16=torch.bfloat16
-        if torch.cuda.is_bf16_supported() else torch.float16,
-    )
+    _WEIGHT_DTYPE_MAP = dict(int4=torch.float16,
+                             float16=torch.float16,
+                             float32=torch.float16,
+                             bfloat16=torch.bfloat16)
 
     return _WEIGHT_DTYPE_MAP.get(weight_type, default)
 
@@ -128,7 +125,7 @@ class BaseOutputModel(ABC):
         elif len(self.tm_params) > 0:
             tm_params = self.tm_params
             weight_type = self.model_config.weight_type
-            assert weight_type in ['fp16', 'fp32', 'bf16', 'int4']
+            assert weight_type in ['float16', 'bfloat16', 'int4']
 
             # currently, the tensor type should in
             # [torch.float, torch.half, torch.bfloat16, torch.int32]
@@ -137,12 +134,12 @@ class BaseOutputModel(ABC):
                 torch.int32, torch.float, torch.half, torch.bfloat16
             ]
             if torch_tensor.dtype != torch.int32:
-                if weight_type in ['fp16', 'int4']:
+                if weight_type in ['float16', 'int4']:
                     torch_tensor = torch_tensor.half()
-                elif weight_type == 'bf16':
+                elif weight_type == 'bfloat16':
                     torch_tensor = torch_tensor.bfloat16()
                 else:
-                    torch_tensor = torch_tensor.float()
+                    torch_tensor = torch_tensor.half()
             for tm_tensor in tm_params[name]:
                 tm_tensor.copy_from(torch_tensor)
             tm_params.pop(name)

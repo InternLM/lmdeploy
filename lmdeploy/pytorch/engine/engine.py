@@ -43,11 +43,6 @@ def _raise_exception_on_finish(task: asyncio.Task) -> None:
         raise e
 
 
-class NoRunningSeqs(Exception):
-    """NoRunningSeqs."""
-    pass
-
-
 @dataclass
 class InferOutput:
     """The output of the model inference."""
@@ -127,8 +122,12 @@ class Engine:
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(
                 engine_config.device_type)
+        assert engine_config.max_batch_size > 0, 'max_batch_size should be' \
+            f' greater than 0, but got {engine_config.max_batch_size}'
         if engine_config.adapters is not None:
             check_adapters(list(engine_config.adapters.values()))
+        assert engine_config.dtype in ['auto', 'float16', 'bfloat16'], \
+            f'unsupported specified data type {engine_config.dtype}'
 
         self.engine_config = engine_config
         self.tp = engine_config.tp
@@ -171,6 +170,7 @@ class Engine:
                 trust_remote_code=trust_remote_code,
                 adapters=adapters,
                 tp=self.tp,
+                dtype=engine_config.dtype,
                 custom_module_map=engine_config.custom_module_map)
 
         cache_config = self.model_agent.cache_config
@@ -633,7 +633,11 @@ class Engine:
                 ret['logits'] = ret['logits'][:, last_token_loc]
             return ret
         else:
-            return await __long_context_single_forward(inputs)
+            ret = await __long_context_single_forward(inputs)
+            if not return_logits and not inputs.is_decoding:
+                last_token_loc = [-1]
+                ret['logits'] = ret['logits'][:, last_token_loc]
+            return ret
 
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor,
                             logits: torch.Tensor, stopped: torch.Tensor):
@@ -825,16 +829,15 @@ class Engine:
             return any(seq.return_logits for seq in seqs)
 
         while True:
-            is_prefill = await in_que.get()
+            is_prefill, scheduler_output = await in_que.get()
             try:
+                running = scheduler_output.running
+                adapters = scheduler_output.adapters
+                swap_in_map = scheduler_output.swap_in_map
+                swap_out_map = scheduler_output.swap_out_map
                 prefill_interval = self.scheduler_config.prefill_interval
-                schedule_output = self.scheduler.schedule(
-                    is_prefill=is_prefill, prealloc_size=prefill_interval)
-                running: SeqList = schedule_output.running
-                adapters = schedule_output.adapters
                 loop_count = 1 if is_prefill else (prefill_interval - 1)
-                if len(running) == 0:
-                    raise NoRunningSeqs()
+                assert len(running) > 0
 
                 # create inputs
                 inputs = self.create_model_inputs(running, adapters,
@@ -852,8 +855,8 @@ class Engine:
 
                 await self._async_step_background(
                     inputs=inputs,
-                    swap_in_map=schedule_output.swap_in_map,
-                    swap_out_map=schedule_output.swap_out_map,
+                    swap_in_map=swap_in_map,
+                    swap_out_map=swap_out_map,
                     all_ids=all_ids,
                     guided_input_ids=guided_input_ids,
                     sampling_inputs=sampling_inputs,
@@ -874,6 +877,7 @@ class Engine:
 
         Each engine instance would communicate with the engine by queue.
         """
+        prefill_interval = self.scheduler_config.prefill_interval
         in_que = asyncio.Queue()
         out_que = asyncio.Queue()
         loop_background = asyncio.get_event_loop().create_task(
@@ -896,9 +900,18 @@ class Engine:
             for out in step_outputs.values():
                 __send_resp(out)
 
-        async def __step(prefill: bool):
+        async def __step():
             """step decoding."""
-            in_que.put_nowait(prefill)
+            prefill = self.scheduler.has_waiting()
+            schedule_output = self.scheduler.schedule(
+                is_prefill=prefill, prealloc_size=prefill_interval)
+            # schedule decoding if no valid prefill reqs.
+            if prefill and len(schedule_output.running) == 0:
+                prefill = False
+                schedule_output = self.scheduler.schedule(
+                    is_prefill=prefill, prealloc_size=prefill_interval)
+
+            in_que.put_nowait((prefill, schedule_output))
             finish = False
             while not finish:
                 if self.req_manager.has_requests():
@@ -911,8 +924,6 @@ class Engine:
                     step_outputs = self._make_infer_outputs(
                         next_token_ids, logits, stopped)
                     __send_resps(step_outputs)
-                except NoRunningSeqs:
-                    break
                 except Exception as e:
                     raise e
                 finally:
@@ -926,13 +937,7 @@ class Engine:
                 await asyncio.sleep(0.01)
                 continue
 
-            # prefill
-            if self.scheduler.has_waiting():
-                await __step(True)
-
-            # decoding
-            if self.scheduler.has_running():
-                await __step(False)
+            await __step()
 
     async def async_loop(self):
         device_manager = get_device_manager()

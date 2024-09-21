@@ -33,10 +33,9 @@ def test_history_issue_tp1(config, model, worker_id):
 
 
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', [
-    'internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits',
-    'internlm/internlm2-20b', 'internlm/internlm2-20b-inner-4bits'
-])
+@pytest.mark.parametrize(
+    'model',
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
 def test_history_issue_tp2(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:

@@ -101,7 +101,10 @@ def _load_hf_results(test_results: dict, model_name: str):
     return out
 
 
-def evaluate(models: List[str], datasets: List[str], workspace: str):
+def evaluate(models: List[str],
+             datasets: List[str],
+             workspace: str,
+             is_smoke: bool = False):
     """Evaluate models from lmdeploy using opencompass.
 
     Args:
@@ -157,6 +160,10 @@ def evaluate(models: List[str], datasets: List[str], workspace: str):
 
         with open(config_path_new, 'a') as f:
             f.write(f'\ndatasets = {datasets}\n')
+            if is_smoke:
+                f.write('\nfor d in datasets:\n')
+                f.write("    if d['reader_cfg'] is not None:\n")
+                f.write("        d['reader_cfg']['test_range'] = '[0:50]'\n")
             if engine_type == 'hf':
                 f.write(f'\nmodels = [ *{target_model} ]\n')
             else:

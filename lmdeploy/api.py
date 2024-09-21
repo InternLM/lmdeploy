@@ -11,7 +11,8 @@ def pipeline(model_path: str,
              backend_config: Optional[Union[TurbomindEngineConfig,
                                             PytorchEngineConfig]] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
-             log_level='ERROR',
+             log_level: str = 'ERROR',
+             max_log_len: int = None,
              **kwargs):
     """
     Args:
@@ -32,7 +33,10 @@ def pipeline(model_path: str,
             config instance. Default to None.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
-        log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
+        log_level(str): set log level whose value among [CRITICAL, ERROR,
+            WARNING, INFO, DEBUG]
+        max_log_len(int): Max number of prompt characters or prompt tokens
+            being printed in log
 
     Examples:
         >>> # LLM
@@ -78,6 +82,7 @@ def pipeline(model_path: str,
                           backend=backend,
                           backend_config=backend_config,
                           chat_template_config=chat_template_config,
+                          max_log_len=max_log_len,
                           **kwargs)
 
 
