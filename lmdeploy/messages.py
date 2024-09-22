@@ -301,6 +301,7 @@ class ResponseType(enum.Enum):
     SESSION_NOT_EXIST = enum.auto()
     HANDLER_NOT_EXIST = enum.auto()
     INPUT_LENGTH_ERROR = enum.auto()
+    INTERNAL_ENGINE_ERROR = enum.auto()
 
 
 @dataclass

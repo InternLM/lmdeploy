@@ -503,7 +503,7 @@ class AsyncEngine(LogitsMixin):
             gen_config.temperature = 1.0
             gen_config.repetition_penalty = 1.0
         # set random if it is not set and sequence_start is True
-        if gen_config.random_seed is None and sequence_start:
+        elif gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
             logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "

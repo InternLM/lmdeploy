@@ -358,7 +358,12 @@ class TurboMindInstance:
             self.gpu_count)
 
         def _func():
-            output = self.model_inst.forward(inputs, instance_comm)
+            try:
+                output = self.model_inst.forward(inputs, instance_comm)
+            except Exception as e:
+                logger.error(f'Exception happened: {e}')
+                self.que.put((-1, None))
+                return
             self.que.put((True, output))
 
         self.executor = ThreadPoolExecutor(1)
@@ -372,7 +377,12 @@ class TurboMindInstance:
             self.gpu_count)
 
         def _func():
-            output = self.model_inst.forward(inputs, instance_comm)
+            try:
+                output = self.model_inst.forward(inputs, instance_comm)
+            except Exception as e:
+                logger.error(f'Exception happened: {e}')
+                self.que.put((-1, None))
+                return
             que.put((True, output))
 
         self.executor = ThreadPoolExecutor(1)
@@ -653,6 +663,10 @@ class TurboMindInstance:
                 await asyncio.sleep(0.002)
 
             finish, tm_outputs = que.get()
+            if finish < 0:
+                yield EngineOutput()
+                self.executor.shutdown()
+                break
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
 
@@ -766,6 +780,10 @@ class TurboMindInstance:
                 self.que.get()
 
             finish, tm_outputs = self.que.get()
+            if finish < 0:
+                yield EngineOutput()
+                self.executor.shutdown()
+                break
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
 
@@ -892,7 +910,9 @@ class TurboMindInstance:
         # start forward thread
         self._forward_thread(tm_inputs)
 
-        _, tm_outputs = self.que.get()
+        res, tm_outputs = self.que.get()
+        if res < 0:
+            return None
 
         outputs = _tm_dict_to_torch_dict(tm_outputs)
         logits = outputs['logits']
@@ -942,6 +962,8 @@ class TurboMindInstance:
                                   steps,
                                   sequence_start=(i == 0),
                                   sequence_end=(i == n_max_iter - 1))
+            if _logits is None:
+                return None
             _logits = _logits.to(device=device)
             logits.append(_logits)
 
