@@ -40,6 +40,8 @@ _SUPPORTED_ARCHS = dict(
     Qwen2ForCausalLM=True,
     # Qwen1.5-MoE-A2.7B-Chat
     Qwen2MoeForCausalLM=True,
+    # Qwen2-VL-7B-Instruct
+    Qwen2VLForConditionalGeneration=True,
     # Dbrx 132B
     DbrxForCausalLM=True,
     # cogvlm-chat

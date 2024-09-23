@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -13,12 +13,38 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 
-class QWenAttention(torch.nn.Module):
-    """Parallel self-attention layer abstract class.
+def _apply_mrope_selection(hidden_states: torch.Tensor,
+                           mrope_position_ids: torch.Tensor,
+                           mrope_section: List[int],
+                           position_ids: torch.Tensor,
+                           rotary_emb_func: Callable):
+    _mrope_position_ids = torch.zeros(3,
+                                      position_ids.shape[-1],
+                                      dtype=position_ids.dtype,
+                                      device=position_ids.device)
+    _mrope_position_ids[:, :mrope_position_ids.shape[-1]] = mrope_position_ids
+    cos, sin = rotary_emb_func(hidden_states, _mrope_position_ids)
+    _cos = torch.zeros(cos.shape[1],
+                       cos.shape[-1],
+                       dtype=cos.dtype,
+                       device=cos.device)
+    _sin = torch.zeros_like(_cos)
+    mrope_section = mrope_section * 2
 
-    Self-attention layer takes input with size [s, b, h] and returns output of
-    the same size.
-    """
+    def _apply_split(src, dst):
+        start = 0
+        for i, m in enumerate(src.split(mrope_section, dim=-1)):
+            dst[:, start:start + mrope_section[i]] = m[i % 3]
+            start += mrope_section[i]
+
+    _apply_split(cos, _cos)
+    _apply_split(sin, _sin)
+
+    return _cos, _sin
+
+
+class Qwen2Attention(nn.Module):
+    """Rewrite module of Qwen2Attention."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -26,39 +52,39 @@ class QWenAttention(torch.nn.Module):
                  device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
+        num_heads = config.num_attention_heads
+        num_key_value_heads = config.num_key_value_heads
+        hidden_size = config.hidden_size
+        head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
 
-        self.hidden_size = config.hidden_size
-        self.split_size = config.hidden_size
-        self.num_heads = config.num_attention_heads
-        self.projection_size = config.kv_channels * config.num_attention_heads
-        self.num_attention_heads = config.num_attention_heads
-        self.num_kv_heads = self.num_attention_heads
-        self.head_dim = self.hidden_size // self.num_heads
-        self.c_attn = build_qkv_proj(
-            config.hidden_size,
-            num_q_heads=self.num_attention_heads,
-            num_kv_heads=self.num_kv_heads,
-            head_size=self.head_dim,
+        # packed qkv
+        self.qkv_proj = build_qkv_proj(
+            hidden_size,
+            num_q_heads=num_heads,
+            num_kv_heads=num_key_value_heads,
+            head_size=head_dim,
             bias=True,
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
         )
 
-        # apply rotary
+        # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
 
         # attention
         self.attn_fwd = Attention(
-            self.num_attention_heads,
-            self.head_dim,
-            num_kv_heads=self.num_kv_heads,
+            num_heads,
+            head_dim,
+            num_kv_heads=num_key_value_heads,
+            v_head_size=head_dim,
+            sliding_window=config.sliding_window,
         )
 
         # o_proj
-        self.c_proj = build_rowwise_linear(self.projection_size,
-                                           config.hidden_size,
-                                           bias=not config.no_bias,
+        self.o_proj = build_rowwise_linear(num_heads * head_dim,
+                                           hidden_size,
+                                           bias=False,
                                            quant_config=quantization_config,
                                            dtype=dtype,
                                            device=device,
@@ -73,11 +99,11 @@ class QWenAttention(torch.nn.Module):
     ):
         """Rewrite of LlamaAttention.forward."""
         # qkv proj
-        qkv_states = self.c_attn(hidden_states)
+        qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        (query_states, key_states,
-         value_states) = self.c_attn.split_qkv(qkv_states)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(
+            qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -102,11 +128,11 @@ class QWenAttention(torch.nn.Module):
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
 
         # o proj
-        attn_output = self.c_proj(attn_output)
+        attn_output = self.o_proj(attn_output)
         return attn_output
 
 
-class QWenMLP(nn.Module):
+class Qwen2MLP(nn.Module):
     """mlp."""
 
     def __init__(self,
@@ -115,12 +141,11 @@ class QWenMLP(nn.Module):
                  device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
-        ff_dim_in = config.intermediate_size // 2
         # gate up
         self.gate_up_proj = build_merged_colwise_linear(
             config.hidden_size,
-            [ff_dim_in, ff_dim_in],
-            bias=not config.no_bias,
+            [config.intermediate_size, config.intermediate_size],
+            bias=False,
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
@@ -131,59 +156,53 @@ class QWenMLP(nn.Module):
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.c_proj = build_rowwise_linear(ff_dim_in,
-                                           config.hidden_size,
-                                           bias=not config.no_bias,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
+        self.down_proj = build_rowwise_linear(config.intermediate_size,
+                                              config.hidden_size,
+                                              bias=False,
+                                              quant_config=quantization_config,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True)
 
     def forward(self, x):
         """forward."""
         gate_up = self.gate_up_proj(x)
         act = self.act_fn(gate_up)
-        return self.c_proj(act)
+        return self.down_proj(act)
 
 
-class QWenBlock(torch.nn.Module):
-    """A single transformer layer.
-
-    Transformer layer takes input with size [s, b, h] and returns an output of
-    the same size.
-    """
+class Qwen2DecoderLayer(nn.Module):
+    """decoder layer."""
 
     def __init__(self,
                  config: PretrainedConfig,
-                 layer_number: int,
+                 layer_idx: int,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        self.layer_number = layer_number
-        hidden_size = config.hidden_size
-        self.bf16 = config.bf16
-
+        self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.attn = QWenAttention(config, dtype=dtype, device=device)
+        self.self_attn = Qwen2Attention(config, dtype=dtype, device=device)
 
         # builf MLP
-        self.mlp = QWenMLP(config, dtype=dtype, device=device)
+        self.mlp = Qwen2MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
-        self.ln_1 = RMSNorm(hidden_size,
-                            config.layer_norm_epsilon,
-                            quant_config=quantization_config,
-                            dtype=dtype,
-                            device=device)
+        self.input_layernorm = RMSNorm(config.hidden_size,
+                                       config.rms_norm_eps,
+                                       quant_config=quantization_config,
+                                       dtype=dtype,
+                                       device=device)
 
         # build attention layer norm
-        self.ln_2 = RMSNorm(hidden_size,
-                            config.layer_norm_epsilon,
-                            quant_config=quantization_config,
-                            dtype=dtype,
-                            device=device)
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device)
 
     def forward(
         self,
@@ -196,70 +215,71 @@ class QWenBlock(torch.nn.Module):
 
         if residual is None:
             residual = hidden_states
-            layernorm_output = self.ln_1(hidden_states)
+            hidden_states = self.input_layernorm(hidden_states)
         else:
-            layernorm_output, residual = self.ln_1(hidden_states, residual)
+            hidden_states, residual = self.input_layernorm(
+                hidden_states, residual)
 
         # Self Attention
-        layernorm_input = self.attn(
-            hidden_states=layernorm_output,
+        hidden_states = self.self_attn(
+            hidden_states=hidden_states,
             rotary_pos_emb=rotary_pos_emb,
             past_key_value=past_key_value,
             attn_metadata=attn_metadata,
         )
 
         # Fully Connected
-        layernorm_output, residual = self.ln_2(layernorm_input, residual)
-        mlp_output = self.mlp(layernorm_output)
+        hidden_states, residual = self.post_attention_layernorm(
+            hidden_states, residual)
+        hidden_states = self.mlp(hidden_states)
 
-        outputs = (mlp_output, residual)
+        outputs = (hidden_states, residual)
         return outputs
 
 
-class QWenModel(nn.Module):
+class Qwen2Model(nn.Module):
+    """model."""
 
     def __init__(self,
                  config: PretrainedConfig,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        quantization_config = getattr(config, 'quantization_config', None)
+        self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        self.embed_dim = config.hidden_size
-        self.wte = nn.Embedding(self.vocab_size,
-                                self.embed_dim,
-                                dtype=dtype,
-                                device=device)
+        self.mrope_section = config.rope_scaling['mrope_section']
+        quantization_config = getattr(config, 'quantization_config', None)
+
+        self.embed_tokens = nn.Embedding(config.vocab_size,
+                                         config.hidden_size,
+                                         self.padding_idx,
+                                         dtype=dtype,
+                                         device=device)
 
         # build all decode layers
-        self.h = nn.ModuleList([
-            QWenBlock(config, layer_idx, dtype=dtype, device=device)
+        self.layers = nn.ModuleList([
+            Qwen2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
+        # build norm
+        self.norm = RMSNorm(config.hidden_size,
+                            config.rms_norm_eps,
+                            quant_config=quantization_config,
+                            dtype=dtype,
+                            device=device)
+
         # build rotary embedding
         emb_type = RopeType.LinearScaling
-        if config.rotary_pct == 1.0:
-            self.rotary_ndims = None
-        else:
-            assert config.rotary_pct < 1
-            self.rotary_ndims = int(config.kv_channels * config.rotary_pct)
-        rope_dim = (self.rotary_ndims
-                    if self.rotary_ndims is not None else config.kv_channels)
-        rope_max_pos_emb = getattr(config, 'max_position_embeddings', 4096)
-        rope_base = config.rotary_emb_base
+        rope_dim = config.hidden_size // config.num_attention_heads
+        rope_max_pos_emb = config.max_position_embeddings
+        rope_base = config.rope_theta
         self.rotary_emb = build_rotary_embedding(
             rope_dim,
             rope_max_pos_emb,
             rope_base,
             emb_type=emb_type,
         )
-
-        self.ln_f = RMSNorm(self.embed_dim,
-                            eps=config.layer_norm_epsilon,
-                            quant_config=quantization_config,
-                            dtype=dtype,
-                            device=device)
 
     def forward(
         self,
@@ -268,23 +288,30 @@ class QWenModel(nn.Module):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        mrope_position_ids: torch.LongTensor = None,
     ):
-        """forward."""
+        """Rewrite of LlamaModel.forward."""
 
         # token embedding
         if inputs_embeds is None:
-            inputs_embeds = self.wte(input_ids)
+            inputs_embeds = self.embed_tokens(input_ids)
 
         hidden_states = inputs_embeds
 
         # rotary embedding
-        cos, sin = self.rotary_emb(hidden_states, position_ids)
-        cos, sin = cos[0], sin[0]
+        if mrope_position_ids is None:
+            cos, sin = self.rotary_emb(hidden_states, position_ids)
+            cos, sin = cos[0], sin[0]
+        else:
+            cos, sin = _apply_mrope_selection(hidden_states,
+                                              mrope_position_ids,
+                                              self.mrope_section, position_ids,
+                                              self.rotary_emb)
         rotary_pos_emb = (cos, sin)
 
         # decoding
         residual = None
-        for idx, decoder_layer in enumerate(self.h):
+        for idx, decoder_layer in enumerate(self.layers):
             past_key_value = past_key_values[idx]
             hidden_states, residual = decoder_layer(
                 hidden_states,
@@ -295,24 +322,29 @@ class QWenModel(nn.Module):
             )
 
         # norm
-        hidden_states, residual = self.ln_f(hidden_states, residual)
+        hidden_states, _ = self.norm(hidden_states, residual)
 
         return hidden_states
 
     def get_input_embeddings(self):
         """get input embeddings."""
-        return self.wte
+        return self.embed_tokens
 
 
-class QWenLMHeadModel(nn.Module):
-    """rewrote model."""
+class Qwen2VLForConditionalGeneration(nn.Module):
+    """ModelForCausalLM."""
 
     support_cuda_graph = True
 
     packed_modules_mapping = {
+        'qkv_proj': [
+            'q_proj',
+            'k_proj',
+            'v_proj',
+        ],
         'gate_up_proj': [
-            'w2',
-            'w1',
+            'gate_proj',
+            'up_proj',
         ],
     }
 
@@ -324,10 +356,9 @@ class QWenLMHeadModel(nn.Module):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
-        # build Model
-        self.transformer = QWenModel(config, dtype=dtype, device=device)
-
-        # output_layers
+        # build model
+        self.model = Qwen2Model(config, dtype=dtype, device=device)
+        # build lm_head
         self.lm_head = build_rowwise_linear(config.hidden_size,
                                             config.vocab_size,
                                             bias=False,
@@ -341,24 +372,31 @@ class QWenLMHeadModel(nn.Module):
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
+        mrope_position_ids: torch.Tensor = None,
         **kwargs,
     ):
         """model forward, return logits."""
-        hidden_states = self.transformer(
+        hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            mrope_position_ids=mrope_position_ids,
         )
 
         logits = self.lm_head(hidden_states)
         logits = logits.float()
         return logits
 
+    def update_weights(self):
+        """update weights."""
+        if self.config.tie_word_embeddings:
+            self.lm_head.weight = self.model.embed_tokens.weight
+
     def get_input_embeddings(self):
         """get input embeddings."""
-        return self.transformer.get_input_embeddings()
+        return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
         self,
@@ -367,6 +405,7 @@ class QWenLMHeadModel(nn.Module):
         context: StepContext = None,
     ):
         """prepare input."""
+
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -389,6 +428,7 @@ class QWenLMHeadModel(nn.Module):
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            mrope_position_ids=context.mrope_position_ids,
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
@@ -396,20 +436,23 @@ class QWenLMHeadModel(nn.Module):
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
-            ('.gate_up_proj', '.w2', 0),
-            ('.gate_up_proj', '.w1', 1),
+            ('.qkv_proj', '.q_proj', 'q'),
+            ('.qkv_proj', '.k_proj', 'k'),
+            ('.qkv_proj', '.v_proj', 'v'),
+            ('.gate_up_proj', '.gate_proj', 0),
+            ('.gate_up_proj', '.up_proj', 1),
         ]
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'visual' in name:
                 continue
-            if 'rotary_pos_emb.inv_freq' in name:
+            if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_pos_emb.cos_cached' in name
-                    or 'rotary_pos_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name
+                    or 'rotary_emb.sin_cached' in name):
                 continue
-            if (self.config.tie_word_embeddings and 'lm_head.weight' in name):
+            if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
                 if weight_name not in name:
@@ -419,12 +462,5 @@ class QWenLMHeadModel(nn.Module):
                 load_weight(param, loaded_weight, shard_id=shard_id)
                 break
             else:
-                if '.c_attn' in name:
-                    param = params_dict[name]
-                    q, k, v = param.weight_spliter(loaded_weight)
-                    load_weight(param, q, shard_id='q')
-                    load_weight(param, k, shard_id='k')
-                    load_weight(param, v, shard_id='v')
-                else:
-                    param = params_dict[name]
-                    load_weight(param, loaded_weight)
+                param = params_dict[name]
+                load_weight(param, loaded_weight)

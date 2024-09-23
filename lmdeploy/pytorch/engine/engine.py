@@ -19,7 +19,7 @@ from ..config import BackendConfig, CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
 from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
-from ..model_inputs import ModelInputs, VisionModelInputs
+from ..model_inputs import ModelInputs, MRopeModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 from .model_agent import build_model_agent
@@ -318,6 +318,8 @@ class Engine:
                     adapter_name=req.data['adapter_name'],
                     return_logits=req.data.get('return_logits', False),
                     input_embeddings=req.data.get('input_embeddings'),
+                    mrope_position_ids=req.data.get('mrope_position_ids'),
+                    mrope_position_delta=req.data.get('mrope_position_delta'),
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_bad_words(msg)
@@ -421,6 +423,12 @@ class Engine:
             return (input_embeddings, input_embedding_indexing,
                     input_embedding_ranges)
 
+        def __get_mrope_inputs():
+            """get multimodal rotary position inputs."""
+            position_ids = [msg.mrope_position_ids for msg in messages]
+            deltas = [msg.mrope_position_delta for msg in messages]
+            return MRopeModelInputs(position_ids=position_ids, deltas=deltas)
+
         # for inputs with embeddings
         history_image_nums = None
         history_image_token_lengths = None
@@ -428,6 +436,12 @@ class Engine:
         if self.model_config.cogvlm_style:
             (history_image_nums,
              history_image_token_lengths) = __get_cogvlm_image_info()
+        # only for qwen2_vl
+        mrope_inputs = None
+        has_mrope_params = any(
+            [msg.mrope_position_ids is not None for msg in messages])
+        if has_mrope_params:
+            mrope_inputs = __get_mrope_inputs()
 
         input_embeddings = None
         input_embedding_indexing = None
@@ -457,6 +471,7 @@ class Engine:
             num_ignored_history=num_ignored_history,
             local_adapter_ids=local_adapter_ids,
             vision_inputs=vision_embedding_inputs,
+            mrope_inputs=mrope_inputs,
         )
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,
