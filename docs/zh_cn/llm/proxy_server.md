@@ -12,8 +12,13 @@ lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --s
 
 启动成功后，代理服务的 URL 也会被脚本打印。浏览器访问这个 URL，可以打开 Swagger UI。
 随后，用户可以在启动 api_server 服务的时候，通过 `--proxy-url` 命令将其直接添加到代理服务中。例如：`lmdeploy serve api_server InternLM/internlm2-chat-1_8b --proxy-url http://0.0.0.0:8000`。
+这样，用户可以通过代理节点访问 api_server 的服务，代理节点的使用方式和 api_server 一模一样，都是兼容 OpenAI 的形式。
 
-## API
+- /v1/models
+- /v1/chat/completions
+- /v1/completions
+
+## 节点管理
 
 通过 Swagger UI，我们可以看到多个 API。其中，和 api_server 节点管理相关的有：
 
@@ -22,14 +27,6 @@ lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --s
 - /nodes/remove
 
 他们分别表示，查看所有的 api_server 服务节点，增加某个节点，删除某个节点。他们的使用方式，最直接的可以在浏览器里面直接操作。也可以通过命令行或者 python 操作。
-
-和使用相关的 api 有：
-
-- /v1/models
-- /v1/chat/completions
-- /v1/completions
-
-这些 API 的使用方式和 api_server 一样。
 
 ### 通过 command 增删查
 

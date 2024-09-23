@@ -13,8 +13,13 @@ lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --s
 After startup is successful, the URL of the proxy service will also be printed by the script. Access this URL in your browser to open the Swagger UI.
 Subsequently, users can add it directly to the proxy service when starting the `api_server` service by using the `--proxy-url` command. For example:
 `lmdeploy serve api_server InternLM/internlm2-chat-1_8b --proxy-url http://0.0.0.0:8000`。
+In this way, users can access the services of the `api_server` through the proxy node, and the usage of the proxy node is exactly the same as that of the `api_server`, both of which are compatible with the OpenAI format.
 
-## API
+- /v1/models
+- /v1/chat/completions
+- /v1/completions
+
+## Node Management
 
 Through Swagger UI, we can see multiple APIs. Those related to api_server node management include:
 
@@ -23,14 +28,6 @@ Through Swagger UI, we can see multiple APIs. Those related to api_server node m
 - /nodes/remove
 
 They respectively represent viewing all api_server service nodes, adding a certain node, and deleting a certain node.
-
-APIs related to usage include:
-
-- /v1/models
-- /v1/chat/completions
-- /v1/completions
-
-The usage of these APIs is the same as that of api_server.
 
 ### Node Management through curl
 
