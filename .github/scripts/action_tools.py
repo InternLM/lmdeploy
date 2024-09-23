@@ -139,10 +139,6 @@ def evaluate(models: List[str],
             continue
 
         model_cfg = cfg[model]
-        hf_model_path = model_cfg['path']
-        if not os.path.exists(hf_model_path):
-            logging.error(f'Model path not exists: {hf_model_path}')
-            continue
         logging.info(f'Start evaluating {model} ...\\nn{model_cfg}\n\n')
 
         with open(config_path_new, 'a') as f:
@@ -198,7 +194,7 @@ def evaluate(models: List[str],
                 acc = json.load(f)['accuracy']
                 acc = f'{float(acc):.2f}'
                 model_results['crows_pairs'] = acc
-        logging.info(f'\n{hf_model_path}\n{model_results}')
+        logging.info(f'\n{model}\n{model_results}')
         dataset_names = list(model_results.keys())
 
         row = ','.join([model, str(task_duration_seconds)] +
