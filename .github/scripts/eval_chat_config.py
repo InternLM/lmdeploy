@@ -252,6 +252,7 @@ turbomind_llama3_8b_instruct_4bits = deepcopy(*lmdeploy_llama3_8b_instruct)
 turbomind_llama3_8b_instruct_kvint4 = deepcopy(*lmdeploy_llama3_8b_instruct)
 turbomind_llama3_8b_instruct_kvint8 = deepcopy(*lmdeploy_llama3_8b_instruct)
 pytorch_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
+del pytorch_llama3_8b_instruct['stop_words']
 pytorch_llama3_8b_instruct['meta_template'] = llama3_meta_template
 
 # ===== Configs for meta-llama/Meta-Llama-3.1-8B-Instruct =====
@@ -264,6 +265,7 @@ turbomind_llama3_1_8b_instruct_kvint4 = deepcopy(
 turbomind_llama3_1_8b_instruct_kvint8 = deepcopy(
     turbomind_llama3_1_8b_instruct)
 pytorch_llama3_1_8b_instruct = deepcopy(turbomind_llama3_1_8b_instruct)
+del pytorch_llama3_1_8b_instruct['stop_words']
 pytorch_llama3_1_8b_instruct['meta_template'] = llama3_meta_template
 
 # ===== Configs for Qwen/Qwen2-7B-Instruct =====
