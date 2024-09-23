@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 from mmengine.config import read_base
-from opencompass.models import LmdeployPytorchModel
+from opencompass.models import LmdeployPytorchModel, TurboMindModel
 
 with read_base():
     # choose a list of datasets
@@ -212,6 +212,7 @@ turbomind_qwen1_5_7b_chat_4bits = deepcopy(*lmdeploy_qwen1_5_7b_chat)
 turbomind_qwen1_5_7b_chat_kvint4 = deepcopy(*lmdeploy_qwen1_5_7b_chat)
 turbomind_qwen1_5_7b_chat_kvint8 = deepcopy(*lmdeploy_qwen1_5_7b_chat)
 pytorch_qwen1_5_7b_chat = deepcopy(*lmdeploy_qwen1_5_7b_chat)
+del pytorch_qwen1_5_7b_chat['stop_words']
 pytorch_qwen1_5_7b_chat['meta_template'] = qwen1_5_meta_template
 
 # ===== Configs for Qwen/Qwen-7B-Chat =====
@@ -223,11 +224,26 @@ pytorch_qwen_7b_chat = deepcopy(*lmdeploy_qwen_7b_chat)
 pytorch_qwen_7b_chat['meta_template'] = qwen_meta_template
 
 # ===== Configs for meta-llama/Llama-2-7b-chat-hf =====
-turbomind_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)
-turbomind_llama2_7b_chat_4bits = deepcopy(*lmdeploy_llama2_7b_chat)
-turbomind_llama2_7b_chat_kvint4 = deepcopy(*lmdeploy_llama2_7b_chat)
-turbomind_llama2_7b_chat_kvint8 = deepcopy(*lmdeploy_llama2_7b_chat)
-pytorch_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)
+turbomind_llama2_7b_chat = dict(type=TurboMindModel,
+                                abbr='tb_llama2_chat_7b',
+                                path='meta-llama/Llama-2-7b-chat-hf',
+                                engine_config=dict(session_len=MAX_SESSION_LEN,
+                                                   max_batch_size=128),
+                                gen_config=dict(top_k=1,
+                                                top_p=0.8,
+                                                temperature=1.0,
+                                                max_new_tokens=MAX_NEW_TOKENS),
+                                max_out_len=MAX_NEW_TOKENS,
+                                max_seq_len=MAX_SESSION_LEN,
+                                batch_size=128,
+                                concurrency=128,
+                                meta_template=llama2_meta_template,
+                                run_cfg=dict(num_gpus=1),
+                                end_str='[INST]')
+turbomind_llama2_7b_chat_4bits = deepcopy(turbomind_llama2_7b_chat)
+turbomind_llama2_7b_chat_kvint4 = deepcopy(turbomind_llama2_7b_chat)
+turbomind_llama2_7b_chat_kvint8 = deepcopy(turbomind_llama2_7b_chat)
+pytorch_llama2_7b_chat = deepcopy(turbomind_llama2_7b_chat)
 pytorch_llama2_7b_chat['meta_template'] = llama2_meta_template
 
 # ===== Configs for meta-llama/Meta-Llama-3-8B-Instruct =====
@@ -240,12 +256,14 @@ pytorch_llama3_8b_instruct['meta_template'] = llama3_meta_template
 
 # ===== Configs for meta-llama/Meta-Llama-3.1-8B-Instruct =====
 turbomind_llama3_1_8b_instruct = deepcopy(*lmdeploy_llama3_1_8b_instruct)
-turbomind_llama3_1_8b_instruct_4bits = deepcopy(*lmdeploy_llama3_1_8b_instruct)
+turbomind_llama3_1_8b_instruct[
+    'path'] = 'meta-llama/Meta-Llama-3-1-8B-Instruct'
+turbomind_llama3_1_8b_instruct_4bits = deepcopy(turbomind_llama3_1_8b_instruct)
 turbomind_llama3_1_8b_instruct_kvint4 = deepcopy(
-    *lmdeploy_llama3_1_8b_instruct)
+    turbomind_llama3_1_8b_instruct)
 turbomind_llama3_1_8b_instruct_kvint8 = deepcopy(
-    *lmdeploy_llama3_1_8b_instruct)
-pytorch_llama3_1_8b_instruct = deepcopy(*lmdeploy_llama3_1_8b_instruct)
+    turbomind_llama3_1_8b_instruct)
+pytorch_llama3_1_8b_instruct = deepcopy(turbomind_llama3_1_8b_instruct)
 pytorch_llama3_1_8b_instruct['meta_template'] = llama3_meta_template
 
 # ===== Configs for Qwen/Qwen2-7B-Instruct =====
