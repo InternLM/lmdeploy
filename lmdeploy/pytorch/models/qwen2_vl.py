@@ -299,9 +299,14 @@ class Qwen2Model(nn.Module):
         hidden_states = inputs_embeds
 
         # rotary embedding
-        cos, sin = _apply_mrope_selection(hidden_states, mrope_position_ids,
-                                          self.mrope_section, position_ids,
-                                          self.rotary_emb)
+        if mrope_position_ids is None:
+            cos, sin = self.rotary_emb(hidden_states, position_ids)
+            cos, sin = cos[0], sin[0]
+        else:
+            cos, sin = _apply_mrope_selection(hidden_states,
+                                              mrope_position_ids,
+                                              self.mrope_section, position_ids,
+                                              self.rotary_emb)
         rotary_pos_emb = (cos, sin)
 
         # decoding
