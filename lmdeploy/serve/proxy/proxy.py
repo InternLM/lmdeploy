@@ -512,7 +512,7 @@ async def completions_v1(request: CompletionRequest,
 
 
 def proxy(server_name: str = '0.0.0.0',
-          server_port: int = 10086,
+          server_port: int = 8000,
           strategy: Literal['random', 'min_expected_latency',
                             'min_observed_latency'] = 'min_expected_latency',
           api_keys: Optional[Union[List[str], str]] = None,
@@ -522,7 +522,7 @@ def proxy(server_name: str = '0.0.0.0',
 
     Args:
         server_name (str): the server name of the proxy. Default to '0.0.0.0'.
-        server_port (str): the server port. Default to 10086.
+        server_port (str): the server port. Default to 8000.
         strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
             the strategy to dispatch requests to nodes. Default to
             'min_expected_latency'

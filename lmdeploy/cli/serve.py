@@ -209,6 +209,36 @@ class SubCliServe:
         ArgumentHelper.session_id(parser)
 
     @staticmethod
+    def add_parser_proxy():
+        """Add parser for proxy server command."""
+        parser = SubCliServe.subparsers.add_parser(
+            'proxy',
+            formatter_class=DefaultsAndTypesHelpFormatter,
+            description=SubCliServe.proxy.__doc__,
+            help=SubCliServe.proxy.__doc__)
+        parser.set_defaults(run=SubCliServe.proxy)
+        parser.add_argument('--server-name',
+                            type=str,
+                            default='0.0.0.0',
+                            help='Host ip for proxy serving')
+        parser.add_argument('--server-port',
+                            type=int,
+                            default=8000,
+                            help='Server port of the proxy')
+        parser.add_argument(
+            '--strategy',
+            type=str,
+            choices=['random', 'min_expected_latency', 'min_observed_latency'],
+            default='min_expected_latency',
+            help='the strategy to dispatch requests to nodes')
+        parser.add_argument('--api-key',
+                            type=str,
+                            default=None,
+                            help='api key. Default to None, which means no '
+                            'api key will be used')
+        ArgumentHelper.ssl(parser)
+
+    @staticmethod
     def gradio(args):
         """Serve LLMs with web UI using gradio."""
         from lmdeploy.archs import autoget_backend
@@ -326,7 +356,15 @@ class SubCliServe:
         run_api_client(**kwargs)
 
     @staticmethod
+    def proxy(args):
+        """Proxy server that manages distributed api_server nodes."""
+        from lmdeploy.serve.proxy.proxy import proxy
+        kwargs = convert_args(args)
+        proxy(**kwargs)
+
+    @staticmethod
     def add_parsers():
         SubCliServe.add_parser_gradio()
         SubCliServe.add_parser_api_server()
         SubCliServe.add_parser_api_client()
+        SubCliServe.add_parser_proxy()

@@ -7,12 +7,12 @@ The request distributor service can parallelize multiple api_server services. Us
 Start the proxy service:
 
 ```shell
-python3 -m lmdeploy.serve.proxy.proxy --server_name {server_name} --server_port {server_port} --strategy "min_expected_latency"
+lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --strategy "min_expected_latency"
 ```
 
 After startup is successful, the URL of the proxy service will also be printed by the script. Access this URL in your browser to open the Swagger UI.
 Subsequently, users can add it directly to the proxy service when starting the `api_server` service by using the `--proxy-url` command. For example:
-`lmdeploy serve api_server InternLM/internlm2-chat-1_8b --proxy-url http://0.0.0.0:10086`。
+`lmdeploy serve api_server InternLM/internlm2-chat-1_8b --proxy-url http://0.0.0.0:8000`。
 
 ## API
 
@@ -32,17 +32,17 @@ APIs related to usage include:
 
 The usage of these APIs is the same as that of api_server.
 
-### add, delete and query through commands
+### Node Management through curl
 
 ```shell
 curl -X 'GET' \
-  'http://localhost:10086/nodes/status' \
+  'http://localhost:8000/nodes/status' \
   -H 'accept: application/json'
 ```
 
 ```shell
 curl -X 'POST' \
-  'http://localhost:10086/nodes/add' \
+  'http://localhost:8000/nodes/add' \
   -H 'accept: application/json' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -52,17 +52,17 @@ curl -X 'POST' \
 
 ```shell
 curl -X 'POST' \
-  'http://localhost:10086/nodes/remove?node_url=http://0.0.0.0:23333' \
+  'http://localhost:8000/nodes/remove?node_url=http://0.0.0.0:23333' \
   -H 'accept: application/json' \
   -d ''
 ```
 
-### add, delete and query through python
+### Node Management through python
 
 ```python
 # query all nodes
 import requests
-url = 'http://localhost:10086/nodes/status'
+url = 'http://localhost:8000/nodes/status'
 headers = {'accept': 'application/json'}
 response = requests.get(url, headers=headers)
 print(response.text)
@@ -71,7 +71,7 @@ print(response.text)
 ```python
 # add a new node
 import requests
-url = 'http://localhost:10086/nodes/add'
+url = 'http://localhost:8000/nodes/add'
 headers = {
     'accept': 'application/json',
     'Content-Type': 'application/json'
@@ -84,7 +84,7 @@ print(response.text)
 ```python
 # delete a node
 import requests
-url = 'http://localhost:10086/nodes/remove'
+url = 'http://localhost:8000/nodes/remove'
 headers = {'accept': 'application/json',}
 params = {'node_url': 'http://0.0.0.0:23333',}
 response = requests.post(url, headers=headers, data='', params=params)

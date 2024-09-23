@@ -7,11 +7,11 @@
 启动代理服务：
 
 ```shell
-python3 -m lmdeploy.serve.proxy.proxy --server_name {server_name} --server_port {server_port} --strategy "min_expected_latency"
+lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --strategy "min_expected_latency"
 ```
 
 启动成功后，代理服务的 URL 也会被脚本打印。浏览器访问这个 URL，可以打开 Swagger UI。
-随后，用户可以在启动 api_server 服务的时候，通过 `--proxy-url` 命令将其直接添加到代理服务中。例如：`lmdeploy serve api_server InternLM/internlm2-chat-1_8b --proxy-url http://0.0.0.0:10086`。
+随后，用户可以在启动 api_server 服务的时候，通过 `--proxy-url` 命令将其直接添加到代理服务中。例如：`lmdeploy serve api_server InternLM/internlm2-chat-1_8b --proxy-url http://0.0.0.0:8000`。
 
 ## API
 
@@ -35,13 +35,13 @@ python3 -m lmdeploy.serve.proxy.proxy --server_name {server_name} --server_port 
 
 ```shell
 curl -X 'GET' \
-  'http://localhost:10086/nodes/status' \
+  'http://localhost:8000/nodes/status' \
   -H 'accept: application/json'
 ```
 
 ```shell
 curl -X 'POST' \
-  'http://localhost:10086/nodes/add' \
+  'http://localhost:8000/nodes/add' \
   -H 'accept: application/json' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -51,7 +51,7 @@ curl -X 'POST' \
 
 ```shell
 curl -X 'POST' \
-  'http://localhost:10086/nodes/remove?node_url=http://0.0.0.0:23333' \
+  'http://localhost:8000/nodes/remove?node_url=http://0.0.0.0:23333' \
   -H 'accept: application/json' \
   -d ''
 ```
@@ -61,7 +61,7 @@ curl -X 'POST' \
 ```python
 # 查询所有节点
 import requests
-url = 'http://localhost:10086/nodes/status'
+url = 'http://localhost:8000/nodes/status'
 headers = {'accept': 'application/json'}
 response = requests.get(url, headers=headers)
 print(response.text)
@@ -70,7 +70,7 @@ print(response.text)
 ```python
 # 添加新节点
 import requests
-url = 'http://localhost:10086/nodes/add'
+url = 'http://localhost:8000/nodes/add'
 headers = {
     'accept': 'application/json',
     'Content-Type': 'application/json'
@@ -83,7 +83,7 @@ print(response.text)
 ```python
 # 删除某个节点
 import requests
-url = 'http://localhost:10086/nodes/remove'
+url = 'http://localhost:8000/nodes/remove'
 headers = {'accept': 'application/json',}
 params = {'node_url': 'http://0.0.0.0:23333',}
 response = requests.post(url, headers=headers, data='', params=params)
