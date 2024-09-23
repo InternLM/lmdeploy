@@ -39,7 +39,7 @@ void set_runtime_args(int    batch_size,
     for (int i = 0; i < batch_size; i++) {
         int   topk = top_ks_size > 1 ? top_ks[i] : top_k;
         float topp = top_ps_size > 1 ? top_ps[i] : top_p;
-        float minp = min_ps_size > 1 ? top_ps[i] : min_p;
+        float minp = min_ps_size > 1 ? min_ps[i] : min_p;
 
         if (topk == 0 && topp == 0.f) {
             topk = 1;

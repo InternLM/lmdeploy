@@ -11,4 +11,4 @@ def multinomial_sampling(scores: torch.Tensor,
     """multinomial sampling op."""
     impl_builder = get_backend().get_layer_impl_builder(
         OpType.MultinomialSampling)
-    return impl_builder.build()(scores, seeds, offsets, indices)
+    return impl_builder.build().forward(scores, seeds, offsets, indices)

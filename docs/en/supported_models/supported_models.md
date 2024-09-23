@@ -1,6 +1,8 @@
 # Supported Models
 
-## Models supported by TurboMind
+The following tables detail the models supported by LMDeploy's TurboMind engine and PyTorch engine across different platforms.
+
+## TurboMind on CUDA Platform
 
 |         Model         |    Size     | Type | FP16/BF16 | KV INT8 | KV INT4 | W4A16 |
 | :-------------------: | :---------: | :--: | :-------: | :-----: | :-----: | :---: |
@@ -38,7 +40,7 @@
 The TurboMind engine doesn't support window attention. Therefore, for models that have applied window attention and have the corresponding switch "use_sliding_window" enabled, such as Mistral, Qwen1.5 and etc., please choose the PyTorch engine for inference.
 ```
 
-## Models supported by PyTorch
+## PyTorchEngine on CUDA Platform
 
 |     Model      |    Size     | Type | FP16/BF16 | KV INT8 | W8A8 | W4A16 |
 | :------------: | :---------: | :--: | :-------: | :-----: | :--: | :---: |
@@ -62,6 +64,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |     QWen2      | 0.5B - 72B  | LLM  |    Yes    |   No    |  No  |  Yes  |
 |  DeepSeek-MoE  |     16B     | LLM  |    Yes    |   No    |  No  |  No   |
 |  DeepSeek-V2   |  16B, 236B  | LLM  |    Yes    |   No    |  No  |  No   |
+|    MiniCPM3    |     4B      | LLM  |    Yes    |   No    |  No  |  No   |
 |     Gemma      |    2B-7B    | LLM  |    Yes    |   No    |  No  |  No   |
 |      Dbrx      |    132B     | LLM  |    Yes    |   No    |  No  |  No   |
 |   StarCoder2   |   3B-15B    | LLM  |    Yes    |   No    |  No  |  No   |
@@ -79,3 +82,19 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |  Phi-3.5-mini  |    3.8B     | LLM  |    Yes    |   No    |  No  |   -   |
 |  Phi-3.5-MoE   |   16x3.8B   | LLM  |    Yes    |   No    |  No  |   -   |
 | Phi-3.5-vision |    4.2B     | MLLM |    Yes    |   No    |  No  |   -   |
+
+## PyTorchEngine on Huawei Ascend Platform
+
+|     Model      |   Size   | Type | FP16/BF16 |
+| :------------: | :------: | :--: | :-------: |
+|     Llama2     | 7B - 70B | LLM  |    Yes    |
+|     Llama3     |    8B    | LLM  |    Yes    |
+|    Llama3.1    |    8B    | LLM  |    Yes    |
+|   InternLM2    | 7B - 20B | LLM  |    Yes    |
+|  InternLM2.5   | 7B - 20B | LLM  |    Yes    |
+|    Mixtral     |   8x7B   | LLM  |    Yes    |
+|  QWen1.5-MoE   |  A2.7B   | LLM  |    Yes    |
+|     QWen2      |    7B    | LLM  |    Yes    |
+|   QWen2-MoE    | A14.57B  | LLM  |    Yes    |
+| InternVL(v1.5) |  2B-26B  | MLLM |    Yes    |
+|   InternVL2    |  1B-40B  | MLLM |    Yes    |

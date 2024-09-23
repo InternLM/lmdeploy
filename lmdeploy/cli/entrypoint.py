@@ -16,6 +16,12 @@ def run():
     parser = CLI.parser
     args = parser.parse_args()
 
+    if hasattr(args, 'model_name'):
+        # if `model_name` is not specified, use the model_path instead. The
+        # 'model_path' could be a a local path, or a repo id from hub
+        args.model_name = args.model_name if args.model_name else \
+            args.model_path
+
     if 'run' in dir(args):
         from lmdeploy.utils import get_model
         model_path = getattr(args, 'model_path', None)

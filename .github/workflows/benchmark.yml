@@ -36,6 +36,7 @@ env:
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'}}
+  FAIL_CONFIG: ${{ github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
 
 jobs:
   linux-build:
@@ -111,29 +112,32 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -e /root/packages/AutoAWQ_kernels
+          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
-          python3 -m pip install lmdeploy-*.whl
-          python3 -m pip install triton==2.1.0
+          python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl
-          python3 -m pip install triton==2.1.0
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
+          mkdir ${{env.REPORT_DIR}}/allure-results/.pytest_cache -p
+          ln -s ${{env.REPORT_DIR}}/allure-results/.pytest_cache autotest
       - name: Run other benchmark
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m gpu_num_2 --lf --alluredir=${{env.REPORT_DIR}}/allure-results || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m gpu_num_4 --lf --alluredir=${{env.REPORT_DIR}}/allure-results
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m gpu_num_2 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m gpu_num_4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results
       - name: Clear workfile
         if: always()
         run: |

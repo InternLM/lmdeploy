@@ -101,7 +101,7 @@ class AscendOpsBackend(DefaultOpsBackend):
         for i in range(step_context.q_start_loc.size(0)):
             q_seq_len = int(step_context.q_seqlens[i])
             kv_seq_len = int(step_context.kv_seqlens[i])
-            if not step_context.is_decoding:
+            if not (step_context.is_decoding or is_unpaged_prefill):
                 single_attention_mask = torch.logical_not(
                     torch.tril(
                         torch.ones(step_context.q_seqlens[i],

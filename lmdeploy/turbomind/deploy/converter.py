@@ -85,7 +85,7 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
 
 
 def get_output_model_registered_name_and_config(model_path: str,
-                                                model_format: str,
+                                                model_format: str, dtype: str,
                                                 group_size: int):
     """Get the registered name of the turbomind model and its configuration
     according to the input model path, format and user-input config. The name
@@ -95,11 +95,12 @@ def get_output_model_registered_name_and_config(model_path: str,
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
             ['meta_llama',  'hf', 'awq', 'gptq']
+        dtype (str): the data type of the model's weights and activations
         group_size (int): the size of group used by awq model
     """
     register_name = 'tm'
     turbomind_model_arch = 'llama'
-    weight_type = 'fp16'
+    weight_type = 'float16'
 
     config = TurbomindModelConfig.from_dict()
 
@@ -114,16 +115,28 @@ def get_output_model_registered_name_and_config(model_path: str,
             group_size = 128 if group_size == 0 else group_size
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
-            TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16', torch.float16: 'fp16'}
-            weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'fp16')
+            TORCH_DTYPE_MAP = {
+                torch.bfloat16: 'bfloat16',
+                torch.float16: 'float16'
+            }
+            weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'float16')
 
             # Qwen-1 didn't set torch_dtype. It used bf16 as default
             if model_arch == 'QWenLMHeadModel':
-                weight_type = 'bf16'
-            if not torch.cuda.is_bf16_supported():
-                print(
-                    'Device does not support bfloat16. Set float16 forcefully')
-                weight_type = 'fp16'
+                weight_type = 'bfloat16'
+
+    if dtype == 'auto':
+        weight_type = weight_type if weight_type in [
+            'float16', 'bfloat16', 'int4'
+        ] else 'float16'
+    elif dtype in ['float16', 'bfloat16']:
+        if weight_type == 'int4':
+            logger.warn(f'The model {model_path} is a quantized model, so the '
+                        f'specified data type {dtype} is ignored')
+        else:
+            weight_type = dtype
+    else:
+        assert 0, f'unsupported specified data type {dtype}'
 
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type
@@ -251,6 +264,7 @@ def get_tm_model(model_path,
         get_output_model_registered_name_and_config(
             model_path=model_path,
             model_format=engine_config.model_format,
+            dtype=engine_config.dtype,
             group_size=group_size)
 
     tm_cfg.model_config.chat_template = chat_template_name
@@ -269,6 +283,7 @@ def get_tm_model(model_path,
 def main(model_name: str,
          model_path: str,
          model_format: str = 'hf',
+         dtype: str = 'auto',
          chat_template: str = None,
          tokenizer_path: str = None,
          dst_path: str = 'workspace',
@@ -287,6 +302,10 @@ def main(model_name: str,
             llama format, 'hf' means huggingface model, and 'awq', `gptq`
             means models quantized by `autoawq` and `autogptq` respectively.
             The default value is hf
+        dtype (str): data type for model weights and activations. It can be
+            one of the following values, ['auto', 'float16', 'bfloat16']
+            The `auto` option will use FP16 precision for FP32 and FP16
+            models, and BF16 precision for BF16 models.
         chat_template (str): the name of the built-in chat template.
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
@@ -333,7 +352,9 @@ def main(model_name: str,
 
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
-    engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format)
+    engine_config = TurbomindEngineConfig(tp=tp,
+                                          model_format=model_format,
+                                          dtype=dtype)
     tm_model = get_tm_model(model_path, model_name, chat_template,
                             engine_config, group_size, tm_weight_path)
     tm_model.export()

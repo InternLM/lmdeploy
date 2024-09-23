@@ -7,30 +7,31 @@ from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
 
 def test_registered_models():
     for model, model_format, group_size, weight_type, register_name in [
-        ('internlm/internlm2-7b', 'hf', 0, 'bf16', 'tm'),
-        ('baichuan-inc/Baichuan-7B', 'hf', 0, 'fp16', 'tm'),
-        ('baichuan-inc/Baichuan2-7B-Chat', 'hf', 0, 'bf16', 'tm'),
-        ('baichuan-inc/Baichuan-13B-Chat', 'hf', 0, 'bf16', 'tm'),
-        ('baichuan-inc/Baichuan2-13B-Chat', 'hf', 0, 'bf16', 'tm'),
-        ('internlm/internlm-chat-7b', 'hf', 0, 'fp16', 'tm'),
-        ('internlm/internlm2-chat-7b', 'hf', 0, 'bf16', 'tm'),
-        ('internlm/internlm-xcomposer2-4khd-7b', 'hf', 0, 'bf16', 'tm'),
-        ('internlm/internlm-xcomposer2-vl-7b', 'hf', 0, 'bf16', 'tm'),
-        ('internlm/internlm-xcomposer2-7b', 'hf', 0, 'bf16', 'tm'),
-        ('lmsys/vicuna-7b-v1.5', 'hf', 0, 'fp16', 'tm'),
-        ('01-ai/Yi-1.5-9B', 'hf', 0, 'bf16', 'tm'),
-        ('deepseek-ai/deepseek-coder-6.7b-instruct', 'hf', 0, 'bf16', 'tm'),
-        ('deepseek-ai/deepseek-llm-7b-chat', 'hf', 0, 'bf16', 'tm'),
-        ('Qwen/Qwen-7B-Chat', 'hf', 0, 'bf16', 'tm'),
-        ('Qwen/Qwen1.5-7B-Chat', 'hf', 0, 'bf16', 'tm'),
-        ('Qwen/Qwen2-7B-Instruct', 'hf', 0, 'bf16', 'tm'),
-        ('Qwen/Qwen-VL-Chat', 'hf', 0, 'bf16', 'tm'),
-        ('liuhaotian/llava-v1.6-34b', 'hf', 0, 'bf16', 'tm'),
-        ('liuhaotian/llava-v1.6-mistral-7b', 'hf', 0, 'bf16', 'tm'),
-        ('liuhaotian/llava-v1.6-vicuna-13b', 'hf', 0, 'bf16', 'tm'),
-        ('OpenGVLab/InternVL-Chat-V1-5', 'hf', 0, 'bf16', 'tm'),
-        ('deepseek-ai/deepseek-vl-7b-chat', 'hf', 0, 'fp16', 'tm'),
-        ('YanweiLi/MGM-7B', 'hf', 0, 'bf16', 'tm'),
+        ('internlm/internlm2-7b', 'hf', 0, 'bfloat16', 'tm'),
+        ('baichuan-inc/Baichuan-7B', 'hf', 0, 'float16', 'tm'),
+        ('baichuan-inc/Baichuan2-7B-Chat', 'hf', 0, 'bfloat16', 'tm'),
+        ('baichuan-inc/Baichuan-13B-Chat', 'hf', 0, 'bfloat16', 'tm'),
+        ('baichuan-inc/Baichuan2-13B-Chat', 'hf', 0, 'bfloat16', 'tm'),
+        ('internlm/internlm-chat-7b', 'hf', 0, 'float16', 'tm'),
+        ('internlm/internlm2-chat-7b', 'hf', 0, 'bfloat16', 'tm'),
+        ('internlm/internlm-xcomposer2-4khd-7b', 'hf', 0, 'bfloat16', 'tm'),
+        ('internlm/internlm-xcomposer2-vl-7b', 'hf', 0, 'bfloat16', 'tm'),
+        ('internlm/internlm-xcomposer2-7b', 'hf', 0, 'bfloat16', 'tm'),
+        ('lmsys/vicuna-7b-v1.5', 'hf', 0, 'float16', 'tm'),
+        ('01-ai/Yi-1.5-9B', 'hf', 0, 'bfloat16', 'tm'),
+        ('deepseek-ai/deepseek-coder-6.7b-instruct', 'hf', 0,
+         'bfloat16', 'tm'),
+        ('deepseek-ai/deepseek-llm-7b-chat', 'hf', 0, 'bfloat16', 'tm'),
+        ('Qwen/Qwen-7B-Chat', 'hf', 0, 'bfloat16', 'tm'),
+        ('Qwen/Qwen1.5-7B-Chat', 'hf', 0, 'bfloat16', 'tm'),
+        ('Qwen/Qwen2-7B-Instruct', 'hf', 0, 'bfloat16', 'tm'),
+        ('Qwen/Qwen-VL-Chat', 'hf', 0, 'bfloat16', 'tm'),
+        ('liuhaotian/llava-v1.6-34b', 'hf', 0, 'bfloat16', 'tm'),
+        ('liuhaotian/llava-v1.6-mistral-7b', 'hf', 0, 'bfloat16', 'tm'),
+        ('liuhaotian/llava-v1.6-vicuna-13b', 'hf', 0, 'bfloat16', 'tm'),
+        ('OpenGVLab/InternVL-Chat-V1-5', 'hf', 0, 'bfloat16', 'tm'),
+        ('deepseek-ai/deepseek-vl-7b-chat', 'hf', 0, 'float16', 'tm'),
+        ('YanweiLi/MGM-7B', 'hf', 0, 'bfloat16', 'tm'),
         ('Qwen/Qwen1.5-4B-Chat-AWQ', 'awq', 128, 'int4', 'tm'),
         ('solidrust/Meta-Llama-3-8B-Instruct-hf-AWQ', 'awq', 128,
          'int4', 'tm'),
@@ -42,7 +43,7 @@ def test_registered_models():
         assert input_name in list(INPUT_MODELS.module_dict.keys())
 
         output_name, config, _ = get_output_model_registered_name_and_config(
-            model, model_format=model_format, group_size=0)
+            model, model_format=model_format, dtype='auto', group_size=0)
         assert output_name == register_name
         assert config.model_config.group_size == group_size
         assert config.weight_type == weight_type
@@ -53,7 +54,10 @@ def test_registered_models():
 def test_update_from_engine_config():
     import copy
     _, _config, _ = get_output_model_registered_name_and_config(
-        'internlm/internlm2-chat-7b', model_format='hf', group_size=0)
+        'internlm/internlm2-chat-7b',
+        model_format='hf',
+        dtype='auto',
+        group_size=0)
     config = copy.deepcopy(_config)
     config.update_from_engine_config(None)
     assert (config == _config)
@@ -85,3 +89,22 @@ def test_update_from_engine_config():
             engine_config.rope_scaling_factor)
     assert (
         config.attention_config.use_logn_attn == engine_config.use_logn_attn)
+
+
+def test_dtype():
+    testsets = [('auto', 'bfloat16'), ('float16', 'float16'),
+                ('bfloat16', 'bfloat16')]
+    for specified_dtype, expected_dtype in testsets:
+        _, _config, _ = get_output_model_registered_name_and_config(
+            'internlm/internlm2-chat-7b',
+            model_format='hf',
+            dtype=specified_dtype,
+            group_size=0)
+        assert _config.weight_type == expected_dtype
+    for specified_dtype in ['auto', 'float16', 'bfloat16']:
+        _, _config, _ = get_output_model_registered_name_and_config(
+            'internlm/internlm2_5-20b-chat-4bit-awq',
+            model_format='awq',
+            dtype=specified_dtype,
+            group_size=128)
+        assert _config.weight_type == 'int4'

@@ -26,8 +26,10 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/08\] 🔥🔥 LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
-- \[2024/07\] 🎉🎉 Support Llama3.1 8B, 70B and its TOOLS CALLING
+- \[2024/09\] LMDeploy PyTorchEngine adds support for[Huawei Ascend](./docs/en/get_started/ascend/get_started.md). See supported models [here](docs/en/supported_models/supported_models.md)
+- \[2024/09\] LMDeploy PyTorchEngine achieves 1.3x faster on Llama3-8B inference by introducing CUDA graph
+- \[2024/08\] LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
+- \[2024/07\] Support Llama3.1 8B, 70B and its TOOLS CALLING
 - \[2024/07\] Support [InternVL2](docs/en/multi_modal/internvl.md) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
@@ -138,6 +140,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Phi-3-mini (3.8B)</li>
   <li>Phi-3.5-mini (3.8B)</li>
   <li>Phi-3.5-MoE (16x3.8B)</li>
+  <li>MiniCPM3 (4B)</li>
 </ul>
 </td>
 <td>
