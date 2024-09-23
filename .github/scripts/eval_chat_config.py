@@ -1,39 +1,39 @@
 from copy import deepcopy
 
 from mmengine.config import read_base
-from opencompass.models import LmdeployPytorchModel, TurboMindModel
+from opencompass.models import TurboMindModel, TurboMindModelwithChatTemplate
 
 with read_base():
     # choose a list of datasets
-    from opencompass.configs.datasets.bbh.bbh_gen import \
+    from opencompass.configs.datasets.bbh.bbh_gen_5b92b0 import \
         bbh_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.ceval.ceval_gen import \
+    from opencompass.configs.datasets.ceval.ceval_gen_2daf24 import \
         ceval_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.cmmlu.cmmlu_gen import \
+    from opencompass.configs.datasets.cmmlu.cmmlu_gen_c13365 import \
         cmmlu_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.crowspairs.crowspairs_gen import \
+    from opencompass.configs.datasets.crowspairs.crowspairs_gen_381af0 import \
         crowspairs_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.GaokaoBench.GaokaoBench_no_subjective_gen_4c31db import \
         GaokaoBench_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.gpqa.gpqa_gen import \
+    from opencompass.configs.datasets.gpqa.gpqa_gen_4baadb import \
         gpqa_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.gsm8k.gsm8k_gen import \
+    from opencompass.configs.datasets.gsm8k.gsm8k_gen_1d7fe4 import \
         gsm8k_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.hellaswag.hellaswag_10shot_gen_e42710 import \
         hellaswag_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.humaneval.humaneval_gen import \
+    from opencompass.configs.datasets.humaneval.humaneval_gen_8e312c import \
         humaneval_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.IFEval.IFEval_gen import \
+    from opencompass.configs.datasets.IFEval.IFEval_gen_3321a3 import \
         ifeval_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.math.math_0shot_gen_393424 import \
         math_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.mbpp.sanitized_mbpp_gen_a0fc46 import \
         sanitized_mbpp_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.mmlu.mmlu_gen import \
+    from opencompass.configs.datasets.mmlu.mmlu_gen_4d595a import \
         mmlu_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.nq.nq_open_1shot_gen_01cf41 import \
         nq_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.race.race_gen import \
+    from opencompass.configs.datasets.race.race_gen_69ee4f import \
         race_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import \
         TheoremQA_datasets  # noqa: F401, E501
@@ -212,7 +212,6 @@ turbomind_qwen1_5_7b_chat_4bits = deepcopy(*lmdeploy_qwen1_5_7b_chat)
 turbomind_qwen1_5_7b_chat_kvint4 = deepcopy(*lmdeploy_qwen1_5_7b_chat)
 turbomind_qwen1_5_7b_chat_kvint8 = deepcopy(*lmdeploy_qwen1_5_7b_chat)
 pytorch_qwen1_5_7b_chat = deepcopy(*lmdeploy_qwen1_5_7b_chat)
-del pytorch_qwen1_5_7b_chat['stop_words']
 pytorch_qwen1_5_7b_chat['meta_template'] = qwen1_5_meta_template
 
 # ===== Configs for Qwen/Qwen-7B-Chat =====
@@ -252,7 +251,6 @@ turbomind_llama3_8b_instruct_4bits = deepcopy(*lmdeploy_llama3_8b_instruct)
 turbomind_llama3_8b_instruct_kvint4 = deepcopy(*lmdeploy_llama3_8b_instruct)
 turbomind_llama3_8b_instruct_kvint8 = deepcopy(*lmdeploy_llama3_8b_instruct)
 pytorch_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
-del pytorch_llama3_8b_instruct['stop_words']
 pytorch_llama3_8b_instruct['meta_template'] = llama3_meta_template
 
 # ===== Configs for meta-llama/Meta-Llama-3.1-8B-Instruct =====
@@ -265,7 +263,6 @@ turbomind_llama3_1_8b_instruct_kvint4 = deepcopy(
 turbomind_llama3_1_8b_instruct_kvint8 = deepcopy(
     turbomind_llama3_1_8b_instruct)
 pytorch_llama3_1_8b_instruct = deepcopy(turbomind_llama3_1_8b_instruct)
-del pytorch_llama3_1_8b_instruct['stop_words']
 pytorch_llama3_1_8b_instruct['meta_template'] = llama3_meta_template
 
 # ===== Configs for Qwen/Qwen2-7B-Instruct =====
@@ -295,8 +292,8 @@ for model in [v for k, v in locals().items() if k.endswith('_kvint8')]:
     model['abbr'] = model['abbr'] + '_kvint8'
 
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
-    model['type'] = LmdeployPytorchModel
     model['abbr'] = model['abbr'].replace('turbomind', 'pytorch')
+    model['backend'] = 'pytorch'
     model['engine_config']['max_batch_size'] = 64
     model['gen_config']['do_sample'] = False
     model['batch_size'] = 64
@@ -308,25 +305,23 @@ turbomind_internlm2_5_7b_chat_batch1['engine_config']['max_batch_size'] = 64
 turbomind_internlm2_5_7b_chat_batch1['batch_size'] = 64
 turbomind_internlm2_5_7b_chat_batch1['concurrency'] = 64
 
-basic_pytorch_chat_tp1 = dict(type=LmdeployPytorchModel,
+basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               engine_config=dict(session_len=MAX_SESSION_LEN,
-                                                 max_batch_size=64),
+                                                 max_batch_size=64,
+                                                 tp=1),
                               gen_config=dict(do_sample=False,
                                               max_new_tokens=MAX_NEW_TOKENS),
                               max_out_len=MAX_NEW_TOKENS,
                               max_seq_len=MAX_SESSION_LEN,
                               batch_size=64,
-                              concurrency=64,
                               run_cfg=dict(num_gpus=1))
 
 # ===== Configs for Qwen/Qwen1.5-MoE-A2.7B-Chat =====
 pytorch_qwen1_5_moe_2_7b_chat = deepcopy(basic_pytorch_chat_tp1)
 pytorch_qwen1_5_moe_2_7b_chat['abbr'] = 'pytorch_qwen1_5_moe_2_7b_chat'
 pytorch_qwen1_5_moe_2_7b_chat['path'] = 'Qwen/Qwen1.5-MoE-A2.7B-Chat'
-pytorch_qwen1_5_moe_2_7b_chat['meta_template'] = qwen1_5_meta_template
 
 # ===== Configs for google/gemma2-7b-it =====
 pytorch_gemma_2_9b_it = deepcopy(basic_pytorch_chat_tp1)
 pytorch_gemma_2_9b_it['abbr'] = 'pytorch_gemma_2_9b_it'
 pytorch_gemma_2_9b_it['path'] = 'google/gemma-2-9b-it'
-pytorch_gemma_2_9b_it['meta_template'] = gemma_meta_template
