@@ -196,6 +196,13 @@ class LogitsMixin:
         generator = self.engine.create_instance()
         all_loss_matrix = []
         all_target_mask = []
+        # suppose input_ids is [0,1,2,3,4,5,6,7,8], and max_input_len=5
+        # In the first iter, tokens [0,1,2,3,4] are prefilled.
+        # loss=cross_entropy(logits[..., :-1, :], token_ids[1,2,3,4])
+        # In the 2nd iter, token [4,5,6,7,8] should be prefilled.
+        # The first token must be the latest one in prev iter, because
+        # token_ids (or labels) have to be shifted the mostleft token
+        # loss=cross_entropy(logits[..., :-1, :], token_ids[5,6,7,8])
         for i in range(0, max_seq_len, max_input_len - 1):
             _input_ids = [
                 input_id[i:i + max_input_len] for input_id in input_ids
