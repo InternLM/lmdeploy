@@ -887,6 +887,7 @@ Reminder:
 
 
 @MODELS.register_module(name='minicpmv-2d6')
+@MODELS.register_module(name='minicpm3')
 @MODELS.register_module(name='qwen')
 class Qwen7BChat(BaseChatTemplate):
     """Chat template for Qwen-7B-Chat."""
@@ -924,6 +925,8 @@ class Qwen7BChat(BaseChatTemplate):
             return 'qwen'
         if 'minicpm-v-2_6' in model_path.lower():
             return 'minicpmv-2d6'
+        if 'minicpm3-' in model_path.lower():
+            return 'minicpm3'
 
 
 @MODELS.register_module(name='codellama')
