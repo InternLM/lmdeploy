@@ -209,6 +209,66 @@ class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
         return res
 
 
+class Qwen2VLChatTemplateWrapper(VLChatTemplateWrapper):
+    """qwen2 vl."""
+
+    def append_image_token(self, prompt, num_images: int):
+        """append image tokens to user prompt."""
+        if IMAGE_TOKEN in prompt and '<|vision_start|>' not in prompt:
+            prompt = prompt.replace(
+                IMAGE_TOKEN, f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>')
+        else:
+            # Qwen2-VL-2B-Instruct will concat image and user prompt according
+            #   to their order in the content list
+            # we insert image token before user prompt by default. The user can
+            #   use custom image token position if they want the same decorated
+            #   prompt as Qwen2-VL
+            prompt = f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>' * \
+                num_images + prompt
+        return prompt
+
+    def get_mrope_info(self,
+                       seq_len: int,
+                       grid_thws: List[Tuple[int, int, int]] = None,
+                       embedding_ranges: List[Tuple[int, int]] = None):
+        import torch
+        if grid_thws is None:
+            mrope_position_ids = torch.arange(seq_len).expand(3, -1)
+            mrope_position_delta = torch.tensor([0], dtype=torch.long)
+        else:
+            mrope_position_ids = [
+                torch.arange(embedding_ranges[0][0]).expand(3, -1)
+            ]
+            st_idx = embedding_ranges[0][0]
+            for i, (grid_thw, embedding_range) in enumerate(
+                    zip(grid_thws, embedding_ranges)):
+                llm_grid_t, llm_grid_h, llm_grid_w = grid_thw
+                llm_grid_h //= 2
+                llm_grid_w //= 2
+                t_index = torch.arange(llm_grid_t).view(-1, 1).expand(
+                    -1, llm_grid_h * llm_grid_w).flatten()
+                h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(
+                    llm_grid_t, -1, llm_grid_w).flatten()
+                w_index = torch.arange(llm_grid_w).view(1, 1, -1).expand(
+                    llm_grid_t, llm_grid_h, -1).flatten()
+                mrope_position_ids.append(
+                    torch.stack([t_index, h_index, w_index]) + st_idx)
+                st_idx += max(llm_grid_h, llm_grid_w)
+                if i < len(embedding_ranges) - 1:
+                    text_len = embedding_ranges[i +
+                                                1][0] - embedding_ranges[i][1]
+                else:
+                    text_len = seq_len - embedding_range[1]
+                mrope_position_ids.append(
+                    torch.arange(text_len).expand(3, -1) + st_idx)
+                st_idx += text_len
+            mrope_position_ids = torch.cat(mrope_position_ids, dim=-1)
+            mrope_position_delta = torch.tensor([st_idx - seq_len],
+                                                dtype=torch.long)
+
+        return mrope_position_ids, mrope_position_delta
+
+
 class CogVLMChatTemplateWrapper(VLChatTemplateWrapper):
     """cogvlm chat template wrapper."""
 
@@ -395,4 +455,6 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return version_map[version](chat_template)
     elif arch == 'ChatGLMModel':
         return GLM4VChatTemplateWrapper(chat_template)
+    elif arch == 'Qwen2VLForConditionalGeneration':
+        return Qwen2VLChatTemplateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')

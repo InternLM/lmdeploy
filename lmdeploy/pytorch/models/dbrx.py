@@ -12,6 +12,8 @@ from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class DbrxAttention(nn.Module):
     """Rewrite module of DbrxAttention."""
@@ -405,10 +407,8 @@ class DbrxModel(nn.Module):
         return self.wte
 
 
-class DbrxForCausalLM(nn.Module):
+class DbrxForCausalLM(nn.Module, CudaGraphMixin):
     """ModelForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'qkv_proj': [

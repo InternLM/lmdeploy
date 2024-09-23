@@ -111,6 +111,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_moe.Qwen2MoeForCausalLM',
 })
 
+# qwen2_vl
+MODULE_MAP.update({
+    'Qwen2VLForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_vl.Qwen2VLForConditionalGeneration',
+})
+
 # dbrx
 MODULE_MAP.update({
     'DbrxForCausalLM':
@@ -151,6 +157,12 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'PhiMoEForCausalLM':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3_moe.PhiMoEForCausalLM',
+})
+
+# minicpm3
+MODULE_MAP.update({
+    'MiniCPM3ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.minicpm3.MiniCPM3ForCausalLM',
 })
 
 CUSTOM_MODULE_MAP = dict()
