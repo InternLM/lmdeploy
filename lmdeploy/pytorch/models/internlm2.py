@@ -12,6 +12,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class InternLM2Attention(nn.Module):
     """Rewrite module of InternLM2Attention."""
@@ -304,7 +306,7 @@ class InternLM2Model(nn.Module):
         return self.tok_embeddings
 
 
-class InternLM2ForCausalLM(nn.Module):
+class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
     """rewrote model of InternLM2ForCausalLM."""
 
     packed_modules_mapping = {

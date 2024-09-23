@@ -4,6 +4,7 @@ import json
 import os
 import os.path as osp
 import random
+import threading
 import time
 from collections import deque
 from http import HTTPStatus
@@ -46,6 +47,17 @@ class Node(BaseModel):
     status: Optional[Status] = None
 
 
+CONTROLLER_HEART_BEAT_EXPIRATION = int(
+    os.getenv('LMDEPLOY_CONTROLLER_HEART_BEAT_EXPIRATION', 90))
+
+
+def heart_beat_controller(proxy_controller):
+    while True:
+        time.sleep(CONTROLLER_HEART_BEAT_EXPIRATION)
+        logger.info('Start heart beat check')
+        proxy_controller.remove_stale_nodes_by_expiration()
+
+
 class NodeManager:
     """Manage all the sub nodes.
 
@@ -77,6 +89,10 @@ class NodeManager:
                 for url, status in self.nodes.items():
                     status = Status(**status)
                     self.nodes[url] = status
+        self.heart_beat_thread = threading.Thread(target=heart_beat_controller,
+                                                  args=(self, ),
+                                                  daemon=True)
+        self.heart_beat_thread.start()
 
     def update_config_file(self):
         """Update the config file."""
@@ -100,6 +116,10 @@ class NodeManager:
         """
         if status is None:
             status = self.nodes.get(node_url, Status())
+        if status.models != []:  # force register directly
+            self.nodes[node_url] = status
+            self.update_config_file()
+            return
         try:
             from lmdeploy.serve.openai.api_client import APIClient
             client = APIClient(api_server_url=node_url)
@@ -114,6 +134,22 @@ class NodeManager:
         if node_url in self.nodes.keys():
             self.nodes.pop(node_url)
             self.update_config_file()
+
+    def remove_stale_nodes_by_expiration(self):
+        """remove stale nodes."""
+        to_be_deleted = []
+        for node_url in self.nodes.keys():
+            url = f'{node_url}/health'
+            headers = {'accept': 'application/json'}
+            try:
+                response = requests.get(url, headers=headers)
+                if response.status_code != 200:
+                    to_be_deleted.append(node_url)
+            except:  # noqa
+                to_be_deleted.append(node_url)
+        for node_url in to_be_deleted:
+            self.remove(node_url)
+            logger.info(f'Removed node_url: {node_url}')
 
     @property
     def model_list(self):
@@ -476,7 +512,7 @@ async def completions_v1(request: CompletionRequest,
 
 
 def proxy(server_name: str = '0.0.0.0',
-          server_port: int = 10086,
+          server_port: int = 8000,
           strategy: Literal['random', 'min_expected_latency',
                             'min_observed_latency'] = 'min_expected_latency',
           api_keys: Optional[Union[List[str], str]] = None,
@@ -486,7 +522,7 @@ def proxy(server_name: str = '0.0.0.0',
 
     Args:
         server_name (str): the server name of the proxy. Default to '0.0.0.0'.
-        server_port (str): the server port. Default to 10086.
+        server_port (str): the server port. Default to 8000.
         strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
             the strategy to dispatch requests to nodes. Default to
             'min_expected_latency'

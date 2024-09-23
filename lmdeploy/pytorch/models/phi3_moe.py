@@ -12,6 +12,8 @@ from lmdeploy.pytorch.nn.rotary_embedding import (LongRoPEScalingParameters,
                                                   build_rotary_embedding)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 def sparsemixer(scores, top_k, jitter_eps):
     assert top_k == 2
@@ -365,10 +367,8 @@ class PhiMoEModel(nn.Module):
         return self.embed_tokens
 
 
-class PhiMoEForCausalLM(nn.Module):
+class PhiMoEForCausalLM(nn.Module, CudaGraphMixin):
     """mixture model for causalLM."""
-
-    support_cuda_graph = True
 
     def __init__(self,
                  config: Any,

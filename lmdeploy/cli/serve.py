@@ -134,6 +134,10 @@ class SubCliServe:
                             type=str,
                             default=['*'],
                             help='A list of allowed http headers for cors')
+        parser.add_argument('--proxy-url',
+                            type=str,
+                            default=None,
+                            help='The proxy url for api server.')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -203,6 +207,32 @@ class SubCliServe:
                             help='api key. Default to None, which means no '
                             'api key will be used')
         ArgumentHelper.session_id(parser)
+
+    @staticmethod
+    def add_parser_proxy():
+        """Add parser for proxy server command."""
+        parser = SubCliServe.subparsers.add_parser(
+            'proxy',
+            formatter_class=DefaultsAndTypesHelpFormatter,
+            description=SubCliServe.proxy.__doc__,
+            help=SubCliServe.proxy.__doc__)
+        parser.set_defaults(run=SubCliServe.proxy)
+        parser.add_argument('--server-name',
+                            type=str,
+                            default='0.0.0.0',
+                            help='Host ip for proxy serving')
+        parser.add_argument('--server-port',
+                            type=int,
+                            default=8000,
+                            help='Server port of the proxy')
+        parser.add_argument(
+            '--strategy',
+            type=str,
+            choices=['random', 'min_expected_latency', 'min_observed_latency'],
+            default='min_expected_latency',
+            help='the strategy to dispatch requests to nodes')
+        ArgumentHelper.api_keys(parser)
+        ArgumentHelper.ssl(parser)
 
     @staticmethod
     def gradio(args):
@@ -311,6 +341,7 @@ class SubCliServe:
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
                        ssl=args.ssl,
+                       proxy_url=args.proxy_url,
                        max_log_len=args.max_log_len)
 
     @staticmethod
@@ -321,7 +352,15 @@ class SubCliServe:
         run_api_client(**kwargs)
 
     @staticmethod
+    def proxy(args):
+        """Proxy server that manages distributed api_server nodes."""
+        from lmdeploy.serve.proxy.proxy import proxy
+        kwargs = convert_args(args)
+        proxy(**kwargs)
+
+    @staticmethod
     def add_parsers():
         SubCliServe.add_parser_gradio()
         SubCliServe.add_parser_api_server()
         SubCliServe.add_parser_api_client()
+        SubCliServe.add_parser_proxy()
