@@ -297,7 +297,6 @@ for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['engine_config']['max_batch_size'] = 64
     model['gen_config']['do_sample'] = False
     model['batch_size'] = 64
-    model['concurrency'] = 64
 
 turbomind_internlm2_5_7b_chat_batch1[
     'abbr'] = turbomind_internlm2_5_7b_chat_batch1['abbr'] + '_batch1'

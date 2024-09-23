@@ -4,7 +4,7 @@ from mmengine.config import read_base
 
 with read_base():
     # choose a list of datasets
-    from opencompass.configs.datasets.bbh.bbh_gen import \
+    from opencompass.configs.datasets.bbh.bbh_gen_5b92b0 import \
         bbh_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.ceval.ceval_ppl import \
         ceval_datasets  # noqa: F401, E501
