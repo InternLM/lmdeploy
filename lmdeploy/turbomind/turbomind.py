@@ -664,7 +664,9 @@ class TurboMindInstance:
 
             finish, tm_outputs = que.get()
             if finish < 0:
-                yield EngineOutput()
+                yield EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
+                                   token_ids=[],
+                                   num_token=0)
                 self.executor.shutdown()
                 break
 
@@ -781,7 +783,9 @@ class TurboMindInstance:
 
             finish, tm_outputs = self.que.get()
             if finish < 0:
-                yield EngineOutput()
+                yield EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
+                                   token_ids=[],
+                                   num_token=0)
                 self.executor.shutdown()
                 break
 

@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response,
-                               TurbomindEngineConfig)
+                               ResponseType, TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.utils import LogitsMixin, _get_event_loop
 from lmdeploy.tokenizer import DetokenizeState
@@ -46,7 +46,7 @@ class GenOut:
     history_token_len: int
     input_token_len: int
     generate_token_len: int
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'error']] = None
     token_ids: List[int] = None
     logprobs: List[Dict[int, float]] = None
 
@@ -566,6 +566,8 @@ class AsyncEngine(LogitsMixin):
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
                     # decode res
+                    if outputs.status > ResponseType.FINISH:
+                        break
                     res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
                     if len(res) <= state.ids_offset:
                         continue
@@ -587,15 +589,24 @@ class AsyncEngine(LogitsMixin):
                     yield GenOut(response, self.id2step[str(session_id)],
                                  len(input_ids), tokens, finish_reason, res,
                                  logprobs)
-
-                finish_reason = 'length' \
-                    if tokens >= gen_config.max_new_tokens else 'stop'
-                # utf-8 char at the end means it's a potential unfinished
-                # byte sequence
-                if not response.endswith('�'):
-                    response = ''  # avaid returning the last response twice
-                yield GenOut(response, self.id2step[str(session_id)],
-                             len(input_ids), tokens, finish_reason)
+                if outputs.status > ResponseType.FINISH:
+                    yield GenOut(
+                        response='internal error happened',
+                        history_token_len=self.id2step[str(session_id)],
+                        input_token_len=len(input_ids),
+                        generate_token_len=0,
+                        finish_reason='error',
+                        token_ids=[])
+                else:
+                    finish_reason = 'length' \
+                        if tokens >= gen_config.max_new_tokens else 'stop'
+                    # utf-8 char at the end means it's a potential unfinished
+                    # byte sequence
+                    if not response.endswith('�'):
+                        # avaid returning the last response twice
+                        response = ''
+                    yield GenOut(response, self.id2step[str(session_id)],
+                                 len(input_ids), tokens, finish_reason)
                 # update step
                 self.id2step[str(session_id)] += len(input_ids) + tokens
                 if sequence_end:
