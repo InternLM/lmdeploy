@@ -180,42 +180,32 @@ class LogitsMixin:
             input_ids (Union[List[int], List[List[int]]]): the batch of
                 input token ids
         """
-        assert len(input_ids) > 0
+        assert isinstance(input_ids, List) and len(input_ids) > 0
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
-        for input_id in input_ids:
-            assert len(input_id) > 1
+        assert all(len(_) > 1 for _ in input_ids)
 
-        max_input_len = self.backend_config.max_prefill_token_num
-        n_max_iter = np.ceil(
-            max([len(input_id)
-                 for input_id in input_ids]) / max_input_len).astype(int)
+        bs = len(input_ids)
+        max_seq_len = max([len(input_id) for input_id in input_ids])
 
-        index_range_starts = []
-        index_range_ends = []
-        for input_id in input_ids:
-            index_range_start = np.array(
-                [i * max_input_len for i in range(n_max_iter)])
-            index_range_end = index_range_start + max_input_len
-            index_range_start[index_range_start >= len(input_id)] = len(
-                input_id)
-            index_range_end[index_range_end >= len(input_id)] = len(input_id)
-            index_range_starts.append(index_range_start)
-            index_range_ends.append(index_range_end)
+        # TODO: a better way to determine `max_input_len`
+        # At most allocate 2G mem for logits with shape [bs, seq, vocab_size]
+        vocab_size = self.hf_tm_cfg.vocab_size
+        max_input_len = 2 * 1024**3 // (bs * vocab_size * 4)
 
         generator = self.engine.create_instance()
         all_loss_matrix = []
         all_target_mask = []
-        for i in range(n_max_iter):
-            steps = [start[i] for start in index_range_starts]
+        for i in range(0, max_seq_len, max_input_len - 1):
             _input_ids = [
-                input_id[start[i]:end[i]] for input_id, start, end in zip(
-                    input_ids, index_range_starts, index_range_ends)
+                input_id[i:i + max_input_len] for input_id in input_ids
             ]
-            _logits = generator.decode(_input_ids,
-                                       steps=steps,
-                                       sequence_start=(i == 0),
-                                       sequence_end=(i == n_max_iter - 1))
+            steps = [i] * bs
+            _logits = generator.decode(
+                _input_ids,
+                steps=steps,
+                sequence_start=(i == 0),
+                sequence_end=(i + max_input_len >= max_seq_len))
             _logits = _logits.float().cpu()
             padding_token_id = -100
             target_ids = [(x + [padding_token_id])[1:] for x in _input_ids]
