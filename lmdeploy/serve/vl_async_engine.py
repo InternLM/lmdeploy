@@ -63,6 +63,9 @@ class VLAsyncEngine(AsyncEngine):
 
         results = {}
         input_ids = []
+        from lmdeploy.vl.templates import Qwen2VLChatTemplateWrapper
+        ranges = None
+        grid_thws = None
         if len(segs) > 1:
             # yapf: disable
             images_with_kwargs = await self.vl_prompt_template.async_collect_pil_images(prompt)  # noqa: E501
@@ -78,6 +81,11 @@ class VLAsyncEngine(AsyncEngine):
                     decorated, features = self.vl_prompt_template.update_image_token(  # noqa: E501
                         decorated, features)
                     segs = decorated.split(IMAGE_TOKEN)
+
+                if isinstance(self.vl_prompt_template,
+                              Qwen2VLChatTemplateWrapper):
+                    grid_thws = [x['grid_thw'] for x in features]
+                    features = [x['embeddings'] for x in features]
 
             features = [x.cpu().numpy() for x in features]
             input_ids = []
@@ -104,6 +112,15 @@ class VLAsyncEngine(AsyncEngine):
         else:
             input_ids = self.tokenizer.encode(decorated,
                                               add_bos=sequence_start)
+
+        if isinstance(self.vl_prompt_template, Qwen2VLChatTemplateWrapper):
+            # TODO: refactor _get_prompt_input function
+            mrope_position_ids, mrope_position_delta = \
+                self.vl_prompt_template.get_mrope_info(
+                    len(input_ids), grid_thws=grid_thws,
+                    embedding_ranges=ranges)
+            results['mrope_position_ids'] = mrope_position_ids
+            results['mrope_position_delta'] = mrope_position_delta
 
         results['input_ids'] = input_ids
         results['prompt'] = decorated

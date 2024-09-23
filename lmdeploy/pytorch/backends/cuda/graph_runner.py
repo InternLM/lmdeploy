@@ -95,9 +95,14 @@ class CUDASingleGraphRunner:
         context.kv_seqlens = self.input_buffers['kv_seqlens']
         context.q_start_loc = self.input_buffers['q_start_loc']
 
-    def _fill_inputs(self, input_ids: torch.Tensor, position_ids: torch.Tensor,
-                     past_key_values: List, attn_metadata: Any,
-                     inputs_embeds: torch.Tensor, **kwargs):
+    def _fill_inputs(self,
+                     input_ids: torch.Tensor,
+                     position_ids: torch.Tensor,
+                     past_key_values: List,
+                     attn_metadata: Any,
+                     inputs_embeds: torch.Tensor,
+                     mrope_position_ids: torch.Tensor = None,
+                     **kwargs):
         """fill input."""
         is_decoding = self.is_decoding
         block_offsets = attn_metadata.block_offsets
@@ -128,6 +133,14 @@ class CUDASingleGraphRunner:
                 self.input_buffers['inputs_embeds'] = inputs_embeds.new_zeros(
                     1, max_num_tokens, emb_size)
             self.input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
+        if mrope_position_ids is not None:
+            if 'mrope_position_ids' not in self.input_buffers:
+                max_num_tokens = self.input_buffers['input_ids'].size(-1)
+                self.input_buffers[
+                    'mrope_position_ids'] = mrope_position_ids.new_zeros(
+                        3, max_num_tokens)
+            self.input_buffers[
+                'mrope_position_ids'][:, :num_tokens] = mrope_position_ids
 
         # create inputs
         new_batch_size = next_power_of_2(batch_size)
@@ -161,7 +174,13 @@ class CUDASingleGraphRunner:
             else:
                 new_inputs['inputs_embeds'] = self.input_buffers[
                     'inputs_embeds']
-
+        if mrope_position_ids is not None:
+            if is_decoding:
+                new_inputs['mrope_position_ids'] = self.input_buffers[
+                    'mrope_position_ids'][:, :new_batch_size]
+            else:
+                new_inputs['mrope_position_ids'] = self.input_buffers[
+                    'mrope_position_ids']
         new_inputs.update(kwargs)
         self._fill_context()
         return new_inputs

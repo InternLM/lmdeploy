@@ -111,6 +111,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_moe.Qwen2MoeForCausalLM',
 })
 
+# qwen2_vl
+MODULE_MAP.update({
+    'Qwen2VLForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_vl.Qwen2VLForConditionalGeneration',
+})
+
 # dbrx
 MODULE_MAP.update({
     'DbrxForCausalLM':
