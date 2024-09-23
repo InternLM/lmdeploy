@@ -11,6 +11,8 @@ from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class MixtralAttention(nn.Module):
     """mixtral attention."""
@@ -293,7 +295,7 @@ class MixtralModel(nn.Module):
         return self.embed_tokens
 
 
-class MixtralForCausalLM(nn.Module):
+class MixtralForCausalLM(nn.Module, CudaGraphMixin):
     """mixture model for causalLM."""
 
     def __init__(self,

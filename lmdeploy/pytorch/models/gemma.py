@@ -13,6 +13,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class GemmaAttention(nn.Module):
     """Rewrite module of GemmaAttention."""
@@ -346,10 +348,8 @@ class GemmaModel(nn.Module):
         return self.embed_tokens
 
 
-class GemmaForCausalLM(nn.Module):
+class GemmaForCausalLM(nn.Module, CudaGraphMixin):
     """ModelForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'qkv_proj': [

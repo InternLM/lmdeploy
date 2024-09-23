@@ -13,6 +13,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
 from lmdeploy.pytorch.nn.rotary_embedding import Llama3Parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class LlamaAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
@@ -317,7 +319,7 @@ class LlamaModel(nn.Module):
         return self.embed_tokens
 
 
-class LlamaForCausalLM(nn.Module):
+class LlamaForCausalLM(nn.Module, CudaGraphMixin):
     """rewrote model of LlamaForCausalLM."""
 
     packed_modules_mapping = {
