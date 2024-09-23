@@ -8,11 +8,10 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 
 from .patch import build_model_from_hf_config
+from .utils.cudagraph import CudaGraphMixin
 
 
-class LlavaForConditionalGeneration(nn.Module):
-
-    support_cuda_graph = True
+class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin):
 
     def __init__(self,
                  config: PretrainedConfig,

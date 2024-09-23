@@ -166,7 +166,9 @@ class EngineInstance:
                    session_id=session_id,
                    sampling_param=sampling_param,
                    adapter_name=adapter_name,
-                   input_embeddings=input_embeddings_new)
+                   input_embeddings=input_embeddings_new,
+                   mrope_position_ids=kwargs.get('mrope_position_ids'),
+                   mrope_position_delta=kwargs.get('mrope_position_delta'))
         req_id = await self.req_sender.async_send_async(
             RequestType.ADD_MESSAGE, msg)
 

@@ -1,9 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Iterable, List, Optional, Tuple
 
 import torch
-import torch.distributed as dist
-import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
@@ -12,27 +10,43 @@ from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
                                  SiluAndMul, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
-from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .utils.cudagraph import CudaGraphMixin
+from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
 
 
-def get_world_rank():
-    """get current world size and rank."""
-    import torch.distributed as dist
-    world_size = 1
-    rank = 0
+def _apply_mrope_selection(hidden_states: torch.Tensor,
+                           mrope_position_ids: torch.Tensor,
+                           mrope_section: List[int],
+                           position_ids: torch.Tensor,
+                           rotary_emb_func: Callable):
+    _mrope_position_ids = torch.zeros(3,
+                                      position_ids.shape[-1],
+                                      dtype=position_ids.dtype,
+                                      device=position_ids.device)
+    _mrope_position_ids[:, :mrope_position_ids.shape[-1]] = mrope_position_ids
+    cos, sin = rotary_emb_func(hidden_states, _mrope_position_ids)
+    _cos = torch.zeros(cos.shape[1],
+                       cos.shape[-1],
+                       dtype=cos.dtype,
+                       device=cos.device)
+    _sin = torch.zeros_like(_cos)
+    mrope_section = mrope_section * 2
 
-    if dist.is_initialized():
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
+    def _apply_split(src, dst):
+        start = 0
+        for i, m in enumerate(src.split(mrope_section, dim=-1)):
+            dst[:, start:start + mrope_section[i]] = m[i % 3]
+            start += mrope_section[i]
 
-    return world_size, rank
+    _apply_split(cos, _cos)
+    _apply_split(sin, _sin)
+
+    return _cos, _sin
 
 
-class Qwen2MoeAttention(nn.Module):
-    """Rewrite module of Qwen2MoeAttention."""
+class Qwen2Attention(nn.Module):
+    """Rewrite module of Qwen2Attention."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -120,43 +134,37 @@ class Qwen2MoeAttention(nn.Module):
         return attn_output
 
 
-class Qwen2MoeMLP(nn.Module):
+class Qwen2MLP(nn.Module):
     """mlp."""
 
     def __init__(self,
                  config: PretrainedConfig,
-                 intermediate_size: int = None,
                  dtype: torch.dtype = None,
-                 device: torch.device = None,
-                 is_tp: bool = True,
-                 all_reduce: bool = True):
+                 device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
-        if intermediate_size is None:
-            intermediate_size = config.intermediate_size
         # gate up
         self.gate_up_proj = build_merged_colwise_linear(
             config.hidden_size,
-            [intermediate_size, intermediate_size],
+            [config.intermediate_size, config.intermediate_size],
             bias=False,
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
-            is_tp=is_tp,
+            is_tp=True,
         )
 
         # silu and mul
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.down_proj = build_rowwise_linear(intermediate_size,
+        self.down_proj = build_rowwise_linear(config.intermediate_size,
                                               config.hidden_size,
                                               bias=False,
                                               quant_config=quantization_config,
                                               dtype=dtype,
                                               device=device,
-                                              is_tp=is_tp,
-                                              all_reduce=all_reduce)
+                                              is_tp=True)
 
     def forward(self, x):
         """forward."""
@@ -165,93 +173,7 @@ class Qwen2MoeMLP(nn.Module):
         return self.down_proj(act)
 
 
-class Qwen2MoeSparseMoeBlock(nn.Module):
-    """moe block."""
-
-    def __init__(self,
-                 config: PretrainedConfig,
-                 layer_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
-        super().__init__()
-        self.layer_idx = layer_idx
-        self.hidden_dim = config.hidden_size
-        self.ffn_dim = config.moe_intermediate_size
-        self.num_experts = config.num_experts
-        self.top_k = config.num_experts_per_tok
-        self.norm_topk_prob = config.norm_topk_prob
-        self.renormalize = self.norm_topk_prob
-
-        self.gate = build_rowwise_linear(
-            self.hidden_dim,
-            self.num_experts,
-            bias=False,
-            dtype=dtype,
-            device=device,
-            is_tp=False,
-        )
-
-        self.softmax_topk = SoftmaxTopK(self.top_k)
-
-        self.experts = FusedMoE(
-            self.hidden_dim,
-            self.ffn_dim,
-            self.num_experts,
-            top_k=self.top_k,
-            renormalize=self.renormalize,
-            dtype=dtype,
-            device=device,
-            all_reduce=False,
-        )
-
-        intermediate_size = config.shared_expert_intermediate_size
-        self.shared_expert = Qwen2MoeMLP(
-            config=config,
-            intermediate_size=intermediate_size,
-            dtype=dtype,
-            device=device,
-            is_tp=True,
-            all_reduce=False,
-        )
-        self.shared_expert_gate = build_rowwise_linear(config.hidden_size,
-                                                       1,
-                                                       bias=False,
-                                                       dtype=dtype,
-                                                       device=device,
-                                                       all_reduce=False)
-        world_size, _ = get_world_rank()
-        if world_size > 1:
-            self._all_reduce = True
-        else:
-            self._all_reduce = False
-
-    def forward(self, hidden_states: torch.Tensor):
-        """forward."""
-        batch_size, sequence_length, hidden_dim = hidden_states.shape
-        hidden_states = hidden_states.view(-1, hidden_dim)
-        router_logits = self.gate(hidden_states)
-
-        topk_weights, topk_ids = self.softmax_topk(router_logits)
-
-        out_states = self.experts(
-            hidden_states,
-            topk_weights,
-            topk_ids,
-        )
-
-        shared_states = self.shared_expert(hidden_states)
-        shared_states = F.sigmoid(
-            self.shared_expert_gate(hidden_states)) * shared_states
-        out_states += shared_states
-        out_states = out_states.reshape(batch_size, sequence_length, -1)
-
-        if self._all_reduce:
-            dist.all_reduce(out_states)
-
-        return out_states
-
-
-class Qwen2MoeDecoderLayer(nn.Module):
+class Qwen2DecoderLayer(nn.Module):
     """decoder layer."""
 
     def __init__(self,
@@ -264,21 +186,10 @@ class Qwen2MoeDecoderLayer(nn.Module):
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = Qwen2MoeAttention(config, dtype=dtype, device=device)
+        self.self_attn = Qwen2Attention(config, dtype=dtype, device=device)
 
         # builf MLP
-        if (layer_idx not in config.mlp_only_layers) and (
-                config.num_experts > 0) and ((layer_idx + 1) %
-                                             config.decoder_sparse_step == 0):
-            self.mlp = Qwen2MoeSparseMoeBlock(config,
-                                              layer_idx=layer_idx,
-                                              dtype=dtype,
-                                              device=device)
-        else:
-            self.mlp = Qwen2MoeMLP(config,
-                                   intermediate_size=config.intermediate_size,
-                                   dtype=dtype,
-                                   device=device)
+        self.mlp = Qwen2MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -328,7 +239,7 @@ class Qwen2MoeDecoderLayer(nn.Module):
         return outputs
 
 
-class Qwen2MoeModel(nn.Module):
+class Qwen2Model(nn.Module):
     """model."""
 
     def __init__(self,
@@ -338,6 +249,7 @@ class Qwen2MoeModel(nn.Module):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
+        self.mrope_section = config.rope_scaling['mrope_section']
         quantization_config = getattr(config, 'quantization_config', None)
 
         self.embed_tokens = nn.Embedding(config.vocab_size,
@@ -348,7 +260,7 @@ class Qwen2MoeModel(nn.Module):
 
         # build all decode layers
         self.layers = nn.ModuleList([
-            Qwen2MoeDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            Qwen2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
@@ -378,6 +290,7 @@ class Qwen2MoeModel(nn.Module):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        mrope_position_ids: torch.LongTensor = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -388,8 +301,14 @@ class Qwen2MoeModel(nn.Module):
         hidden_states = inputs_embeds
 
         # rotary embedding
-        cos, sin = self.rotary_emb(hidden_states, position_ids)
-        cos, sin = cos[0], sin[0]
+        if mrope_position_ids is None:
+            cos, sin = self.rotary_emb(hidden_states, position_ids)
+            cos, sin = cos[0], sin[0]
+        else:
+            cos, sin = _apply_mrope_selection(hidden_states,
+                                              mrope_position_ids,
+                                              self.mrope_section, position_ids,
+                                              self.rotary_emb)
         rotary_pos_emb = (cos, sin)
 
         # decoding
@@ -414,7 +333,7 @@ class Qwen2MoeModel(nn.Module):
         return self.embed_tokens
 
 
-class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
+class Qwen2VLForConditionalGeneration(nn.Module, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -438,7 +357,7 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
         self.config = config
         self.ctx_mgr = ctx_mgr
         # build model
-        self.model = Qwen2MoeModel(config, dtype=dtype, device=device)
+        self.model = Qwen2Model(config, dtype=dtype, device=device)
         # build lm_head
         self.lm_head = build_rowwise_linear(config.hidden_size,
                                             config.vocab_size,
@@ -453,6 +372,7 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
+        mrope_position_ids: torch.Tensor = None,
         **kwargs,
     ):
         """model forward, return logits."""
@@ -462,11 +382,17 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            mrope_position_ids=mrope_position_ids,
         )
 
         logits = self.lm_head(hidden_states)
         logits = logits.float()
         return logits
+
+    def update_weights(self):
+        """update weights."""
+        if self.config.tie_word_embeddings:
+            self.lm_head.weight = self.model.embed_tokens.weight
 
     def get_input_embeddings(self):
         """get input embeddings."""
@@ -479,6 +405,7 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
         context: StepContext = None,
     ):
         """prepare input."""
+
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -501,26 +428,8 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            mrope_position_ids=context.mrope_position_ids,
         )
-
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor,
-                             params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
-        """load weight experts."""
-        for (param_name, weight_name, expert_id,
-             shard_id) in expert_params_mapping:
-            if weight_name not in name:
-                continue
-            name = name.replace(weight_name, param_name)
-            param = params_dict[name]
-            load_weight(param,
-                        loaded_weight,
-                        expert_id=expert_id,
-                        shard_id=shard_id)
-            break
-        else:
-            param = params_dict[name]
-            load_weight(param, loaded_weight)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights."""
@@ -534,22 +443,10 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
             ('.gate_up_proj', '.up_proj', 1),
         ]
 
-        # expert map
-        num_experts = self.config.num_experts
-        expert_params_mapping = []
-        for exp_id in range(num_experts):
-            gate_param = ('.experts.gate_up_weights',
-                          f'.experts.{exp_id}.gate_proj.weight', exp_id,
-                          'gate')
-            up_param = ('.experts.gate_up_weights',
-                        f'.experts.{exp_id}.up_proj.weight', exp_id, 'up')
-            down_param = ('.experts.down_weights',
-                          f'.experts.{exp_id}.down_proj.weight', exp_id,
-                          'down')
-            expert_params_mapping += [gate_param, up_param, down_param]
-
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
+            if 'visual' in name:
+                continue
             if 'rotary_emb.inv_freq' in name:
                 continue
             if ('rotary_emb.cos_cached' in name
@@ -557,22 +454,54 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
-
-            if '.experts' in name:
-                self._load_weight_experts(
-                    name,
-                    loaded_weight,
-                    params_dict,
-                    expert_params_mapping=expert_params_mapping)
+            for (param_name, weight_name, shard_id) in stacked_params_mapping:
+                if weight_name not in name:
+                    continue
+                name = name.replace(weight_name, param_name)
+                param = params_dict[name]
+                load_weight(param, loaded_weight, shard_id=shard_id)
+                break
             else:
-                for (param_name, weight_name,
-                     shard_id) in stacked_params_mapping:
-                    if weight_name not in name:
-                        continue
-                    name = name.replace(weight_name, param_name)
-                    param = params_dict[name]
-                    load_weight(param, loaded_weight, shard_id=shard_id)
-                    break
-                else:
-                    param = params_dict[name]
-                    load_weight(param, loaded_weight)
+                param = params_dict[name]
+                load_weight(param, loaded_weight)
+
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
+        """make cudagraph buffers from forward inputs."""
+        max_tokens = graph_meta.max_tokens
+
+        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta,
+                                                       **kwargs)
+        mrope_position_ids = kwargs.get('mrope_position_ids', None)
+        if mrope_position_ids is not None:
+            input_buffers['mrope_position_ids'] = mrope_position_ids.new_zeros(
+                3, max_tokens)
+
+        return input_buffers
+
+    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
+        """fill cudagraph buffers from forward inputs."""
+
+        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta,
+                                                    **kwargs)
+
+        input_ids = kwargs.get('input_ids')
+        attn_metadata = kwargs.get('attn_metadata')
+        block_offsets = attn_metadata.block_offsets
+        num_tokens = input_ids.size(-1)
+        batch_size, _ = block_offsets.size()
+        new_batch_size = next_power_of_2(batch_size)
+
+        is_decoding = graph_meta.is_decoding
+        input_buffers = graph_meta.input_buffers
+        mrope_position_ids = kwargs.get('mrope_position_ids', None)
+        if mrope_position_ids is not None:
+            input_buffers[
+                'mrope_position_ids'][:, :num_tokens] = mrope_position_ids
+            if is_decoding:
+                new_inputs['mrope_position_ids'] = input_buffers[
+                    'mrope_position_ids'][:, :new_batch_size]
+            else:
+                new_inputs['mrope_position_ids'] = input_buffers[
+                    'mrope_position_ids']
+
+        return new_inputs

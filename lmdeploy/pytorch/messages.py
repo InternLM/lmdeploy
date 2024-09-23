@@ -206,6 +206,8 @@ class SchedulerSession:
         adapter_name: str = None,
         return_logits: bool = False,
         input_embeddings: List[InputEmbeddings] = None,
+        mrope_position_ids: Tensor = None,
+        mrope_position_delta: Tensor = None,
     ) -> 'SchedulerSequence':
         """Add a new message."""
         if isinstance(token_ids, Tensor):
@@ -226,7 +228,10 @@ class SchedulerSession:
             adapter_name=adapter_name,
             arrive_time=time.time(),
             history_embeddings=HistoryEmbeddings(input_embeddings),
-            return_logits=return_logits)
+            return_logits=return_logits,
+            mrope_position_ids=mrope_position_ids,
+            mrope_position_delta=mrope_position_delta,
+        )
         self.sequences[seq.seq_id] = seq
         if self.seq_manager is not None:
             self.seq_manager.add_sequence(seq)
@@ -376,6 +381,8 @@ class SchedulerSequence:
     random_offsets: int = 0
     _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
     num_ignored_history: int = 0
+    mrope_position_ids: Optional[Tensor] = None
+    mrope_position_delta: Optional[int] = None
 
     def __post_init__(self):
         """post init."""
