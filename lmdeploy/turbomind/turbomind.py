@@ -314,7 +314,7 @@ class TurboMind:
         Returns:
             TurboMindInstance: an instance of turbomind
         """
-        return TurboMindInstance(self, cuda_stream_id)
+        return TurboMindInstance(self, self.config, cuda_stream_id)
 
 
 class TurboMindInstance:
@@ -325,7 +325,10 @@ class TurboMindInstance:
         cuda_stream_id(int): identity of a cuda stream
     """
 
-    def __init__(self, tm_model: TurboMind, cuda_stream_id: int = 0):
+    def __init__(self,
+                 tm_model: TurboMind,
+                 config: TurbomindModelConfig,
+                 cuda_stream_id: int = 0):
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
 
@@ -343,6 +346,7 @@ class TurboMindInstance:
         self.que = Queue()
         self.executor: ThreadPoolExecutor = None
         self.future = None
+        self.config = config
 
     def _create_model_instance(self, device_id):
         rank = self.node_id * self.gpu_count + device_id
@@ -903,78 +907,72 @@ class TurboMindInstance:
         """Get perplexity scores given a list of input tokens.
 
         Args:
-            input_ids (Union[List[int], List[List[int]]]): the batch of input token ids
-        """  # noqa 501
+            input_ids (Union[List[int], List[List[int]]]): the batch of
+                input token ids
+        """
 
-        if len(input_ids) == 0:
-            input_ids = [[]]
+        assert isinstance(input_ids, List) and len(input_ids) > 0
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
+        assert all(len(_) > 1 for _ in input_ids)
 
-        max_input_len = 16 * 1024
-        # max_input_len = 16
-        n_max_iter = np.ceil(
-            max([len(input_id)
-                 for input_id in input_ids]) / max_input_len).astype(int)
+        bs = len(input_ids)
+        max_seq_len = max([len(input_id) for input_id in input_ids])
 
-        device = 'cpu' if n_max_iter > 1 else 'cuda'
+        # TODO: a better way to determine `max_input_len`
+        # At most allocate 2G mem for logits with shape [bs, seq, vocab_size]
+        vocab_size = self.config.vocab_size
+        max_input_len = 2 * 1024**3 // (bs * vocab_size * 4)
 
-        index_range_starts = []
-        index_range_ends = []
-        for input_id in input_ids:
-            index_range_start = np.array(
-                [i * max_input_len for i in range(n_max_iter)])
-            index_range_end = index_range_start + max_input_len
-            index_range_start[index_range_start >= len(input_id)] = len(
-                input_id)
-            index_range_end[index_range_end >= len(input_id)] = len(input_id)
-            index_range_starts.append(index_range_start)
-            index_range_ends.append(index_range_end)
-
-        logits = []
-        for i in range(n_max_iter):
-            steps = [start[i] for start in index_range_starts]
+        all_loss_matrix = []
+        all_target_mask = []
+        # suppose input_ids is [0,1,2,3,4,5,6,7,8], and max_input_len=5
+        # In the first iter, tokens [0,1,2,3,4] are prefilled.
+        # loss=cross_entropy(logits[..., :-1, :], token_ids[1,2,3,4])
+        # In the 2nd iter, token [4,5,6,7,8] should be prefilled.
+        # The first token must be the latest one in prev iter, because
+        # token_ids (or labels) have to be shifted the mostleft token
+        # loss=cross_entropy(logits[..., :-1, :], token_ids[5,6,7,8])
+        for i in range(0, max_seq_len, max_input_len - 1):
             _input_ids = [
-                input_id[start[i]:end[i]] for input_id, start, end in zip(
-                    input_ids, index_range_starts, index_range_ends)
+                input_id[i:i + max_input_len] for input_id in input_ids
             ]
-            _logits = self.decode(_input_ids,
-                                  steps,
-                                  sequence_start=(i == 0),
-                                  sequence_end=(i == n_max_iter - 1))
-            _logits = _logits.to(device=device)
-            logits.append(_logits)
+            steps = [i] * bs
+            _logits = self.decode(
+                _input_ids,
+                steps=steps,
+                sequence_start=(i == 0),
+                sequence_end=(i + max_input_len >= max_seq_len))
+            _logits = _logits.float().cpu()
+            padding_token_id = -100
+            target_ids = [(x + [padding_token_id])[1:] for x in _input_ids]
+            target_ids = [
+                torch.Tensor(torch.LongTensor(_target_ids))
+                for _target_ids in target_ids
+            ]
+            target_ids = pad_sequence(target_ids,
+                                      batch_first=True,
+                                      padding_value=padding_token_id)
+            target_ids = target_ids.to(_logits.device)
+            target_mask = target_ids != padding_token_id
+            target_count = torch.sum(target_mask, dim=-1)
+            # compute cross entropy loss
+            bsz, seq_len, vocab_size = _logits.shape
+            flat_logits = _logits.contiguous().view(-1, vocab_size)
+            flat_target_ids = target_ids.contiguous().view(-1)
+            flat_loss_matrix = torch.nn.functional.cross_entropy(
+                flat_logits,
+                flat_target_ids,
+                reduction='none',
+                ignore_index=padding_token_id)
 
-        # concat logits. Shape is [bsz, seq_len, vocab_size]
-        logits = torch.cat(logits, dim=1)
+            all_loss_matrix.append(flat_loss_matrix.view(bsz, seq_len))
+            all_target_mask.append(target_mask)
 
-        # get target ids
-        padding_token_id = -100
-        target_ids = [(_input_ids + [padding_token_id])[1:]
-                      for _input_ids in input_ids]
-        target_ids = [
-            torch.Tensor(torch.LongTensor(_target_ids))
-            for _target_ids in target_ids
-        ]
-        target_ids = pad_sequence(target_ids,
-                                  batch_first=True,
-                                  padding_value=padding_token_id)
-        target_ids = target_ids.to(logits.device)
-        target_mask = target_ids != padding_token_id
-        target_count = torch.sum(target_mask, dim=-1)
-
-        # compute cross entropy loss
-        bsz, seq_len, vocab_size = logits.shape
-        flat_logits = logits.contiguous().view(-1, vocab_size)
-        flat_target_ids = target_ids.contiguous().view(-1)
-        flat_loss_matrix = torch.nn.functional.cross_entropy(
-            flat_logits,
-            flat_target_ids,
-            reduction='none',
-            ignore_index=padding_token_id)
-
-        loss_matrix = flat_loss_matrix.view(bsz, seq_len)
-        loss_sum = torch.sum(loss_matrix * target_mask, dim=1)
+        all_loss_matrix = torch.cat(all_loss_matrix, dim=1)
+        all_target_mask = torch.cat(all_target_mask, dim=1)
+        target_count = torch.sum(all_target_mask, dim=-1)
+        loss_sum = torch.sum(all_loss_matrix * all_target_mask, dim=1)
         loss_avg = loss_sum / target_count
         loss_avg = loss_avg.cpu().numpy()
         return loss_avg
