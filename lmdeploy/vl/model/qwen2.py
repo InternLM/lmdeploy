@@ -9,7 +9,7 @@ from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 
-def check_qwen_vl_utils_install():
+def check_qwen_vl_deps_install():
     """check qwen_vl_utils."""
     try:
         import qwen_vl_utils  # noqa: F401
@@ -17,6 +17,12 @@ def check_qwen_vl_utils_install():
         raise ImportError(
             'please install qwen_vl_utils by pip install qwen_vl_utils'  # noqa: E501
         )
+    try:
+        from transformers import Qwen2VLForConditionalGeneration  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            'please install latest transformers by '
+            'pip install git+https://github.com/huggingface/transformers.git')
 
 
 @VISION_MODELS.register_module()
@@ -26,7 +32,7 @@ class Qwen2VLModel(VisonModel):
     _arch = 'Qwen2VLForConditionalGeneration'
 
     def build_model(self):
-        check_qwen_vl_utils_install()
+        check_qwen_vl_deps_install()
 
         from accelerate import init_empty_weights
         with init_empty_weights():
