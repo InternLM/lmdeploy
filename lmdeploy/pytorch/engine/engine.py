@@ -561,41 +561,41 @@ class Engine:
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
 
-        class _LogitsGather:
-            """logits gather."""
+        class _OutputGather:
+            """output gather."""
 
             def __init__(self, max_seq_len):
                 self._max_seq_len = max_seq_len
                 self._start = 0
-                self._out_logits = None
+                self._output = None
 
             def gather(self, output):
                 """gather."""
-                logits = output['hidden_states']
+                tmp_output = output['hidden_states']
 
                 if not return_logits:
-                    self._out_logits = logits
+                    self._output = tmp_output
                     return
 
-                out_logits = self._out_logits
+                out_logits = self._output
                 start = self._start
-                seq_len = logits.size(-2)
+                seq_len = tmp_output.size(-2)
                 if out_logits is None:
-                    out_logits = logits.new_empty(1,
-                                                  self._max_seq_len,
-                                                  logits.size(-1),
-                                                  device='cpu')
-                out_logits[:, start:start + seq_len].copy_(logits,
+                    out_logits = tmp_output.new_empty(1,
+                                                      self._max_seq_len,
+                                                      tmp_output.size(-1),
+                                                      device='cpu')
+                out_logits[:, start:start + seq_len].copy_(tmp_output,
                                                            non_blocking=True)
                 self._start = start + seq_len
-                self._out_logits = out_logits
+                self._output = out_logits
 
-            def get_logits(self):
-                """get logits."""
+            def get_output(self):
+                """get tmp_output."""
                 if not return_logits:
-                    return self._out_logits[:, -1:]
+                    return self._output[:, -1:]
                 torch.cuda.synchronize()
-                return self._out_logits
+                return self._output
 
         async def __forward(inputs):
             """forward."""
@@ -618,12 +618,12 @@ class Engine:
             new_inputs = inputs.split(max_prefill_token_num,
                                       self.cache_config.block_size)
 
-            logits_gather = _LogitsGather(max_seq_len)
+            output_gather = _OutputGather(max_seq_len)
             for inp in new_inputs:
                 tmp_out = await __forward(inp)
-                logits_gather.gather(tmp_out)
+                output_gather.gather(tmp_out)
                 tmp_out.pop('hidden_states', None)
-            tmp_out['hidden_states'] = logits_gather.get_logits()
+            tmp_out['hidden_states'] = output_gather.get_output()
             return tmp_out
 
         if inputs.input_ids.numel() <= max_prefill_token_num:
