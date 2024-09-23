@@ -231,11 +231,7 @@ class SubCliServe:
             choices=['random', 'min_expected_latency', 'min_observed_latency'],
             default='min_expected_latency',
             help='the strategy to dispatch requests to nodes')
-        parser.add_argument('--api-key',
-                            type=str,
-                            default=None,
-                            help='api key. Default to None, which means no '
-                            'api key will be used')
+        ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
 
     @staticmethod
