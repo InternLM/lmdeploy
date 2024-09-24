@@ -79,28 +79,6 @@ def add_summary(csv_path: str):
         _append_summary('\n')
 
 
-def _load_hf_results(test_results: dict, model_name: str):
-    """Read opencompass eval results."""
-    lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
-    hf_res_path = os.path.join(
-        lmdeploy_dir, '.github/resources/opencompass-hf-results.json')
-    out = OrderedDict()
-    if os.path.exists(hf_res_path):
-        with open(hf_res_path, 'r') as f:
-            data = json.load(f)
-            if model_name in data:
-                res = data[model_name]
-                for dataset in test_results:
-                    value = '-'
-                    if dataset in res:
-                        value = res[dataset]
-                    out[dataset] = value
-            else:
-                logging.warning(
-                    f'No opencompass results found for model {model_name}')
-    return out
-
-
 def evaluate(models: List[str],
              datasets: List[str],
              workspace: str,
