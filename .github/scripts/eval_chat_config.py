@@ -181,7 +181,6 @@ turbomind_llama2_7b_chat = dict(type=TurboMindModel,
 turbomind_llama2_7b_chat_4bits = deepcopy(turbomind_llama2_7b_chat)
 turbomind_llama2_7b_chat_kvint4 = deepcopy(turbomind_llama2_7b_chat)
 turbomind_llama2_7b_chat_kvint8 = deepcopy(turbomind_llama2_7b_chat)
-pytorch_llama2_7b_chat = deepcopy(turbomind_llama2_7b_chat)
 
 # ===== Configs for meta-llama/Meta-Llama-3-8B-Instruct =====
 turbomind_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
