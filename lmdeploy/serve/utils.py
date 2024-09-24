@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple, Union
 
 import numpy as np
 import torch
+from torch.nn.utils.rnn import pad_sequence
 
 from lmdeploy.utils import get_logger
 
@@ -64,7 +65,7 @@ class LogitsMixin:
 
     def get_logits(
         self,
-        input_ids: Union[InputIdsType, List[InputIdsType]],
+        inputs: Union[str, List[str]],
         input_embeddings: Union[InputEmbsType, List[InputEmbsType]] = None,
         input_embedding_ranges: Union[InputEmbRngsType,
                                       List[InputEmbRngsType]] = None):
@@ -74,13 +75,17 @@ class LogitsMixin:
             input_ids (Union[List[int], List[List[int]]]): the batch of
                 input token ids
         """
-        assert len(input_ids) > 0
-        if isinstance(input_ids[0], int):
-            input_ids = [input_ids]
-        for input_id in input_ids:
-            assert len(input_id) > 0
+        if isinstance(inputs, str):
+            inputs = [inputs]
+        assert all(len(_) > 0 for _ in inputs)
 
-        max_input_len = self.backend_config.max_prefill_token_num
+        input_ids = [self.tokenizer.encode(text) for text in inputs]
+        bs = len(input_ids)
+        # TODO: a better way to determine `max_input_len`, at most allocate
+        # 2G mem for logits with shape [bs, max_input_len, vocab_size]
+        vocab_size = self.hf_tm_cfg.vocab_size
+        max_input_len = 2 * 1024**3 // (bs * vocab_size * 4)
+
         n_max_iter = np.ceil(
             max([len(input_id)
                  for input_id in input_ids]) / max_input_len).astype(int)
@@ -183,6 +188,69 @@ class LogitsMixin:
         """
         if isinstance(inputs, str):
             inputs = [inputs]
-        input_ids = [self.tokenizer.encode(text) for text in inputs]
+        assert all(len(_) > 0 for _ in inputs)
+
         generator = self.engine.create_instance()
-        return generator.get_ppl(input_ids)
+        input_ids = [self.tokenizer.encode(text) for text in inputs]
+
+        bs = len(input_ids)
+        max_seq_len = len(input_ids[0])
+
+        # TODO: a better way to determine `max_input_len`, at most allocate
+        # 2G mem for logits with shape [bs, max_input_len, vocab_size]
+        vocab_size = self.hf_tm_cfg.vocab_size
+        max_input_len = 2 * 1024**3 // (bs * vocab_size * 4)
+
+        all_loss_matrix = []
+        all_target_mask = []
+        for i in range(0, max_seq_len, max_input_len):
+            token_ids = [
+                input_id[i:i + max_input_len] for input_id in input_ids
+            ]
+            steps = [i] * bs
+            logits = generator.decode(
+                token_ids,
+                steps=steps,
+                sequence_start=(i == 0),
+                sequence_end=(i + max_input_len >= max_seq_len))
+            bsz, seq_len, vocab_size = logits.shape
+            logits = logits.float().cpu()
+            padding_token_id = -100
+            # meaning logits[..., :, :] corresponds to labels
+            # token_ids[1:] + predict_token_id, which is
+            # input_ids[:, i+max_input_len:i+max_input_len+1]
+            target_ids = [
+                input_id[i + 1:i + 1 + max_input_len] for input_id in input_ids
+            ]
+            if len(target_ids[0]) < len(token_ids[0]):
+                target_ids = [x + [padding_token_id] for x in target_ids]
+            target_ids = [
+                torch.Tensor(torch.LongTensor(_target_ids))
+                for _target_ids in target_ids
+            ]
+            target_ids = pad_sequence(target_ids,
+                                      batch_first=True,
+                                      padding_value=padding_token_id)
+            target_ids = target_ids.to(logits.device)
+            target_mask = target_ids != padding_token_id
+
+            # compute cross entropy loss
+            flat_logits = logits.contiguous().view(-1, vocab_size)
+            flat_target_ids = target_ids.contiguous().view(-1)
+            flat_loss_matrix = torch.nn.functional.cross_entropy(
+                flat_logits,
+                flat_target_ids,
+                reduction='none',
+                ignore_index=padding_token_id)
+
+            all_loss_matrix.append(flat_loss_matrix.view(bsz, seq_len))
+            all_target_mask.append(target_mask)
+
+        all_loss_matrix = torch.cat(all_loss_matrix, dim=1)
+        all_target_mask = torch.cat(all_target_mask, dim=1)
+        target_count = torch.sum(all_target_mask, dim=-1)
+        loss_sum = torch.sum(all_loss_matrix * all_target_mask, dim=1)
+        loss_avg = loss_sum / target_count
+        loss_avg = loss_avg.cpu().numpy()
+
+        return loss_avg

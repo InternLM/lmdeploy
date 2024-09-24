@@ -119,21 +119,21 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
 - **An example to cauculate logits & ppl:**
 
 ```python
-from transformers import AutoTokenizer
 from lmdeploy import pipeline
+
 model_repoid_or_path='internlm/internlm2_5-7b-chat'
 pipe = pipeline(model_repoid_or_path)
-tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
+
+prompts = [
+    "Hello, I am an AI assistant named InternLM. I am developed by Shanghai AI Laboratory",
+    "How to use LMDeploy to deploy a LLM model?"
+]
 
 # logits
-messages = [
-   {"role": "user", "content": "Hello, how are you?"},
-]
-input_ids = tokenizer.apply_chat_template(messages)
-logits = pipe.get_logits(input_ids)
+logits = pipe.get_logits(prompts)
 
 # ppl
-ppl = pipe.get_ppl(input_ids)
+ppl = pipe.get_ppl(prompts)
 ```
 
 - **Below is an example for pytorch backend. Please install triton first.**

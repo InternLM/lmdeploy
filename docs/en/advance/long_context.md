@@ -96,11 +96,9 @@ This test takes approximately 364 seconds per round when conducted on A100-80G G
 The following codes demonstrate how to use LMDeploy to calculate perplexity.
 
 ```python
-from transformers import AutoTokenizer
 from lmdeploy import TurbomindEngineConfig, pipeline
-import numpy as np
 
-# load model and tokenizer
+# build pipeline
 model_repoid_or_path = 'internlm/internlm2_5-7b-chat-1m'
 backend_config = TurbomindEngineConfig(
         rope_scaling_factor=2.5,
@@ -109,11 +107,9 @@ backend_config = TurbomindEngineConfig(
         cache_max_entry_count=0.7,
         tp=4)
 pipe = pipeline(model_repoid_or_path, backend_config=backend_config)
-tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
 
 # get perplexity
 text = 'Use a long prompt to replace this sentence'
-input_ids = tokenizer.encode(text)
-ppl = pipe.get_ppl(input_ids)[0]
+ppl = pipe.get_ppl(text)
 print(ppl)
 ```
