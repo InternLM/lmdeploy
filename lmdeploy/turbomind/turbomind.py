@@ -361,7 +361,7 @@ class TurboMindInstance:
             try:
                 output = self.model_inst.forward(inputs, instance_comm)
             except Exception as e:
-                logger.error(f'Exception happened: {e}')
+                logger.error(f'unhandled exception: {e}')
                 self.que.put((-1, None))
                 return
             self.que.put((True, output))
@@ -380,7 +380,7 @@ class TurboMindInstance:
             try:
                 output = self.model_inst.forward(inputs, instance_comm)
             except Exception as e:
-                logger.error(f'Exception happened: {e}')
+                logger.error(f'unhandled exception: {e}')
                 que.put((-1, None))
                 return
             que.put((True, output))
