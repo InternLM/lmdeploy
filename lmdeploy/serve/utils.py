@@ -65,7 +65,7 @@ class LogitsMixin:
 
     def get_logits(
         self,
-        inputs: Union[str, List[str]],
+        input_ids: Union[InputIdsType, List[InputIdsType]],
         input_embeddings: Union[InputEmbsType, List[InputEmbsType]] = None,
         input_embedding_ranges: Union[InputEmbRngsType,
                                       List[InputEmbRngsType]] = None):
@@ -75,11 +75,20 @@ class LogitsMixin:
             input_ids (Union[List[int], List[List[int]]]): the batch of
                 input token ids
         """
-        if isinstance(inputs, str):
-            inputs = [inputs]
-        assert all(len(_) > 0 for _ in inputs)
 
-        input_ids = [self.tokenizer.encode(text) for text in inputs]
+        if isinstance(input_ids, InputIdsType):
+            input_ids = [input_ids]
+        if isinstance(input_embeddings, InputEmbsType):
+            input_embeddings = [input_embeddings]
+        if isinstance[input_embedding_ranges, InputEmbRngsType]:
+            input_embedding_ranges = [input_embedding_ranges]
+
+        assert all(len(_) == len(input_ids[0]) for _ in input_ids), \
+            'the list of input_ids must have the same length'
+
+        if input_embeddings is None or input_embedding_ranges is None:
+            assert input_embeddings is None and input_embedding_ranges is None
+
         bs = len(input_ids)
         # TODO: a better way to determine `max_input_len`, at most allocate
         # 2G mem for logits with shape [bs, max_input_len, vocab_size]
@@ -177,21 +186,30 @@ class LogitsMixin:
         logits = torch.cat(logits, dim=1)
         return logits
 
-    def get_ppl(self, inputs: List[str]) -> List[float]:
-        """Get perplexity scores given a list of inputs.
+    def get_ppl(
+        self, input_ids: Union[List[int],
+                               List[List[int]]]) -> Union[float, List[float]]:
+        """Get perplexity scores given a list of input tokens that have to be
+        of the same length.
 
         Args:
-            inputs (List[str]): A list of strings.
+            input_ids (Union[List[int], List[List[int]]]): the batch of
+                input token ids
 
         Returns:
-            List[float]: A list of perplexity scores.
+            Union[float, List[float]]: A list of perplexity scores.
         """
-        if isinstance(inputs, str):
-            inputs = [inputs]
-        assert all(len(_) > 0 for _ in inputs)
+        assert isinstance(input_ids, List)
+        if isinstance(input_ids[0], int):
+            input_ids = [input_ids]
+
+        # In case of input_ids of unequal length, some list might be empty
+        # during multi-iter prefilling, which causes shape error if the
+        # inference engine is pytorch engine
+        assert all(len(_) == len(input_ids[0]) for _ in input_ids), \
+            'the list of input_ids must have the same length'
 
         generator = self.engine.create_instance()
-        input_ids = [self.tokenizer.encode(text) for text in inputs]
 
         bs = len(input_ids)
         max_seq_len = max([len(_) for _ in input_ids])
@@ -246,13 +264,15 @@ class LogitsMixin:
                 reduction='none',
                 ignore_index=padding_token_id)
             flat_loss_matrix = flat_loss_matrix.view(bsz, seq_len)
-            losses.append(flat_loss_matrix.sum(dim=-1).view(bsz, -1))
-            target_counts.append(target_mask.sum(dim=-1).view(bsz, -1))
+            loss = flat_loss_matrix.sum(dim=-1).cpu().view(bsz, -1)
+            target_count = target_mask.sum(dim=-1).cpu().view(bsz, -1)
+            losses.append(loss)
+            target_counts.append(target_count)
 
         target_count = torch.concatenate(target_counts, dim=-1).sum(dim=-1)
         loss_sum = torch.concatenate(losses, dim=-1).sum(dim=-1)
 
         loss_avg = loss_sum / target_count
-        loss_avg = loss_avg.cpu().numpy()
+        loss_avg = loss_avg.numpy()
 
         return loss_avg
