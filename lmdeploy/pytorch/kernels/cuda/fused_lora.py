@@ -158,7 +158,7 @@ def fused_lora(input: torch.Tensor, lora_a: torch.Tensor, lora_b: torch.Tensor,
     M, K = input.shape
     N = lora_b.size(1)
 
-    output = torch.empty((M, N), dtype=input.dtype, device=input.device)
+    output = input.new_empty((M, N))
 
     BLOCK_SIZE_R = max(16, max_rank)
     _fused_lora_kernel[grid](

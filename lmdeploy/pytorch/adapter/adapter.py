@@ -4,7 +4,6 @@ import re
 from typing import Dict, Iterable, List, Tuple
 
 import torch
-import torch.distributed as dist
 from torch import nn
 
 
@@ -61,17 +60,6 @@ def get_layer_index(key: str, layers_pattern: str = None):
 
             if layer_index is not None:
                 return int(layer_index[1])
-
-
-def _get_rank_and_world():
-    """get rank and world size."""
-    rank = 0
-    world_size = 1
-    if dist.is_initialized():
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
-
-    return rank, world_size
 
 
 def _get_reverse_pack_map(model: nn.Module):
