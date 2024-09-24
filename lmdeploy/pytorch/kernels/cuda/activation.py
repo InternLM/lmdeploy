@@ -95,7 +95,8 @@ def silu_and_mul(gate_up: torch.Tensor, out: torch.Tensor = None):
         out_shape = (M, N)
         out = gate_up.new_empty(out_shape)
 
-    BLOCK_SIZE_N = min(N, 1024)
+    BLOCK_SIZE_N = triton.next_power_of_2(N)
+    BLOCK_SIZE_N = min(BLOCK_SIZE_N, 1024)
     num_warps = 4
     num_stages = 2
     grid = (M, )
