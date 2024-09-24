@@ -102,65 +102,11 @@ with read_base():
     from opencompass.configs.summarizers.medium import \
         summarizer  # noqa: F401, E501
 
-internlm_meta_template = dict(round=[
-    dict(role='HUMAN', begin='<|User|>:', end='\n'),
-    dict(role='BOT', begin='<|Bot|>:', end='<eoa>\n', generate=True),
-],
-                              eos_token_id=103028)
-
-internlm2_meta_template = dict(round=[
-    dict(role='HUMAN', begin='<|im_start|>user\n', end='<|im_end|>\n'),
-    dict(role='BOT',
-         begin='<|im_start|>assistant\n',
-         end='<|im_end|>\n',
-         generate=True),
-],
-                               eos_token_id=92542)
-
 llama2_meta_template = dict(round=[
     dict(role='HUMAN', begin='[INST] ', end=' [/INST]'),
     dict(role='BOT', begin='', end='', generate=True),
 ],
                             eos_token_id=2)
-
-llama3_meta_template = dict(round=[
-    dict(role='HUMAN',
-         begin='<|start_header_id|>user<|end_header_id|>\n\n',
-         end='<|eot_id|>'),
-    dict(role='BOT',
-         begin='<|start_header_id|>assistant<|end_header_id|>\n\n',
-         end='<|eot_id|>',
-         generate=True),
-],
-                            eos_token_id=[128001, 128009])
-
-qwen_meta_template = dict(round=[
-    dict(role='HUMAN', begin='\n<|im_start|>user\n', end='<|im_end|>'),
-    dict(role='BOT',
-         begin='\n<|im_start|>assistant\n',
-         end='<|im_end|>',
-         generate=True),
-], )
-
-qwen1_5_meta_template = dict(
-    round=[
-        dict(role='HUMAN', begin='<|im_start|>user\n', end='<|im_end|>\n'),
-        dict(role='BOT',
-             begin='<|im_start|>assistant\n',
-             end='<|im_end|>\n',
-             generate=True),
-    ],
-    eos_token_id=[151645, 151643],
-)
-
-gemma_meta_template = dict(round=[
-    dict(role='HUMAN', begin='<start_of_turn>user\n', end='<end_of_turn>\n'),
-    dict(role='BOT',
-         begin='<start_of_turn>model',
-         end='<end_of_turn>\n',
-         generate=True),
-],
-                           eos_token_id=1)
 
 MAX_SESSION_LEN = 2048
 MAX_NEW_TOKENS = 1024
@@ -169,7 +115,6 @@ MAX_NEW_TOKENS = 1024
 turbomind_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
 turbomind_internlm_chat_7b_4bits = deepcopy(*lmdeploy_internlm_chat_7b)
 pytorch_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
-pytorch_internlm_chat_7b['meta_template'] = internlm_meta_template
 
 # ===== Configs for internlm/internlm2-chat-7b =====
 turbomind_internlm2_chat_7b = deepcopy(*lmdeploy_internlm2_chat_7b)
@@ -177,7 +122,6 @@ turbomind_internlm2_chat_7b_4bits = deepcopy(*lmdeploy_internlm2_chat_7b)
 turbomind_internlm2_chat_7b_kvint4 = deepcopy(*lmdeploy_internlm2_chat_7b)
 turbomind_internlm2_chat_7b_kvint8 = deepcopy(*lmdeploy_internlm2_chat_7b)
 pytorch_internlm2_chat_7b = deepcopy(*lmdeploy_internlm2_chat_7b)
-pytorch_internlm2_chat_7b['meta_template'] = internlm2_meta_template
 
 # ===== Configs for internlm/internlm2_5_7b_chat =====
 turbomind_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
@@ -186,7 +130,6 @@ turbomind_internlm2_5_7b_chat_kvint4 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_batch1 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-pytorch_internlm2_5_7b_chat['meta_template'] = internlm2_meta_template
 
 # ===== Configs for internlm/internlm2_5_20b_chat =====
 turbomind_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
@@ -196,7 +139,6 @@ turbomind_internlm2_5_20b_chat_kvint4 = deepcopy(
 turbomind_internlm2_5_20b_chat_kvint8 = deepcopy(
     *lmdeploy_internlm2_5_20b_chat)
 pytorch_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
-pytorch_internlm2_5_20b_chat['meta_template'] = internlm2_meta_template
 
 # ===== Configs for internlm/internlm2_chat_20b =====
 turbomind_internlm2_chat_20b = deepcopy(*lmdeploy_internlm2_chat_20b)
@@ -204,7 +146,6 @@ turbomind_internlm2_chat_20b_4bits = deepcopy(*lmdeploy_internlm2_chat_20b)
 turbomind_internlm2_chat_20b_kvint4 = deepcopy(*lmdeploy_internlm2_chat_20b)
 turbomind_internlm2_chat_20b_kvint8 = deepcopy(*lmdeploy_internlm2_chat_20b)
 pytorch_internlm2_chat_20b = deepcopy(*lmdeploy_internlm2_chat_20b)
-pytorch_internlm2_chat_20b['meta_template'] = internlm2_meta_template
 
 # ===== Configs for Qwen/Qwen1.5-7B-Chat =====
 turbomind_qwen1_5_7b_chat = deepcopy(*lmdeploy_qwen1_5_7b_chat)
@@ -212,7 +153,6 @@ turbomind_qwen1_5_7b_chat_4bits = deepcopy(*lmdeploy_qwen1_5_7b_chat)
 turbomind_qwen1_5_7b_chat_kvint4 = deepcopy(*lmdeploy_qwen1_5_7b_chat)
 turbomind_qwen1_5_7b_chat_kvint8 = deepcopy(*lmdeploy_qwen1_5_7b_chat)
 pytorch_qwen1_5_7b_chat = deepcopy(*lmdeploy_qwen1_5_7b_chat)
-pytorch_qwen1_5_7b_chat['meta_template'] = qwen1_5_meta_template
 
 # ===== Configs for Qwen/Qwen-7B-Chat =====
 turbomind_qwen_7b_chat = deepcopy(*lmdeploy_qwen_7b_chat)
@@ -220,7 +160,6 @@ turbomind_qwen_7b_chat_4bits = deepcopy(*lmdeploy_qwen_7b_chat)
 turbomind_qwen_7b_chat_kvint4 = deepcopy(*lmdeploy_qwen_7b_chat)
 turbomind_qwen_7b_chat_kvint8 = deepcopy(*lmdeploy_qwen_7b_chat)
 pytorch_qwen_7b_chat = deepcopy(*lmdeploy_qwen_7b_chat)
-pytorch_qwen_7b_chat['meta_template'] = qwen_meta_template
 
 # ===== Configs for meta-llama/Llama-2-7b-chat-hf =====
 turbomind_llama2_7b_chat = dict(type=TurboMindModel,
@@ -243,7 +182,6 @@ turbomind_llama2_7b_chat_4bits = deepcopy(turbomind_llama2_7b_chat)
 turbomind_llama2_7b_chat_kvint4 = deepcopy(turbomind_llama2_7b_chat)
 turbomind_llama2_7b_chat_kvint8 = deepcopy(turbomind_llama2_7b_chat)
 pytorch_llama2_7b_chat = deepcopy(turbomind_llama2_7b_chat)
-pytorch_llama2_7b_chat['meta_template'] = llama2_meta_template
 
 # ===== Configs for meta-llama/Meta-Llama-3-8B-Instruct =====
 turbomind_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
@@ -251,7 +189,6 @@ turbomind_llama3_8b_instruct_4bits = deepcopy(*lmdeploy_llama3_8b_instruct)
 turbomind_llama3_8b_instruct_kvint4 = deepcopy(*lmdeploy_llama3_8b_instruct)
 turbomind_llama3_8b_instruct_kvint8 = deepcopy(*lmdeploy_llama3_8b_instruct)
 pytorch_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
-pytorch_llama3_8b_instruct['meta_template'] = llama3_meta_template
 
 # ===== Configs for meta-llama/Meta-Llama-3.1-8B-Instruct =====
 turbomind_llama3_1_8b_instruct = deepcopy(*lmdeploy_llama3_1_8b_instruct)
@@ -263,7 +200,6 @@ turbomind_llama3_1_8b_instruct_kvint4 = deepcopy(
 turbomind_llama3_1_8b_instruct_kvint8 = deepcopy(
     turbomind_llama3_1_8b_instruct)
 pytorch_llama3_1_8b_instruct = deepcopy(turbomind_llama3_1_8b_instruct)
-pytorch_llama3_1_8b_instruct['meta_template'] = llama3_meta_template
 
 # ===== Configs for Qwen/Qwen2-7B-Instruct =====
 turbomind_qwen2_7b_instruct = deepcopy(*lmdeploy_qwen2_7b_instruct)
@@ -271,15 +207,14 @@ turbomind_qwen2_7b_instruct_4bits = deepcopy(*lmdeploy_qwen2_7b_instruct)
 turbomind_qwen2_7b_instruct_kvint4 = deepcopy(*lmdeploy_qwen2_7b_instruct)
 turbomind_qwen2_7b_instruct_kvint8 = deepcopy(*lmdeploy_qwen2_7b_instruct)
 pytorch_qwen2_7b_instruct = deepcopy(*lmdeploy_qwen2_7b_instruct)
-pytorch_qwen2_7b_instruct['meta_template'] = qwen1_5_meta_template
 
 for model in [v for k, v in locals().items() if k.startswith('turbomind_')]:
     model['engine_config']['max_batch_size'] = 128
+    model['gen_config']['do_sample'] = False
     model['batch_size'] = 128
 
 for model in [v for k, v in locals().items() if k.endswith('_4bits')]:
     model['engine_config']['model_format'] = 'awq'
-    model['gen_config']['do_sample'] = False
     model['abbr'] = model['abbr'] + '_4bits'
     model['path'] = model['path'] + '-inner-4bits'
 
@@ -300,9 +235,8 @@ for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
 
 turbomind_internlm2_5_7b_chat_batch1[
     'abbr'] = turbomind_internlm2_5_7b_chat_batch1['abbr'] + '_batch1'
-turbomind_internlm2_5_7b_chat_batch1['engine_config']['max_batch_size'] = 64
-turbomind_internlm2_5_7b_chat_batch1['batch_size'] = 64
-turbomind_internlm2_5_7b_chat_batch1['concurrency'] = 64
+turbomind_internlm2_5_7b_chat_batch1['engine_config']['max_batch_size'] = 1
+turbomind_internlm2_5_7b_chat_batch1['batch_size'] = 1
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               engine_config=dict(session_len=MAX_SESSION_LEN,
