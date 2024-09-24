@@ -551,6 +551,12 @@ class AsyncEngine(LogitsMixin):
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
         else:
+
+            def is_error(status):
+                return status not in [
+                    ResponseType.SUCCESS, ResponseType.FINISH
+                ]
+
             generator = await self.get_generator(False, session_id)
             async with self.safe_run(session_id):
                 state = DetokenizeState(len(input_ids))
@@ -566,7 +572,8 @@ class AsyncEngine(LogitsMixin):
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
                     # decode res
-                    if outputs.status > ResponseType.FINISH:
+                    if is_error(outputs.status):
+                        tokens = 0
                         break
                     res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
                     if len(res) <= state.ids_offset:
@@ -589,7 +596,7 @@ class AsyncEngine(LogitsMixin):
                     yield GenOut(response, self.id2step[str(session_id)],
                                  len(input_ids), tokens, finish_reason, res,
                                  logprobs)
-                if outputs.status <= ResponseType.FINISH:
+                if not is_error(outputs.status):
                     finish_reason = 'length' \
                         if tokens >= gen_config.max_new_tokens else 'stop'
                     # utf-8 char at the end means it's a potential unfinished
