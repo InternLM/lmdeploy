@@ -75,24 +75,6 @@ class MacaAttentionImpl(AttentionImpl[MacaAttentionMetadata]):
         max_q_seq_len = attn_metadata.max_q_seq_len
         max_kv_seq_len = attn_metadata.max_kv_seq_len
 
-        # import pdb; pdb.set_trace()
-
-        # x = 32 // k_caches.element_size()
-        # k_caches shape: [block_num, kv_head_num, head_size // x, block_size, x]
-        # v_caches shape: [block_num, kv_head_num, block_size, head_size]
-
-        # if k_cache.dim() == 3:
-        #     block_num = k_cache.size(0)
-        #     num_kv_heads = key.size(1)
-        #     head_size = key.size(-1)
-        #     x = 32 // k_cache.element_size()
-
-        #     k_cache = k_cache.view(block_num, block_size, num_kv_heads, head_size // x, x)
-        #     k_cache = k_cache.transpose(1, 2).contiguous().transpose(2, 3).contiguous()
-
-        #     v_cache = v_cache.view(block_num, block_size, num_kv_heads, head_size)
-        #     v_cache = v_cache.transpose(1, 2).contiguous()
-
         # fill kv cache
         # import pdb; pdb.set_trace()
         self.fill_kv_cache(key, value, k_cache, v_cache, kv_start_indices)
