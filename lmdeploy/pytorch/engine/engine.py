@@ -135,6 +135,9 @@ class Engine:
                                    engine_config.revision)
         self.model_path = model_path
 
+        if adapters is not None and len(adapters) > 0:
+            adapters = self._download_adapters(adapters, engine_config)
+
         backend_config = BackendConfig(
             eager_mode=engine_config.eager_mode,
             device_type=engine_config.device_type,
@@ -202,6 +205,23 @@ class Engine:
         if not hasattr(self, '_tokenizer'):
             self._tokenizer = Tokenizer(self.model_path)
         return self._tokenizer
+
+    def _download_adapters(self, adapters: Dict[str, str],
+                           engine_config: PytorchEngineConfig):
+        """download adapters."""
+        download_dir = engine_config.download_dir
+        revision = engine_config.revision
+        new_adapters = dict()
+        for name, path in adapters.items():
+            if os.path.exists(path):
+                new_adapters[name] = path
+                continue
+            new_path = get_model(path,
+                                 download_dir=download_dir,
+                                 revision=revision)
+            new_adapters[name] = new_path
+
+        return new_adapters
 
     def _create_buffers(self):
         max_batches = self.scheduler_config.max_batches
