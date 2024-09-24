@@ -201,8 +201,8 @@ class LogitsMixin:
         vocab_size = self.hf_tm_cfg.vocab_size
         max_input_len = 2 * 1024**3 // (bs * vocab_size * 4)
 
-        all_loss_matrix = []
-        all_target_mask = []
+        losses = []
+        target_counts = []
         for i in range(0, max_seq_len, max_input_len):
             token_ids = [
                 input_id[i:i + max_input_len] for input_id in input_ids
@@ -245,14 +245,13 @@ class LogitsMixin:
                 flat_target_ids,
                 reduction='none',
                 ignore_index=padding_token_id)
+            flat_loss_matrix = flat_loss_matrix.view(bsz, seq_len)
+            losses.append(flat_loss_matrix.sum(dim=-1).view(bsz, -1))
+            target_counts.append(target_mask.sum(dim=-1).view(bsz, -1))
 
-            all_loss_matrix.append(flat_loss_matrix.view(bsz, seq_len))
-            all_target_mask.append(target_mask)
+        target_count = torch.concatenate(target_counts, dim=-1).sum(dim=-1)
+        loss_sum = torch.concatenate(losses, dim=-1).sum(dim=-1)
 
-        all_loss_matrix = torch.cat(all_loss_matrix, dim=1)
-        all_target_mask = torch.cat(all_target_mask, dim=1)
-        target_count = torch.sum(all_target_mask, dim=-1)
-        loss_sum = torch.sum(all_loss_matrix * all_target_mask, dim=1)
         loss_avg = loss_sum / target_count
         loss_avg = loss_avg.cpu().numpy()
 
