@@ -209,12 +209,12 @@ class LogitsMixin:
             ]
             steps = [i] * bs
             logits = generator.decode(
-                token_ids,
+                input_ids=token_ids,
                 steps=steps,
                 sequence_start=(i == 0),
                 sequence_end=(i + max_input_len >= max_seq_len))
             bsz, seq_len, vocab_size = logits.shape
-            logits = logits.float().cpu()
+            logits = logits.float()
             padding_token_id = -100
             # meaning logits[..., :, :] corresponds to labels
             # token_ids[1:] + predict_token_id, which is
