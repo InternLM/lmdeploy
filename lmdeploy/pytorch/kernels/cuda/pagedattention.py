@@ -64,7 +64,6 @@ else:
     window_size=torch.int32,
     head_size=torch.int32,
     head_size_v=torch.int32,
-    shared_kv=bool,
     BLOCK_DMODEL=torch.int32,
     BLOCK_DV=torch.int32,
     BLOCK_N=torch.int32,
@@ -101,7 +100,6 @@ def _fwd_grouped_split_kernel(
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
     num_heads_q: tl.constexpr,
-    shared_kv: tl.constexpr,
     logit_softcapping: tl.constexpr,
     SPLIT_K: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -195,10 +193,7 @@ def _fwd_grouped_split_kernel(
         if BLOCK_DMODEL1 != 0:
             k1 = tl.load(k1_ptrs + b_offset * stride_kp)
 
-        if shared_kv:
-            v = tl.trans(k)
-        else:
-            v = tl.load(v_ptrs + b_offset * stride_vp)
+        v = tl.load(v_ptrs + b_offset * stride_vp)
 
         qk = tl.zeros([BLOCK_H, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -370,7 +365,6 @@ def _fwd_kernel(
     window_size: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
-    shared_kv: tl.constexpr,
     logit_softcapping: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -435,15 +429,14 @@ def _fwd_kernel(
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
 
-    # this is dirty
-    start_block_id = kv_seqlen - kv_seqlen
+    kv_start_loc = 0
     if window_size > 0:
         start_block_id = tl.maximum(history_len - window_size, 0) // BLOCK_N
         kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
-    kv_start_loc = start_block_id * BLOCK_N
-    block_offset_ptrs += start_block_id
+        kv_start_loc = start_block_id * BLOCK_N
+        block_offset_ptrs += start_block_id
+
     for start_n in range(kv_start_loc, kv_seqlen, BLOCK_N):
-        start_n = tl.multiple_of(start_n, BLOCK_N)
         b_offset = tl.load(block_offset_ptrs)
         block_offset_ptrs += 1
 
@@ -452,10 +445,7 @@ def _fwd_kernel(
         if BLOCK_DMODEL1 != 0:
             k1 = tl.load(k1_ptrs + b_offset * stride_kp)
 
-        if shared_kv:
-            v = tl.trans(k)
-        else:
-            v = tl.load(v_ptrs + b_offset * stride_vp)
+        v = tl.load(v_ptrs + b_offset * stride_vp)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -467,17 +457,16 @@ def _fwd_kernel(
             qk = tanh(qk)
             qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
-        if start_n + BLOCK_N > history_len or window_size > 0:
-            qk_mask = (history_len + offs_m[:, None]) >= (start_n +
-                                                          offs_n[None, :])
-            if window_size > 0:
-                qk_mask = qk_mask and (
-                    (start_n + offs_n[None, :]) >= kv_min_loc[:, None])
-            qk = tl.where(
-                qk_mask,
-                qk,
-                float(-1e30),
-            )
+        qk_mask = (history_len + offs_m[:, None]) >= (start_n +
+                                                      offs_n[None, :])
+        if window_size > 0:
+            qk_mask = qk_mask and (
+                (start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+        qk = tl.where(
+            qk_mask,
+            qk,
+            float(-1e30),
+        )
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
@@ -518,7 +507,6 @@ def paged_attention_fwd(
     window_size: int = None,
     sm_scale: float = None,
     logit_softcapping: float = None,
-    shared_kv: bool = False,
 ):
     """Paged Attention forward.
 
@@ -549,13 +537,10 @@ def paged_attention_fwd(
         """get block d."""
         BLOCK_DMODEL = triton.next_power_of_2(Lk)
         BLOCK_DMODEL1 = 0
-        if BLOCK_DMODEL != Lk and not shared_kv:
+        if BLOCK_DMODEL != Lk:
             BLOCK_DMODEL = BLOCK_DMODEL // 2
             BLOCK_DMODEL1 = max(16, triton.next_power_of_2(Lk - BLOCK_DMODEL))
-        if shared_kv:
-            BLOCK_DV = BLOCK_DMODEL
-        else:
-            BLOCK_DV = triton.next_power_of_2(Lv)
+        BLOCK_DV = triton.next_power_of_2(Lv)
         return BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV
 
     # shape constraints
@@ -610,7 +595,6 @@ def paged_attention_fwd(
                           window_size=window_size,
                           head_size=Lk,
                           head_size_v=Lv,
-                          shared_kv=shared_kv,
                           logit_softcapping=logit_softcapping,
                           BLOCK_M=BLOCK_M,
                           BLOCK_DMODEL=BLOCK_DMODEL,
@@ -660,7 +644,6 @@ def paged_attention_fwd(
                                         head_size=Lk,
                                         head_size_v=Lv,
                                         num_heads_q=head,
-                                        shared_kv=shared_kv,
                                         logit_softcapping=logit_softcapping,
                                         SPLIT_K=SPLIT_K,
                                         BLOCK_DMODEL=BLOCK_DMODEL,
