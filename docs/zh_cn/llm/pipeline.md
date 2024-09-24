@@ -165,7 +165,7 @@ response = pipe(prompts, gen_config=gen_config)
 print(response)
 ```
 
-- **一个 slora 的例子**
+- **一个 lora 的例子**
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
