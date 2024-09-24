@@ -15,6 +15,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
 from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 def get_world_rank():
     """get current world size and rank."""
@@ -412,10 +414,8 @@ class Qwen2MoeModel(nn.Module):
         return self.embed_tokens
 
 
-class Qwen2MoeForCausalLM(nn.Module):
+class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
     """ModelForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'qkv_proj': [

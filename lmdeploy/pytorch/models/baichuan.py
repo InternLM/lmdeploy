@@ -11,6 +11,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 def _is_baichuan_13b(config: Any):
     """is baichuan 13b."""
@@ -304,10 +306,8 @@ class BaichuanModel(nn.Module):
         return self.embed_tokens
 
 
-class BaichuanForCausalLM(nn.Module):
+class BaichuanForCausalLM(nn.Module, CudaGraphMixin):
     """rewrote model of LlamaForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'gate_up_proj': [

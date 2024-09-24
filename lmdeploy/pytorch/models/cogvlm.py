@@ -13,6 +13,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 def get_world_rank():
     """get current world size and rank."""
@@ -500,7 +502,7 @@ def _get_cogvlm_position_ids(context):
     return position_ids, lang_ids, vis_ids
 
 
-class CogVLMForCausalLM(nn.Module):
+class CogVLMForCausalLM(nn.Module, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
