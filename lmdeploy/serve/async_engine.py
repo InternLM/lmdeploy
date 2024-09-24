@@ -589,15 +589,7 @@ class AsyncEngine(LogitsMixin):
                     yield GenOut(response, self.id2step[str(session_id)],
                                  len(input_ids), tokens, finish_reason, res,
                                  logprobs)
-                if outputs.status > ResponseType.FINISH:
-                    yield GenOut(
-                        response='internal error happened',
-                        history_token_len=self.id2step[str(session_id)],
-                        input_token_len=len(input_ids),
-                        generate_token_len=0,
-                        finish_reason='error',
-                        token_ids=[])
-                else:
+                if outputs.status <= ResponseType.FINISH:
                     finish_reason = 'length' \
                         if tokens >= gen_config.max_new_tokens else 'stop'
                     # utf-8 char at the end means it's a potential unfinished
@@ -607,6 +599,14 @@ class AsyncEngine(LogitsMixin):
                         response = ''
                     yield GenOut(response, self.id2step[str(session_id)],
                                  len(input_ids), tokens, finish_reason)
+                else:
+                    yield GenOut(
+                        response='internal error happened',
+                        history_token_len=self.id2step[str(session_id)],
+                        input_token_len=len(input_ids),
+                        generate_token_len=0,
+                        finish_reason='error',
+                        token_ids=[])
                 # update step
                 self.id2step[str(session_id)] += len(input_ids) + tokens
                 if sequence_end:
