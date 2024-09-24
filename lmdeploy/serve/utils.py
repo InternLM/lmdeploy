@@ -194,7 +194,7 @@ class LogitsMixin:
         input_ids = [self.tokenizer.encode(text) for text in inputs]
 
         bs = len(input_ids)
-        max_seq_len = len(input_ids[0])
+        max_seq_len = max([len(_) for _ in input_ids])
 
         # TODO: a better way to determine `max_input_len`, at most allocate
         # 2G mem for logits with shape [bs, max_input_len, vocab_size]
@@ -222,8 +222,11 @@ class LogitsMixin:
             target_ids = [
                 input_id[i + 1:i + 1 + max_input_len] for input_id in input_ids
             ]
-            if len(target_ids[0]) < len(token_ids[0]):
-                target_ids = [x + [padding_token_id] for x in target_ids]
+            target_ids = [
+                target_ids[i] + [padding_token_id]
+                if len(target_ids[i]) < len(token_ids[i]) else target_ids[i]
+                for i in range(bsz)
+            ]
             target_ids = [
                 torch.Tensor(torch.LongTensor(_target_ids))
                 for _target_ids in target_ids
