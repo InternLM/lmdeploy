@@ -350,9 +350,11 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+        return hidden_states
 
-        logits = self.output(hidden_states)
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.output(hidden_states)
 
     def support_cuda_graph(
         self,

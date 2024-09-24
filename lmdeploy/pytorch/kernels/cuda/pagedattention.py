@@ -467,17 +467,16 @@ def _fwd_kernel(
             qk = tanh(qk)
             qk = qk * logit_softcapping
         # NOTE: inf - inf = nan, and nan will leads to error
-        if start_n + BLOCK_N > history_len or window_size > 0:
-            qk_mask = (history_len + offs_m[:, None]) >= (start_n +
-                                                          offs_n[None, :])
-            if window_size > 0:
-                qk_mask = qk_mask and (
-                    (start_n + offs_n[None, :]) >= kv_min_loc[:, None])
-            qk = tl.where(
-                qk_mask,
-                qk,
-                float(-1e30),
-            )
+        qk_mask = (history_len + offs_m[:, None]) >= (start_n +
+                                                      offs_n[None, :])
+        if window_size > 0:
+            qk_mask = qk_mask and (
+                (start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+        qk = tl.where(
+            qk_mask,
+            qk,
+            float(-1e30),
+        )
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
