@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -14,20 +14,28 @@ class AdapterInfo:
     out_features: int
     ranks: torch.Tensor
     scalings: torch.Tensor
-    rank_offsets: torch.Tensor
-    a_cache: torch.Tensor
-    b_cache: torch.Tensor
     base_slice: slice
-    max_rank: int
+    rank_offsets: torch.Tensor = field(init=False)
+    max_rank: int = field(init=False)
+
+    def __post_init__(self):
+        """post init."""
+        ranks = self.ranks
+        rank_offsets = ranks.cumsum(0) - ranks
+        max_rank = ranks.max().item()
+        self.rank_offsets = rank_offsets
+        self.max_rank = max_rank
 
 
-class SLoRAImpl(ABC):
-    """slora implementation api."""
+class LoRAImpl(ABC):
+    """lora implementation."""
 
     @abstractmethod
     def forward(self,
                 x: torch.Tensor,
                 base_output: torch.Tensor,
+                lora_A: torch.Tensor,
+                lora_B: torch.Tensor,
                 adapter_info: AdapterInfo,
                 ctx_mgr: StepContextManager,
                 colwise: bool,
@@ -36,8 +44,8 @@ class SLoRAImpl(ABC):
         raise NotImplementedError
 
 
-class SLoRABuilder(ABC):
-    """slora implementation builder."""
+class LoRABuilder(ABC):
+    """lora implementation builder."""
 
     @staticmethod
     @abstractmethod

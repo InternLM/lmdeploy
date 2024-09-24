@@ -7,45 +7,6 @@ import torch
 
 from lmdeploy.pytorch.backends import get_backend
 
-from .adapter.adapter import SchedulerAdapter
-
-
-@dataclass
-class AdapterInfo:
-    adapter_ids: torch.LongTensor
-    rank_offsets: torch.LongTensor
-
-    @classmethod
-    def from_adapters(cls, adapters: List[SchedulerAdapter]):
-        """from adapters."""
-        if len(adapters) == 0:
-            return None
-        adapter_ids = [ada.adapter_id for ada in adapters]
-        adapter_ids = torch.tensor(adapter_ids)
-        rank_offsets = [torch.from_numpy(ada.rank_offset) for ada in adapters]
-        rank_offsets = torch.stack(rank_offsets)
-
-        return cls(
-            adapter_ids=adapter_ids,
-            rank_offsets=rank_offsets,
-        )
-
-    def update_offsets(self, rank_offsets: torch.LongTensor):
-        """update rank offsets."""
-        rank_offsets[self.adapter_ids] = self.rank_offsets
-
-    def to_device(self, device: str):
-        """to device."""
-        out_dict = dict()
-        for f in fields(self):
-            k = f.name
-            v = getattr(self, k)
-            if isinstance(v, torch.Tensor):
-                v = v.to(device)
-            out_dict[k] = v
-
-        return AdapterInfo(**out_dict)
-
 
 @dataclass
 class MRopeModelInputs:
@@ -157,7 +118,6 @@ class ModelInputs:
     is_decoding: bool
     num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
-    adapter_info: AdapterInfo = None
     vision_inputs: VisionModelInputs = None
     mrope_inputs: MRopeModelInputs = None
 
@@ -202,7 +162,6 @@ class ModelInputs:
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=self.local_adapter_ids,
-                adapter_info=self.adapter_info,
                 vision_inputs=self.vision_inputs,
                 mrope_inputs=self.mrope_inputs,
             )
@@ -220,8 +179,6 @@ class ModelInputs:
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
             elif isinstance(v, VisionModelInputs):
-                v = v.to_device(device)
-            elif isinstance(v, AdapterInfo):
                 v = v.to_device(device)
             elif isinstance(v, MRopeModelInputs):
                 v = v.to_device(device)
@@ -248,7 +205,6 @@ class StepContext:
     is_decoding: bool
     world_size: int = 1
     local_adapter_ids: torch.LongTensor = None
-    adapter_params: Dict[str, AdapterInfo] = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
     vision_inputs: VisionModelInputs = None

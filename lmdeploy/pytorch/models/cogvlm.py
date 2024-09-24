@@ -550,10 +550,11 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin):
             lang_ids=lang_ids,
             vision_ids=vision_ids,
         )
+        return hidden_states
 
-        logits = self.lm_head(hidden_states)
-        logits = logits.float()
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def support_cuda_graph(
         self,

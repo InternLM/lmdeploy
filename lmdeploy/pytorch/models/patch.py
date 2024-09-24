@@ -4,7 +4,7 @@ import inspect
 import os.path as osp
 import re
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -202,18 +202,17 @@ def build_patched_model(config: ModelConfig, device: torch.device = None):
 
 @torch.inference_mode()
 def add_adapters(model: torch.nn.Module,
-                 kv_caches: List[List[torch.Tensor]],
                  adapters: Dict[str, str],
+                 dtype: torch.dtype = torch.float16,
                  device: torch.device = None):
     """add adapters."""
     from peft import PeftConfig
     from peft.tuners.lora import LoraConfig
 
-    from lmdeploy.pytorch.adapter.adapter import (LoRATargetInfo,
-                                                  find_all_target,
-                                                  get_layer_index,
-                                                  get_ranks_and_scalings)
-    from lmdeploy.pytorch.nn.linear import SLoRA
+    from lmdeploy.pytorch.adapter.adapter import (find_all_target,
+                                                  get_ranks_and_scalings,
+                                                  load_lora_weights)
+    from lmdeploy.pytorch.nn.linear import LoRA
     num_adapters = len(adapters)
     if num_adapters == 0:
         return
@@ -222,87 +221,85 @@ def add_adapters(model: torch.nn.Module,
         device = torch.device('cuda')
 
     # model could be graph runner
-    origin_model = model
     if hasattr(model, 'get_model'):
         model = model.get_model()
     ctx_mgr = model.ctx_mgr
 
+    adapter_names = list(adapters.keys())
+    adapter_names = sorted(adapter_names)
+
     adapter_cfgs = [
-        PeftConfig.from_pretrained(path) for path in adapters.values()
+        PeftConfig.from_pretrained(adapters[name]) for name in adapter_names
     ]
-    # get layer pattern (should be same between different adapter)
-    config = next(iter(adapter_cfgs))
-    layers_pattern = getattr(config, 'layers_pattern', None)
 
     # insert one for no adapter
     adapter_cfgs = [LoraConfig(r=0, target_modules=[])] + adapter_cfgs
+    adapter_names = [None] + adapter_names
+    adapter_id_map = dict(zip(adapter_names, range(len(adapter_names))))
 
     # target layer name to add adapter
     target_names = set()
-    max_rank = 0
     for cfg in adapter_cfgs:
         target_names = target_names.union(cfg.target_modules)
-        max_rank = max(max_rank, cfg.r)
     target_names = list(target_names)
     target_names = sorted(target_names)
-    num_targets = len(target_names)
-
-    # get rank offsets
-    # add 1 for none adapter
-    rank_offsets = torch.zeros(num_adapters + 1,
-                               num_targets * max_rank,
-                               dtype=torch.int64,
-                               device=device)
 
     target_infos = dict()
-    for target_idx, target_name in enumerate(target_names):
+    for _, target_name in enumerate(target_names):
         # get ranks and scalings
         ranks, scalings = get_ranks_and_scalings(target_name,
                                                  adapter_cfgs,
                                                  device=device)
         found_mods, pack_idx = find_all_target(model, target_name)
-        r_start = target_idx * max_rank
-        r_end = r_start + max_rank
-        r_offs = rank_offsets[:, r_start:r_end]
+        sum_rank = ranks.sum().item()
 
         in_features = 0
         out_features = 0
         colwise = True
-        for name, mod in found_mods:
+        for _, mod in found_mods:
             assert hasattr(mod, 'lora_adapters')
-            layer_idx = get_layer_index(name, layers_pattern)
-            k_cache, v_cache = kv_caches[layer_idx]
             in_features = mod.in_features
             colwise = mod.colwise
             if pack_idx is None:
                 base_slice = slice(0, mod.out_features)
                 out_features = mod.out_features
+                lora_b_spliter = getattr(mod, 'weight_spliter_lora_b', None)
             else:
                 prev_feats = sum(mod.all_out_features[:pack_idx])
                 out_features = mod.all_out_features[pack_idx]
                 base_slice = slice(prev_feats, prev_feats + out_features)
+                lora_b_spliter = None
+            lora_a = torch.empty((sum_rank, in_features),
+                                 dtype=dtype,
+                                 device=device)
+            lora_b = torch.empty((sum_rank, out_features),
+                                 dtype=dtype,
+                                 device=device)
 
-            slora = SLoRA(
+            lora = LoRA(
                 in_features,
                 out_features,
                 ranks=ranks,
                 scalings=scalings,
-                rank_offsets=r_offs,
-                a_cache=k_cache,
-                b_cache=v_cache,
+                lora_a=lora_a,
+                lora_b=lora_b,
                 base_slice=base_slice,
-                max_rank=max_rank,
                 ctx_mgr=ctx_mgr,
                 colwise=colwise,
                 is_tp=mod.is_tp,
+                lora_b_spliter=lora_b_spliter,
             )
-            mod.lora_adapters.append(slora)
+            mod.lora_adapters[target_name] = lora
 
-        target_info = LoRATargetInfo(in_features=in_features,
-                                     out_features=out_features,
-                                     colwise=colwise)
-        target_infos[target_name] = target_info
+    # fill adapter data
+    for name, path in adapters.items():
+        adapter_id = adapter_id_map[name]
+        checkpoint_path = f'{path}/adapter_model.bin'
+        state_dict = torch.load(checkpoint_path, map_location=device)
 
-    # add rank_offsets
-    setattr(origin_model, 'rank_offsets', rank_offsets)
+        if hasattr(model, 'load_lora_weights'):
+            model.load_lora_weights(state_dict.items(), adapter_id=adapter_id)
+        else:
+            load_lora_weights(model, state_dict.items(), adapter_id=adapter_id)
+
     return target_infos
