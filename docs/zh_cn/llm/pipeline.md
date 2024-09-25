@@ -119,21 +119,21 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
 - **计算 logits & ppl:**
 
 ```python
+from transformers import AutoTokenizer
 from lmdeploy import pipeline
-
 model_repoid_or_path='internlm/internlm2_5-7b-chat'
 pipe = pipeline(model_repoid_or_path)
-
-prompts = [
-    "Hello, I am an AI assistant named InternLM. I am developed by Shanghai AI Laboratory",
-    "How to use LMDeploy to deploy a LLM model?"
-]
+tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
 
 # logits
-logits = pipe.get_logits(prompts)
+messages = [
+   {"role": "user", "content": "Hello, how are you?"},
+]
+input_ids = tokenizer.apply_chat_template(messages)
+logits = pipe.get_logits(input_ids)
 
 # ppl
-ppl = pipe.get_ppl(prompts)
+ppl = pipe.get_ppl(input_ids)
 ```
 
 - **使用 pytorch 后端**
