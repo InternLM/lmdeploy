@@ -94,14 +94,12 @@ jobs:
           echo $RELEASE_TAG
           docker tag $TAG $RELEASE_TAG
           docker push $RELEASE_TAG
-
       - name: Login to Aliyun Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.ALIYUNHUB_USERNAME }}
           password: ${{ secrets.ALIYUNHUB_TOKEN }}
           registry: pjlab-wulan-acr-registry.cn-wulanchabu.cr.aliyuncs.com
-
       - name: Push released docker image to aliyun hub
         if: endsWith(env.TAG, 'cu12') == true
         run: |
