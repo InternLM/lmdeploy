@@ -149,9 +149,8 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |
-          git clone https://github.com/lvhan028/opencompass.git
+          git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
-          git checkout integrate-lmdeploy-pipeline-api
           python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
