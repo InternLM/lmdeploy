@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord auto_gptq'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord auto_gptq mmengine-lite==0.10.5'
       regression_func:
         required: true
         description: 'regression functions'
@@ -43,7 +43,7 @@ on:
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord auto_gptq'}}
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord auto_gptq mmengine-lite==0.10.5'}}
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
@@ -591,10 +591,7 @@ jobs:
         run: |
           export LMDEPLOY_DIR=$(pwd)
 
-          python3 .github/scripts/action_tools.py evaluate \
-            --models "[tb_internlm2_5_7b_chat, tb_internlm2_5_7b_chat_4bits, tb_internlm2_5_7b_chat_kvint4, pt_internlm2_5_7b_chat, tb_internlm2_5_20b_chat, tb_internlm2_5_20b_chat_4bits, tb_internlm2_5_20b_chat_kvint4, pt_internlm2_5_20b_chat, tb_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, tb_llama_3d1_8b_instruct_4bits, tb_llama_3d1_8b_instruct_kvint4, tb_qwen2_7b_instruct, tb_qwen2_7b_instruct_4bits, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]" \
-            --datasets "[*race_datasets, *gsm8k_datasets]" \
-            --workspace /root/evaluation-reports/${{ github.run_id }} --is_smoke true
+          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_4bits, turbomind_internlm2_5_7b_chat_kvint4, pt_internlm2_5_7b_chat, turbomind_internlm2_5_20b_chat, turbomind_internlm2_5_20b_chat_4bits, turbomind_internlm2_5_20b_chat_kvint4, pt_internlm2_5_20b_chat, turbomind_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, turbomind_llama_3d1_8b_instruct_4bits, turbomind_llama_3d1_8b_instruct_kvint4, turbomind_qwen2_7b_instruct, turbomind_qwen2_7b_instruct_4bits, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]" "[*race_datasets, *gsm8k_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
       - name: Clear workspace
         if: always()
         run: |
