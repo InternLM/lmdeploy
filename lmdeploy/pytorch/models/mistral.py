@@ -12,6 +12,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class MistralAttention(nn.Module):
     """Rewrite module of MistralAttention."""
@@ -293,10 +295,8 @@ class MistralModel(nn.Module):
         return self.embed_tokens
 
 
-class MistralForCausalLM(nn.Module):
+class MistralForCausalLM(nn.Module, CudaGraphMixin):
     """ModelForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'qkv_proj': [
@@ -344,10 +344,11 @@ class MistralForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+        return hidden_states
 
-        logits = self.lm_head(hidden_states)
-        logits = logits.float()
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """get input embeddings."""

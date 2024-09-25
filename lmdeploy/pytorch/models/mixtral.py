@@ -11,6 +11,8 @@ from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class MixtralAttention(nn.Module):
     """mixtral attention."""
@@ -293,7 +295,7 @@ class MixtralModel(nn.Module):
         return self.embed_tokens
 
 
-class MixtralForCausalLM(nn.Module):
+class MixtralForCausalLM(nn.Module, CudaGraphMixin):
     """mixture model for causalLM."""
 
     def __init__(self,
@@ -328,9 +330,11 @@ class MixtralForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+        return hidden_states
 
-        logits = self.lm_head(hidden_states)
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def support_cuda_graph(
         self,

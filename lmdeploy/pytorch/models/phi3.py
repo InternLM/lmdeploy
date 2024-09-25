@@ -14,6 +14,8 @@ from lmdeploy.pytorch.nn.rotary_embedding import (LongRoPEScalingParameters,
                                                   build_rotary_embedding)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class Phi3Attention(nn.Module):
     """Rewrite module of Phi3Attention."""
@@ -315,10 +317,8 @@ class Phi3Model(nn.Module):
         return self.embed_tokens
 
 
-class Phi3ForCausalLM(nn.Module):
+class Phi3ForCausalLM(nn.Module, CudaGraphMixin):
     """ModelForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'gate_up_proj': [
@@ -361,10 +361,11 @@ class Phi3ForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+        return hidden_states
 
-        logits = self.lm_head(hidden_states)
-        logits = logits.float()
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """get input embeddings."""

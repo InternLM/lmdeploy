@@ -11,6 +11,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 def _is_baichuan_13b(config: Any):
     """is baichuan 13b."""
@@ -304,10 +306,8 @@ class BaichuanModel(nn.Module):
         return self.embed_tokens
 
 
-class BaichuanForCausalLM(nn.Module):
+class BaichuanForCausalLM(nn.Module, CudaGraphMixin):
     """rewrote model of LlamaForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'gate_up_proj': [
@@ -350,10 +350,11 @@ class BaichuanForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+        return hidden_states
 
-        logits = self.lm_head(hidden_states)
-        logits = logits.float()
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """get input embeddings."""
@@ -417,8 +418,8 @@ class BaichuanForCausalLM(nn.Module):
                 break
             else:
                 if '.W_pack' in name:
-                    q, k, v = loaded_weight.chunk(3, 0)
                     param = params_dict[name]
+                    q, k, v = param.weight_spliter(loaded_weight)
                     load_weight(param, q, shard_id='q')
                     load_weight(param, k, shard_id='k')
                     load_weight(param, v, shard_id='v')

@@ -16,6 +16,8 @@ from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 def yarn_get_mscale(scale=1, mscale=1):
     if scale <= 1:
@@ -599,10 +601,8 @@ class DeepseekV2Model(nn.Module):
         return self.embed_tokens
 
 
-class DeepseekV2ForCausalLM(nn.Module):
+class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
     """mixture model for causalLM."""
-
-    support_cuda_graph = True
 
     def __init__(self,
                  config: Any,
@@ -636,10 +636,11 @@ class DeepseekV2ForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+        return hidden_states
 
-        logits = self.lm_head(hidden_states)
-        # logits = logits.float()
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """get input embeddings."""

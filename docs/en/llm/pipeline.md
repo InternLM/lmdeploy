@@ -163,7 +163,7 @@ response = pipe(prompts, gen_config=gen_config)
 print(response)
 ```
 
-- **An example for slora.**
+- **An example for lora.**
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig

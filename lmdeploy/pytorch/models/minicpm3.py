@@ -395,8 +395,6 @@ class MiniCPM3Model(nn.Module):
 class MiniCPM3ForCausalLM(nn.Module):
     """rewrote model of MiniCPM3ForCausalLM."""
 
-    support_cuda_graph = True
-
     packed_modules_mapping = {
         'gate_up_proj': [
             'gate_proj',

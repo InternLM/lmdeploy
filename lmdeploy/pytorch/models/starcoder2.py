@@ -12,6 +12,8 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_qkv_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class Starcoder2Attention(nn.Module):
     """Rewrite module of Starcoder2Attention."""
@@ -296,10 +298,8 @@ class Starcoder2Model(nn.Module):
         return self.embed_tokens
 
 
-class Starcoder2ForCausalLM(nn.Module):
+class Starcoder2ForCausalLM(nn.Module, CudaGraphMixin):
     """ModelForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'qkv_proj': [
@@ -343,10 +343,11 @@ class Starcoder2ForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+        return hidden_states
 
-        logits = self.lm_head(hidden_states)
-        logits = logits.float()
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def update_weights(self):
         """update weights."""

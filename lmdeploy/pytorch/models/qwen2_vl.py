@@ -12,6 +12,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
+
 
 def _apply_mrope_selection(hidden_states: torch.Tensor,
                            mrope_position_ids: torch.Tensor,
@@ -331,10 +333,8 @@ class Qwen2Model(nn.Module):
         return self.embed_tokens
 
 
-class Qwen2VLForConditionalGeneration(nn.Module):
+class Qwen2VLForConditionalGeneration(nn.Module, CudaGraphMixin):
     """ModelForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'qkv_proj': [
@@ -464,3 +464,44 @@ class Qwen2VLForConditionalGeneration(nn.Module):
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
+
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
+        """make cudagraph buffers from forward inputs."""
+        max_tokens = graph_meta.max_tokens
+
+        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta,
+                                                       **kwargs)
+        mrope_position_ids = kwargs.get('mrope_position_ids', None)
+        if mrope_position_ids is not None:
+            input_buffers['mrope_position_ids'] = mrope_position_ids.new_zeros(
+                3, max_tokens)
+
+        return input_buffers
+
+    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
+        """fill cudagraph buffers from forward inputs."""
+
+        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta,
+                                                    **kwargs)
+
+        input_ids = kwargs.get('input_ids')
+        attn_metadata = kwargs.get('attn_metadata')
+        block_offsets = attn_metadata.block_offsets
+        num_tokens = input_ids.size(-1)
+        batch_size, _ = block_offsets.size()
+        new_batch_size = next_power_of_2(batch_size)
+
+        is_decoding = graph_meta.is_decoding
+        input_buffers = graph_meta.input_buffers
+        mrope_position_ids = kwargs.get('mrope_position_ids', None)
+        if mrope_position_ids is not None:
+            input_buffers[
+                'mrope_position_ids'][:, :num_tokens] = mrope_position_ids
+            if is_decoding:
+                new_inputs['mrope_position_ids'] = input_buffers[
+                    'mrope_position_ids'][:, :new_batch_size]
+            else:
+                new_inputs['mrope_position_ids'] = input_buffers[
+                    'mrope_position_ids']
+
+        return new_inputs
