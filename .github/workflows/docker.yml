@@ -102,8 +102,8 @@ jobs:
           password: ${{ secrets.ALIYUNHUB_TOKEN }}
           registry: pjlab-wulan-acr-registry.cn-wulanchabu.cr.aliyuncs.com
 
-      - name: Push docker image
-        if: endsWith(env.TAG, 'latest-cu12') == true
+      - name: Push released docker image to aliyun hub
+        if: endsWith(env.TAG, 'cu12') == true
         run: |
           export RELEASE_ALIYUN_TAG=pjlab-wulan-acr-registry.cn-wulanchabu.cr.aliyuncs.com/pjlab-eflops/lmdeploy-online:${{github.ref_name}}-${CUDA_VERSION}
           docker tag $TAG $RELEASE_ALIYUN_TAG
