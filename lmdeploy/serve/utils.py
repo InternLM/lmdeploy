@@ -75,19 +75,11 @@ class LogitsMixin:
             input_ids (Union[List[int], List[List[int]]]): the batch of
                 input token ids
         """
-
-        if isinstance(input_ids, InputIdsType):
+        assert len(input_ids) > 0
+        if isinstance(input_ids[0], int):
             input_ids = [input_ids]
-        if isinstance(input_embeddings, InputEmbsType):
-            input_embeddings = [input_embeddings]
-        if isinstance[input_embedding_ranges, InputEmbRngsType]:
-            input_embedding_ranges = [input_embedding_ranges]
-
-        assert all(len(_) == len(input_ids[0]) for _ in input_ids), \
-            'the list of input_ids must have the same length'
-
-        if input_embeddings is None or input_embedding_ranges is None:
-            assert input_embeddings is None and input_embedding_ranges is None
+        for input_id in input_ids:
+            assert len(input_id) > 0
 
         bs = len(input_ids)
         # TODO: a better way to determine `max_input_len`, at most allocate
@@ -202,12 +194,6 @@ class LogitsMixin:
         assert isinstance(input_ids, List)
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
-
-        # In case of input_ids of unequal length, some list might be empty
-        # during multi-iter prefilling, which causes shape error if the
-        # inference engine is pytorch engine
-        assert all(len(_) == len(input_ids[0]) for _ in input_ids), \
-            'the list of input_ids must have the same length'
 
         generator = self.engine.create_instance()
 
