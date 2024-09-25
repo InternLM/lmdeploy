@@ -10,7 +10,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import \
 from lmdeploy.utils import get_logger
 
 from ..backends import OpType, get_backend
-from ..backends.slora import AdapterInfo
+from ..backends.lora import AdapterInfo
 from .utils import div_up, get_distribute_size, get_world_rank
 
 logger = get_logger('lmdeploy')
@@ -73,48 +73,89 @@ class QKVMixin:
         return q, k, v
 
 
-class SLoRA(nn.Module):
-    """SLoRA layer."""
+class LoRA(nn.Module):
+    """LoRA layer."""
 
     def __init__(self,
                  in_features: int,
                  out_features: int,
                  ranks: torch.Tensor,
                  scalings: torch.Tensor,
-                 rank_offsets: torch.Tensor,
-                 a_cache: torch.Tensor,
-                 b_cache: torch.Tensor,
+                 lora_a: torch.Tensor,
+                 lora_b: torch.Tensor,
                  base_slice: slice,
-                 max_rank: int,
                  ctx_mgr: Any = None,
                  colwise: bool = True,
-                 is_tp: bool = True):
+                 is_tp: bool = True,
+                 lora_b_spliter: Any = None):
         super().__init__()
         self.adapter_info = AdapterInfo(
             in_features=in_features,
             out_features=out_features,
             ranks=ranks,
             scalings=scalings,
-            rank_offsets=rank_offsets,
-            a_cache=a_cache,
-            b_cache=b_cache,
             base_slice=base_slice,
-            max_rank=max_rank,
         )
-        impl_builder = get_backend().get_layer_impl_builder(OpType.SLoRA)
+        impl_builder = get_backend().get_layer_impl_builder(OpType.LoRA)
         self.impl = impl_builder.build()
+
+        lora_A = nn.Parameter(lora_a, requires_grad=False)
+        lora_B = nn.Parameter(lora_b, requires_grad=False)
+        self.register_parameter('lora_A', lora_A)
+        self.register_parameter('lora_B', lora_B)
+        lora_A.weight_loader = self.weight_loader_A
+        lora_B.weight_loader = self.weight_loader_B
         self.is_tp = is_tp
         self.ctx_mgr = ctx_mgr
         self.colwise = colwise
+        self.lora_b_spliter = lora_b_spliter
 
     def forward(self, x, base_output=None):
         """forward of loraA@loraB."""
         return self.impl.forward(x,
+                                 self.lora_A,
+                                 self.lora_B,
                                  base_output,
                                  self.adapter_info,
                                  ctx_mgr=self.ctx_mgr,
                                  colwise=self.colwise,
                                  is_tp=self.is_tp)
+
+    def weight_loader_A(self, param: nn.Parameter, loaded_weight: torch.Tensor,
+                        adapter_id: int):
+        """weight loader."""
+        rank = self.adapter_info.ranks[adapter_id].item()
+        r_start = self.adapter_info.rank_offsets[adapter_id].item()
+        r_end = r_start + rank
+        param_r = param.data[r_start:r_end]
+
+        if self.is_tp and not self.colwise:
+            world_size, rank = get_world_rank()
+            loaded_weight = loaded_weight.chunk(world_size, dim=1)[rank]
+
+        param_r.copy_(loaded_weight)
+
+    def weight_loader_B(self, param: nn.Parameter, loaded_weight: torch.Tensor,
+                        adapter_id: int):
+        """weight loader."""
+        rank = self.adapter_info.ranks[adapter_id].item()
+        r_start = self.adapter_info.rank_offsets[adapter_id].item()
+        r_end = r_start + rank
+        param_r = param.data[r_start:r_end]
+
+        if self.is_tp and self.colwise:
+            world_size, rank = get_world_rank()
+            if self.lora_b_spliter is not None:
+                loaded_weights = self.lora_b_spliter(loaded_weight)
+                new_weights = []
+                for w in loaded_weights:
+                    w = w.chunk(world_size, dim=0)[rank]
+                    new_weights.append(w)
+                loaded_weight = torch.cat(new_weights, dim=0)
+            else:
+                loaded_weight = loaded_weight.chunk(world_size, dim=0)[rank]
+
+        param_r.copy_(loaded_weight.t())
 
 
 class AwqLinear(nn.Module):
@@ -171,7 +212,7 @@ class AwqLinear(nn.Module):
         self.w_bit = w_bit
         self.group_size = group_size
         self.elem_per_int = 32 // self.w_bit
-        self.lora_adapters = []
+        self.lora_adapters = nn.ModuleDict()
         self.is_tp = is_tp
         self.colwise = colwise
         self.all_reduce = all_reduce
@@ -305,7 +346,7 @@ class AwqLinear(nn.Module):
         out = self.impl.forward(x, self.qweight, self.scales, self.qzeros,
                                 self.bias, False)
         if self.lora_adapters is not None:
-            for lora_adapter in self.lora_adapters:
+            for lora_adapter in self.lora_adapters.values():
                 out = lora_adapter(x, out)
         if all_reduce:
             dist.all_reduce(out)
@@ -517,6 +558,9 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
         else:
             raise RuntimeError(f'Unsupported layout: {layout}')
 
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
+        return loaded_weight.split(self.qkv_split_section_s, dim=0)
+
 
 class W8A8Linear(nn.Module):
     """w8a8 linear."""
@@ -560,7 +604,7 @@ class W8A8Linear(nn.Module):
 
         self.in_features = in_features
         self.out_features = out_features
-        self.lora_adapters = []
+        self.lora_adapters = nn.ModuleDict()
         self.is_tp = is_tp
         self.colwise = colwise
         self.all_reduce = all_reduce
@@ -651,7 +695,7 @@ class W8A8Linear(nn.Module):
                                      all_reduce)
 
         out = self.impl.forward(x, self.weight, self.scale, self.bias, False)
-        for lora_adapter in self.lora_adapters:
+        for lora_adapter in self.lora_adapters.values():
             out = lora_adapter(x, out)
         if all_reduce:
             dist.all_reduce(out)
@@ -729,6 +773,9 @@ class MergedW8A8Linear(W8A8Linear):
         """weight spliter."""
         return loaded_weight.split(self.split_section, dim=0)
 
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
+        return loaded_weight.split(self.split_section, dim=0)
+
 
 class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
     """qkv w8a8 linear."""
@@ -791,6 +838,9 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
         else:
             raise RuntimeError(f'Unsupported layout: {layout}')
 
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
+        return loaded_weight.split(self.qkv_split_section, dim=0)
+
 
 class BaseLinear(nn.Module):
     """linear layer."""
@@ -833,7 +883,7 @@ class BaseLinear(nn.Module):
 
         self.in_features = in_features
         self.out_features = out_features
-        self.lora_adapters = []
+        self.lora_adapters = nn.ModuleDict()
         self.is_tp = is_tp
         self.colwise = colwise
         self.all_reduce = all_reduce
@@ -921,7 +971,7 @@ class BaseLinear(nn.Module):
             return self.impl.forward(x, self.weight, self.bias, all_reduce)
 
         out = self.impl.forward(x, self.weight, self.bias, False)
-        for lora_adapter in self.lora_adapters:
+        for lora_adapter in self.lora_adapters.values():
             out = lora_adapter(x, out)
         if all_reduce:
             dist.all_reduce(out)
@@ -995,6 +1045,9 @@ class MergedBaseLinear(BaseLinear):
 
     def weight_spliter(self, loaded_weight: torch.Tensor):
         """weight spliter."""
+        return loaded_weight.split(self.split_section, dim=0)
+
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
         return loaded_weight.split(self.split_section, dim=0)
 
 
@@ -1073,6 +1126,9 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
             return q, k, v
         else:
             raise RuntimeError(f'Unsupported layout: {layout}')
+
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
+        return loaded_weight.split(self.qkv_split_section, dim=0)
 
 
 def build_linear(in_features: int,

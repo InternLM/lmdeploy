@@ -162,8 +162,10 @@ class CudaGraphMixin:
         input_buffers = graph_meta.input_buffers
         local_adapter_ids = context.local_adapter_ids
         if local_adapter_ids is not None:
+            if input_buffers['local_adapter_ids'].data_ptr(
+            ) != local_adapter_ids.data_ptr():
+                input_buffers['local_adapter_ids'].fill_(0)
             batch_size = local_adapter_ids.size(0)
-            input_buffers['local_adapter_ids'].fill_(0)
             input_buffers['local_adapter_ids'][:batch_size] = local_adapter_ids
             context.local_adapter_ids = input_buffers['local_adapter_ids']
         context.q_seqlens = input_buffers['q_seqlens']

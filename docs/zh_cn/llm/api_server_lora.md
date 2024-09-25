@@ -1,8 +1,8 @@
 # LoRA 推理服务
 
-## 启动 S-LoRA 服务
+## 启动 LoRA 服务
 
-S-LoRA 目前只有 pytorch 后端支持。它的服务化，和其他模型服务化一样，命令都可以用 `lmdeploy serve api_server -h` 查看。其中 pytorch 后端支持的参数就有 S-LoRA 的配置内容。
+LoRA 目前只有 pytorch 后端支持。它的服务化，和其他模型服务化一样，命令都可以用 `lmdeploy serve api_server -h` 查看。其中 pytorch 后端支持的参数就有 LoRA 的配置内容。
 
 ```txt
 PyTorch engine arguments:
