@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from torch import nn
-
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul
 
 from ..activation import SiluAndMulBuilder, SiluAndMulImpl
@@ -12,17 +10,8 @@ class TritonSiluAndMulImpl(SiluAndMulImpl):
     def __init__(self, inplace: bool):
         self.inplace = inplace
 
-    def _forward_naive(self, x):
-        """forward naive."""
-        gate, up = x.chunk(2, -1)
-        return nn.functional.silu(gate, self.inplace) * up
-
     def forward(self, x):
         """forward."""
-
-        if x.size(-1) % 2048 != 0:
-            return self._forward_naive(x)
-
         out = None
         x_shape = None
         if x.dim() != 2:
