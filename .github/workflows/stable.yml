@@ -22,7 +22,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath mmengine-lite==0.10.5'
   schedule:
     - cron:  '00 8 * * 1'
 
@@ -32,7 +32,7 @@ env:
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   REPORT_DIR: /nvme/qa_test_models/stable_reports/${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'}}
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath mmengine-lite==0.10.5'}}
   COMPASS_DATA_CACHE: /nvme/qa_test_models/dataset
 
 jobs:
