@@ -543,6 +543,22 @@ class ChatGLM4Tokenizer(HuggingFaceTokenizer):
                                                      **kwargs)
 
 
+class ChatGLMTokenizer(HuggingFaceTokenizer):
+    """tokenizer of GLM2."""
+
+    def __init__(self, model_path):
+        super(ChatGLMTokenizer, self).__init__(model_path)
+        original_pad = self.model._pad
+
+        def __pad(*args, **kwargs):
+            if 'padding_side' in kwargs:
+                kwargs.pop('padding_side')
+            return original_pad(*args, **kwargs)
+
+        # fix for transformers>4.45.0
+        self.model._pad = __pad
+
+
 class Tokenizer:
     """Tokenize prompts or de-tokenize tokens into texts.
 
@@ -572,6 +588,8 @@ class Tokenizer:
             config_tokenizer_class = tokenizer_config.get('tokenizer_class')
             if config_tokenizer_class == 'ChatGLM4Tokenizer':
                 self.model = ChatGLM4Tokenizer(model_folder)
+            elif config_tokenizer_class == 'ChatGLMTokenizer':
+                self.model = ChatGLMTokenizer(model_folder)
             else:
                 self.model = HuggingFaceTokenizer(model_folder)
 
