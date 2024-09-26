@@ -217,6 +217,9 @@ class LlamaModel(BaseInputModel):
             scaling_type = ''
             low_freq_factor = 1.0
             high_freq_factor = 1.0
+            attention_factor = -1.0
+            beta_fast = 32.0
+            beta_slow = 1.0
             original_max_position_embeddings = 0
             if isinstance(rope_scaling, dict):
                 llama2_scaling_type = model_arg['rope_scaling'].get('type', '')
@@ -236,6 +239,10 @@ class LlamaModel(BaseInputModel):
                     else llama3_scaling_type
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
+                attention_factor = model_arg['rope_scaling'].get(
+                    'attention_factor', None)
+                beta_fast = model_arg['rope_scaling'].get('beta_fast', 32.0)
+                beta_slow = model_arg['rope_scaling'].get('beta_slow', 1.0)
 
         return dict(
             num_layer=num_layer,
@@ -250,4 +257,7 @@ class LlamaModel(BaseInputModel):
             rope_scaling_type=scaling_type,
             rope_scaling_factor=scaling_factor,
             low_freq_factor=low_freq_factor,
-            high_freq_factor=high_freq_factor)
+            high_freq_factor=high_freq_factor,
+            attention_factor=attention_factor,
+            beta_fast=beta_fast,
+            beta_slow=beta_slow)
