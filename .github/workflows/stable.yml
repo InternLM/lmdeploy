@@ -24,7 +24,7 @@ on:
         type: string
         default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'
   schedule:
-    - cron:  '00 8 * * 1,5'
+    - cron:  '00 8 * * 1'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -140,7 +140,8 @@ jobs:
       - name: Run OC result
         continue-on-error: true
         run: |
-          opencompass .github/scripts/eval_stable_config.py --reuse --dump-eval-details -w ${{env.REPORT_DIR}}
+          ln -s /nvme/qa_test_models/dataset/data .
+          opencompass .github/scripts/eval_stable_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-oc
       - name: Test lmdeploy - restful api
         run: |
           python3 benchmark/profile_restful_api.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json --stream-output True --num-prompts 10000 --csv ${{env.REPORT_DIR}}/stable.csv > ${{env.REPORT_DIR}}/stable.log
