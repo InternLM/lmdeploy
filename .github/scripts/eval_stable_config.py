@@ -27,7 +27,7 @@ with read_base():
         sanitized_mbpp_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.mmlu.mmlu_gen_4d595a import \
         mmlu_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.nq.nq_open_1shot_gen_2e45e5 import \
+    from opencompass.configs.datasets.nq.nq_gen_3dcea1 import \
         nq_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.race.race_gen_69ee4f import \
         race_datasets  # noqa: F401, E501

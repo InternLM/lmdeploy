@@ -33,7 +33,7 @@ env:
   REPORT_DIR: /nvme/qa_test_models/stable_reports/${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'}}
-  COMPASS_DATA_CACHE: /nvme/qa_test_models/dataset/data
+  COMPASS_DATA_CACHE: /nvme/qa_test_models/dataset
 
 jobs:
   linux-build:
