@@ -1030,34 +1030,3 @@ class Engine:
     def end(self, session_id: int):
         """Add new session."""
         return self.engine_instance.end(session_id)
-
-    def decode(self,
-               input_ids,
-               input_embeddings: List[InputEmbeddingType] = None,
-               input_embedding_ranges: List[InputEmbeddingRangeType] = None,
-               steps: List[int] = None,
-               sequence_start: bool = True,
-               sequence_end: bool = True,
-               adapter_names: List[str] = None):
-        """Perform context decode on input tokens.
-
-        Args:
-            input_ids (List[List[int]] | List[np.ndaray]): the batch of input
-                 token ids
-            steps (List[int]): the offset of the k/v cache
-            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
-                embeddings features
-            input_embedding_ranges: (List[List[Tuple[int, int]]]):
-                the begin/end offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-            adapter_names (List[str]): The name of the adapters.
-        """
-        return self.engine_instance.decode(
-            input_ids,
-            input_embeddings=input_embeddings,
-            input_embedding_ranges=input_embedding_ranges,
-            steps=steps,
-            sequence_start=sequence_start,
-            sequence_end=sequence_end,
-            adapter_names=adapter_names)
