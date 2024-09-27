@@ -141,13 +141,20 @@ jobs:
         continue-on-error: true
         run: |
           ln -s /nvme/qa_test_models/dataset/data .
-          opencompass .github/scripts/eval_stable_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-oc
+          opencompass .github/scripts/eval_stable_object_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-object-1
+          opencompass .github/scripts/eval_stable_subject_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-subject-1
+          opencompass .github/scripts/eval_stable_object_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-object-2
+          opencompass .github/scripts/eval_stable_subject_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-subject-2
+          opencompass .github/scripts/eval_stable_object_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-object-3
+          opencompass .github/scripts/eval_stable_subject_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-subject-3
       - name: Test lmdeploy - restful api
         run: |
           python3 benchmark/profile_restful_api.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json --stream-output True --num-prompts 10000 --csv ${{env.REPORT_DIR}}/stable.csv > ${{env.REPORT_DIR}}/stable.log
           python3 /nvme/qa_test_models/offline_pkg/profile_restful_api_internal.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/Mixed.json --stream-output True --num-prompts 100000 --csv ${{env.REPORT_DIR}}/stable-internal-1.csv > ${{env.REPORT_DIR}}/stable-internal-1.log
           python3 /nvme/qa_test_models/offline_pkg/profile_restful_api_internal.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/Mixed.json --stream-output True --num-prompts 100000 --csv ${{env.REPORT_DIR}}/stable-internal-2.csv > ${{env.REPORT_DIR}}/stable-internal-2.log
           python3 /nvme/qa_test_models/offline_pkg/profile_restful_api_internal.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/Mixed.json --stream-output True --num-prompts 100000 --csv ${{env.REPORT_DIR}}/stable-internal-3.csv > ${{env.REPORT_DIR}}/stable-internal-3.log
+          python3 /nvme/qa_test_models/offline_pkg/profile_restful_api_internal.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/Mixed.json --stream-output True --num-prompts 100000 --csv ${{env.REPORT_DIR}}/stable-internal-2.csv > ${{env.REPORT_DIR}}/stable-internal-4.log
+          python3 /nvme/qa_test_models/offline_pkg/profile_restful_api_internal.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/Mixed.json --stream-output True --num-prompts 100000 --csv ${{env.REPORT_DIR}}/stable-internal-3.csv > ${{env.REPORT_DIR}}/stable-internal-5.log
       - name: Attach result
         if: always()
         run: |
@@ -155,6 +162,8 @@ jobs:
           python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal-1.csv
           python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal-2.csv
           python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal-3.csv
+          python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal-4.csv
+          python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal-5.csv
       - name: Kill api server
         if: always()
         run: |
