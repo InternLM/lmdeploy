@@ -17,6 +17,8 @@ from lmdeploy.pytorch.nn.rotary_embedding import (ApplyRotaryEmb,
                                                   LongRoPEScalingParameters)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 # TODO use MLA of pytorch engine
 class MiniCPMAttention(nn.Module):
@@ -392,7 +394,7 @@ class MiniCPM3Model(nn.Module):
         return self.embed_tokens
 
 
-class MiniCPM3ForCausalLM(nn.Module):
+class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
     """rewrote model of MiniCPM3ForCausalLM."""
 
     packed_modules_mapping = {

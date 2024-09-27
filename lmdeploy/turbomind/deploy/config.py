@@ -135,5 +135,9 @@ class TurbomindModelConfig:
     def group_size(self):
         return self.model_config.group_size
 
+    @property
+    def vocab_size(self):
+        return self.model_config.vocab_size
+
     def __str__(self):
         return json.dumps(self.to_dict(), indent=2)
