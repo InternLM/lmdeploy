@@ -27,7 +27,9 @@ with read_base():
     from opencompass.configs.datasets.winogrande.winogrande_5shot_gen_b36770 import \
         winogrande_datasets  # noqa: F401, E501
 
-datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), [])
+datasets = sum((v for k, v in locals().items()
+                if k.endswith('_datasets') and 'wildbench' not in k), [])
+datasets += wildbench_datasets
 
 api_meta_template = dict(
     round=[
