@@ -9,6 +9,7 @@ namespace turbomind::gemm {
 
 void Registry::f16_u4g128_f16_tnt_sm80_s16816()
 {
+#if 0
     using namespace sm80_s16816;
     using namespace cache_policy;
     using S = cache_policy::Stream;
@@ -23,7 +24,6 @@ void Registry::f16_u4g128_f16_tnt_sm80_s16816()
                           Operand_UV_Pack<uint32_t, true>,     // V
                           kRowMajor,                           // order_C
                           half>;                               // Tc
-
     // clang-format off
     // Add<C::Type<128, 256,  64, 1, 8, 1, D, S, 3, true, 1, 128>>(); // 0/0
     Add<C::Type<128, 256,  32, 1, 8, 1, D, D, 3, true, 1, 128, 128, 128>>(); // 30/3
@@ -61,6 +61,7 @@ void Registry::f16_u4g128_f16_tnt_sm80_s16816()
     Add<C::Type<16,  64, 128, 1, 2, 2, D, S, 3, true, 1, 128>>();
     Add<C::Type<16,  64, 128, 1, 2, 2, D, S, 4, true, 1, 128>>();
     // clang-format on
+#endif
 }
 
 // sm80_f16_u4g128_f16_ttt_128x256x32_4_s16816_1x8x1_c128x128_a1x32x32_00: 46

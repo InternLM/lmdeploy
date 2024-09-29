@@ -5,9 +5,12 @@
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
+#include "src/turbomind/kernels/gemm/matrix_ptr.h"
+#include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/test/quantization.h"
 #include "src/turbomind/kernels/gemm/test/reference.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
@@ -43,10 +46,11 @@ template<class Ta,
          Order order_a,
          Order order_b,
          Order order_c,
-         Pack  pack_a,
-         Pack  pack_b,
-         Pack  pack_u = 0,
-         Pack  pack_v = 0>
+         class Stridings,
+         Pack pack_a,
+         Pack pack_b,
+         Pack pack_u = 0,
+         Pack pack_v = 0>
 class Testbed {
 public:
     static constexpr int kBatchDim = batch_dim;
@@ -103,9 +107,9 @@ public:
         b_.resize(n * k);
         c_.resize(m * n);
 
-        a_desc_ = MatrixLayout{get_data_type_v<Tc>, order_a, m, k, mk2cs<order_a>(m, k).x};
-        b_desc_ = MatrixLayout{get_data_type_v<Tc>, order_b, k, n, _kn2cs<order_b>(k, n).x};
-        c_desc_ = MatrixLayout{get_data_type_v<Tc>, order_c, m, n, mk2cs<order_c>(m, n).x};
+        a_desc_ = MatrixLayout{get_data_type_v<Tc>, order_a, m, k, mk2cs<order_a>(m, k).x, 0, Stridings::a};
+        b_desc_ = MatrixLayout{get_data_type_v<Tc>, order_b, k, n, _kn2cs<order_b>(k, n).x, 0, Stridings::b};
+        c_desc_ = MatrixLayout{get_data_type_v<Tc>, order_c, m, n, mk2cs<order_c>(m, n).x, 0, Stridings::c};
 
         c_f_.resize(c_.size());
         c_ref_.resize(c_.size());
@@ -155,6 +159,7 @@ public:
             Quantize<Ta>(a_, m, k, order_a, g, a_f_, a_q_, u_, stream);
             u_pack_desc_ = u_desc_ = {DataType::U32, kColMajor, m, ceil_div(k, g), m};
             u_pack_desc_.pack      = pack_u;
+            u_pack_desc_.striding  = a_pack_desc_.striding;
             u_pack_.resize(u_.size());
             CHECK(!Convert(u_.data().get(), u_desc_, u_pack_.data().get(), u_pack_desc_, stream_));
             quant_a_ = {QuantType::kDefault, g};
@@ -174,6 +179,7 @@ public:
             Quantize<Tb>(b_, n, k, _order_b, g, b_f_, b_q_, v_, stream);
             v_pack_desc_ = v_desc_ = {DataType::U32, kRowMajor, ceil_div(k, g), n, n};
             v_pack_desc_.pack      = pack_v;
+            v_pack_desc_.striding  = b_pack_desc_.striding;
             v_pack_.resize(v_.size());
             CHECK(!Convert(v_.data().get(), v_desc_, v_pack_.data().get(), v_pack_desc_, stream_));
             quant_b_ = {QuantType::kDefault, g};
@@ -223,47 +229,120 @@ public:
                 (Tb*)b_pack_.data().get(), b_.data().get(), sizeof(Tb) * b_.size(), cudaMemcpyDefault, stream);
         }
 
-        SetMoE(batch_size_, experts, top_e);
+        cudaGetDeviceProperties(&prop_, 0);
+        ctx_ = std::make_unique<DynamicGemmContext>(prop_, stream_);
+
+        InitMoE(batch_size_, experts, top_e);
     }
 
-    void SetMoE(int batch_size, int experts, int top_e)
+    void InitMoE(int batch_size, int experts, int top_e)
     {
         experts_ = experts;
 
-        if (experts == 1) {
+        if (experts == 0) {
             return;
         }
+
+        CHECK(output_dims_ % experts == 0);
+        moe_output_dim_ = output_dims_ / experts;
+
+        ctx_ = std::make_unique<MoeGemmContext>(experts_, top_e, prop_, stream_);
 
         std::vector<int> r(experts);
         std::iota(r.begin(), r.end(), 0);
         // Sample `top_e` experts per token
         expert_ids_ = {};
+        moe_scales_.resize(top_e * batch_size_);
+        std::mt19937                          gen{};
+        std::uniform_real_distribution<float> dist(1e-3, 1.f);
+        std::vector<float>                    tmp(top_e);
         for (int i = 0; i < batch_size_; ++i) {
-            std::sample(r.begin(), r.end(), std::back_inserter(expert_ids_), top_e, std::mt19937{});
+            std::sample(r.cbegin(), r.cend(), std::back_inserter(expert_ids_), top_e, gen);
+            float inv{};
+            for (auto& x : tmp) {
+                x = dist(gen);
+                inv += x;
+            }
+            inv = 1.f / inv;
+            for (int e = 0; e < top_e; ++e) {
+                moe_scales_[e * batch_size_ + i] = tmp[e] * inv;
+            }
         }
+
+        moe_cnt_.resize(experts);
+        std::fill_n(moe_cnt_.begin(), moe_cnt_.size(), 0);
+        std::vector<std::vector<int>> f2i(experts_);
+        for (int i = 0; i < (int)expert_ids_.size(); ++i) {
+            ++moe_cnt_[expert_ids_[i]];
+            f2i[expert_ids_[i]].push_back(i);  // i ~ [n, e]
+        }
+
+        moe_m_offsets_.resize(experts_ + 1);
+        moe_m_offsets_[0] = 0;
+        for (int i = 0; i < experts_; ++i) {
+            moe_m_offsets_[i + 1] = moe_m_offsets_[i] + moe_cnt_[i];
+        }
+
+        moe_n_offsets_.resize(experts_ + 1);
+        moe_n_offsets_[0] = 0;
+        for (int i = 0; i < experts_; ++i) {
+            moe_n_offsets_[i + 1] = moe_n_offsets_[i] + moe_output_dim_;
+        }
+
+        if (1) {
+            moe_n_ptrs_.resize(experts_);
+            CHECK(order_b == kColMajor);
+            CHECK(pack_b == 0);
+            for (int i = 0; i < experts_; ++i) {
+                moe_n_ptrs_[i] =
+                    StridedPtr{(Tb*)b_pack_.data().get() + (size_t)i * input_dims_ * moe_output_dim_, input_dims_};
+            }
+        }
+
+        std::cout << expert_ids_.size() << "\n";
+
+        for (auto x : moe_cnt_) {
+            std::cout << x << " ";
+        }
+        std::cout << "\n";
+
+        for (auto x : moe_m_offsets_) {
+            std::cout << x << " ";
+        }
+        std::cout << "\n";
+
+        for (auto x : moe_n_offsets_) {
+            std::cout << x << " ";
+        }
+        std::cout << "\n";
+
+        moe_f2n_.resize(expert_ids_.size());
+        moe_f2en_.resize(expert_ids_.size());
+        moe_en2f_.resize(expert_ids_.size());
+        for (int e = 0, i = 0; e < experts_; ++e) {
+            for (const auto& x : f2i[e]) {
+                moe_f2n_[i] = x / top_e;
+                // [n, e] -> [e, n]
+                const int en  = x % top_e * batch_size_ + x / top_e;
+                moe_f2en_[i]  = en;
+                moe_en2f_[en] = i;
+                ++i;
+            }
+        }
+
+        ((MoeGemmContext*)ctx_.get())->set_offsets(moe_m_offsets_.data().get());
 
         CHECK(batch_dim == 0);
+        CHECK(a_desc_.order == kRowMajor);
 
         a_e_.resize(a_f_.size() * top_e);
-        const Tc* src = a_f_.data().get();
-        auto      dst = a_e_.data().get();
-        expert_cnt_.clear();
-        batch_ids_.clear();
-        for (int e = 0; e < experts; ++e) {
-            int count = 0;
-            for (int i = 0; i < (int)expert_ids_.size(); ++i) {
-                const int batch_id = i / top_e;
-                if (i == e) {
-                    cudaMemcpyAsync(
-                        dst, src + batch_id * a_desc_.ld, a_desc_.ld * sizeof(Tc), cudaMemcpyDefault, stream_);
-                    dst += a_desc_.ld;
-                    // batch_ids_.emplace_back(batch_id, i % top_e);
-                    ++count;
-                }
-            }
-            expert_cnt_.push_back(count);
+        c_e_.resize(c_f_.size() * top_e);
+        c_e_ref_.resize(c_e_.size());
+
+        for (int i = 0; i < 10; ++i) {
+            dispatchMoeGather(
+                a_e_.data().get(), a_f_.data().get(), moe_f2n_.data().get(), batch_size_, top_e, input_dims_, stream_);
         }
-        CHECK(batch_ids_.size() == expert_ids_.size());
     }
 
     void Run(void* ctx = {})
@@ -274,38 +353,117 @@ public:
             quant_a_,
             quant_b_,
             kBatchDim,
+            ctx_.get(),
             ctx,
         };
 
         const Workspace workspace{barriers_.data().get(), barriers_.size(), partials_.data().get(), partials_.size()};
 
-        auto status = gemm_.Run(operation,
+        void *       A, *U{}, *C;
+        MatrixLayout a_desc, u_desc{}, c_desc;
+
+        auto [B, b_desc] = Adjust(b_pack_.data().get(), b_pack_desc_, b_tmp_);
+        auto [V, v_desc] = Adjust(v_pack_.data().get(), v_pack_desc_, v_tmp_);
+
+        if (experts_ == 0) {
+            std::tie(A, a_desc) = Adjust(a_pack_.data().get(), a_pack_desc_, a_tmp_);
+            std::tie(U, u_desc) = Adjust(u_pack_.data().get(), u_pack_desc_, u_tmp_);
+            std::tie(C, c_desc) = Adjust(c_.data().get(), c_desc_, c_tmp_);
+            CHECK(0);
+        }
+        else {
+            // std::tie(A, a_desc) = Adjust(a_e_.data().get(), a_desc_, a_tmp_);
+
+            std::tie(A, a_desc) = Adjust(a_f_.data().get(), a_desc_, a_tmp_);
+            a_desc.idxs         = moe_f2n_.data().get();
+
+            // U              = moe_scales_.data().get();
+            // u_desc         = {DataType::F32, kColMajor, (int)moe_scales_.size(), 1, (int)moe_scales_.size()};
+            // u_desc.offsets = moe_m_offsets_.data().get();
+            // u_desc.idxs    = moe_f2en_.data().get();
+
+            std::tie(C, c_desc) = Adjust(c_e_.data().get(), c_desc_, c_tmp_);
+            // a -> [m, k] -> [bs,        input_dim]
+            // b -> [k, n] -> [input_dim, moe_output_dim]
+            // c -> [m, n] -> [bs,        moe_output_dim]
+            c_desc.ld = c_desc.cols = b_desc.cols = moe_output_dim_;
+            c_desc.rows = a_desc.rows = expert_ids_.size();
+            c_desc.offsets = a_desc.offsets = moe_m_offsets_.data().get();
+            b_desc.offsets                  = moe_n_offsets_.data().get();
+
+            CHECK(a_desc.ld == input_dims_ && a_desc.cols == input_dims_);
+            CHECK(b_desc.ld == input_dims_ && b_desc.rows == input_dims_);
+
+            // B         = moe_n_ptrs_.data().get();
+            // b_desc.ld = 0;
+        }
+
+        auto status = gemm_.Run(operation,  //
                                 1.f,
-                                a_pack_.data().get(),
-                                a_pack_desc_,
-                                u_pack_.data().get(),
-                                u_pack_desc_,
-                                b_pack_.data().get(),
-                                b_pack_desc_,
-                                v_pack_.data().get(),
-                                v_pack_desc_,
+                                A,
+                                a_desc,
+                                U,
+                                u_desc,
+                                B,
+                                b_desc,
+                                V,
+                                v_desc,
                                 0.f,
-                                c_.data().get(),
-                                c_desc_,
-                                c_.data().get(),
-                                c_desc_,
+                                C,
+                                c_desc,
+                                C,
+                                c_desc,
                                 workspace,
                                 stream_);
+        // auto status = 0;
 
         if (!ctx && status) {
             std::cerr << "Run failed, code =" << status << "\n";
             std::abort();
         }
+
+        if (experts_) {
+            invokeMoeReduce(c_.data().get(),
+                            c_e_.data().get(),
+                            moe_scales_.data().get(),
+                            moe_en2f_.data().get(),
+                            batch_size_,
+                            expert_ids_.size() / batch_size_,
+                            moe_output_dim_,
+                            stream_);
+        }
+    }
+
+    struct TempData {
+        universal_vector<StridedPtr> ptr;
+        universal_vector<int>        idx;
+        universal_vector<int*>       idx_ptr;
+    };
+
+    // Convert flat to blocked / indexed
+    std::pair<void*, MatrixLayout> Adjust(void* X, MatrixLayout _desc, TempData& tmp)
+    {
+        auto desc = _desc;
+        if (desc.striding == Striding::kBlocked) {
+            tmp.ptr.resize(1);
+            tmp.ptr[0] = {X, desc.ld};
+            X          = tmp.ptr.data().get();
+            desc.ld    = 0;
+        }
+        else if (desc.striding == Striding::kIndexed) {
+            const int strided = desc.order == kRowMajor ? desc.cols : desc.rows;
+            tmp.idx.resize(strided);
+            std::iota(tmp.idx.begin(), tmp.idx.end(), 0);
+            tmp.idx_ptr.resize(1);
+            tmp.idx_ptr[0] = tmp.idx.data().get();
+            desc.idxs      = (int*)tmp.idx_ptr.data().get();
+        }
+        return {X, desc};
     }
 
     void RunCublas()
     {
-        if (experts_ == 1) {
+        if (experts_ == 0) {
             reference_.gemm(a_f_.data().get(),  //
                             a_desc_,
                             b_f_.data().get(),
@@ -314,42 +472,6 @@ public:
                             c_desc_);
         }
         else {
-            const int top_e = expert_ids_.size() / experts_;
-
-            auto a_desc = a_desc_;
-            auto b_desc = b_desc_;
-            auto c_desc = c_desc_;
-
-            auto a = a_e_.data().get();
-            auto b = b_f_.data().get();
-            auto c = c_e_.data().get();
-            auto d = c_f_.data().get();
-
-            b_desc.cols = output_dims_ / top_e;
-            c_desc.cols = b_desc.cols;
-
-            CHECK(a_desc.order == kRowMajor);
-            const auto a_stride = (size_t)a_desc.ld;
-
-            CHECK(b_desc.order == kColMajor);
-            const auto b_stride = (size_t)b_desc.ld;
-
-            CHECK(c_desc.order == kRowMajor);
-            const auto c_stride = (size_t)c_desc.ld;
-
-            int cumul = 0;
-            for (int e = 0; e < experts_; ++e) {
-                a_desc.rows = expert_cnt_[e];
-                reference_.gemm(a, a_desc, b, b_desc, c, c_desc);
-                a += a_stride * a_desc.rows;  // next expert
-                b += b_stride * b_desc.cols;  // next expert
-
-                for (int i = 0; i < a_desc.rows; ++i) {
-                    cudaMemcpyAsync(d + c_desc_.ld, c, sizeof(Tc) * c_desc_.ld, cudaMemcpyDefault, stream_);
-                    c += c_stride;  // next row
-                }
-                cumul += expert_cnt_[e];
-            }
         }
     }
 
@@ -361,30 +483,70 @@ public:
 
     void CompareC()
     {
-        for (int i = 0; i < 10; ++i) {
-            reference_.gemm(a_f_.data().get(),  //
-                            a_desc_,
-                            b_f_.data().get(),
-                            b_desc_,
-                            c_ref_.data().get(),
-                            c_desc_);
+        if (experts_ == 0) {
+            CHECK(0);
+
+            for (int i = 0; i < 25; ++i) {
+                reference_.gemm(a_f_.data().get(),  //
+                                a_desc_,
+                                b_f_.data().get(),
+                                b_desc_,
+                                c_ref_.data().get(),
+                                c_desc_);
+            }
+
+            cudaDeviceSynchronize();
+
+            int dims = m_, bsz = n_;
+            if (order_c == kRowMajor) {
+                std::swap(dims, bsz);
+            }
+            Compare(c_.data().get(), c_ref_.data().get(), dims, dims, bsz, 0);
         }
+        else {  // [e_i, k] -> [k, n / E] -> [e_i, n / E]
 
-        // c_f_.resize(m_ * n_);
-        // computeRefCublas(c_f_.data().get(), a_.data().get(), b_f_.data().get(), m_, n_, k_, stream_);
-        // RunCublas();
+            // const int top_e = expert_ids_.size() / experts_;
 
-        cudaDeviceSynchronize();
+            auto a_desc = a_desc_;
+            auto b_desc = b_desc_;
+            auto c_desc = c_desc_;
 
-        // Compare(c_f_.data().get(), c_ref_.data().get(), n_, n_, m_, 0);
+            c_desc.ld = c_desc.cols = b_desc.cols = moe_output_dim_;
 
-        // Compare(c_.data().get(), c_f_.data().get(), n_, n_, m_, 0);
+            CHECK(a_desc.order == kRowMajor);  // k-major, T
+            CHECK(b_desc.order == kColMajor);  // k-major, N
+            CHECK(c_desc.order == kRowMajor);  // n-major, T
 
-        int dims = m_, bsz = n_;
-        if (order_c == kRowMajor) {
-            std::swap(dims, bsz);
+            auto a = a_e_.data().get();
+            auto b = b_f_.data().get();
+            auto c = c_e_ref_.data().get();
+
+            for (int e = 0; e < experts_; ++e) {
+                // Set input size for current expert
+                c_desc.rows = a_desc.rows = moe_cnt_[e];
+
+                reference_.gemm(a, a_desc, b, b_desc, c, c_desc);
+
+                // Move to next expert
+                a += moe_cnt_[e] * input_dims_;
+                b += moe_output_dim_ * input_dims_;
+                c += moe_cnt_[e] * moe_output_dim_;
+            }
+
+            invokeMoeReduce(c_ref_.data().get(),
+                            c_e_ref_.data().get(),
+                            moe_scales_.data().get(),
+                            moe_en2f_.data().get(),
+                            batch_size_,
+                            expert_ids_.size() / batch_size_,
+                            moe_output_dim_,
+                            stream_);
+
+            cudaDeviceSynchronize();
+
+            Compare(c_e_.data().get(), c_e_ref_.data().get(), moe_output_dim_, moe_output_dim_, expert_ids_.size(), 0);
+            Compare(c_.data().get(), c_ref_.data().get(), moe_output_dim_, moe_output_dim_, batch_size_, 0);
         }
-        Compare(c_.data().get(), c_ref_.data().get(), dims, dims, bsz, 0);
     }
 
     void Check()
@@ -450,14 +612,24 @@ private:
     int batch_size_{};
     int input_dims_{};
     int output_dims_{};
-    int experts_{1};
+    int experts_{0};
+    int moe_output_dim_{};
 
+    /// MoE buffers
     universal_vector<Tc> a_e_;
     universal_vector<Tc> c_e_;
+    universal_vector<Tc> c_e_ref_;
 
-    std::vector<int> expert_ids_;  // f(batch_idx * top_e) -> expert_id
-    std::vector<int> expert_cnt_;
-    std::vector<int> batch_ids_;  // f(reordered_idx) -> (batch_idx, local_eid)
+    /// MoE utils
+    std::vector<int>             expert_ids_;  // f(batch_idx * top_e) -> expert_id
+    std::vector<int>             moe_cnt_;
+    universal_vector<int>        moe_f2n_;
+    universal_vector<int>        moe_f2en_;
+    universal_vector<int>        moe_en2f_;
+    universal_vector<int>        moe_m_offsets_;
+    universal_vector<int>        moe_n_offsets_;
+    universal_vector<StridedPtr> moe_n_ptrs_;
+    universal_vector<float>      moe_scales_;
 
     universal_vector<Tc> a_;      // A in fp
     universal_vector<Tc> b_;      // B in fp
@@ -503,6 +675,16 @@ private:
     universal_vector<char> barriers_;
     universal_vector<char> partials_;
 
+    TempData a_tmp_;
+    TempData b_tmp_;
+    TempData c_tmp_;
+    TempData u_tmp_;
+    TempData v_tmp_;
+
+    // Tape tape_{};
+    cudaDeviceProp           prop_;
+    std::unique_ptr<Context> ctx_;
+
     cudaStream_t stream_;
 
     RNG rng_;
@@ -544,35 +726,75 @@ T& gTestbed()
     return inst;
 }
 
+struct FFF {
+    static constexpr Striding a = Striding::kFlat;
+    static constexpr Striding b = Striding::kFlat;
+    static constexpr Striding c = Striding::kFlat;
+};
+
+struct RBR {
+    static constexpr Striding a = Striding::kRagged;
+    static constexpr Striding b = Striding::kBlocked;
+    static constexpr Striding c = Striding::kRagged;
+};
+
+struct RRR {
+    static constexpr Striding a = Striding::kRagged;
+    static constexpr Striding b = Striding::kRagged;
+    static constexpr Striding c = Striding::kRagged;
+};
+
+struct TMP {
+    static constexpr Striding a = Striding::kFlat;
+    static constexpr Striding b = Striding::kFlat;
+    static constexpr Striding c = Striding::kFlat;
+};
+
 inline decltype(auto) get_test()
 {
     if constexpr (0) {
         // native
-        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, 0, 0, 0>>();
+        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, FFF, 0, 0, 0, 0>>();
     }
     else if constexpr (0) {
         // sm80 / sm75
         constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 2;
         constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
-        return gTestbed<gemm::Testbed<uint4_t, half, half, 1, kColMajor, kColMajor, kColMajor, kPackA, 0, kPackU, 0>>();
+        return gTestbed<
+            gemm::Testbed<uint4_t, half, half, 1, kColMajor, kColMajor, kColMajor, FFF, kPackA, 0, kPackU, 0>>();
     }
-    else if constexpr (1) {
+    else if constexpr (0) {
         // sm80 / sm75
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
         constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
-        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kRowMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<
+            gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kRowMajor, kRowMajor, FFF, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // sm70
         constexpr Pack kPackB = HMMA_884 | OPERAND_B | 1;
         constexpr Pack kPackV = HMMA_884 | OPERAND_V | 1;
-        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<
+            gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, FFF, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // simt
         constexpr Pack kPackB = HMMA_SIMT | OPERAND_B | 1;
         constexpr Pack kPackV = HMMA_SIMT | OPERAND_V | 1;
-        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<
+            gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, FFF, 0, kPackB, 0, kPackV>>();
+    }
+    else if constexpr (1) {
+        // constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
+        constexpr Pack kPackB = 0;
+        constexpr Pack kPackV = 0;
+        return gTestbed<
+            gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, TMP, 0, kPackB, 0, kPackV>>();
+    }
+    else if constexpr (0) {
+        // constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;
+        constexpr Pack kPackA = 0;
+        return gTestbed<gemm::Testbed<half, half, half, 1, kColMajor, kColMajor, kColMajor, FFF, kPackA, 0, 0, 0>>();
     }
 }
 

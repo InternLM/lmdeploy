@@ -22,6 +22,7 @@
 #include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
@@ -129,17 +130,17 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
         tensor_para_size_,
         weight_type_,
         group_size,
-        is_fuse_silu_act(),
+        weight_type_ == WeightType::kINT4 && is_fuse_silu_act(),
     };
 
-    // FT_CHECK(moe_param.expert_num > 0);
     moe_weights = MoeFfnWeight<T>{hidden_units_,
-                                  (size_t)moe_param.inter_size,
+                                  moe_param.inter_size,
+                                  moe_param.expert_num,
+                                  moe_param.method,
                                   tensor_para_size_,
                                   weight_type,
                                   group_size,
-                                  is_fuse_silu_act(),
-                                  moe_param.expert_num};
+                                  is_fuse_silu_act()};
 
     mallocWeights();
 }
@@ -495,7 +496,6 @@ void interleave(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight
         interleave_output_dims(c.zeros, a.zeros, b.zeros, a.output_dims, a.input_dims / a.group_size, 0);
     }
     else {
-        FT_CHECK_WITH_INFO(0, "not implemented");
         interleave_output_dims((T*)c.kernel, (const T*)a.kernel, (const T*)b.kernel, a.output_dims, a.input_dims, 0);
     }
 
@@ -529,6 +529,16 @@ void chunk(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& 
 
     // Check at function level
     sync_check_cuda_error();
+}
+
+template<typename T>
+static void transpose(LlamaDenseWeight<T>& x)
+{
+    uint16_t* tmp{};
+    deviceMalloc(&tmp, x.input_dims * x.output_dims, false);
+    invokeTransposeAxis01(tmp, (uint16_t*)x.kernel, x.input_dims, x.output_dims, 1, 0);
+    cudaFree(x.kernel);
+    x.kernel = tmp;
 }
 
 template<typename T>
@@ -568,9 +578,43 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
         process_ffn(ffn_weights);
     }
     else {
-        for (auto& expert : moe_weights.experts) {
-            process_ffn(expert);
+        std::vector<std::pair<void*, int>> fused_ptrs;
+        std::vector<std::pair<void*, int>> output_ptrs;
+
+        for (auto& e : moe_weights.experts) {
+            process_ffn(e);
+
+            // MoE kernel is using K-major weights
+            if (moe_weights.transpose) {
+                transpose(e.fused_gating_intermediate);
+                transpose(e.output);
+            }
+
+            // K-major
+            fused_ptrs.push_back({e.fused_gating_intermediate.kernel, e.fused_gating_intermediate.input_dims});
+            output_ptrs.push_back({e.output.kernel, e.output.input_dims});
+            // std::cout << e.fused_gating_intermediate.input_dims << "\n";
         }
+
+        // Note: This assumes all experts has the same shape
+        moe_weights.block = moe_weights.experts[0];
+
+        // TODO: free these ptrs
+        moe_weights.block.fused_gating_intermediate.kernel = gemm::make_blocked_ptrs(fused_ptrs, nullptr);
+        moe_weights.block.output.kernel                    = gemm::make_blocked_ptrs(output_ptrs, nullptr);
+
+        auto set_desc = [&](LlamaDenseWeight<T>& w) {
+            w.k_desc = {
+                gemm::get_data_type_v<T>,
+                gemm::kColMajor,
+                (int)w.input_dims,   // k
+                (int)w.output_dims,  // n
+            };
+            w.k_desc.striding = gemm::Striding::kFlat;
+        };
+
+        set_desc(moe_weights.block.fused_gating_intermediate);
+        set_desc(moe_weights.block.output);
     }
 }
 

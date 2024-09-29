@@ -33,6 +33,8 @@ private:
 
     void u4g128_f16_f16_nnn_sm80_s16816();
 
+    void f16_f16_f16_grouped_sm80_s16816();
+
 private:
     std::shared_ptr<cudaDeviceProp>      device_prop_;
     int                                  arch_;

@@ -1,9 +1,12 @@
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/tuner/cache_utils.h"
+#include "src/turbomind/kernels/gemm/types.h"
 #include <algorithm>
 #include <iomanip>
 #include <numeric>
+#include <string>
+#include <thrust/host_vector.h>
 #include <thrust/universal_vector.h>
 
 using namespace turbomind;
@@ -202,7 +205,18 @@ void mask2eids(const universal_vector<int>& masks, universal_vector<int>& eids, 
     }
 }
 
-bool test_moe_gate(int tokens, int expert_num, int experts_per_token, universal_vector<float> logits)
+struct Tiling {
+    int  output_dims;
+    int  input_dims;
+    int3 cta_tile;
+};
+
+bool test_moe_gate(int                     tokens,  //
+                   int                     expert_num,
+                   int                     experts_per_token,
+                   gemm::Tape&             tape,
+                   const Tiling&           tiling,
+                   universal_vector<float> logits = {})
 {
     if (logits.empty()) {
         logits.resize(tokens * expert_num);
@@ -211,6 +225,7 @@ bool test_moe_gate(int tokens, int expert_num, int experts_per_token, universal_
     assert(logits.size() == tokens * expert_num);
 
     const int tokens_padded = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
+    // const int max_coords    = get_max_coords(tokens, expert_num, experts_per_token, tiling);
 
     universal_vector<int>   offsets(expert_num + 1);
     universal_vector<int>   accum(expert_num * kMoeGateMaxTiles);
@@ -219,6 +234,8 @@ bool test_moe_gate(int tokens, int expert_num, int experts_per_token, universal_
     universal_vector<int>   f2n(experts_per_token * tokens);
     universal_vector<int>   en2f(experts_per_token * tokens);
     universal_vector<float> scales(experts_per_token * tokens);
+    // universal_vector<int2>  coords(max_coords);
+    // thrust::fill(coords.begin(), coords.end(), int2{-1, 0});
 
     auto offsets_ref = offsets;
     auto eids_ref    = eids;
@@ -228,19 +245,36 @@ bool test_moe_gate(int tokens, int expert_num, int experts_per_token, universal_
 
     moe_gate_ref(tokens, expert_num, experts_per_token, logits, offsets_ref, eids_ref, f2n_ref, en2f_ref, scales_ref);
 
-    cudaMemset(accum.data().get(), 0, sizeof(int) * accum.size());
-    invokeMoeGate_V2(f2n.data().get(),
-                     en2f.data().get(),
-                     offsets.data().get(),
-                     scales.data().get(),
-                     masks.data().get(),
-                     accum.data().get(),
-                     logits.data().get(),
-                     tokens,
-                     tokens_padded,
-                     expert_num,
-                     experts_per_token,
-                     0);
+    for (int i = 0; i < 10; ++i) {
+        cudaMemset(accum.data().get(), 0, sizeof(int) * accum.size());
+        invokeMoeGate_V2(f2n.data().get(),
+                         en2f.data().get(),
+                         offsets.data().get(),
+                         scales.data().get(),
+                         masks.data().get(),
+                         accum.data().get(),
+                         logits.data().get(),
+                         tokens,
+                         tokens_padded,
+                         expert_num,
+                         experts_per_token,
+                         0);
+    }
+
+    // invokeMoeTiling(coords.data().get(), offsets.data().get(), expert_num, coords.size(), &tiling, 1, 0);
+
+    // gemm::scheduleGemmMoe(tape,
+    //                       offsets.data().get(),
+    //                       tokens,
+    //                       experts_per_token,
+    //                       expert_num,
+    //                       tiling.output_dims,
+    //                       tiling.input_dims,
+    //                       tiling.cta_tile,
+    //                       tiling.cta_tile.z,
+    //                       1,
+    //                       0,
+    //                       0);
 
     if (auto err = cudaDeviceSynchronize(); err != cudaSuccess) {
         std::cerr << cudaGetErrorString(err) << std::endl;
@@ -271,7 +305,7 @@ bool test_moe_gate(int tokens, int expert_num, int experts_per_token, universal_
         success = false;
     }
 
-    if (!success && false) {
+    if (!success || false) {
         print_vecs(offsets_ref.data().get(), 1, expert_num + 1, "offsets_ref");
         print_vecs(offsets.data().get(), 1, expert_num + 1, "offsets");
 
@@ -286,6 +320,33 @@ bool test_moe_gate(int tokens, int expert_num, int experts_per_token, universal_
 
         print_vecs(scales_ref.data().get(), experts_per_token, tokens, "scales_ref", 12);
         print_vecs(scales.data().get(), experts_per_token, tokens, "scales", 12);
+
+        print_vecs(accum.data().get(), expert_num, 1, "accum");
+
+        // print_vecs(coords.data().get(), 1, max_coords, "coords");
+
+        thrust::host_vector<int4> tile_offsets(tape.max_ctas);
+        std::cout << tape.max_ctas << std::endl;
+        cudaMemcpy(tile_offsets.data(), tape.tile_offsets, sizeof(int4) * tile_offsets.size(), cudaMemcpyDefault);
+        cudaDeviceSynchronize();
+
+        std::cout << "coords:\n";
+        int last = -1;
+        for (int i = 0; i < tape.max_ctas; ++i) {
+            auto& c = tile_offsets[i];
+            if (last >= 0 && c.w != last) {
+                std::cout << "\n";
+            }
+            if (c.w == -1) {
+                std::cout << i << "\n";
+                break;
+            }
+            last = c.w;
+            std::stringstream ss;
+            ss << c.x << "," << c.y;
+            std::cout << std::setw(6) << ss.str();
+        }
+        std::cout << "\n";
     }
 
     return success;
@@ -293,12 +354,15 @@ bool test_moe_gate(int tokens, int expert_num, int experts_per_token, universal_
 
 int main()
 {
-    // test_moe_gate(4, 8, 2, {});
-    // return 0;
+    gemm::Tape       tape{};
+    constexpr Tiling tiling{14336, 128, {128, 128, 32}};
+
+    test_moe_gate(8192, 8, 2, tape, tiling);
+    return 0;
 
     for (int i = 1; i < 16384; ++i) {
         // std::cerr << i << std::endl;
-        auto success = test_moe_gate(i, 8, 2, {});
+        auto success = test_moe_gate(i, 8, 2, tape, tiling);
         if (!success) {
             std::cerr << i << std::endl;
             // std::abort();

@@ -9,17 +9,19 @@ add_library(gemm2
         convert_v2.cu
         cast.cu
         unpack.cu
+        context.cu
         tuner/cache_utils.cu
         tuner/measurer.cu
         tuner/sampler.cu
         tuner/stopping_criterion.cc
         tuner/params.cc
-        kernel/f16_u4g128_f16_tnt_sm90_s16816.cu
-        kernel/f16_u4g128_f16_tnt_sm80_s16816.cu
-        kernel/f16_u4g128_f16_tnt_sm75_s16816.cu
-        kernel/f16_u4g128_f16_tnt_sm70_s884.cu
-        kernel/f16_u4g128_f16_tnt_sm75_simt.cu
-        kernel/u4g128_f16_f16_nnn_sm80_s16816.cu
+        # kernel/f16_u4g128_f16_tnt_sm90_s16816.cu
+        # kernel/f16_u4g128_f16_tnt_sm80_s16816.cu
+        # kernel/f16_u4g128_f16_tnt_sm75_s16816.cu
+        # kernel/f16_u4g128_f16_tnt_sm70_s884.cu
+        # kernel/f16_u4g128_f16_tnt_sm75_simt.cu
+        # kernel/u4g128_f16_f16_nnn_sm80_s16816.cu
+        kernel/f16_f16_f16_grouped_sm80_s16816.cu
         moe_utils_v2.cu
 )
 

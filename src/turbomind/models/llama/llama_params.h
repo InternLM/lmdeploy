@@ -26,6 +26,10 @@ struct ModelParam {
 };
 
 struct MoeParam {
+    enum Method {
+        kNaive,
+        kFused
+    } method;
     int expert_num;
     int experts_per_token;
     int inter_size;

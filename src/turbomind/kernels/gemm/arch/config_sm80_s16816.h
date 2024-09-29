@@ -25,7 +25,12 @@ template<class Arch,
          class V,
          Order order_c,
          class Tc,
-         class CtaMap_ = CtaMap>
+         Striding StridingA,
+         Striding StridingB,
+         Striding StridingC,
+         class scale_SC,
+         class mode_SC,
+         class CtaMap_>
 struct Sm80_s16816 {
 
     static_assert(A::SmemCopyAtom::K == B::SmemCopyAtom::K);
@@ -59,12 +64,12 @@ struct Sm80_s16816 {
 
         using Mainloop = MainloopSm80_v2<MMA,
                                          A,
-                                         IteratorSm80<PolicyA>,
+                                         IteratorSm80<StridingA, PolicyA>,
                                          TransformA,
                                          U,
                                          GroupSizeU,
                                          B,
-                                         IteratorSm80<PolicyB>,
+                                         IteratorSm80<StridingB, PolicyB>,
                                          TransformB,
                                          V,
                                          GroupSizeV,
@@ -82,6 +87,9 @@ struct Sm80_s16816 {
                                          MMA::kThreadCount,
                                          Rearrange<MMA>,
                                          Operand_C<float, order_c>,
+                                         StridingC,
+                                         scale_SC,
+                                         mode_SC,
                                          SplitK>;
 
         using Kernel = GemmUniversal<Arch, Mainloop, Epilogue, CtaMap_>;

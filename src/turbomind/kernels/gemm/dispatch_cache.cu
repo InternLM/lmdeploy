@@ -34,6 +34,9 @@ static inline decltype(auto) as_tuple(const KernelDesc& d)
                     d.order_a,
                     d.order_b,
                     d.order_c,
+                    d.striding_a,
+                    d.striding_b,
+                    d.striding_c,
                     d.pack_a,
                     d.pack_b,
                     d.pack_u,
@@ -47,7 +50,8 @@ static inline decltype(auto) as_tuple(const KernelDesc& d)
                     d.align,
                     d.c_tile,
                     d.stages,
-                    d.split_k);
+                    d.split_k,
+                    d.sched);
 }
 
 static inline bool operator==(const QuantDesc& a, const QuantDesc& b)
@@ -92,6 +96,9 @@ void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc,
                     g.order_a,
                     g.order_b,
                     g.order_c,
+                    g.striding_a,
+                    g.striding_b,
+                    g.striding_c,
                     g.pack_a,
                     g.pack_b,
                     g.pack_u,
@@ -101,15 +108,23 @@ void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc,
                     g.quant_b.type,
                     g.quant_b.group_size,
                     g.epilogue,
+                    g.batch_dim,
+                    g.sched,
+                    g.align_m,
+                    g.align_n,
+                    g.align_k,
                     g.m,
                     g.n,
                     g.k,
-                    g.batch_dim);
+                    g.num);
         // Kernel desc
         auto& k = spec.kernel->desc();
         export_impl(os,
                     k.arch,
                     k.op_class,
+                    k.striding_a,
+                    k.striding_b,
+                    k.striding_c,
                     k.cta_tile.x,
                     k.cta_tile.y,
                     k.cta_tile.z,
@@ -148,6 +163,9 @@ void ImportDispatchCache(std::istream&                                 is,
                     g.order_a,
                     g.order_b,
                     g.order_c,
+                    g.striding_a,
+                    g.striding_b,
+                    g.striding_c,
                     g.pack_a,
                     g.pack_b,
                     g.pack_u,
@@ -157,10 +175,15 @@ void ImportDispatchCache(std::istream&                                 is,
                     g.quant_b.type,
                     g.quant_b.group_size,
                     g.epilogue,
+                    g.batch_dim,
+                    g.sched,
+                    g.align_m,
+                    g.align_n,
+                    g.align_k,
                     g.m,
                     g.n,
                     g.k,
-                    g.batch_dim);
+                    g.num);
         KernelDesc k{};
         k.type_a  = g.type_a;
         k.type_b  = g.type_b;
@@ -174,9 +197,13 @@ void ImportDispatchCache(std::istream&                                 is,
         k.order_c = g.order_c;
         k.quant_a = g.quant_a;
         k.quant_b = g.quant_b;
+        k.sched   = g.sched;
         import_impl(ss,
                     k.arch,
                     k.op_class,
+                    k.striding_a,
+                    k.striding_b,
+                    k.striding_c,
                     k.cta_tile.x,
                     k.cta_tile.y,
                     k.cta_tile.z,
@@ -220,6 +247,9 @@ inline decltype(auto) as_tuple(const GemmDesc& d)
                     d.order_a,
                     d.order_b,
                     d.order_c,
+                    d.striding_a,
+                    d.striding_b,
+                    d.striding_c,
                     d.pack_a,
                     d.pack_b,
                     d.pack_u,
@@ -228,11 +258,16 @@ inline decltype(auto) as_tuple(const GemmDesc& d)
                     d.quant_a.group_size,
                     d.quant_b.type,
                     d.quant_b.group_size,
+                    d.batch_dim,
+                    d.sched,
+                    d.align_m,
+                    d.align_n,
+                    d.align_k,
                     d.m,
                     d.n,
                     d.k,
-                    d.batch_dim);
-    // d.epilogue
+                    d.num);
+    // Note: `d.epilogue` is not used yet
 }
 
 }  // namespace

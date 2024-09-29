@@ -238,4 +238,18 @@ std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(int sm, bool f
     return {};
 }
 
+void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream)
+{
+    std::vector<StridedPtr> tmp;
+    for (const auto& [p, s] : ptrs) {
+        tmp.push_back({p, s});
+    }
+    StridedPtr* ptr{};
+    cudaMallocAsync(&ptr, sizeof(StridedPtr) * ptrs.size(), stream);
+    cudaMemcpyAsync(ptr, tmp.data(), sizeof(StridedPtr) * ptrs.size(), cudaMemcpyDefault, stream);
+    // Sync before tmp can be destructed
+    cudaStreamSynchronize(stream);
+    return ptr;
+}
+
 }  // namespace turbomind::gemm

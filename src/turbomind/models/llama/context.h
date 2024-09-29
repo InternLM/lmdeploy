@@ -40,6 +40,11 @@ struct Context {
         cublasLtCreate(&cublasLt_handle);
         cublasSetStream(cublas_handle, stream);
 
+        if (0) {
+            cublasSetWorkspace(cublas_handle, nullptr, 0);
+            cublasSetMathMode(cublas_handle, CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION);
+        }
+
         cublas_algo_map      = std::make_unique<cublasAlgoMap>("gemm_config.in");
         cublas_wrapper_mutex = std::make_unique<std::mutex>();
         cublas_wrapper       = std::make_unique<cublasMMWrapper>(

@@ -24,6 +24,7 @@
 #include "src/turbomind/models/llama/LlamaInstanceComm.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/allocator.h"
@@ -257,6 +258,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_param_.num_tokens_per_iter = reader.GetInteger("llama", "num_tokens_per_iter", 0);
     engine_param_.max_prefill_iters   = reader.GetInteger("llama", "max_prefill_iters", 1);
 
+    moe_param_.method            = turbomind::MoeParam::kFused;
     moe_param_.expert_num        = reader.GetInteger("llama", "expert_num", 0);
     moe_param_.experts_per_token = reader.GetInteger("llama", "experts_per_token", 0);
     moe_param_.inter_size        = reader.GetInteger("llama", "expert_inter_size", 0);

@@ -3,12 +3,18 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/kernels/core/smem.h"
+#include "src/turbomind/kernels/gemm/cp_async.h"
+#include "src/turbomind/kernels/gemm/cta_map.h"
+#include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
+#include "src/turbomind/kernels/gemm/types.h"
 #include <cstdio>
 #include <limits>
 
 #include <cub/block/block_reduce.cuh>
 #include <cub/block/block_scan.cuh>
+#include <cuda_pipeline_primitives.h>
 
 namespace turbomind {
 
@@ -352,7 +358,7 @@ __global__ void MoeReduceKernel(T*           dst,     // [  n, d]
     PRAGMA_UNROLL
     for (int e = 0; e < exp_k; ++e) {
         src_ptr[e] = (const Vec*)src + dims * en2f[e * tokens + ti];
-        scale[e]   = scales[e * tokens + ti];
+        scale[e]   = scales ? scales[e * tokens + ti] : 1.f;
     }
 
     for (int i = threadIdx.x; i < dims; i += block_dim) {

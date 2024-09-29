@@ -140,7 +140,7 @@ struct LlamaFfnWeight {
         fused_gating_intermediate.type        = weight_type;
         fused_gating_intermediate.group_size  = group_size;
 
-        is_fused_silu = weight_type == WeightType::kINT4 && fuse_silu_act;
+        is_fused_silu = fuse_silu_act;
 
         output.input_dims  = inter_size / tp;
         output.output_dims = hidden_dim;
@@ -153,7 +153,7 @@ struct LlamaFfnWeight {
     LlamaDenseWeight<T> output;
     LlamaDenseWeight<T> fused_gating_intermediate;
 
-    bool is_fused_silu;
+    bool is_fused_silu{};
 };
 
 template<class T>
@@ -162,12 +162,13 @@ struct MoeFfnWeight {
     MoeFfnWeight() = default;
 
     MoeFfnWeight(size_t     hidden_dim,
-                 size_t     inter_size,
+                 int        inter_size,
+                 int        expert_num,
+                 int        method,
                  size_t     tp,
                  WeightType weight_type,
                  int        group_size,
-                 bool       fuse_silu_act,
-                 int        expert_num)
+                 bool       fuse_silu_act)
     {
         if (expert_num == 0) {
             return;
@@ -180,15 +181,24 @@ struct MoeFfnWeight {
 
         experts.resize(expert_num);
 
+        transpose     = method;
+        fuse_silu_act = fuse_silu_act && method;
+
         for (auto& e : experts) {
             /// FIXME: this is unsafe
             memset(&e, 0, sizeof(e));
+
+            // inter size is divided by tp in `FfnWeight`
             e = LlamaFfnWeight<T>{hidden_dim, inter_size, tp, weight_type, group_size, fuse_silu_act};
         }
     }
 
     LlamaDenseWeight<T>            gate;
     std::vector<LlamaFfnWeight<T>> experts;
+
+    LlamaFfnWeight<T> block;
+
+    bool transpose{};
 };
 
 }  // namespace turbomind
