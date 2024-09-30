@@ -57,9 +57,11 @@ void Run(int batch_size, int output_dims, int input_dims, int expert_num = 0, in
         test.Check();
     }
     else {
-        for (int i = 0; i < 10; ++i) {
-            // CacheFlushing::flush();
+        for (int i = 0; i < 100; ++i) {
+            CacheFlushing::flush();
             test.Run();
+            CacheFlushing::flush();
+            test.RunCublas();
         }
         test.CompareC();
     }
@@ -73,7 +75,8 @@ int main(int argc, char* argv[])
     // Run(16384, 16384, 16384);
     // Run(18, 14336, 4096, 8, 2);
 
-    Run(16, 4096, 7168, 8, 2);
+    // Run(16, 4096, 7168, 8, 2);
+    Run(64, 14336, 4096, 8, 2);
 
     // Run(256, 14336 * 2, 4096);
     // Run(16, 4096, 14336);

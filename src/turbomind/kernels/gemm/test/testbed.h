@@ -89,7 +89,7 @@ public:
         Initialize(m, n, k, g, 1, 1, stream);
     }
 
-    void Initialize(int m, int n, int k, int g, int experts, int top_e, cudaStream_t stream)
+    void Initialize(int m, int n, int k, int g, int experts, int top_e, cudaStream_t stream) noexcept
     {
         rng_.set_stream(stream);
         reference_.set_stream(stream);
@@ -237,7 +237,8 @@ public:
 
     void InitMoE(int batch_size, int experts, int top_e)
     {
-        experts_ = experts;
+        experts_     = experts;
+        exp_per_tok_ = top_e;
 
         if (experts == 0) {
             return;
@@ -343,6 +344,18 @@ public:
             dispatchMoeGather(
                 a_e_.data().get(), a_f_.data().get(), moe_f2n_.data().get(), batch_size_, top_e, input_dims_, stream_);
         }
+
+        c_desc_.rows = a_desc_.rows = expert_ids_.size();
+        c_desc_.ld = c_desc_.cols = b_desc_.cols = moe_output_dim_;
+
+        c_desc_.offsets = moe_m_offsets_.data().get();
+
+        a_pack_desc_         = a_desc_;
+        a_pack_desc_.offsets = moe_m_offsets_.data().get();
+        a_pack_desc_.idxs    = moe_f2n_.data().get();
+
+        b_pack_desc_         = b_desc_;
+        b_pack_desc_.offsets = moe_n_offsets_.data().get();
     }
 
     void Run(void* ctx = {})
@@ -359,60 +372,25 @@ public:
 
         const Workspace workspace{barriers_.data().get(), barriers_.size(), partials_.data().get(), partials_.size()};
 
-        void *       A, *U{}, *C;
-        MatrixLayout a_desc, u_desc{}, c_desc;
-
-        auto [B, b_desc] = Adjust(b_pack_.data().get(), b_pack_desc_, b_tmp_);
-        auto [V, v_desc] = Adjust(v_pack_.data().get(), v_pack_desc_, v_tmp_);
-
-        if (experts_ == 0) {
-            std::tie(A, a_desc) = Adjust(a_pack_.data().get(), a_pack_desc_, a_tmp_);
-            std::tie(U, u_desc) = Adjust(u_pack_.data().get(), u_pack_desc_, u_tmp_);
-            std::tie(C, c_desc) = Adjust(c_.data().get(), c_desc_, c_tmp_);
-            CHECK(0);
-        }
-        else {
-            // std::tie(A, a_desc) = Adjust(a_e_.data().get(), a_desc_, a_tmp_);
-
-            std::tie(A, a_desc) = Adjust(a_f_.data().get(), a_desc_, a_tmp_);
-            a_desc.idxs         = moe_f2n_.data().get();
-
-            // U              = moe_scales_.data().get();
-            // u_desc         = {DataType::F32, kColMajor, (int)moe_scales_.size(), 1, (int)moe_scales_.size()};
-            // u_desc.offsets = moe_m_offsets_.data().get();
-            // u_desc.idxs    = moe_f2en_.data().get();
-
-            std::tie(C, c_desc) = Adjust(c_e_.data().get(), c_desc_, c_tmp_);
-            // a -> [m, k] -> [bs,        input_dim]
-            // b -> [k, n] -> [input_dim, moe_output_dim]
-            // c -> [m, n] -> [bs,        moe_output_dim]
-            c_desc.ld = c_desc.cols = b_desc.cols = moe_output_dim_;
-            c_desc.rows = a_desc.rows = expert_ids_.size();
-            c_desc.offsets = a_desc.offsets = moe_m_offsets_.data().get();
-            b_desc.offsets                  = moe_n_offsets_.data().get();
-
-            CHECK(a_desc.ld == input_dims_ && a_desc.cols == input_dims_);
-            CHECK(b_desc.ld == input_dims_ && b_desc.rows == input_dims_);
-
-            // B         = moe_n_ptrs_.data().get();
-            // b_desc.ld = 0;
-        }
+        void* A = a_pack_.data().get();
+        void* B = b_pack_.data().get();
+        void* C = c_e_.data().get();
 
         auto status = gemm_.Run(operation,  //
                                 1.f,
                                 A,
-                                a_desc,
-                                U,
-                                u_desc,
+                                a_pack_desc_,
+                                u_pack_.data().get(),
+                                u_pack_desc_,
                                 B,
-                                b_desc,
-                                V,
-                                v_desc,
+                                b_pack_desc_,
+                                u_pack_.data().get(),
+                                v_pack_desc_,
                                 0.f,
                                 C,
-                                c_desc,
+                                c_desc_,
                                 C,
-                                c_desc,
+                                c_desc_,
                                 workspace,
                                 stream_);
         // auto status = 0;
@@ -421,97 +399,29 @@ public:
             std::cerr << "Run failed, code =" << status << "\n";
             std::abort();
         }
-
-        if (experts_) {
-            invokeMoeReduce(c_.data().get(),
-                            c_e_.data().get(),
-                            moe_scales_.data().get(),
-                            moe_en2f_.data().get(),
-                            batch_size_,
-                            expert_ids_.size() / batch_size_,
-                            moe_output_dim_,
-                            stream_);
-        }
-    }
-
-    struct TempData {
-        universal_vector<StridedPtr> ptr;
-        universal_vector<int>        idx;
-        universal_vector<int*>       idx_ptr;
-    };
-
-    // Convert flat to blocked / indexed
-    std::pair<void*, MatrixLayout> Adjust(void* X, MatrixLayout _desc, TempData& tmp)
-    {
-        auto desc = _desc;
-        if (desc.striding == Striding::kBlocked) {
-            tmp.ptr.resize(1);
-            tmp.ptr[0] = {X, desc.ld};
-            X          = tmp.ptr.data().get();
-            desc.ld    = 0;
-        }
-        else if (desc.striding == Striding::kIndexed) {
-            const int strided = desc.order == kRowMajor ? desc.cols : desc.rows;
-            tmp.idx.resize(strided);
-            std::iota(tmp.idx.begin(), tmp.idx.end(), 0);
-            tmp.idx_ptr.resize(1);
-            tmp.idx_ptr[0] = tmp.idx.data().get();
-            desc.idxs      = (int*)tmp.idx_ptr.data().get();
-        }
-        return {X, desc};
     }
 
     void RunCublas()
     {
         if (experts_ == 0) {
+            // reference_.gemm(a_f_.data().get(),  //
+            //                 a_desc_,
+            //                 b_f_.data().get(),
+            //                 b_desc_,
+            //                 c_f_.data().get(),
+            //                 c_desc_);
+
             reference_.gemm(a_f_.data().get(),  //
                             a_desc_,
                             b_f_.data().get(),
                             b_desc_,
-                            c_f_.data().get(),
+                            c_ref_.data().get(),
                             c_desc_);
         }
-        else {
-        }
-    }
-
-    void CompareB()
-    {
-        cudaDeviceSynchronize();
-        Compare(b_f_.data().get(), b_.data().get(), k_, k_, n_);
-    }
-
-    void CompareC()
-    {
-        if (experts_ == 0) {
-            CHECK(0);
-
-            for (int i = 0; i < 25; ++i) {
-                reference_.gemm(a_f_.data().get(),  //
-                                a_desc_,
-                                b_f_.data().get(),
-                                b_desc_,
-                                c_ref_.data().get(),
-                                c_desc_);
-            }
-
-            cudaDeviceSynchronize();
-
-            int dims = m_, bsz = n_;
-            if (order_c == kRowMajor) {
-                std::swap(dims, bsz);
-            }
-            Compare(c_.data().get(), c_ref_.data().get(), dims, dims, bsz, 0);
-        }
         else {  // [e_i, k] -> [k, n / E] -> [e_i, n / E]
-
-            // const int top_e = expert_ids_.size() / experts_;
-
             auto a_desc = a_desc_;
             auto b_desc = b_desc_;
             auto c_desc = c_desc_;
-
-            c_desc.ld = c_desc.cols = b_desc.cols = moe_output_dim_;
 
             CHECK(a_desc.order == kRowMajor);  // k-major, T
             CHECK(b_desc.order == kColMajor);  // k-major, N
@@ -532,6 +442,36 @@ public:
                 b += moe_output_dim_ * input_dims_;
                 c += moe_cnt_[e] * moe_output_dim_;
             }
+        }
+    }
+
+    void CompareB()
+    {
+        cudaDeviceSynchronize();
+        Compare(b_f_.data().get(), b_.data().get(), k_, k_, n_);
+    }
+
+    void CompareC()
+    {
+        if (experts_ == 0) {
+
+            cudaDeviceSynchronize();
+
+            int dims = m_, bsz = n_;
+            if (order_c == kRowMajor) {
+                std::swap(dims, bsz);
+            }
+            Compare(c_.data().get(), c_ref_.data().get(), dims, dims, bsz, 0);
+        }
+        else {
+            invokeMoeReduce(c_.data().get(),
+                            c_e_.data().get(),
+                            moe_scales_.data().get(),
+                            moe_en2f_.data().get(),
+                            batch_size_,
+                            expert_ids_.size() / batch_size_,
+                            moe_output_dim_,
+                            stream_);
 
             invokeMoeReduce(c_ref_.data().get(),
                             c_e_ref_.data().get(),
@@ -593,17 +533,49 @@ public:
         }
     }
 
-    int64_t global_memory_reads()
+    int64_t get_global_memory_reads()
     {
-        return get_size(a_pack_desc_) + get_size(b_pack_desc_) + get_size(u_pack_desc_) + get_size(v_pack_desc_);
+        if (experts_ == 0) {
+            return get_size(a_pack_desc_) + get_size(b_pack_desc_) + get_size(u_pack_desc_) + get_size(v_pack_desc_);
+        }
+        else {
+            size_t    size = get_size(a_pack_desc_) + get_size(u_pack_desc_);
+            const int nnz =
+                std::accumulate(moe_cnt_.begin(), moe_cnt_.end(), 0, [](auto a, auto x) { return a + (x > 0); });
+            size += nnz * (get_size(b_pack_desc_) + get_size(v_pack_desc_));
+            return size;
+        }
     }
 
-    int64_t ref_global_memory_reads()
+    int64_t get_ref_global_memory_reads()
     {
-        return get_size(a_desc_) + get_size(b_desc_);
+        if (experts_ == 0) {
+            return get_size(a_desc_) + get_size(b_desc_);
+        }
+        else {
+            size_t    size = get_size(a_desc_);
+            const int nnz =
+                std::accumulate(moe_cnt_.begin(), moe_cnt_.end(), 0, [](auto a, auto x) { return a + (x > 0); });
+            size += nnz * get_size(b_desc_);
+            return size;
+        }
     }
 
-private:
+    int64_t get_element_count()
+    {
+        if (experts_ == 0) {
+            return (int64_t)m_ * n_ * k_ * 2;
+        }
+        else {
+            int64_t count = 0;
+            for (const auto& m : moe_cnt_) {
+                count += (int64_t)m * moe_output_dim_ * input_dims_;
+            }
+            return count * 2;
+        }
+    }
+
+    // private:
     int m_{};
     int n_{};
     int k_{};
@@ -612,7 +584,8 @@ private:
     int batch_size_{};
     int input_dims_{};
     int output_dims_{};
-    int experts_{0};
+    int experts_{};
+    int exp_per_tok_{};
     int moe_output_dim_{};
 
     /// MoE buffers
@@ -675,13 +648,6 @@ private:
     universal_vector<char> barriers_;
     universal_vector<char> partials_;
 
-    TempData a_tmp_;
-    TempData b_tmp_;
-    TempData c_tmp_;
-    TempData u_tmp_;
-    TempData v_tmp_;
-
-    // Tape tape_{};
     cudaDeviceProp           prop_;
     std::unique_ptr<Context> ctx_;
 

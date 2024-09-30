@@ -10,6 +10,8 @@
 #include "src/turbomind/utils/monotonic.h"
 #include <cub/block/block_reduce.cuh>
 #include <iostream>
+#include <tuple>
+#include <algorithm>
 
 namespace turbomind::gemm {
 
