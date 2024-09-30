@@ -145,6 +145,7 @@ class SubCliServe:
         ArgumentHelper.ssl(parser)
         ArgumentHelper.model_name(parser)
         ArgumentHelper.max_log_len(parser)
+        ArgumentHelper.disable_fastapi_docs(parser)
 
         # chat template args
         ArgumentHelper.chat_template(parser)
@@ -342,7 +343,8 @@ class SubCliServe:
                        api_keys=args.api_keys,
                        ssl=args.ssl,
                        proxy_url=args.proxy_url,
-                       max_log_len=args.max_log_len)
+                       max_log_len=args.max_log_len,
+                       disable_fastapi_docs=args.disable_fastapi_docs)
 
     @staticmethod
     def api_client(args):
