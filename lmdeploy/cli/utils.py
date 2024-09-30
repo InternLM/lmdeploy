@@ -487,3 +487,11 @@ class ArgumentHelper:
             default=None,
             help='Max number of prompt characters or prompt tokens being'
             'printed in log. Default: Unlimited')
+
+    @staticmethod
+    def disable_fastapi_docs(parser):
+        return parser.add_argument('--disable-fastapi-docs',
+                                   action='store_true',
+                                   default=False,
+                                   help="Disable FastAPI's OpenAPI schema,"
+                                   ' Swagger UI, and ReDoc endpoint')
