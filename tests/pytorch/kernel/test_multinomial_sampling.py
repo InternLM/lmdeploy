@@ -4,6 +4,11 @@ import torch
 from lmdeploy.pytorch.kernels import multinomial_sampling
 
 
+def _bf16_mark():
+    return pytest.mark.skipif(not torch.cuda.is_bf16_supported(),
+                              reason='bf16 not supported.')
+
+
 class TestMultinomialSampling:
 
     @pytest.fixture
@@ -50,8 +55,10 @@ class TestMultinomialSampling:
         batch_ids = torch.arange(batch_size).cuda()
         yield indices[batch_ids, select_ids]
 
-    @pytest.mark.parametrize('dtype',
-                             [torch.float32, torch.half, torch.bfloat16])
+    @pytest.mark.parametrize('dtype', [
+        torch.float32, torch.half,
+        pytest.param(torch.bfloat16, marks=_bf16_mark())
+    ])
     @pytest.mark.parametrize(['num_tokens', 'select_ids'], [
         (8, (4, 2) * 30),
         (2000, (500, 1500)),
