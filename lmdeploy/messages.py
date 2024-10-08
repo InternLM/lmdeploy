@@ -293,6 +293,11 @@ class PytorchEngineConfig:
         assert self.device_type in [
             'cuda', 'ascend'
         ], (f'invalid device_type: {self.device_type}')
+        if self.quant_policy == 4:
+            import triton
+            from packaging import version
+            assert version.parse(triton.__version__) > version.parse('2.1.0'),\
+                'triton version should be >=2.2.0 for int4 quantization'
 
 
 class ResponseType(enum.Enum):
