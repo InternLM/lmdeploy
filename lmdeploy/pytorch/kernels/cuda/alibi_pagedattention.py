@@ -8,7 +8,6 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .pagedattention import _unpack_kv_int4, _unpack_kv_int4_transposed
 from .triton_utils import get_kernel_meta, wrap_jit_func
 
 assert triton.__version__ >= '2.1.0'
@@ -449,10 +448,11 @@ def _fwd_split_kernel_quant(
     off_q = (cur_batch * stride_qbs + cur_head * stride_qh +
              offs_d * stride_qd)
     if quant_policy == 4:
+        shift_d = offs_d // (BLOCK_DMODEL // 2) * 4
         off_k = (cur_kv_head * stride_kh +
-                 tl.arange(0, BLOCK_DMODEL // 2)[None, :] * stride_kd)
+                 (offs_d % (BLOCK_DMODEL // 2))[None, :] * stride_kd)
         off_v = (cur_kv_head * stride_vh +
-                 tl.arange(0, BLOCK_DMODEL // 2)[None, :] * stride_vd)
+                 (offs_d % (BLOCK_DMODEL // 2))[None, :] * stride_vd)
     else:
         off_k = (cur_kv_head * stride_kh + offs_d[None, :] * stride_kd)
         off_v = (cur_kv_head * stride_vh + offs_d[None, :] * stride_vd)
@@ -496,8 +496,7 @@ def _fwd_split_kernel_quant(
             other=0.0,
         )
         if quant_policy == 4:
-            k = _unpack_kv_int4(k)
-            k = tl.view(k, (k.shape[0], k.shape[1] * k.shape[2]))
+            k = (k >> shift_d) & 0x0F
         ks = tl.load(
             ksz_ptrs + b_offset[:, None] * stride_kszbs,
             mask=mask,
@@ -515,8 +514,7 @@ def _fwd_split_kernel_quant(
             other=0.0,
         )
         if quant_policy == 4:
-            v = _unpack_kv_int4(v)
-            v = tl.view(v, (v.shape[0], v.shape[1] * v.shape[2]))
+            v = (v >> shift_d) & 0x0F
         vs = tl.load(
             vsz_ptrs + b_offset[:, None] * stride_vszbs,
             mask=mask,
@@ -645,10 +643,12 @@ def _fwd_kernel_quant(
     off_q = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs +
              cur_head * stride_qh + offs_d[None, :] * stride_qd)
     if quant_policy == 4:
+        shift_kd = (offs_d // (BLOCK_DMODEL // 2) * 4)[:, None]
+        shift_vd = (offs_d // (BLOCK_DMODEL // 2) * 4)[None, :]
         off_k = (cur_kv_head * stride_kh +
-                 tl.arange(0, BLOCK_DMODEL // 2)[:, None] * stride_kd)
+                 (offs_d % (BLOCK_DMODEL // 2))[:, None] * stride_kd)
         off_v = (cur_kv_head * stride_vh +
-                 tl.arange(0, BLOCK_DMODEL // 2)[None, :] * stride_vd)
+                 (offs_d % (BLOCK_DMODEL // 2))[None, :] * stride_vd)
     else:
         off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd)
         off_v = (cur_kv_head * stride_vh + offs_d[None, :] * stride_vd)
@@ -683,8 +683,7 @@ def _fwd_kernel_quant(
             other=0.0,
         )
         if quant_policy == 4:
-            k = _unpack_kv_int4_transposed(k)
-            k = tl.view(k, (k.shape[0] * k.shape[1], k.shape[2]))
+            k = (k >> shift_kd) & 0x0F
         ks = tl.load(
             ksz_ptrs + b_offset[None, :] * stride_kszbs,
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
@@ -702,8 +701,7 @@ def _fwd_kernel_quant(
             other=0.0,
         )
         if quant_policy == 4:
-            v = _unpack_kv_int4(v)
-            v = tl.view(v, (v.shape[0], v.shape[1] * v.shape[2]))
+            v = (v >> shift_vd) & 0x0F
         vs = tl.load(
             vsz_ptrs + b_offset[:, None] * stride_vszbs,
             mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,

@@ -245,36 +245,6 @@ def _fwd_grouped_split_kernel(
     tl.store(Acc_out + off_meta + 1, l_i, mask=mask_h)
 
 
-@triton.jit
-def _unpack_kv_int4(k):
-    """k with shape [head_num, head_dim]"""
-    k1 = k - (k >> 4) * 16
-    k2 = k >> 4
-    k = tl.zeros((k.shape[0], 2, k.shape[1]), dtype=tl.uint8)
-    k1 = tl.expand_dims(k1, 1)
-    k2 = tl.expand_dims(k2, 1)
-    k1 = tl.broadcast_to(k1, k.shape)
-    k2 = tl.broadcast_to(k2, k.shape)
-    k = tl.where(tl.arange(0, 2)[None, :, None] == 1, k, k1)
-    k = tl.where(tl.arange(0, 2)[None, :, None] == 0, k, k2)
-    return k
-
-
-@triton.jit
-def _unpack_kv_int4_transposed(k):
-    """k with shape [head_dim, head_num]"""
-    k1 = k - (k >> 4) * 16
-    k2 = k >> 4
-    k = tl.zeros((2, k.shape[0], k.shape[1]), dtype=tl.uint8)
-    k1 = tl.expand_dims(k1, 0)
-    k2 = tl.expand_dims(k2, 0)
-    k1 = tl.broadcast_to(k1, k.shape)
-    k2 = tl.broadcast_to(k2, k.shape)
-    k = tl.where(tl.arange(0, 2)[:, None, None] == 1, k, k1)
-    k = tl.where(tl.arange(0, 2)[:, None, None] == 0, k, k2)
-    return k
-
-
 @triton.autotune(configs=[
     triton.Config({}, num_stages=2, num_warps=16),
     triton.Config({}, num_stages=2, num_warps=8),
@@ -415,7 +385,6 @@ def _fwd_grouped_split_quant_kernel(
              offs_d[None, :] * stride_qd)
     q = tl.load(Q + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
 
-    v_ptrs = V + off_v
     ksz_ptrs = KScalesZeros + off_ksz
     vsz_ptrs = VScalesZeros + off_vsz
 
@@ -438,13 +407,20 @@ def _fwd_grouped_split_quant_kernel(
     l_i = tl.zeros([BLOCK_H], dtype=tl.float32)
     if quant_policy == 4:
         if BLOCK_DMODEL1 != 0:
-            offs_d1 = BLOCK_DMODEL // 2 + tl.arange(0, BLOCK_DMODEL1 // 2)
-            offs_d1 = offs_d1 % head_size // 2
+            offs_d1 = BLOCK_DMODEL // 2 + tl.arange(0, BLOCK_DMODEL1)
+            shift_k1d = (offs_d1 // (head_size // 2) * 4)[:, None]
+            offs_d1 = offs_d1 % (head_size // 2)
             off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd +
                       offs_n[None, :] * stride_kbs)
-        offs_d = tl.arange(0, BLOCK_DMODEL // 2) % (head_size // 2)
+        offs_d = tl.arange(0, BLOCK_DMODEL) % (head_size // 2)
+        shift_kd = (tl.arange(0, BLOCK_DMODEL) // (head_size // 2) * 4)[:,
+                                                                        None]
         off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd +
                  offs_n[None, :] * stride_kbs)
+        offs_dv = tl.arange(0, BLOCK_DV * 2) % head_size_v
+        shift_vd = (tl.arange(0, BLOCK_DV * 2) // head_size_v * 4)
+        off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd +
+                 offs_n[:, None] * stride_vbs)
         acc = tl.zeros([BLOCK_H, BLOCK_DV * 2],
                        dtype=tl.float32)  # v head_dim packed
         mask_dv = tl.arange(0, BLOCK_DV * 2) < (head_size_v * 2)
@@ -475,23 +451,20 @@ def _fwd_grouped_split_quant_kernel(
         # k = tl.load(k_ptrs + b_offset * stride_kp)
         k = tl.load(K + off_k + b_offset * stride_kp)
         if quant_policy == 4:
-            k = _unpack_kv_int4_transposed(k)
-            k = tl.view(k, (k.shape[0] * k.shape[1], k.shape[2]))
+            k = (k >> shift_kd) & 0x0F
         ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
         kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
         if BLOCK_DMODEL1 != 0:
             k1 = tl.load(K + off_k1 + b_offset * stride_kp)
             if quant_policy == 4:
-                k1 = _unpack_kv_int4_transposed(k1)
-                k1 = tl.view(k1, (k1.shape[0] * k1.shape[1], k1.shape[2]))
+                k1 = (k1 >> shift_k1d) & 0x0F
             k1 = ((k1 - kz) * ks).to(q.dtype)
 
         if quant_policy == 4:
-            v = tl.load(v_ptrs + b_offset * stride_vp)
-            v = _unpack_kv_int4(v)
-            v = tl.view(v, (v.shape[0], v.shape[1] * v.shape[2]))
+            v = tl.load(V + off_v + b_offset * stride_vp)
+            v = (v >> shift_vd) & 0x0F
         else:
-            v = tl.load(v_ptrs + b_offset * stride_vp)
+            v = tl.load(V + off_v + b_offset * stride_vp)
         vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
         vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
 
@@ -897,7 +870,6 @@ def _fwd_kernel_quant(
                 mask=(offs_m[:, None] < q_seqlen) & mask_d[None, :],
                 other=0.0)
 
-    v_ptrs = V + off_v
     ksz_ptrs = KScalesZeros + off_ksz
     vsz_ptrs = VScalesZeros + off_vsz
 
@@ -917,12 +889,19 @@ def _fwd_kernel_quant(
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     if quant_policy == 4:
-        offs_d = tl.arange(0, BLOCK_DMODEL // 2) % (head_size // 2)
+        offs_d = tl.arange(0, BLOCK_DMODEL) % (head_size // 2)
+        offs_dv = tl.arange(0, BLOCK_DV * 2) % (head_size_v)
+        shift_kd = (tl.arange(0, BLOCK_DMODEL) // (head_size // 2) * 4)[:,
+                                                                        None]
         off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd +
                  offs_n[None, :] * stride_kbs)
+        shift_vd = (tl.arange(0, BLOCK_DV * 2) // head_size_v * 4)
+        off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd +
+                 offs_n[:, None] * stride_vbs)
         if BLOCK_DMODEL1 != 0:
-            offs_d1 = BLOCK_DMODEL // 2 + tl.arange(0, BLOCK_DMODEL1 // 2)
-            offs_d1 = offs_d1 % head_size // 2
+            offs_d1 = BLOCK_DMODEL // 2 + tl.arange(0, BLOCK_DMODEL1)
+            shift_k1d = (offs_d1 // (head_size // 2) * 4)[:, None]
+            offs_d1 = offs_d1 % (head_size // 2)
             off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd +
                       offs_n[None, :] * stride_kbs)
         acc = tl.zeros([BLOCK_M, BLOCK_DV * 2],
@@ -945,23 +924,20 @@ def _fwd_kernel_quant(
         # -- compute qk ----
         k = tl.load(K + off_k + b_offset * stride_kp)
         if quant_policy == 4:
-            k = _unpack_kv_int4_transposed(k)
-            k = tl.view(k, (k.shape[0] * k.shape[1], k.shape[2]))
+            k = (k >> shift_kd) & 0x0F
         ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
         kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
         if BLOCK_DMODEL1 != 0:
             k1 = tl.load(K + off_k1 + b_offset * stride_kp)
             if quant_policy == 4:
-                k1 = _unpack_kv_int4_transposed(k1)
-                k1 = tl.view(k1, (k1.shape[0] * k1.shape[1], k1.shape[2]))
+                k1 = (k1 >> shift_k1d) & 0x0F
             k1 = ((k1 - kz) * ks).to(q.dtype)
 
         if quant_policy == 4:
-            v = tl.load(v_ptrs + b_offset * stride_vp)
-            v = _unpack_kv_int4(v)
-            v = tl.view(v, (v.shape[0], v.shape[1] * v.shape[2]))
+            v = tl.load(V + off_v + b_offset * stride_vp)
+            v = (v >> shift_vd) & 0x0F
         else:
-            v = tl.load(v_ptrs + b_offset * stride_vp)
+            v = tl.load(V + off_v + b_offset * stride_vp)
         vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
         vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
 
