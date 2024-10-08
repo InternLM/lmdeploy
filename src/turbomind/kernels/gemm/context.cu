@@ -330,6 +330,7 @@ MoeGemmContext::MoeGemmContext(int expert_num, int experts_per_token, const cuda
     offsets_{},
     tape_{}
 {
+    resize(tape_, 256 << 10, expert_num_, stream_);
 }
 
 MoeGemmContext::~MoeGemmContext()
@@ -580,8 +581,9 @@ Tape MoeGemmContext::Schedule(const LaunchSpec& spec)
 
 std::vector<Kernel*> MoeGemmContext::Filter(const std::vector<Kernel*>& kernels) const
 {
-    const int avg_m = cdiv(tokens_ * experts_per_token_, expert_num_);
-    return filter_by_batch_size(kernels, *desc_, desc_->batch_dim == 0 ? avg_m : desc_->n);
+    // const int avg_m = cdiv(tokens_ * experts_per_token_, expert_num_);
+    const int max_m = cdiv(tokens_ * experts_per_token_, 1);
+    return filter_by_batch_size(kernels, *desc_, desc_->batch_dim == 0 ? max_m : desc_->n);
 }
 
 std::vector<LaunchSpec> MoeGemmContext::Swizzle(const LaunchSpec& spec, const std::vector<int>& swizzle) const

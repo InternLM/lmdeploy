@@ -16,8 +16,8 @@ void gemm_bench(nvbench::state& state)
     const auto bs = state.get_int64("bs");
     const auto tp = state.get_int64("tp");
 
-    const auto expert_num  = state.get_int64("expert_num");
-    const auto exp_per_tok = state.get_int64("exp_per_tok");
+    const auto expert_num  = state.get_int64("e_num");
+    const auto exp_per_tok = state.get_int64("e_tok");
 
     auto [output_dims, input_dims] = config[idx];
 
@@ -41,7 +41,7 @@ void gemm_bench(nvbench::state& state)
 
     {
         int m = bs;
-        int n = output_dims * std::max(1, (int)expert_num);
+        int n = output_dims;
         int k = input_dims;
         if (get_test().kBatchDim == 1) {
             std::swap(m, n);
@@ -75,10 +75,10 @@ void gemm_bench(nvbench::state& state)
 
 NVBENCH_BENCH(gemm_bench)
     .add_int64_axis("idx", nvbench::range(0, (int)config.size() - 1))
-    .add_int64_power_of_two_axis("bs", nvbench::range(0, 14))
+    .add_int64_power_of_two_axis("bs", nvbench::range(0, 16))
     .add_int64_axis("tp", {1, 2, 4})
-    .add_int64_axis("expert_num", {0})
-    .add_int64_axis("exp_per_tok", {1});
+    .add_int64_axis("e_num", {0})
+    .add_int64_axis("e_tok", {1});
 
 int main(int argc, char* argv[])
 {

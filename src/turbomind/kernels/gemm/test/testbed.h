@@ -103,8 +103,10 @@ public:
         input_dims_  = k;
         output_dims_ = (size_t)m_ * n_ / batch_size_;
 
+        const size_t E = std::max(1, experts);
+
         a_.resize(m * k);
-        b_.resize(n * k);
+        b_.resize(n * k * E);
         c_.resize(m * n);
 
         a_desc_ = MatrixLayout{get_data_type_v<Tc>, order_a, m, k, mk2cs<order_a>(m, k).x, 0, Stridings::a};
@@ -113,15 +115,6 @@ public:
 
         c_f_.resize(c_.size());
         c_ref_.resize(c_.size());
-
-        // a_q_.resize(a_.size());
-        // b_q_.resize(b_.size());
-
-        // u_.resize(a_.size());
-        // v_.resize(b_.size());
-
-        // a_f_.resize(a_.size());
-        // b_f_.resize(b_.size());
 
         /// TODO: Revise packed format
         a_pack_.resize(a_.size() / kVecSize);
@@ -204,6 +197,7 @@ public:
         }
 
         if constexpr (pack_b) {
+            CHECK(experts == 0);
             b_pack_desc_.type = get_data_type_v<Tb>;
             b_pack_desc_.pack = pack_b;
             const auto b_data = is_quant_b ? (void*)b_q_.data().get() : (void*)b_.data().get();
@@ -243,9 +237,6 @@ public:
         if (experts == 0) {
             return;
         }
-
-        CHECK(output_dims_ % experts == 0);
-        moe_output_dim_ = output_dims_ / experts;
 
         ctx_ = std::make_unique<MoeGemmContext>(experts_, top_e, prop_, stream_);
 
@@ -287,7 +278,7 @@ public:
         moe_n_offsets_.resize(experts_ + 1);
         moe_n_offsets_[0] = 0;
         for (int i = 0; i < experts_; ++i) {
-            moe_n_offsets_[i + 1] = moe_n_offsets_[i] + moe_output_dim_;
+            moe_n_offsets_[i + 1] = moe_n_offsets_[i] + output_dims_;
         }
 
         if (1) {
@@ -296,7 +287,7 @@ public:
             CHECK(pack_b == 0);
             for (int i = 0; i < experts_; ++i) {
                 moe_n_ptrs_[i] =
-                    StridedPtr{(Tb*)b_pack_.data().get() + (size_t)i * input_dims_ * moe_output_dim_, input_dims_};
+                    StridedPtr{(Tb*)b_pack_.data().get() + (size_t)i * input_dims_ * output_dims_, input_dims_};
             }
         }
 
@@ -346,7 +337,7 @@ public:
         }
 
         c_desc_.rows = a_desc_.rows = expert_ids_.size();
-        c_desc_.ld = c_desc_.cols = b_desc_.cols = moe_output_dim_;
+        c_desc_.ld = c_desc_.cols = b_desc_.cols = output_dims_;
 
         c_desc_.offsets = moe_m_offsets_.data().get();
 
@@ -356,6 +347,10 @@ public:
 
         b_pack_desc_         = b_desc_;
         b_pack_desc_.offsets = moe_n_offsets_.data().get();
+
+        cudaMemPrefetchAsync(moe_m_offsets_.data().get(), sizeof(int) * moe_m_offsets_.size(), 0, stream_);
+        cudaMemPrefetchAsync(moe_n_offsets_.data().get(), sizeof(int) * moe_n_offsets_.size(), 0, stream_);
+        cudaMemPrefetchAsync(moe_f2n_.data().get(), sizeof(int) * moe_f2n_.size(), 0, stream_);
     }
 
     void Run(void* ctx = {})
@@ -439,8 +434,8 @@ public:
 
                 // Move to next expert
                 a += moe_cnt_[e] * input_dims_;
-                b += moe_output_dim_ * input_dims_;
-                c += moe_cnt_[e] * moe_output_dim_;
+                b += output_dims_ * input_dims_;
+                c += moe_cnt_[e] * output_dims_;
             }
         }
     }
@@ -470,7 +465,7 @@ public:
                             moe_en2f_.data().get(),
                             batch_size_,
                             expert_ids_.size() / batch_size_,
-                            moe_output_dim_,
+                            output_dims_,
                             stream_);
 
             invokeMoeReduce(c_ref_.data().get(),
@@ -479,13 +474,13 @@ public:
                             moe_en2f_.data().get(),
                             batch_size_,
                             expert_ids_.size() / batch_size_,
-                            moe_output_dim_,
+                            output_dims_,
                             stream_);
 
             cudaDeviceSynchronize();
 
-            Compare(c_e_.data().get(), c_e_ref_.data().get(), moe_output_dim_, moe_output_dim_, expert_ids_.size(), 0);
-            Compare(c_.data().get(), c_ref_.data().get(), moe_output_dim_, moe_output_dim_, batch_size_, 0);
+            Compare(c_e_.data().get(), c_e_ref_.data().get(), output_dims_, output_dims_, expert_ids_.size(), 0);
+            Compare(c_.data().get(), c_ref_.data().get(), output_dims_, output_dims_, batch_size_, 0);
         }
     }
 
@@ -569,7 +564,7 @@ public:
         else {
             int64_t count = 0;
             for (const auto& m : moe_cnt_) {
-                count += (int64_t)m * moe_output_dim_ * input_dims_;
+                count += (int64_t)m * output_dims_ * input_dims_;
             }
             return count * 2;
         }
@@ -586,7 +581,6 @@ public:
     int output_dims_{};
     int experts_{};
     int exp_per_tok_{};
-    int moe_output_dim_{};
 
     /// MoE buffers
     universal_vector<Tc> a_e_;
