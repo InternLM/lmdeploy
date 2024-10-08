@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <random>
+#include <vector>
 
 namespace turbomind {
 
@@ -51,5 +53,10 @@ void invokeMoeReduce(T*           dst,
                      int          experts_per_token,
                      int          dims,
                      cudaStream_t st);
+
+// Sample `e` from `E` experts uniformly for every token
+std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g);
+
+std::vector<int> SampleBalanced(int token_num, int expert_num, int exp_per_tok, std::mt19937& g);
 
 }  // namespace turbomind

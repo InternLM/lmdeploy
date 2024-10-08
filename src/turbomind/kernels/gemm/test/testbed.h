@@ -242,17 +242,18 @@ public:
 
         std::vector<int> r(experts);
         std::iota(r.begin(), r.end(), 0);
+
         // Sample `top_e` experts per token
-        expert_ids_ = {};
-        moe_scales_.resize(top_e * batch_size_);
-        std::mt19937                          gen{};
+        std::mt19937 g{};
+        expert_ids_ = SampleBalanced(batch_size_, experts_, top_e, g);
+
         std::uniform_real_distribution<float> dist(1e-3, 1.f);
         std::vector<float>                    tmp(top_e);
+        moe_scales_.resize(top_e * batch_size_);
         for (int i = 0; i < batch_size_; ++i) {
-            std::sample(r.cbegin(), r.cend(), std::back_inserter(expert_ids_), top_e, gen);
             float inv{};
             for (auto& x : tmp) {
-                x = dist(gen);
+                x = dist(g);
                 inv += x;
             }
             inv = 1.f / inv;
@@ -292,6 +293,11 @@ public:
         }
 
         std::cout << expert_ids_.size() << "\n";
+
+        // for (auto x : expert_ids_) {
+        //     std::cout << x << " ";
+        // }
+        // std::cout << "\n";
 
         for (auto x : moe_cnt_) {
             std::cout << x << " ";

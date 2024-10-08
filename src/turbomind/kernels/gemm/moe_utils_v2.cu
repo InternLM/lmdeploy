@@ -9,8 +9,10 @@
 #include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include <algorithm>
 #include <cstdio>
 #include <limits>
+#include <random>
 
 #include <cub/block/block_reduce.cuh>
 #include <cub/block/block_scan.cuh>
@@ -418,5 +420,58 @@ template void invokeMoeReduce(half*, const half*, const float*, const int*, int,
 #ifdef ENABLE_BF16
 template void invokeMoeReduce(nv_bfloat16*, const nv_bfloat16*, const float*, const int*, int, int, int, cudaStream_t);
 #endif
+
+std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g)
+{
+    std::vector<int> idxs((size_t)token_num * exp_per_tok);
+    std::vector<int> r(expert_num);
+    std::iota(r.begin(), r.end(), 0);
+    auto it = idxs.begin();
+    for (int i = 0; i < token_num; ++i) {
+        it = std::sample(r.cbegin(), r.cend(), it, exp_per_tok, g);
+    }
+    return idxs;
+}
+
+std::vector<int> SampleBalanced(int token_num, int expert_num, int exp_per_tok, std::mt19937& g)
+{
+    assert(exp_per_tok <= expert_num);
+    std::vector<int> idxs((size_t)token_num * exp_per_tok);
+    std::vector<int> q;
+
+    std::vector<int> r(expert_num);
+    std::iota(r.begin(), r.end(), 0);
+
+    auto it = idxs.begin();
+    for (int i = 0; i < token_num; ++i) {
+        if ((int)q.size() < exp_per_tok) {
+            const int k = q.size();
+            // prepend the experts: [xxx] -> [yyy | xxx]
+            q.insert(q.begin(), r.cbegin(), r.cend());
+            // move duplicated experts to the front: [yyy | xxx] -> [xxx' | yyy' | xxx]
+            int p = 0;
+            std::for_each(q.cend() - k, q.cend(), [&](auto x) { std::swap(q[p++], q[x]); });
+            // shuffle unique experts yyy'
+            std::shuffle(q.begin() + p, q.end() - k, g);
+        }
+        it = std::copy(q.end() - exp_per_tok, q.end(), it);
+        // remove used experts [xxx' | yyy' | xxx ] -> [xxx' | zzz]
+        q.resize(q.size() - exp_per_tok);
+        // alias [xxx] <- [xxx' | zzz]
+    }
+    assert(it == idxs.end());
+
+    // shuffle to decorrelate adjacent tokens
+    r.resize(token_num);
+    std::iota(r.begin(), r.end(), 0);
+    std::shuffle(r.begin(), r.end(), g);
+    std::vector<int> ret(idxs.size());
+    it = ret.begin();
+    for (const auto& i : r) {
+        it = std::copy_n(idxs.begin() + i * exp_per_tok, exp_per_tok, it);
+    }
+    assert(it == ret.end());
+    return ret;
+}
 
 }  // namespace turbomind
