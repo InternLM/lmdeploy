@@ -26,8 +26,10 @@ def _quant_int8(val):
 
 @triton.jit
 def _quant_int4(val1, val2):
-    val_min = tl.minimum(tl.min(val1, 1), tl.min(val2, 1))
-    val_max = tl.maximum(tl.max(val1, 1), tl.max(val2, 1))
+    val1 = val1.to(tl.float32)
+    val2 = val2.to(tl.float32)
+    val_min = tl.min(tl.minimum(val1, val2), 1)
+    val_max = tl.max(tl.maximum(val1, val2), 1)
     scales = (val_max - val_min) / 15
     zeros = -val_min / scales
     q_val1 = (val1 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
