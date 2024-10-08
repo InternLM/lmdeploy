@@ -99,7 +99,6 @@ class Qwen2Attention(nn.Module):
             if len(past_key_value) == 2 else past_key_value[2],
             v_scales_zeros=None
             if len(past_key_value) == 2 else past_key_value[3],
-            quant_policy=0 if len(past_key_value) == 2 else past_key_value[4],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)

@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal
-
 import torch
 import torch.distributed as dist
 
@@ -73,7 +71,6 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         attn_metadata: TritonAttentionMetadata,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
-        quant_policy: Literal[0, 4, 8] = 0,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
@@ -82,6 +79,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         q_start_loc = attn_metadata.q_start_loc
         q_seqlens = attn_metadata.q_seqlens
         kv_seqlens = attn_metadata.kv_seqlens
+        quant_policy = attn_metadata.quant_policy
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
 
         # fill kv cache

@@ -184,9 +184,8 @@ class CacheEngine:
                     dtype=self.model_config.dtype,
                     device='cuda',
                 )
-                gpu_cache.append(
-                    (key_blocks, value_blocks, key_scales_zeros,
-                     value_scales_zeros, self.cache_config.quant_policy))
+                gpu_cache.append((key_blocks, value_blocks, key_scales_zeros,
+                                  value_scales_zeros))
             else:
                 gpu_cache.append((key_blocks, value_blocks))
 
@@ -223,9 +222,8 @@ class CacheEngine:
                     dtype=self.model_config.dtype,
                     pin_memory=pin_memory,
                 )
-                cpu_cache.append(
-                    (key_blocks, value_blocks, key_scales_zeros,
-                     value_scales_zeros, self.cache_config.quant_policy))
+                cpu_cache.append((key_blocks, value_blocks, key_scales_zeros,
+                                  value_scales_zeros))
             else:
                 cpu_cache.append((key_blocks, value_blocks))
         return cpu_cache
