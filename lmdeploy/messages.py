@@ -256,6 +256,8 @@ class PytorchEngineConfig:
         revision (str): The specific model version to use.
             It can be a branch name, a tag name, or a commit id.
             If unspecified, will use the default version.
+        quant_policy (int): default to 0. When k/v is quantized into 4 or 8
+            bit, set it to 4 or 8, respectively
     """
     dtype: str = 'auto'
     tp: int = 1
