@@ -210,6 +210,9 @@ public:
             auto size_and_type = pointer_mapping_.begin()->second;
             free(&ptr, size_and_type.second == MemoryType::HOST);
         }
+        // release cuda memory to os
+        cudaMemPoolTrimTo(mempool_, 0);
+        check_cuda_error(cudaStreamSynchronize(stream_));
         if (enable_peer_access_) {  // We own the pool in this case
             check_cuda_error(cudaMemPoolDestroy(mempool_));
             mempool_ = {};

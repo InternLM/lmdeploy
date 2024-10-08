@@ -130,6 +130,10 @@ class TurboMind:
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
 
+    def __del__(self):
+        """release hardware resources."""
+        self.model_comm.destroy_nccl_params(self.nccl_params)
+
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
 

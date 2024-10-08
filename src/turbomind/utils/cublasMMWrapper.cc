@@ -73,6 +73,8 @@ cublasMMWrapper::~cublasMMWrapper()
         allocator_->free((void**)(&cublas_workspace_));
         allocator_ = nullptr;
     }
+    cublasDestroy(cublas_handle_);
+    cublasLtDestroy(cublaslt_handle_);
 }
 
 cublasMMWrapper::cublasMMWrapper(const cublasMMWrapper& wrapper):

@@ -80,3 +80,14 @@ AbstractTransformerModel::createNcclParams(const int node_id, const int device_i
     }
     return std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>(tensor_para_params, pipeline_para_params);
 }
+
+void AbstractTransformerModel::destroyNcclParams(
+    std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> params)
+{
+    for (auto& param : params.first) {
+        ftNcclParamDestroy(param);
+    }
+    for (auto& param : params.second) {
+        ftNcclParamDestroy(param);
+    }
+}
