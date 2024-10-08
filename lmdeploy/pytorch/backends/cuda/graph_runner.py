@@ -5,6 +5,7 @@ import torch
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext
+from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.utils import get_logger
 
 from ..graph_runner import GraphRunner
@@ -25,6 +26,11 @@ def next_power_of_2(n: int):
     return n
 
 
+def _false(*args, **kwargs):
+    """default value of not support cuda graph."""
+    return False
+
+
 class CUDASingleGraphRunner:
     """cuda single graph runner."""
 
@@ -40,6 +46,16 @@ class CUDASingleGraphRunner:
     ):
         self.model = model
         self.ctx_mgr = model.ctx_mgr
+
+        self.meta = CudaGraphMeta(
+            max_batchs=max_batches,
+            max_tokens=max_tokens,
+            num_blocks=num_blocks,
+            is_decoding=is_decoding,
+            device=device,
+            input_buffers=dict(),
+            output_buffers=dict(),
+        )
         self.device = device
         self.max_batches = max_batches
         self.max_tokens = max_tokens
@@ -48,127 +64,13 @@ class CUDASingleGraphRunner:
         self.pool = pool
         self._graph: torch.cuda.CUDAGraph = None
 
-        self.input_buffers = dict()
-        self.output_buffers = dict()
-        self.make_buffers()
-
-    def make_buffers(self):
-        """make cache step context."""
-        max_batches = self.max_batches
-        max_tokens = self.max_tokens
-        num_blocks = self.num_blocks
-        device = self.device
-
-        self.input_buffers['input_ids'] = torch.zeros(1,
-                                                      max_tokens,
-                                                      dtype=torch.int64,
-                                                      device=device)
-        self.input_buffers['position_ids'] = torch.zeros((1, max_tokens),
-                                                         dtype=torch.int64,
-                                                         device=device)
-
-        self.input_buffers['block_offsets'] = torch.zeros(
-            (max_batches, num_blocks), dtype=torch.int64, device=device)
-        self.input_buffers['q_start_loc'] = torch.zeros(max_batches,
-                                                        dtype=torch.int64,
-                                                        device=device)
-        self.input_buffers['q_seqlens'] = torch.zeros(max_batches,
-                                                      dtype=torch.int64,
-                                                      device=device)
-        self.input_buffers['kv_seqlens'] = torch.zeros(max_batches,
-                                                       dtype=torch.int64,
-                                                       device=device)
-        self.input_buffers['local_adapter_ids'] = torch.zeros(
-            max_batches, dtype=torch.int64, device=device)
-
-    def _fill_context(self):
-        """fill context."""
-        context = self.ctx_mgr.current_context()
-        local_adapter_ids = context.local_adapter_ids
-        if local_adapter_ids is not None:
-            batch_size = local_adapter_ids.size(0)
-            self.input_buffers['local_adapter_ids'].fill_(0)
-            self.input_buffers[
-                'local_adapter_ids'][:batch_size] = local_adapter_ids
-            context.local_adapter_ids = self.input_buffers['local_adapter_ids']
-        context.q_seqlens = self.input_buffers['q_seqlens']
-        context.kv_seqlens = self.input_buffers['kv_seqlens']
-        context.q_start_loc = self.input_buffers['q_start_loc']
-
-    def _fill_inputs(self, input_ids: torch.Tensor, position_ids: torch.Tensor,
-                     past_key_values: List, attn_metadata: Any,
-                     inputs_embeds: torch.Tensor, **kwargs):
-        """fill input."""
-        is_decoding = self.is_decoding
-        block_offsets = attn_metadata.block_offsets
-        q_start_loc = attn_metadata.q_start_loc
-        q_seqlens = attn_metadata.q_seqlens
-        kv_seqlens = attn_metadata.kv_seqlens
-
-        batch_size, num_blocks = block_offsets.size()
-        num_tokens = input_ids.size(-1)
-
-        # fill buffer
-        self.input_buffers['input_ids'][:, :num_tokens] = input_ids
-        self.input_buffers['position_ids'][:, :num_tokens] = position_ids
-        self.input_buffers[
-            'block_offsets'][:batch_size, :num_blocks] = block_offsets
-        if q_seqlens.data_ptr() != self.input_buffers['q_seqlens'].data_ptr():
-            self.input_buffers['q_seqlens'].zero_()
-        self.input_buffers['q_seqlens'][:batch_size] = q_seqlens
-        if kv_seqlens.data_ptr() != self.input_buffers['kv_seqlens'].data_ptr(
-        ):
-            self.input_buffers['kv_seqlens'].zero_()
-        self.input_buffers['kv_seqlens'][:batch_size] = kv_seqlens
-        self.input_buffers['q_start_loc'][:batch_size] = q_start_loc
-        if inputs_embeds is not None:
-            emb_size = inputs_embeds.size(-1)
-            if 'inputs_embeds' not in self.input_buffers:
-                max_num_tokens = self.input_buffers['input_ids'].size(-1)
-                self.input_buffers['inputs_embeds'] = inputs_embeds.new_zeros(
-                    1, max_num_tokens, emb_size)
-            self.input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
-
-        # create inputs
-        new_batch_size = next_power_of_2(batch_size)
-        attn_metadata.block_offsets = self.input_buffers[
-            'block_offsets'][:new_batch_size]
-        attn_metadata.q_start_loc = self.input_buffers[
-            'q_start_loc'][:new_batch_size]
-        attn_metadata.q_seqlens = self.input_buffers[
-            'q_seqlens'][:new_batch_size]
-        attn_metadata.kv_seqlens = self.input_buffers[
-            'kv_seqlens'][:new_batch_size]
-
-        new_inputs = dict(
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
-        )
-
-        if is_decoding:
-            new_inputs['input_ids'] = self.input_buffers[
-                'input_ids'][:, :new_batch_size]
-            new_inputs['position_ids'] = self.input_buffers[
-                'position_ids'][:, :new_batch_size]
-        else:
-            new_inputs['input_ids'] = self.input_buffers['input_ids']
-            new_inputs['position_ids'] = self.input_buffers['position_ids']
-
-        if inputs_embeds is not None:
-            if is_decoding:
-                new_inputs['inputs_embeds'] = self.input_buffers[
-                    'inputs_embeds'][:, :new_batch_size]
-            else:
-                new_inputs['inputs_embeds'] = self.input_buffers[
-                    'inputs_embeds']
-
-        new_inputs.update(kwargs)
-        self._fill_context()
-        return new_inputs
-
     def capture(self, **kwargs):
         """capture graph."""
-        padded_kwargs = self._fill_inputs(**kwargs)
+        self.meta.input_buffers = self.model.make_buffers_cudagraph(
+            self.meta, **kwargs)
+        padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
+        context = self.ctx_mgr.current_context()
+        self.model.update_context_cudagraph(self.meta, context)
         current_stream = torch.cuda.current_stream()
 
         # warmup
@@ -180,17 +82,20 @@ class CUDASingleGraphRunner:
                               stream=current_stream):
             output = self.model(**padded_kwargs)
 
-        self.output_buffers['logits'] = output
+        output_buffers = dict(logits=output)
+        self.meta.output_buffers = output_buffers
         return output
 
     def forward(self, **kwargs):
         """forward."""
         num_tokens = kwargs['input_ids'].size(-1)
         assert self._graph is not None
-        self._fill_inputs(**kwargs)
+        self.model.fill_buffers_cudagraph(self.meta, **kwargs)
+        context = self.ctx_mgr.current_context()
+        self.model.update_context_cudagraph(self.meta, context)
         self._graph.replay()
 
-        output = self.output_buffers['logits'][:, :num_tokens]
+        output = self.meta.output_buffers['logits'][:, :num_tokens]
         return output
 
     def __del__(self):
@@ -218,9 +123,9 @@ class CUDAGraphRunner(GraphRunner):
     def check_enable_graph(self):
         """check enable graph."""
         if self.backend_config.eager_mode:
-            return False
+            return _false
 
-        return getattr(self.model, 'support_cuda_graph', False)
+        return getattr(self.model, 'support_cuda_graph', _false)
 
     def get_graph_key(self, input_ids: torch.Tensor,
                       position_ids: torch.Tensor, past_key_values: List,
@@ -235,9 +140,7 @@ class CUDAGraphRunner(GraphRunner):
 
     def __call__(self, **kwargs):
         """call."""
-        enable_graph = self.enable_graph
-        if callable(enable_graph):
-            enable_graph = enable_graph(**kwargs)
+        enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:
             return self.model(**kwargs)

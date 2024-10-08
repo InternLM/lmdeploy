@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from itertools import repeat
 from queue import LifoQueue, Queue
-from typing import Dict, Iterable, List, Union
+from typing import Dict, Iterable, List
 
 import numpy as np
 import torch
@@ -93,6 +93,8 @@ class TurboMind:
             _engine_config = TurbomindEngineConfig()
         if _engine_config.max_batch_size is None:
             _engine_config.max_batch_size = get_max_batch_size('cuda')
+        assert _engine_config.max_batch_size > 0, 'max_batch_size should be' \
+            f' greater than 0, but got {_engine_config.max_batch_size}'
 
         self.gpu_count = _engine_config.tp
 
@@ -312,7 +314,7 @@ class TurboMind:
         Returns:
             TurboMindInstance: an instance of turbomind
         """
-        return TurboMindInstance(self, cuda_stream_id)
+        return TurboMindInstance(self, self.config, cuda_stream_id)
 
 
 class TurboMindInstance:
@@ -323,7 +325,10 @@ class TurboMindInstance:
         cuda_stream_id(int): identity of a cuda stream
     """
 
-    def __init__(self, tm_model: TurboMind, cuda_stream_id: int = 0):
+    def __init__(self,
+                 tm_model: TurboMind,
+                 config: TurbomindModelConfig,
+                 cuda_stream_id: int = 0):
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
 
@@ -341,6 +346,7 @@ class TurboMindInstance:
         self.que = Queue()
         self.executor: ThreadPoolExecutor = None
         self.future = None
+        self.config = config
 
     def _create_model_instance(self, device_id):
         rank = self.node_id * self.gpu_count + device_id
@@ -356,7 +362,12 @@ class TurboMindInstance:
             self.gpu_count)
 
         def _func():
-            output = self.model_inst.forward(inputs, instance_comm)
+            try:
+                output = self.model_inst.forward(inputs, instance_comm)
+            except Exception as e:
+                logger.error(f'unhandled exception: {e}')
+                self.que.put((-1, None))
+                return
             self.que.put((True, output))
 
         self.executor = ThreadPoolExecutor(1)
@@ -370,7 +381,12 @@ class TurboMindInstance:
             self.gpu_count)
 
         def _func():
-            output = self.model_inst.forward(inputs, instance_comm)
+            try:
+                output = self.model_inst.forward(inputs, instance_comm)
+            except Exception as e:
+                logger.error(f'unhandled exception: {e}')
+                que.put((-1, None))
+                return
             que.put((True, output))
 
         self.executor = ThreadPoolExecutor(1)
@@ -471,7 +487,9 @@ class TurboMindInstance:
             if item and isinstance(item[0], np.ndarray):
                 item = [torch.from_numpy(x).squeeze() for x in item]
             # convert to lookup table type
-            _MAP = dict(fp32=torch.float, bf16=torch.bfloat16)
+            _MAP = dict(float=torch.float,
+                        bfloat16=torch.bfloat16,
+                        float16=torch.float16)
             dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
             item = [x.to(dtype=dtype) for x in item]
             item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]
@@ -649,6 +667,12 @@ class TurboMindInstance:
                 await asyncio.sleep(0.002)
 
             finish, tm_outputs = que.get()
+            if finish < 0:
+                yield EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
+                                   token_ids=[],
+                                   num_token=0)
+                self.executor.shutdown()
+                break
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
 
@@ -762,6 +786,12 @@ class TurboMindInstance:
                 self.que.get()
 
             finish, tm_outputs = self.que.get()
+            if finish < 0:
+                yield EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
+                                   token_ids=[],
+                                   num_token=0)
+                self.executor.shutdown()
+                break
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
 
@@ -888,89 +918,11 @@ class TurboMindInstance:
         # start forward thread
         self._forward_thread(tm_inputs)
 
-        _, tm_outputs = self.que.get()
+        res, tm_outputs = self.que.get()
+        if res < 0:
+            return None
 
         outputs = _tm_dict_to_torch_dict(tm_outputs)
         logits = outputs['logits']
 
         return logits[:, :-1, :]
-
-    def get_ppl(self, input_ids: Union[List[int], List[List[int]]]):
-        """Get perplexity scores given a list of input tokens.
-
-        Args:
-            input_ids (Union[List[int], List[List[int]]]): the batch of input token ids
-        """  # noqa 501
-
-        if len(input_ids) == 0:
-            input_ids = [[]]
-        if isinstance(input_ids[0], int):
-            input_ids = [input_ids]
-
-        max_input_len = 16 * 1024
-        # max_input_len = 16
-        n_max_iter = np.ceil(
-            max([len(input_id)
-                 for input_id in input_ids]) / max_input_len).astype(int)
-
-        device = 'cpu' if n_max_iter > 1 else 'cuda'
-
-        index_range_starts = []
-        index_range_ends = []
-        for input_id in input_ids:
-            index_range_start = np.array(
-                [i * max_input_len for i in range(n_max_iter)])
-            index_range_end = index_range_start + max_input_len
-            index_range_start[index_range_start >= len(input_id)] = len(
-                input_id)
-            index_range_end[index_range_end >= len(input_id)] = len(input_id)
-            index_range_starts.append(index_range_start)
-            index_range_ends.append(index_range_end)
-
-        logits = []
-        for i in range(n_max_iter):
-            steps = [start[i] for start in index_range_starts]
-            _input_ids = [
-                input_id[start[i]:end[i]] for input_id, start, end in zip(
-                    input_ids, index_range_starts, index_range_ends)
-            ]
-            _logits = self.decode(_input_ids,
-                                  steps,
-                                  sequence_start=(i == 0),
-                                  sequence_end=(i == n_max_iter - 1))
-            _logits = _logits.to(device=device)
-            logits.append(_logits)
-
-        # concat logits. Shape is [bsz, seq_len, vocab_size]
-        logits = torch.cat(logits, dim=1)
-
-        # get target ids
-        padding_token_id = -100
-        target_ids = [(_input_ids + [padding_token_id])[1:]
-                      for _input_ids in input_ids]
-        target_ids = [
-            torch.Tensor(torch.LongTensor(_target_ids))
-            for _target_ids in target_ids
-        ]
-        target_ids = pad_sequence(target_ids,
-                                  batch_first=True,
-                                  padding_value=padding_token_id)
-        target_ids = target_ids.to(logits.device)
-        target_mask = target_ids != padding_token_id
-        target_count = torch.sum(target_mask, dim=-1)
-
-        # compute cross entropy loss
-        bsz, seq_len, vocab_size = logits.shape
-        flat_logits = logits.contiguous().view(-1, vocab_size)
-        flat_target_ids = target_ids.contiguous().view(-1)
-        flat_loss_matrix = torch.nn.functional.cross_entropy(
-            flat_logits,
-            flat_target_ids,
-            reduction='none',
-            ignore_index=padding_token_id)
-
-        loss_matrix = flat_loss_matrix.view(bsz, seq_len)
-        loss_sum = torch.sum(loss_matrix * target_mask, dim=1)
-        loss_avg = loss_sum / target_count
-        loss_avg = loss_avg.cpu().numpy()
-        return loss_avg

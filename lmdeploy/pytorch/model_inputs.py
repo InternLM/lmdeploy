@@ -7,32 +7,30 @@ import torch
 
 from lmdeploy.pytorch.backends import get_backend
 
-from .adapter.adapter import SchedulerAdapter
-
 
 @dataclass
-class AdapterInfo:
-    adapter_ids: torch.LongTensor
-    rank_offsets: torch.LongTensor
+class MRopeModelInputs:
+    """Multimodal rotary position inputs."""
+    position_ids: List[torch.LongTensor] = None
+    deltas: List[torch.LongTensor] = None
 
-    @classmethod
-    def from_adapters(cls, adapters: List[SchedulerAdapter]):
-        """from adapters."""
-        if len(adapters) == 0:
-            return None
-        adapter_ids = [ada.adapter_id for ada in adapters]
-        adapter_ids = torch.tensor(adapter_ids)
-        rank_offsets = [torch.from_numpy(ada.rank_offset) for ada in adapters]
-        rank_offsets = torch.stack(rank_offsets)
+    def get_inputs(self, history_lengths: torch.Tensor,
+                   seq_lengths: torch.Tensor):
+        mrope_position_ids = []
+        for (his_len, seq_len, pos_ids,
+             delta) in zip(history_lengths, seq_lengths, self.position_ids,
+                           self.deltas):
+            assert pos_ids.dim() == 2, 'invalid mrope_position_ids'
+            if his_len + seq_len <= pos_ids.shape[1]:
+                mrope_position_ids.append(pos_ids[:,
+                                                  his_len:his_len + seq_len])
+            else:
+                mrope_position_ids.append(
+                    torch.tensor([his_len], device=delta.device).expand(3, -1)
+                    + delta)
 
-        return cls(
-            adapter_ids=adapter_ids,
-            rank_offsets=rank_offsets,
-        )
-
-    def update_offsets(self, rank_offsets: torch.LongTensor):
-        """update rank offsets."""
-        rank_offsets[self.adapter_ids] = self.rank_offsets
+        mrope_position_ids = torch.cat(mrope_position_ids, dim=-1)
+        return mrope_position_ids
 
     def to_device(self, device: str):
         """to device."""
@@ -42,9 +40,11 @@ class AdapterInfo:
             v = getattr(self, k)
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
+            elif isinstance(v, list):
+                v = [x.to(device) for x in v]
             out_dict[k] = v
 
-        return AdapterInfo(**out_dict)
+        return MRopeModelInputs(**out_dict)
 
 
 @dataclass
@@ -118,8 +118,8 @@ class ModelInputs:
     is_decoding: bool
     num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
-    adapter_info: AdapterInfo = None
     vision_inputs: VisionModelInputs = None
+    mrope_inputs: MRopeModelInputs = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -162,8 +162,8 @@ class ModelInputs:
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=self.local_adapter_ids,
-                adapter_info=self.adapter_info,
                 vision_inputs=self.vision_inputs,
+                mrope_inputs=self.mrope_inputs,
             )
             ret.append(inp)
             block_start += num_blocks
@@ -180,7 +180,7 @@ class ModelInputs:
                 v = v.to(device)
             elif isinstance(v, VisionModelInputs):
                 v = v.to_device(device)
-            elif isinstance(v, AdapterInfo):
+            elif isinstance(v, MRopeModelInputs):
                 v = v.to_device(device)
             out_dict[k] = v
 
@@ -205,10 +205,10 @@ class StepContext:
     is_decoding: bool
     world_size: int = 1
     local_adapter_ids: torch.LongTensor = None
-    adapter_params: Dict[str, AdapterInfo] = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
     vision_inputs: VisionModelInputs = None
+    mrope_position_ids: torch.Tensor = None
     attn_metadata: Any = None
 
     _outputs: Dict = field(default_factory=dict)
@@ -237,6 +237,11 @@ class StepContext:
                 and inputs.vision_inputs.input_embeddings is not None):
             input_embeddings, input_embedding_indexing = \
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
+        # for mrope
+        mrope_position_ids = None
+        if inputs.mrope_inputs is not None:
+            mrope_position_ids = inputs.mrope_inputs.get_inputs(
+                history_seqlens, q_seqlens)
 
         # kv_seqlens
         if inputs.is_decoding:
@@ -271,6 +276,7 @@ class StepContext:
             world_size=world_size,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
+            mrope_position_ids=mrope_position_ids,
         )
 
         ret = get_backend().update_step_context(ret)

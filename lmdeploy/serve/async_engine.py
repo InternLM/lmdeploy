@@ -11,8 +11,9 @@ from queue import Empty, Queue
 from threading import Thread
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response,
-                               TurbomindEngineConfig)
+                               ResponseType, TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.utils import LogitsMixin, _get_event_loop
 from lmdeploy.tokenizer import DetokenizeState
@@ -45,7 +46,7 @@ class GenOut:
     history_token_len: int
     input_token_len: int
     generate_token_len: int
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'error']] = None
     token_ids: List[int] = None
     logprobs: List[Dict[int, float]] = None
 
@@ -125,6 +126,8 @@ class AsyncEngine(LogitsMixin):
             config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
+        max_log_len (int): Max number of prompt characters or prompt tokens
+            being printed in log. Default: Unlimited
     """
 
     def __init__(self,
@@ -134,6 +137,7 @@ class AsyncEngine(LogitsMixin):
                  backend_config: Optional[Union[TurbomindEngineConfig,
                                                 PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
+                 max_log_len: int = None,
                  **kwargs) -> None:
         logger.info(
             f'input backend={backend}, backend_config={backend_config}')
@@ -180,6 +184,7 @@ class AsyncEngine(LogitsMixin):
         for i in range(self.instance_num):
             self.gens_set.add(self.engine.create_instance())
         self._session_id = count(0)
+        self.request_logger = RequestLogger(max_log_len)
 
     def _build_turbomind(
             self,
@@ -498,14 +503,14 @@ class AsyncEngine(LogitsMixin):
             gen_config.temperature = 1.0
             gen_config.repetition_penalty = 1.0
         # set random if it is not set and sequence_start is True
-        if gen_config.random_seed is None and sequence_start:
+        elif gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
-            logger.warning(f"n({gen_config.n}) > 1 hasn't been supported yet. "
-                           f'Fallback to 1')
+            logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "
+                         f'Fallback to 1')
             gen_config.n = 1
         prompt = messages
-
+        self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
         prompt_input = await self._get_prompt_input(prompt,
                                                     do_preprocess,
                                                     sequence_start,
@@ -514,10 +519,11 @@ class AsyncEngine(LogitsMixin):
         prompt = prompt_input['prompt']
         input_ids = prompt_input['input_ids']
         finish_reason = None
-        logger.info(f'prompt={prompt!r}, '
-                    f'gen_config={gen_config}, '
-                    f'prompt_token_id={input_ids}, '
-                    f'adapter_name={adapter_name}.')
+        self.request_logger.log_inputs(session_id=session_id,
+                                       prompt=prompt,
+                                       prompt_token_ids=input_ids,
+                                       gen_config=gen_config,
+                                       adapter_name=adapter_name)
         logger.info(f'session_id={session_id}, '
                     f'history_tokens={self.id2step[str(session_id)]}, '
                     f'input_tokens={len(input_ids)}, '
@@ -545,6 +551,12 @@ class AsyncEngine(LogitsMixin):
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
         else:
+
+            def is_error(status):
+                return status not in [
+                    ResponseType.SUCCESS, ResponseType.FINISH
+                ]
+
             generator = await self.get_generator(False, session_id)
             async with self.safe_run(session_id):
                 state = DetokenizeState(len(input_ids))
@@ -560,6 +572,9 @@ class AsyncEngine(LogitsMixin):
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
                     # decode res
+                    if is_error(outputs.status):
+                        tokens = 0
+                        break
                     res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
                     if len(res) <= state.ids_offset:
                         continue
@@ -581,15 +596,24 @@ class AsyncEngine(LogitsMixin):
                     yield GenOut(response, self.id2step[str(session_id)],
                                  len(input_ids), tokens, finish_reason, res,
                                  logprobs)
-
-                finish_reason = 'length' \
-                    if tokens >= gen_config.max_new_tokens else 'stop'
-                # utf-8 char at the end means it's a potential unfinished
-                # byte sequence
-                if not response.endswith('�'):
-                    response = ''  # avaid returning the last response twice
-                yield GenOut(response, self.id2step[str(session_id)],
-                             len(input_ids), tokens, finish_reason)
+                if not is_error(outputs.status):
+                    finish_reason = 'length' \
+                        if tokens >= gen_config.max_new_tokens else 'stop'
+                    # utf-8 char at the end means it's a potential unfinished
+                    # byte sequence
+                    if not response.endswith('�'):
+                        # avaid returning the last response twice
+                        response = ''
+                    yield GenOut(response, self.id2step[str(session_id)],
+                                 len(input_ids), tokens, finish_reason)
+                else:
+                    yield GenOut(
+                        response='internal error happened',
+                        history_token_len=self.id2step[str(session_id)],
+                        input_token_len=len(input_ids),
+                        generate_token_len=0,
+                        finish_reason='error',
+                        token_ids=[])
                 # update step
                 self.id2step[str(session_id)] += len(input_ids) + tokens
                 if sequence_end:

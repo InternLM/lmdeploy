@@ -13,14 +13,24 @@ on:
         description: 'Set branch or tag or commit id. Default is "main"'
         type: string
         default: 'main'
-      models:
+      chat_models:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[tb_internlm2_chat_7b, tb_internlm2_chat_7b_4bits, tb_internlm2_chat_7b_kvint4, tb_internlm2_chat_7b_kvint8, pt_internlm2_chat_7b, tb_internlm2_5_7b_chat, tb_internlm2_5_7b_chat_4bits, tb_internlm2_5_7b_chat_kvint4, tb_internlm2_5_7b_chat_kvint8, pt_internlm2_5_7b_chat, tb_internlm2_5_20b_chat, tb_internlm2_5_20b_chat_4bits, tb_internlm2_5_20b_chat_kvint4, tb_internlm2_5_20b_chat_kvint8, pt_internlm2_5_20b_chat, tb_qwen1_5_7b_chat, tb_qwen1_5_7b_chat_4bits, tb_qwen1_5_7b_chat_kvint4, tb_qwen1_5_7b_chat_kvint8, pt_qwen1_5_7b_chat,  tb_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, tb_llama_3d1_8b_instruct_4bits, tb_llama_3d1_8b_instruct_kvint4, tb_llama_3d1_8b_instruct_kvint8, tb_qwen2_7b_instruct, tb_qwen2_7b_instruct_4bits, tb_qwen2_7b_instruct_kvint8, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]'
-      datasets:
+        default: '[turbomind_internlm2_chat_7b, pytorch_internlm2_chat_7b, turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_batch1, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama2_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it, turbomind_internlm2_chat_7b_4bits, turbomind_internlm2_chat_7b_kvint4, turbomind_internlm2_chat_7b_kvint8, turbomind_internlm2_5_7b_chat_4bits, turbomind_internlm2_5_7b_chat_kvint4, turbomind_internlm2_5_7b_chat_kvint8, turbomind_internlm2_5_20b_chat_4bits, turbomind_internlm2_5_20b_chat_kvint4, turbomind_internlm2_5_20b_chat_kvint8, turbomind_qwen1_5_7b_chat_4bits, turbomind_qwen1_5_7b_chat_kvint4, turbomind_qwen1_5_7b_chat_kvint8, turbomind_llama2_7b_chat_4bits, turbomind_llama2_7b_chat_kvint4, turbomind_llama2_7b_chat_kvint8, turbomind_llama3_8b_instruct_4bits, turbomind_llama3_8b_instruct_kvint4, turbomind_llama3_8b_instruct_kvint8, turbomind_llama3_1_8b_instruct_4bits, turbomind_llama3_1_8b_instruct_kvint4, turbomind_llama3_1_8b_instruct_kvint8, turbomind_qwen2_7b_instruct_4bits, turbomind_qwen2_7b_instruct_kvint8]'
+      chat_datasets:
         required: true
         description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
+        type: string
+        default: '[*mmlu_datasets, *gsm8k_datasets]'
+      base_models:
+        required: true
+        description: 'Tested TurboMind models list. eg. [turbomind_internlm2_5_7b, turbomind_qwen2_7b]'
+        type: string
+        default: '[turbomind_internlm2_5_7b, turbomind_qwen2_7b]'
+      baes_datasets:
+        required: true
+        description: 'Tested datasets list. eg. [*mmlu_datasets, *gsm8k_datasets]'
         type: string
         default: '[*mmlu_datasets, *gsm8k_datasets]'
       local_config:
@@ -28,20 +38,20 @@ on:
         description: 'Whether use local eval config'
         type: boolean
         default: false
-      devices:
+      offline_mode:
         required: true
-        description: 'CUDA_VISIBLE_DEVICES.'
-        type: string
-        default: '0,1,2,3,4,5,6,7'
+        description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
+        type: boolean
+        default: false
       dependency_pkgs:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'pynvml packaging protobuf transformers_stream_generator transformers human_eval'
+        default: 'pynvml packaging protobuf transformers_stream_generator transformers human_eval mmengine-lite==0.10.5'
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'pynvml packaging protobuf transformers_stream_generator transformers human_eval'}}
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'pynvml packaging protobuf transformers_stream_generator transformers human_eval mmengine-lite==0.10.5'}}
 
 jobs:
   linux-build:
@@ -82,11 +92,16 @@ jobs:
 
   evaluate:
     needs: linux-build
+    if: ${{github.event_name == 'schedule' || !cancelled()}}
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 4320 # 72hours
+    strategy:
+      fail-fast: false
+      matrix:
+        evaluate_type: ['chat', 'base']
     container:
-      image: nvcr.io/nvidia/tritonserver:24.03-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
+      image: openmmlab/lmdeploy:latest-cu11
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -102,18 +117,19 @@ jobs:
           export TIME_STAMP="$(date +'%Y%m%d-%H%M%S')"
           echo "TIME_STAMP=$TIME_STAMP" >> $GITHUB_ENV
       - name: Clone repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v2
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Copy repository - offline
+        if: ${{inputs.offline_mode}}
+        run: cp -r /root/models/offline_pkg/lmdeploy/. .
       - name: Download Artifacts
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
-      - name: Install pytorch
-        run: |
-          python3 -m pip cache dir
-          python3 -m pip install torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
@@ -122,18 +138,24 @@ jobs:
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install ${{env.dependency_pkgs}}
       - name: Install lmdeploy
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
-          python3 -m pip install lmdeploy-*.whl
+          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip install -r requirements/test.txt
+      - name: Install lmdeploy - offline
+        if: ${{inputs.offline_mode}}
+        run: |
+          python3 -m pip install /root/models/offline_pkg/py310/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
           python3 -m pip install -e .
-          python3 -m pip install triton==2.1.0
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
+          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
       - name: Setup paths for evaluation
@@ -142,18 +164,23 @@ jobs:
           python3 .github/scripts/action_tools.py create_model_links /root/models .
       - name: Use local config
         if: ${{inputs.local_config}}
-        run: cp /nvme/qa_test_models/offline_pkg/eval_config.py .github/scripts/eval_opencompass_config.py
-      - name: Evaluate models
+        run: cp /root/models/offline_pkg/eval_config.py .github/scripts/eval_opencompass_config.py
+      - name: Evaluate chat models
+        if: matrix.evaluate_type == 'chat'
         run: |
-          echo ${{github.event.inputs.models}}
-          echo ${{github.event.inputs.devices}}
+          echo ${{github.event.inputs.chat_models}}
+          echo ${{github.event.inputs.chat_datasets}}
           export LMDEPLOY_DIR=$(pwd)
-          export CUDA_VISIBLE_DEVICES="${{github.event.inputs.devices}}"
 
-          python3 .github/scripts/action_tools.py evaluate \
-            --models "${{github.event.inputs.models}}" \
-            --datasets "${{github.event.inputs.datasets}}" \
-            --workspace /root/evaluation-reports/${{ github.run_id }}
+          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.chat_models}}" "${{github.event.inputs.chat_datasets}}" /root/evaluation-reports/${{ github.run_id }} chat
+      - name: Evaluate base models
+        if: matrix.evaluate_type == 'base'
+        run: |
+          echo ${{github.event.inputs.base_models}}
+          echo ${{github.event.inputs.baes_datasets}}
+          export LMDEPLOY_DIR=$(pwd)
+
+          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.base_models}}" "${{github.event.inputs.baes_datasets}}" /root/evaluation-reports/${{ github.run_id }} base
       - name: Clear workspace
         if: always()
         run: |

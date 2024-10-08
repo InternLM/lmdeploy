@@ -9,7 +9,7 @@ from packaging.version import Version, parse
 from PIL import Image
 
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+                               TurbomindEngineConfig, VisionConfig)
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.engine.request import _run_until_complete
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
@@ -70,12 +70,16 @@ def run_local(model_path: str,
               **kwargs):
 
     from lmdeploy.serve.vl_async_engine import VLAsyncEngine
+    if isinstance(backend_config, PytorchEngineConfig):
+        backend_config.thread_safe = True
+    vision_config = VisionConfig(thread_safe=True)
     engine = VLAsyncEngine(model_path=model_path,
                            model_name=model_name,
                            backend=backend,
                            backend_config=backend_config,
                            chat_template_config=chat_template_config,
                            tp=tp,
+                           vision_config=vision_config,
                            **kwargs)
 
     def add_image(chatbot, session, file):

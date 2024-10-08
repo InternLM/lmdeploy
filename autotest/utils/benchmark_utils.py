@@ -2,6 +2,7 @@ import os
 import subprocess
 from subprocess import PIPE, Popen
 
+import allure
 import psutil
 from utils.config_utils import get_workerid
 from utils.run_restful_chat import health_check
@@ -59,10 +60,11 @@ def generation_test(config,
     ])
 
     returncode, stderr = run_testcase(cmd, benchmark_log)
-
+    allure.attach.file(benchmark_log,
+                       attachment_type=allure.attachment_type.TEXT)
     if returncode == 0 and not os.path.isfile(csv_path):
-        return False, benchmark_log, 'result is empty'
-    return returncode == 0, benchmark_log, stderr
+        return False, 'result is empty'
+    return returncode == 0, stderr
 
 
 def throughput_test(config,
@@ -118,12 +120,15 @@ def throughput_test(config,
         ])
 
         returncode, stderr = run_testcase(cmd, benchmark_log)
+        allure.attach.file(benchmark_log,
+                           attachment_type=allure.attachment_type.TEXT)
 
         if returncode == 0 and not os.path.isfile(csv_path):
-            return False, benchmark_log, 'result is empty'
+            return False, 'result is empty'
         if returncode != 0:
-            return returncode == 0, benchmark_log, stderr
-    return returncode == 0, benchmark_log, stderr
+            return returncode == 0, stderr
+
+    return returncode == 0, stderr
 
 
 def restful_test(config,
@@ -161,7 +166,7 @@ def restful_test(config,
 
     http_url = f'http://localhost:{port}'
     if not health_check(http_url):
-        return False, None, 'server not start'
+        return False, 'server not start'
 
     command = f'python3 benchmark/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True '  # noqa: F401, E501
     if is_smoke:
@@ -186,13 +191,19 @@ def restful_test(config,
                                            text=True,
                                            encoding='utf-8')
             f.writelines(benchmark_res.stderr)
+        allure.attach.file(benchmark_log,
+                           attachment_type=allure.attachment_type.TEXT)
     if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
-        return False, benchmark_log, 'result is empty'
-    return benchmark_res.returncode == 0, benchmark_log, benchmark_res.stderr
+        return False, 'result is empty'
+    return benchmark_res.returncode == 0, benchmark_res.stderr
 
 
 def run_testcase(cmd, benchmark_log):
-    with open(benchmark_log, 'w') as f:
+    if os.path.isfile(benchmark_log):
+        write_type = 'a'
+    else:
+        write_type = 'w'
+    with open(benchmark_log, write_type) as f:
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
         with Popen([cmd],
@@ -236,8 +247,8 @@ def create_multi_level_directory(path):
 
 
 def get_max_cache_entry(model, backend):
-    if backend != 'turbomind':
-        return ''
+    if backend == 'pytorch':
+        return '--cache-max-entry-count 0.8'
     if 'Llama-2' in model:
         return '--cache-max-entry-count 0.95'
     elif 'internlm2' in model:

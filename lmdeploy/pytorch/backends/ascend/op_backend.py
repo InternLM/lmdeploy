@@ -75,7 +75,7 @@ class AscendOpsBackend(DefaultOpsBackend):
     def update_step_context(cls, step_context):
         """update step context."""
         kv_start_indices, attention_mask = [], []
-        _, block_size, _ = step_context.kv_caches[0][0].shape
+        block_num, block_size, _ = step_context.kv_caches[0][0].shape
         device = step_context.block_offsets.device
 
         is_unpaged_prefill = False
@@ -98,10 +98,14 @@ class AscendOpsBackend(DefaultOpsBackend):
                         diagonal=max_kv_seq_len - max_q_seq_len,
                     ))
                 attention_mask.append(single_attention_mask)
+        total_slots = torch.arange(block_num * block_size,
+                                   dtype=torch.long,
+                                   device=device)
+        total_slots = total_slots.view(block_num, block_size)
         for i in range(step_context.q_start_loc.size(0)):
             q_seq_len = int(step_context.q_seqlens[i])
             kv_seq_len = int(step_context.kv_seqlens[i])
-            if not step_context.is_decoding:
+            if not (step_context.is_decoding or is_unpaged_prefill):
                 single_attention_mask = torch.logical_not(
                     torch.tril(
                         torch.ones(step_context.q_seqlens[i],
@@ -113,17 +117,11 @@ class AscendOpsBackend(DefaultOpsBackend):
                     ))
                 attention_mask.append(single_attention_mask)
             history_length = kv_seq_len - q_seq_len
-            block_idx = history_length // block_size
-            block_loc = step_context.block_offsets[i][block_idx]
-            token_loc = history_length % block_size
-            for j in range(q_seq_len):
-                kv_start_indices.append([block_loc * block_size + token_loc])
-                if j == q_seq_len - 1:
-                    break
-                token_loc = (token_loc + 1) % block_size
-                block_idx = block_idx if token_loc else block_idx + 1
-                block_loc = step_context.block_offsets[i][block_idx]
-        kv_start_indices = torch.tensor(kv_start_indices, device=device)
+            slot_tables = total_slots[step_context.block_offsets[i]].flatten()
+            slot_indices = [p for p in range(history_length, kv_seq_len)]
+            slots = slot_tables[slot_indices].reshape((-1, 1))
+            kv_start_indices.append(slots)
+        kv_start_indices = torch.cat(kv_start_indices)
 
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(

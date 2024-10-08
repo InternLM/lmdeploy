@@ -9,8 +9,7 @@ from utils.get_run_config import get_model_name, get_tp_num
 from utils.rule_condition_assert import assert_result
 
 from lmdeploy import pipeline
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 
@@ -53,9 +52,6 @@ def run_pipeline_chat_test(config,
 
     pipe = pipeline(hf_path, backend_config=backend_config)
 
-    # run testcases
-    gen_config = GenerationConfig(top_k=1)
-
     config_log = os.path.join(
         log_path, '_'.join([
             'pipeline', 'config', type, worker_id,
@@ -63,10 +59,12 @@ def run_pipeline_chat_test(config,
         ]))
     file = open(config_log, 'w')
     log_string = '\n'.join([
-        'reproduce config info:', 'engine_config = ' + str(backend_config),
-        'gen_config = ' + str(gen_config),
+        'reproduce config info:',
+        'from lmdeploy.messages import PytorchEngineConfig',
+        'from lmdeploy.messages import TurbomindEngineConfig',
+        'engine_config = ' + str(backend_config),
         'pipe = pipeline("' + hf_path + '",  backend_config=engine_config)',
-        'res = pipe("Hi, pls introduce shanghai", gen_config=gen_config)'
+        'res = pipe("Hi, pls introduce shanghai")'
     ])
     file.writelines(log_string)
     print(log_string)
@@ -91,7 +89,7 @@ def run_pipeline_chat_test(config,
             prompts.append({'role': 'user', 'content': prompt})
             file.writelines('prompt:' + prompt + '\n')
 
-            response = pipe([prompts], gen_config=gen_config)[0].text
+            response = pipe([prompts])[0].text
 
             case_result, reason = assert_result(response,
                                                 prompt_detail.values(),

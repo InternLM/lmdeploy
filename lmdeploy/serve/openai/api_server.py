@@ -40,6 +40,9 @@ class VariableInterface:
     session_id: int = 0
     api_keys: Optional[List[str]] = None
     request_hosts = []
+    # following are for registering to proxy server
+    proxy_url: Optional[str] = None
+    api_server_url: Optional[str] = None
 
 
 app = FastAPI(docs_url='/')
@@ -926,6 +929,33 @@ async def chat_interactive_v1(request: GenerateRequest,
         return JSONResponse(ret)
 
 
+@app.on_event('startup')
+async def startup_event():
+    if VariableInterface.proxy_url is None:
+        return
+    try:
+        import requests
+        url = f'{VariableInterface.proxy_url}/nodes/add'
+        data = {
+            'url': VariableInterface.api_server_url,
+            'status': {
+                'models': get_model_list()
+            }
+        }
+        headers = {
+            'accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+        response = requests.post(url, headers=headers, json=data)
+
+        if response.status_code != 200:
+            raise HTTPException(status_code=400,
+                                detail='Service registration failed')
+        print(response.text)
+    except Exception as e:
+        print(f'Service registration failed: {e}')
+
+
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -941,6 +971,8 @@ def serve(model_path: str,
           log_level: str = 'ERROR',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
+          proxy_url: Optional[str] = None,
+          max_log_len: int = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -966,7 +998,7 @@ def serve(model_path: str,
             `turbomind` backend.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
             config instance. Default to none.
-        chat_template_config (ChatTemplateConfig): chat template configuration.
+        chat_template_config (ChatTemplateConfig): chat template configuration
             Default to None.
         server_name (str): host ip for serving
         server_port (int): server port
@@ -975,11 +1007,17 @@ def serve(model_path: str,
         allow_credentials (bool): whether to allow credentials for CORS
         allow_methods (List[str]): a list of allowed HTTP methods for CORS
         allow_headers (List[str]): a list of allowed HTTP headers for CORS
-        log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
-        api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
-            a single api_key. Default to None, which means no api key applied.
-        ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
-    """  # noqa E501
+        log_level(str): set log level whose value among [CRITICAL, ERROR,
+            WARNING, INFO, DEBUG]
+        api_keys (List[str] | str | None): Optional list of API keys. Accepts
+            string type as a single api_key. Default to None, which means no
+            api key applied.
+        ssl (bool): Enable SSL. Requires OS Environment variables
+            'SSL_KEYFILE' and 'SSL_CERTFILE'.
+        proxy_url (str): The proxy url to register the api_server.
+        max_log_len (int): Max number of prompt characters or prompt tokens
+            being printed in log. Default: Unlimited
+    """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
@@ -1010,8 +1048,12 @@ def serve(model_path: str,
         backend=backend,
         backend_config=backend_config,
         chat_template_config=chat_template_config,
+        max_log_len=max_log_len,
         **kwargs)
 
+    if proxy_url is not None:
+        VariableInterface.proxy_url = proxy_url
+        VariableInterface.api_server_url = f'{http_or_https}://{server_name}:{server_port}'  # noqa
     for i in range(3):
         print(
             f'HINT:    Please open \033[93m\033[1m{http_or_https}://'

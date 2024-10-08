@@ -8,11 +8,10 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 
 from .patch import build_model_from_hf_config
+from .utils.cudagraph import CudaGraphMixin
 
 
-class LlavaForConditionalGeneration(nn.Module):
-
-    support_cuda_graph = True
+class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin):
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -41,6 +40,10 @@ class LlavaForConditionalGeneration(nn.Module):
                                            past_key_values=past_key_values,
                                            position_ids=position_ids,
                                            attn_metadata=attn_metadata)
+
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.language_model.get_logits(hidden_states)
 
     def get_input_embeddings(self):
         """get input embeddings."""
