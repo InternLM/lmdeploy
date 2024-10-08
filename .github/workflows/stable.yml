@@ -22,9 +22,9 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'
+        default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath mmengine-lite==0.10.5'
   schedule:
-    - cron:  '00 8 * * 1,5'
+    - cron:  '00 8 * * 1'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -32,7 +32,8 @@ env:
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   REPORT_DIR: /nvme/qa_test_models/stable_reports/${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'}}
+  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath mmengine-lite==0.10.5'}}
+  COMPASS_DATA_CACHE: /nvme/qa_test_models/dataset
 
 jobs:
   linux-build:
@@ -120,6 +121,12 @@ jobs:
         run: |
           python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+      - name: Install opencompass
+        run: |
+          git clone --depth=1 https://github.com/open-compass/opencompass.git
+          cd opencompass
+          python3 -m pip install -e .
+          cd ..
       - name: Check env
         run: |
           python3 -m pip list
@@ -130,16 +137,24 @@ jobs:
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/${{matrix.model}} --tp 2 --max-batch-size 256 --cache-max-entry-count 0.9 --server-port 23344 > ${{env.REPORT_DIR}}/restful.log 2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
+      - name: Run OC result
+        continue-on-error: true
+        run: |
+          ln -s /nvme/qa_test_models/dataset/data .
+          opencompass .github/scripts/eval_stable_object_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-object-1
+          opencompass .github/scripts/eval_stable_subject_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-subject-1
+          opencompass .github/scripts/eval_stable_object_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-object-2
+          opencompass .github/scripts/eval_stable_subject_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-subject-2
+          opencompass .github/scripts/eval_stable_object_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-object-3
+          opencompass .github/scripts/eval_stable_subject_config.py --reuse --dump-eval-details --work-dir ${{env.REPORT_DIR}}-subject-3
       - name: Test lmdeploy - restful api
         run: |
           python3 benchmark/profile_restful_api.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json --stream-output True --num-prompts 10000 --csv ${{env.REPORT_DIR}}/stable.csv > ${{env.REPORT_DIR}}/stable.log
           python3 /nvme/qa_test_models/offline_pkg/profile_restful_api_internal.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/Mixed.json --stream-output True --num-prompts 100000 --csv ${{env.REPORT_DIR}}/stable-internal-1.csv > ${{env.REPORT_DIR}}/stable-internal-1.log
           python3 /nvme/qa_test_models/offline_pkg/profile_restful_api_internal.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/Mixed.json --stream-output True --num-prompts 100000 --csv ${{env.REPORT_DIR}}/stable-internal-2.csv > ${{env.REPORT_DIR}}/stable-internal-2.log
           python3 /nvme/qa_test_models/offline_pkg/profile_restful_api_internal.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/Mixed.json --stream-output True --num-prompts 100000 --csv ${{env.REPORT_DIR}}/stable-internal-3.csv > ${{env.REPORT_DIR}}/stable-internal-3.log
-      - name: Kill api server
-        if: always()
-        run: |
-          kill -15 "$restful_pid"
+          python3 /nvme/qa_test_models/offline_pkg/profile_restful_api_internal.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/Mixed.json --stream-output True --num-prompts 100000 --csv ${{env.REPORT_DIR}}/stable-internal-2.csv > ${{env.REPORT_DIR}}/stable-internal-4.log
+          python3 /nvme/qa_test_models/offline_pkg/profile_restful_api_internal.py localhost:23344 /nvme/qa_test_models/${{matrix.model}} /nvme/qa_test_models/datasets/Mixed.json --stream-output True --num-prompts 100000 --csv ${{env.REPORT_DIR}}/stable-internal-3.csv > ${{env.REPORT_DIR}}/stable-internal-5.log
       - name: Attach result
         if: always()
         run: |
@@ -147,6 +162,12 @@ jobs:
           python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal-1.csv
           python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal-2.csv
           python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal-3.csv
+          python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal-4.csv
+          python3 .github/scripts/action_tools.py add_summary ${{env.REPORT_DIR}}/stable-internal-5.csv
+      - name: Kill api server
+        if: always()
+        run: |
+          kill -15 "$restful_pid"
       - name: Clear workfile
         if: always()
         run: |
