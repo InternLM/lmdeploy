@@ -135,15 +135,29 @@ def _fill_kv_cache_kernel(
                      mask=maskv)
 
 
-def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
-                  v_caches: Tensor, q_start_loc: Tensor, q_seq_length: Tensor,
-                  kv_seq_length: Tensor, max_q_seq_length: int,
-                  block_offsets: Tensor):
+def fill_kv_cache(k_states: Tensor,
+                  v_states: Tensor,
+                  k_caches: Tensor,
+                  v_caches: Tensor,
+                  q_start_loc: Tensor,
+                  q_seq_length: Tensor,
+                  kv_seq_length: Tensor,
+                  max_q_seq_length: int,
+                  block_offsets: Tensor,
+                  kv_layout: str = 'bshd'):
     """fill key/value state to cache for paged attention."""
+    if kv_layout == 'bshd':
+        b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
+    elif kv_layout == 'bhsd':
+        b_dim, s_dim, h_dim, d_dim = (0, 2, 1, 3)
+    else:
+        raise RuntimeError('Unsupported layout.')
 
     block_offsets = block_offsets.contiguous()
     batch_size = block_offsets.size(0)
-    block_size, num_heads, head_dim = k_caches.size()[1:]
+    block_size = k_caches.size(s_dim)
+    num_heads = k_caches.size(h_dim)
+    head_dim = k_caches.size(d_dim)
     head_dim_v = v_states.size(-1)
     max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
 
@@ -171,14 +185,14 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
         stride_vss=v_states.stride(-3),
         stride_vsh=v_states.stride(-2),
         stride_vsd=v_states.stride(-1),
-        stride_kcn=k_caches.stride(0),
-        stride_kcb=k_caches.stride(1),
-        stride_kch=k_caches.stride(2),
-        stride_kcd=k_caches.stride(3),
-        stride_vcn=v_caches.stride(0),
-        stride_vcb=v_caches.stride(1),
-        stride_vch=v_caches.stride(2),
-        stride_vcd=v_caches.stride(3),
+        stride_kcn=k_caches.stride(b_dim),
+        stride_kcb=k_caches.stride(s_dim),
+        stride_kch=k_caches.stride(h_dim),
+        stride_kcd=k_caches.stride(d_dim),
+        stride_vcn=v_caches.stride(b_dim),
+        stride_vcb=v_caches.stride(s_dim),
+        stride_vch=v_caches.stride(h_dim),
+        stride_vcd=v_caches.stride(d_dim),
         stride_boff=block_offsets.stride(0),
         BLOCK=BLOCK,
         BLOCK_D=BLOCK_D,
