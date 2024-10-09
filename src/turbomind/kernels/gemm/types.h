@@ -236,9 +236,9 @@ struct Tape {
     char* buffer;
     int4* gemm_shapes;
     int4* tiled_shapes;
-    int2* offsets_mn;
     int4* tile_offsets;
     int2* iter_k_ranges;
+    int*  tile_ids;
 };
 
 struct Operation {

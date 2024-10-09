@@ -177,10 +177,8 @@ struct Silu {
 
 struct EpilogueParam {
     MatrixParam c;
-
-    float* partial_C;
-    int    partial_C_ld;
-    int*   locks;  // (m/cta_m, n/cta_n, k)
+    MatrixParam partials;
+    int*        locks;
 
     MatrixParam scale_S;
     MatrixParam scale_C;
@@ -337,18 +335,16 @@ struct Epilogue_ {
 #endif
 
     template<class FragC, class Pred>
-    __device__ void
-    Reduce_v2(FragC& frag_C, int split_id, bool is_last, int2 cs0, Pred& pred, const EpilogueParam& param)
+    __device__ void Reduce(FragC& frag_C, const MatrixData& p, bool is_first, bool is_last, int2 cs0, Pred& pred)
     {
         constexpr int dc = sizeof(Dtype) * Map::kDeltaC;
-        const int     ds = sizeof(Dtype) * Map::kDeltaS * param.partial_C_ld;
+        const int     ds = sizeof(Dtype) * Map::kDeltaS * p.ptr.stride;
 
-        const auto ptr0 = reinterpret_cast<char*>(param.partial_C + cs2idx(cs0, (int64_t)param.partial_C_ld));
+        char* ptr = (char*)p.ptr.ptr + sizeof(Dtype) * dot(cs0, long2{1, p.ptr.stride});
 
-        Pred ld_mask = split_id == 0 ? Pred{} : pred;
+        Pred ld_mask = is_first ? Pred{} : pred;
         Pred st_mask = is_last ? Pred{} : pred;
 
-        auto ptr = ptr0;
         PRAGMA_UNROLL
         for (int s = 0; s < S; ++s) {
             PRAGMA_UNROLL
@@ -376,6 +372,7 @@ struct Epilogue_ {
                                const int4&          tile_offset,
                                const int4&          tiled_shape,
                                const int2&          extents,
+                               int                  tile_id,
                                bool                 is_last,
                                const EpilogueParam& param,
                                SharedStorage&       storage)
@@ -405,11 +402,13 @@ struct Epilogue_ {
         }
 
         if (SplitK_ && tiled_shape.z > 1) {
-            int* barrier = &param.locks[tile_offset.x * tiled_shape.y + tile_offset.y];
+            int* barrier = &param.locks[tile_id];
 
             sem_wait(barrier, tile_offset.z, threadIdx.x == 0);
 
-            Reduce_v2(tmp_C, tile_offset.z, is_last, cs0, pred, param);
+            const MatrixData p = resolve<Dtype, kMode>(param.partials, tile_offset.w);
+
+            Reduce(tmp_C, p, tile_offset.z == 0, is_last, cs0, pred);
 
             const int post_id = is_last ? 0 : tile_offset.z + 1;
             sem_post(barrier, post_id, threadIdx.x == 0);

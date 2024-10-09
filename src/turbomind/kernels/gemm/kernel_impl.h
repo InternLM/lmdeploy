@@ -206,13 +206,13 @@ public:
 
         const bool silu_act = ((int)operation.epilogue & (int)Epilogue::kGatedSilu);
 
-        const int partial_C_ld = mk2cs<Gemm::kOrderC>(Ddesc.rows, Ddesc.cols).x;
+        MatrixLayout Pdesc = Ddesc;
+        Pdesc.ld           = mk2cs<Gemm::kOrderC>(Pdesc.rows, Pdesc.cols).x;
 
         MatrixCombination_v3 combin_mat{to_param((void*)C, Cdesc), alpha, beta};
 
         EpilogueParam epilogue{to_param((void*)D, Ddesc),
-                               (float*)workspace.partials,
-                               partial_C_ld,
+                               to_param((void*)workspace.partials, Pdesc),
                                (int*)workspace.barriers,
                                to_param((void*)U, Udesc),
                                to_param((void*)V, Vdesc),

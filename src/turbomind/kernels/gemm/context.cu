@@ -8,10 +8,10 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 #include "src/turbomind/utils/monotonic.h"
+#include <algorithm>
 #include <cub/block/block_reduce.cuh>
 #include <iostream>
 #include <tuple>
-#include <algorithm>
 
 namespace turbomind::gemm {
 
@@ -227,9 +227,9 @@ static void resize(Tape& tape, int ctas, int num, cudaStream_t st)
         Monotonic alloc{base};
         alloc(&tape.tile_offsets, ctas);
         alloc(&tape.iter_k_ranges, ctas);
+        alloc(&tape.tile_ids, ctas);
         alloc(&tape.gemm_shapes, num);
         alloc(&tape.tiled_shapes, num);
-        alloc(&tape.offsets_mn, num);
         return (char*)alloc.ptr() - (char*)base;
     };
     if (tape.max_ctas < ctas || tape.max_num < num) {
@@ -262,11 +262,11 @@ __global__ void schedule_gemm_split_k(Tape tape, GemmScheduler<order> sched, dim
     if (tid == 0) {
         tape.gemm_shapes[tid]  = sched.gemm_shape();
         tape.tiled_shapes[tid] = sched.tiled_shape();
-        tape.offsets_mn[tid]   = {};
     }
 
     tape.tile_offsets[tid]  = sched.tile_offset();
     tape.iter_k_ranges[tid] = sched.iter_k_range();
+    tape.tile_ids[tid]      = sched.tile_id();
 }
 
 DynamicGemmContext::DynamicGemmContext(const cudaDeviceProp& prop, cudaStream_t stream):
@@ -382,7 +382,7 @@ std::vector<LaunchSpec> MoeGemmContext::Populate(const Kernel& kernel, const Pop
 
     // Note: cdiv(t * e, E) * E >= t * e
     const int batch_size = ceil_div(tokens_ * experts_per_token_, expert_num_);
-    const int num        = std::max(tokens_ * experts_per_token_, expert_num_);
+    const int num        = std::min(tokens_ * experts_per_token_, expert_num_);
 
     const int64_t tiled_shape_m  = cdiv(batch_size, desc.cta_tile.x);
     const int64_t tiled_shape_n  = cdiv(n, desc.cta_tile.y);
@@ -402,6 +402,7 @@ std::vector<LaunchSpec> MoeGemmContext::Populate(const Kernel& kernel, const Pop
         kernel.GetMaxSplits({batch_size, n, k, num}, tiled_shape_mn, param.barriers_size, param.partials_size);
 
     max_splits = std::min(param.max_splits, max_splits);
+    // std::cout << "max_splits: " << max_splits << "\n";
 
     std::vector<LaunchSpec> specs;
 
@@ -422,6 +423,8 @@ std::vector<LaunchSpec> MoeGemmContext::Populate(const Kernel& kernel, const Pop
         const int   residue      = grid_size % concurrency;
         const float partial_wave = (float)cdiv(residue, sm_count_) / desc.max_active_ctas;
         const float waves        = full_waves + partial_wave;
+
+        // std::cout << splits << " " << grid_size << " " << concurrency << " " << waves << std::endl;
 
         if (splits > 1 && waves > param.max_waves) {
             break;
@@ -460,8 +463,8 @@ __global__ void schedule_gemm_moe(Tape       tape,
 {
     const int e = blockIdx.x;
 
-    __shared__ int  shared_sum_ctas;
-    __shared__ int  shared_ctas;
+    __shared__ int  shared_sum_tiles;
+    __shared__ int  shared_tiles;
     __shared__ int4 shared_grid;
 
     {
@@ -473,8 +476,8 @@ __global__ void schedule_gemm_moe(Tape       tape,
 
         const dim3 grid = sched.get_grid_shape(tiled_shape, log_tile);
 
-        // Num of ctas for the expert
-        const int ctas = grid.x * grid.y * grid.z;
+        // Num of tiles for the expert
+        const int tiles = grid.x * grid.y;
 
         using BlockReduce = cub::BlockReduce<int2, block_dim>;
 
@@ -484,19 +487,19 @@ __global__ void schedule_gemm_moe(Tape       tape,
 
         // Sum tokens/cta_m in [0, e) range (exclusive)
         // Not sure if `num_valid = 0` works (as no init value is supplied). Conditioning is used instead.
-        const int2 sum_tokens_ctas =
-            BlockReduce{temp_storage}.Reduce(threadIdx.x < e ? int2{tokens, ctas} : int2{}, plus);
+        const int2 sum_tokens_tiles =
+            BlockReduce{temp_storage}.Reduce(threadIdx.x < e ? int2{tokens, tiles} : int2{}, plus);
 
         // Only thread-0 has the reduced value
         if (threadIdx.x == 0) {
-            tape.offsets_mn[e] = {sum_tokens_ctas.x, e * output_dims};
-            shared_sum_ctas    = sum_tokens_ctas.y;
+            shared_sum_tiles = sum_tokens_tiles.y;
         }
 
         // Shared properties of current expert
         if (threadIdx.x == e) {
             shared_grid = {(int)grid.x, (int)grid.y, (int)grid.z, 1};
-            shared_ctas = ctas;
+
+            shared_tiles = tiles;
 
             tape.gemm_shapes[e]  = {tokens, output_dims, input_dims, 1};
             tape.tiled_shapes[e] = tiled_shape;
@@ -505,9 +508,10 @@ __global__ void schedule_gemm_moe(Tape       tape,
 
     __syncthreads();
 
-    const int  ctas   = shared_ctas;
-    const int  offset = shared_sum_ctas;
     const int4 grid   = shared_grid;
+    const int  ctas   = shared_tiles * grid.z;
+    const int  tiles  = shared_sum_tiles;
+    const int  offset = shared_sum_tiles * grid.z;
 
     for (int i = threadIdx.x; i < ctas; i += block_dim) {
         int idx = i;
@@ -527,12 +531,14 @@ __global__ void schedule_gemm_moe(Tape       tape,
 
         tape.tile_offsets[offset + i]  = tile_offset;
         tape.iter_k_ranges[offset + i] = sched.iter_k_range();
+        tape.tile_ids[offset + i]      = tiles + sched.tile_id();
     }
 
     if (e == expert_num - 1) {
         for (int i = threadIdx.x + offset + ctas; i < max_ctas; i += block_dim) {
             tape.tile_offsets[i]  = int4{-1, -1, -1, -1};
             tape.iter_k_ranges[i] = int2{-1, -1};
+            tape.tile_ids[i]      = -1;
         }
     }
 }

@@ -150,7 +150,14 @@ struct GemmUniversal {
             const bool is_last = cta_map.iter_k_range().y * CTA_K == K;
 
             Epilogue epilogue{};
-            epilogue(frag_C, tile_offset, tiled_shape, extents, is_last, epi_param, storage.epilogue);
+            epilogue(frag_C,  //
+                     tile_offset,
+                     tiled_shape,
+                     extents,
+                     cta_map.tile_id(),
+                     is_last,
+                     epi_param,
+                     storage.epilogue);
         }
     }
 };

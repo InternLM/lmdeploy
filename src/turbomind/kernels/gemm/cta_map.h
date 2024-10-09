@@ -151,9 +151,9 @@ public:
         return iter_k_range_;
     }
 
-    TM_DEVICE constexpr int2 base_mn() const
+    TM_DEVICE int tile_id() const
     {
-        return int2{0, 0};
+        return tile_offset_.x * tiled_shape_.y + tile_offset_.y;
     }
 };
 
@@ -167,6 +167,7 @@ class DynamicScheduler {
     const int2* __restrict__ offsets_mn_;     // [group_num]
     const int4* __restrict__ tile_offsets_;   // [ctas]
     const int2* __restrict__ iter_k_ranges_;  // [ctas]
+    const int* __restrict__ tile_ids_;        // [ctas]
 
     int4 gemm_shape_;
     int4 tiled_shape_;
@@ -179,9 +180,9 @@ public:
         ctas_{tape.ctas},
         gemm_shapes_{tape.gemm_shapes},
         tiled_shapes_{tape.tiled_shapes},
-        offsets_mn_{tape.offsets_mn},
         tile_offsets_{tape.tile_offsets},
-        iter_k_ranges_{tape.iter_k_ranges}
+        iter_k_ranges_{tape.iter_k_ranges},
+        tile_ids_{tape.tile_ids}
     {
     }
 
@@ -236,9 +237,9 @@ public:
         return iter_k_range_;
     }
 
-    TM_DEVICE int2 base_mn() const
+    TM_DEVICE int tile_id() const
     {
-        return base_mn_;
+        return tile_ids_[blockIdx.x];
     }
 };
 
