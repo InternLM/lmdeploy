@@ -344,7 +344,14 @@ def _fwd_grouped_split_quant_kernel(
     BLOCK_H: tl.constexpr,
     BLOCK_DMODEL1: tl.constexpr,
 ):
-    """first step kernel of split k attention."""
+    """first step kernel of split k attention.
+
+    Args:
+        stride_xp: stride of page num dim
+        stride_xbs: stride of block size dim
+        stride_h: stride of head num dim
+        stride_d: stride of head size dim
+    """
     cur_batch = tl.program_id(2)
     cur_kv_head = tl.program_id(0)
     split_k_id = tl.program_id(1)
@@ -829,7 +836,14 @@ def _fwd_kernel_quant(
     BLOCK_N: tl.constexpr,
     BLOCK_DMODEL1: tl.constexpr,
 ):
-    """paged attention kernel."""
+    """paged attention kernel with dequant fused.
+
+    Args:
+        stride_xp: stride of page num dim
+        stride_xbs: stride of block size dim
+        stride_h: stride of head num dim
+        stride_d: stride of head size dim
+    """
     cur_batch = tl.program_id(2)
     cur_head = tl.program_id(1)
     start_m = tl.program_id(0)

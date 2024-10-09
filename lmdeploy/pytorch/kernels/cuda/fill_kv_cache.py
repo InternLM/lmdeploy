@@ -246,7 +246,17 @@ def _fill_kv_cache_quant_kernel(
     BLOCK_DV: tl.constexpr,
     BLOCK_H: tl.constexpr,
 ):
-    """fill kv cache kernel with int4 and int8 quant fuzed."""
+    """fill kv cache kernel with int4 and int8 quant fuzed.
+
+    Args:
+        stride_xss: stride of sequence length dim of key or value states
+        stride_xsh: stride of head_num dim of key or value states
+        stride_xsh: stride of head_size dim of key or value states
+        stride_xn: stride of page num dim
+        stride_xb: stride of block size dim
+        stride_xh: stride of head_num dim
+        stride_xd: stride of head_size dim
+    """
     batch_id = tl.program_id(0)
     block_id = tl.program_id(1)
     d_off = tl.arange(0, BLOCK_D)

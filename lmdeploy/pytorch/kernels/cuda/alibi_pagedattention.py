@@ -430,7 +430,13 @@ def _fwd_split_kernel_quant(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    """first step kernel of split k attention."""
+    """first step kernel of split k attention with dequant fused.
+
+    Args:
+        stride_xbs: stride of block size dim
+        stride_h: stride of head num dim
+        stride_d: stride of head size dim
+    """
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     split_k_id = tl.program_id(2)
@@ -619,7 +625,13 @@ def _fwd_kernel_quant(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    """forward kernel."""
+    """forward kernel with dequant fused.
+
+    Args:
+        stride_xbs: stride of block size dim
+        stride_h: stride of head num dim
+        stride_d: stride of head size dim
+    """
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     start_m = tl.program_id(2)
