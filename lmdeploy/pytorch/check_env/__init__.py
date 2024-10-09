@@ -102,7 +102,7 @@ def check_env_triton(device: str):
                 err = RuntimeError(
                     'Attention triton kernel does not fully support '
                     'triton[2.2.0~2.3.1] on device with capability<8. '
-                    'Please update your triton version.')
+                    'Please upgrade your triton version.')
                 _handle_exception(err, 'Triton', logger)
 
 
