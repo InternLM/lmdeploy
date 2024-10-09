@@ -30,14 +30,13 @@ def run_pipeline_chat_test(config,
     else:
         hf_path = model_case
 
-    if 'pytorch' == type:
+    if 'pytorch' in type:
         backend_config = PytorchEngineConfig(tp=tp)
-    elif 'pytorch_lora' == type:
-        backend_config = PytorchEngineConfig(tp=tp,
-                                             adapters=extra.get('adapters'))
     else:
         backend_config = TurbomindEngineConfig(tp=tp)
 
+    if 'lora' in type:
+        backend_config.adapters = extra.get('adapters')
     if 'kvint' in type:
         backend_config.quant_policy = extra.get('quant_policy')
 

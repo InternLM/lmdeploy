@@ -1,5 +1,6 @@
 import pytest
-from utils.config_utils import get_torch_model_list, get_workerid
+from utils.config_utils import (get_torch_kvint_model_list,
+                                get_torch_model_list, get_workerid)
 from utils.run_restful_chat import (run_all_step, start_restful_api,
                                     stop_restful_api)
 
@@ -51,6 +52,85 @@ def test_restful_chat_tp1(config, common_case_config, worker_id):
                          getModelList(tp_num=2),
                          indirect=True)
 def test_restful_chat_tp2(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     worker_id=worker_id,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+def getKvintModelList(tp_num, quant_policy):
+    return [{
+        'model': item,
+        'cuda_prefix': None,
+        'tp_num': tp_num,
+        'extra': f'--quant-policy {quant_policy}'
+    } for item in get_torch_kvint_model_list(
+        tp_num, quant_policy=quant_policy, exclude_dup=True)
+            if 'qwen2' not in item.lower() or quant_policy == 8]
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('prepare_environment',
+                         getKvintModelList(tp_num=1, quant_policy=4),
+                         indirect=True)
+def test_restful_chat_kvint4_tp1(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     worker_id=worker_id,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('prepare_environment',
+                         getKvintModelList(tp_num=2, quant_policy=4),
+                         indirect=True)
+def test_restful_chat_kvint4_tp2(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     worker_id=worker_id,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('prepare_environment',
+                         getKvintModelList(tp_num=1, quant_policy=8),
+                         indirect=True)
+def test_restful_chat_kvint8_tp1(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     worker_id=worker_id,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('prepare_environment',
+                         getKvintModelList(tp_num=2, quant_policy=8),
+                         indirect=True)
+def test_restful_chat_kvint8_tp2(config, common_case_config, worker_id):
     if get_workerid(worker_id) is None:
         run_all_step(config, common_case_config)
     else:
