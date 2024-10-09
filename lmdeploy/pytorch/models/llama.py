@@ -114,10 +114,11 @@ class LlamaMLP(nn.Module):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
+        mlp_bias = getattr(config, 'mlp_bias', False)
         self.gate_up_proj = build_merged_colwise_linear(
             config.hidden_size,
             [config.intermediate_size, config.intermediate_size],
-            bias=config.mlp_bias,
+            bias=mlp_bias,
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
@@ -130,7 +131,7 @@ class LlamaMLP(nn.Module):
         # down
         self.down_proj = build_rowwise_linear(config.intermediate_size,
                                               config.hidden_size,
-                                              bias=config.mlp_bias,
+                                              bias=mlp_bias,
                                               quant_config=quantization_config,
                                               dtype=dtype,
                                               device=device,

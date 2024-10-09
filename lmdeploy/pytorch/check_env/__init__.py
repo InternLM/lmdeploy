@@ -56,10 +56,10 @@ def check_env_torch():
         _handle_exception(e, 'PyTorch', logger)
 
 
-MAX_TRITON_VERSION = '2.2.0'
+MAX_TRITON_VERSION = '3.0.0'
 
 
-def check_env_triton():
+def check_env_triton(device: str):
     """check OpenAI Triton environment."""
     from packaging import version
     logger = get_logger('lmdeploy')
@@ -68,8 +68,8 @@ def check_env_triton():
         logger.debug('Checking <Triton> environment.')
         import torch
         import triton
-        if version.parse(
-                triton.__version__) > version.parse(MAX_TRITON_VERSION):
+        triton_version = version.parse(triton.__version__)
+        if triton_version > version.parse(MAX_TRITON_VERSION):
             logger.warning(
                 f'Engine has not been tested on triton>{MAX_TRITON_VERSION}.')
 
@@ -91,6 +91,20 @@ def check_env_triton():
     except Exception as e:
         _handle_exception(e, 'Triton', logger)
 
+    if device == 'cuda':
+        device_cap = torch.cuda.get_device_capability()
+        TRITON_VER_220 = version.parse('2.2.0')
+        TRITON_VER_231 = version.parse('2.3.1')
+
+        if device_cap[0] <= 7:
+            if (triton_version >= TRITON_VER_220
+                    and triton_version <= TRITON_VER_231):
+                err = RuntimeError(
+                    'Attention triton kernel does not fully support '
+                    'triton[2.2.0~2.3.1] on device with capability<8. '
+                    'Please upgrade your triton version.')
+                _handle_exception(err, 'Triton', logger)
+
 
 def check_env(device_type: str):
     """check all environment."""
@@ -99,7 +113,7 @@ def check_env(device_type: str):
     check_env_deeplink(device_type)
     check_env_torch()
     if device_type == 'cuda':
-        check_env_triton()
+        check_env_triton('cuda')
 
 
 MIN_TRANSFORMERS_VERSION = '4.33.0'
