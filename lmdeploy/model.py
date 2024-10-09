@@ -838,10 +838,12 @@ Reminder:
             return self.get_prompt(messages, sequence_start)
         box_map = dict(user=self.user,
                        ipython=self.ipython,
+                       tool=self.ipython,
                        assistant=self.assistant,
                        system=self.system)
         eox_map = dict(user=self.eoh,
                        ipython=self.eoi,
+                       tool=self.eoi,
                        assistant=self.eoa + self.separator,
                        system=self.eosys)
         ret = ''
