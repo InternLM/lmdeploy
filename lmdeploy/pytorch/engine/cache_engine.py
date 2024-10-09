@@ -333,6 +333,5 @@ class CacheEngine:
         else:
             raise ValueError(f'unsupported quant_policy {quant_policy}')
 
-        # TODO quant 4
         total = num_layers * (mem_key_block + mem_value_block)
         return total
