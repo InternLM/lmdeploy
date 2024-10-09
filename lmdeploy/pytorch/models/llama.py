@@ -371,6 +371,11 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
         )
         return hidden_states
 
+    def update_weights(self):
+        """update weights."""
+        if self.config.tie_word_embeddings:
+            self.lm_head.weight = self.model.embed_tokens.weight
+
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
         return self.lm_head(hidden_states)
