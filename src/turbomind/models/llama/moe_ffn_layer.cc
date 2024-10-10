@@ -101,6 +101,21 @@ void MoeFfnLayer<T>::forward(T* inout, int tokens, int layer_id, const MoeFfnWei
                      stream_);
     sync_check_cuda_error();
 
+    if (isTuning()) {
+        std::mt19937     g;
+        const auto       expert_ids = SampleUniform(tokens, param_.expert_num, param_.experts_per_token, g);
+        std::vector<int> cnt(param_.expert_num);
+        for (const auto& x : expert_ids) {
+            ++cnt[x];
+        }
+        h_offsets_[0] = 0;
+        for (int i = 0; i < param_.expert_num; ++i) {
+            h_offsets_[i + 1] = h_offsets_[i] + cnt[i];
+        }
+        check_cuda_error(
+            cudaMemcpyAsync(offsets_, h_offsets_, sizeof(int) * (param_.expert_num + 1), cudaMemcpyDefault, stream_));
+    }
+
     if (param_.method == MoeParam::kNaive) {
 
         dispatchMoeGather(inout_buf_, inout, f2n_, tokens, param_.experts_per_token, hidden_dim_, stream_);

@@ -29,12 +29,6 @@ template<typename T>
 void deviceMalloc(T** ptr, size_t size, bool is_random_initialize)
 {
     FT_CHECK_WITH_INFO(size >= ((size_t)0), "Ask deviceMalloc size " + std::to_string(size) + "< 0 is invalid.");
-    // if (size == 469719040) {
-    //     __builtin_trap();
-    // }
-    // int device_id{};
-    // cudaGetDevice(&device_id);
-    // std::cout << device_id << " " << size << std::endl;
     check_cuda_error(cudaMalloc((void**)(ptr), sizeof(T) * size));
     if (is_random_initialize) {
         cudaRandomUniform(*ptr, size);

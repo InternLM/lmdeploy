@@ -377,11 +377,9 @@ struct DispatchCache::Impl {
         // Sort indices and deduplicate
         for (auto& [desc, flat] : cache_) {
             auto& [idxs, specs] = flat;
-            const auto cmp      = [](auto& a, auto& b) {  //
-                return a.first < b.first;
-            };
-            std::stable_sort(idxs.begin(), idxs.end(), cmp);
-            idxs.erase(std::unique(idxs.begin(), idxs.end(), cmp), idxs.end());
+            std::stable_sort(idxs.begin(), idxs.end(), [](auto a, auto b) { return a.first < b.first; });
+            idxs.erase(std::unique(idxs.begin(), idxs.end(), [](auto a, auto b) { return a.first == b.first; }),
+                       idxs.end());
             // Remove unreferenced specs and update spec indices
             std::vector<LaunchSpec> tmp;
             for (auto& [key, val] : idxs) {

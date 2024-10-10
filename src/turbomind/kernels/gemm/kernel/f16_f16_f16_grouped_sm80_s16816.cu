@@ -52,13 +52,14 @@ void Registry::f16_f16_f16_grouped_sm80_s16816()
                           pair<Striding::kFlat, Striding::kFlat>,
                           DynamicScheduler<kColMajor>>;
 
-
     // clang-format off
 
     Add<C::Type<256, 128, 64, 4, 2, 1, D, D, 3, false, 1, 1>>();
     Add<C::Type<128, 256, 64, 2, 4, 1, D, D, 3, false, 1, 1>>(); // 10
     Add<C::Type<128, 256, 32, 2, 4, 1, D, D, 3, false, 1, 1>>();
     Add<C::Type<128, 128, 32, 2, 2, 1, D, D, 3, true, 1, 1>>(); // 6
+    Add<C::Type<128, 128, 64, 2, 2, 1, D, D, 3, true, 1, 1>>(); 
+    Add<C::Type<128, 128, 32, 2, 2, 1, D, D, 5, true, 1, 1>>(); 
     // Add<C::Type<128, 128, 32, 2, 2, 1, D, D, 4, true, 1, 1>>();
     // Add<C::Type<128, 128, 32, 2, 2, 1, D, D, 5, true, 1, 1>>();
     // Add<C::Type< 96, 128, 32, 2, 2, 1, D, D, 3, false, 1, 1>>();
@@ -68,11 +69,12 @@ void Registry::f16_f16_f16_grouped_sm80_s16816()
     // Add<C::Type< 64, 256, 32, 1, 4, 1, D, S, 3, true, 1, 1>>();
     Add<C::Type< 64, 128,  64, 1, 4, 1, D, S, 3, true, 1, 1>>();
     Add<C::Type< 64,  64,  64, 2, 2, 1, D, S, 3, true, 1, 1>>(); // *
+    Add<C::Type< 64,  64,  64, 2, 2, 1, D, S, 5, true, 1, 1>>();
     Add<C::Type< 64,  64, 128, 1, 2, 2, D, S, 3, true, 1, 1>>(); // 4
     Add<C::Type< 32,  64, 128, 1, 2, 2, D, S, 3, true, 1, 1>>();
     Add<C::Type< 32, 128,  64, 1, 4, 1, D, S, 3, true, 1, 1>>();
     Add<C::Type< 16,  64, 128, 1, 2, 2, D, S, 3, true, 1, 1>>(); // 10
-    Add<C::Type< 16, 128,  64, 1, 4, 1, D, S, 3, true, 1, 1>>(); 
+    Add<C::Type< 16, 128,  64, 1, 4, 1, D, S, 3, true, 1, 1>>();
 
     // clang-format on
 }

@@ -23,6 +23,7 @@ add_library(gemm2
         # kernel/u4g128_f16_f16_nnn_sm80_s16816.cu
         kernel/f16_f16_f16_grouped_sm80_s16816.cu
         moe_utils_v2.cu
+        test/test_utils.cu
 )
 
 target_link_libraries(gemm2 PRIVATE parser)
@@ -40,7 +41,7 @@ set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 # if (BUILD_TEST)
         add_executable(gemm_test
                 test/gemm_test.cu
-                test/test_utils.cu
+                # test/test_utils.cu
                 test/quantization.cu
                 test/reference.cu)
         target_link_libraries(gemm_test PRIVATE gemm2 cublas)
@@ -62,7 +63,7 @@ set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
                 add_executable(gemm_bench
                         test/gemm_bench.cu
-                        test/test_utils.cu
+                        # test/test_utils.cu
                         test/quantization.cu
                         test/reference.cu)
                 target_link_libraries(gemm_bench PRIVATE gemm2 nvbench::nvbench cublas)

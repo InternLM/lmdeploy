@@ -52,8 +52,6 @@ public:
             int                             max_batch_size,
             std::shared_ptr<LlamaWeight<T>> weights);
 
-    void tune();
-
     size_t vocab_size() const noexcept
     {
         return vocab_size_;

@@ -21,8 +21,6 @@
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "3rdparty/INIReader.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
-#include "src/turbomind/models/llama/LlamaInstanceComm.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
@@ -30,7 +28,6 @@
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <cuda_runtime.h>
-#include <mutex>
 
 namespace ft = turbomind;
 
@@ -258,7 +255,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_param_.num_tokens_per_iter = reader.GetInteger("llama", "num_tokens_per_iter", 0);
     engine_param_.max_prefill_iters   = reader.GetInteger("llama", "max_prefill_iters", 1);
 
-    moe_param_.method            = turbomind::MoeParam::kFused;
+    moe_param_.method = turbomind::MoeParam::kFused;
+    // moe_param_.method            = turbomind::MoeParam::kNaive;
     moe_param_.expert_num        = reader.GetInteger("llama", "expert_num", 0);
     moe_param_.experts_per_token = reader.GetInteger("llama", "experts_per_token", 0);
     moe_param_.inter_size        = reader.GetInteger("llama", "expert_inter_size", 0);
@@ -425,9 +423,7 @@ void LlamaTritonModel<T>::createEngine(int                                      
     auto engine = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
     engine->set_ffi_lock(ffi_lock_);
 
-    if (weight_type_ == ft::WeightType::kINT4) {
-        engine->model().tune();
-    }
+    engine->tune();
 
     engines_[device_id] = std::move(engine);
 }
@@ -468,7 +464,7 @@ void LlamaTritonModel<T>::createCustomComms(
 template<typename T>
 std::unique_ptr<ft::AbstractInstanceComm> LlamaTritonModel<T>::createInstanceComm(int size)
 {
-    return std::make_unique<ft::LlamaInstanceComm>(size);
+    return nullptr;
 }
 
 template<typename T>

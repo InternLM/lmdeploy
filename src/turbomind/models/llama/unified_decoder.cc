@@ -154,6 +154,11 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
     for (size_t layer = 0; layer < layer_num_; ++layer) {
 
+        /// TODO: do not skip the layers when they are heterogeneous
+        if (isTuning() && layer != 0) {
+            continue;
+        }
+
         // Compare(decoder_output, token_num * hidden_units_, "attn_input", kCmpRead, stream_);
 
         /////////////////////////////////////////////
