@@ -1,16 +1,16 @@
+import copy
 import os
 
 import yaml
-from utils.get_run_config import get_tp_num
 
 
 def get_turbomind_model_list(tp_num: int = None,
                              model_type: str = 'chat_model'):
     config = get_config()
 
-    case_list = config.get('turbomind_' + model_type)
+    case_list = copy.deepcopy(config.get('turbomind_' + model_type))
     quatization_case_config = config.get('turbomind_quatization')
-    for key in case_list:
+    for key in config.get('turbomind_' + model_type):
         if key not in quatization_case_config.get('no_awq'):
             case_list.append(key + '-inner-4bits')
     for key in quatization_case_config.get('gptq'):
@@ -18,9 +18,7 @@ def get_turbomind_model_list(tp_num: int = None,
             case_list.append(key + '-inner-gptq')
 
     if tp_num is not None:
-        return [
-            item for item in case_list if get_tp_num(config, item) == tp_num
-        ]
+        return [item for item in case_list]
     else:
         return case_list
 
@@ -47,9 +45,7 @@ def get_torch_model_list(tp_num: int = None,
             case_list.append(key + '-inner-4bits')
 
     if tp_num is not None:
-        return [
-            item for item in case_list if get_tp_num(config, item) == tp_num
-        ]
+        return [item for item in case_list]
     else:
         return case_list
 
@@ -67,9 +63,9 @@ def get_turbomind_kvint_model_list(tp_num: int = None,
                                    model_type: str = 'chat_model'):
     config = get_config()
 
-    case_list = config.get('turbomind_' + model_type)
+    case_list = copy.deepcopy(config.get('turbomind_' + model_type))
 
-    for key in case_list:
+    for key in config.get('turbomind_' + model_type):
         if key not in config.get('turbomind_quatization').get('no_awq'):
             case_list.append(key + '-inner-4bits')
     for key in config.get('turbomind_quatization').get('gptq'):
@@ -77,9 +73,7 @@ def get_turbomind_kvint_model_list(tp_num: int = None,
             case_list.append(key + '-inner-gptq')
 
     if tp_num is not None:
-        return [
-            item for item in case_list if get_tp_num(config, item) == tp_num
-        ]
+        return [item for item in case_list]
     else:
         return case_list
 
@@ -111,9 +105,7 @@ def get_torch_kvint_model_list(tp_num: int = None,
             case_list.append(key + '-inner-w8a8')
 
     if tp_num is not None:
-        return [
-            item for item in case_list if get_tp_num(config, item) == tp_num
-        ]
+        return [item for item in case_list]
     else:
         return case_list
 
@@ -154,16 +146,14 @@ def get_quantization_model_list(type):
 def get_vl_model_list(tp_num: int = None):
     config = get_config()
 
-    case_list = config.get('vl_model')
+    case_list = copy.deepcopy(config.get('vl_model'))
 
-    for key in case_list:
+    for key in config.get('vl_model'):
         if key not in config.get('turbomind_quatization').get('no_awq'):
             case_list.append(key + '-inner-4bits')
 
     if tp_num is not None:
-        return [
-            item for item in case_list if get_tp_num(config, item) == tp_num
-        ]
+        return [item for item in case_list]
     else:
         return case_list
 
@@ -207,18 +197,17 @@ def get_benchmark_model_list(tp_num,
                              kvint_list: list = []):
     config = get_config()
     if is_longtext:
-        case_list = [item for item in config.get('longtext_model')]
+        case_list_base = [item for item in config.get('longtext_model')]
     else:
-        case_list = config.get('benchmark_model')
+        case_list_base = config.get('benchmark_model')
     quatization_case_config = config.get('turbomind_quatization')
 
-    for key in case_list:
+    case_list = copy.deepcopy(case_list_base)
+    for key in case_list_base:
         if key not in quatization_case_config.get('no_awq'):
             case_list.append(key + '-inner-4bits')
 
-    model_list = [
-        item for item in case_list if get_tp_num(config, item) == tp_num
-    ]
+    model_list = [item for item in case_list]
 
     result = []
     if len(model_list) > 0:
@@ -250,7 +239,3 @@ def get_workerid(worker_id):
         return None
     else:
         return int(worker_id.replace('gw', ''))
-
-
-if __name__ == '__main__':
-    print(get_all_model_list(tp_num=1))
