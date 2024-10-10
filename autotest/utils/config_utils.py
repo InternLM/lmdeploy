@@ -33,7 +33,7 @@ def get_torch_model_list(tp_num: int = None,
     if exclude_dup:
         case_list = [
             x for x in config.get('pytorch_' + model_type)
-            if x not in config.get('turbomind_' + model_type)
+            if x in config.get('turbomind_' + model_type)
         ]
     else:
         case_list = config.get('pytorch_' + model_type)
@@ -59,7 +59,7 @@ def get_all_model_list(tp_num: int = None, model_type: str = 'chat_model'):
     for case in get_torch_model_list(tp_num=tp_num, model_type=model_type):
         if case not in case_list:
             case_list.append(case)
-    return case_list
+    return [x for x in case_list if 'w8a8' not in x]
 
 
 def get_turbomind_kvint_model_list(tp_num: int = None,
@@ -97,7 +97,7 @@ def get_torch_kvint_model_list(tp_num: int = None,
     if exclude_dup:
         case_list_base = [
             x for x in config.get('pytorch_' + model_type)
-            if x not in config.get('turbomind_' + model_type)
+            if x in config.get('turbomind_' + model_type)
         ]
     else:
         case_list_base = config.get('pytorch_' + model_type)

@@ -14,7 +14,8 @@ from utils.pipeline_chat import (assert_pipeline_chat_log,
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(tp_num=1))
+@pytest.mark.parametrize('model',
+                         get_torch_model_list(tp_num=1, exclude_dup=True))
 def test_pipeline_chat_pytorch_tp1(config, common_case_config, model,
                                    worker_id):
     if 'gw' in worker_id:
@@ -34,7 +35,8 @@ def test_pipeline_chat_pytorch_tp1(config, common_case_config, model,
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(tp_num=2))
+@pytest.mark.parametrize('model',
+                         get_torch_model_list(tp_num=2, exclude_dup=True))
 def test_pipeline_chat_pytorch_tp2(config, common_case_config, model,
                                    worker_id):
     if 'gw' in worker_id:
