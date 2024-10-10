@@ -188,6 +188,7 @@ def build_model_from_hf_config(model_config: PretrainedConfig,
     if device is None:
         device = torch.device('cuda')
     model_cls = _get_model_class(model_config, module_map)
+    # import pdb; pdb.set_trace()
     model = model_cls(model_config, ctx_mgr, dtype=dtype, device=device)
     return model.eval()
 
