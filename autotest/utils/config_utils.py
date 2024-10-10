@@ -31,9 +31,10 @@ def get_torch_model_list(tp_num: int = None,
     config = get_config()
 
     if exclude_dup:
-        case_list = list(
-            set(config.get('pytorch_' + model_type)).union(
-                set(config.get('turbomind_' + model_type))))
+        case_list = [
+            x for x in config.get('pytorch_' + model_type)
+            if x not in config.get('turbomind_' + model_type)
+        ]
     else:
         case_list = config.get('pytorch_' + model_type)
 
@@ -93,9 +94,10 @@ def get_torch_kvint_model_list(tp_num: int = None,
     config = get_config()
 
     if exclude_dup:
-        case_list_base = list(
-            set(config.get('pytorch_' + model_type)).union(
-                set(config.get('turbomind_' + model_type))))
+        case_list_base = [
+            x for x in config.get('pytorch_' + model_type)
+            if x not in config.get('turbomind_' + model_type)
+        ]
     else:
         case_list_base = config.get('pytorch_' + model_type)
 
