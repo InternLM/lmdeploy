@@ -17,6 +17,7 @@ RUN sed -i 's@http://.*.ubuntu.com@http://mirrors.tuna.tsinghua.edu.cn@g' /etc/a
     apt install --no-install-recommends libopenblas-dev libgmpxx4ldbl liblzma-dev -y && \
     apt install --no-install-recommends libicu66 libxml2 pciutils libgl1-mesa-glx libbz2-dev -y && \
     apt install --no-install-recommends libreadline-dev libncurses5 libncurses5-dev libncursesw5 -y && \
+    apt install --no-install-recommends rustc -y && \
     sed -i 's@http://mirrors.tuna.tsinghua.edu.cn@https://mirrors.tuna.tsinghua.edu.cn@g' /etc/apt/sources.list && \
     apt clean && rm -rf /var/lib/apt/lists/*
 
@@ -43,8 +44,8 @@ RUN --mount=type=cache,target=/root/.cache/pip pip3 config set global.index-url 
     pip3 install decorator sympy cffi && \
     pip3 install cmake ninja pyyaml && \
     pip3 install pathlib2 protobuf attrs attr scipy && \
-    pip3 install requests psutil absl-py
-
+    pip3 install requests psutil absl-py && \
+    pip3 install setuptools_rust 
 ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/hdf5/serial:$LD_LIBRARY_PATH
 ENV LD_PRELOAD=/lib/aarch64-linux-gnu/libGLdispatch.so.0:$LD_PRELOAD
 
