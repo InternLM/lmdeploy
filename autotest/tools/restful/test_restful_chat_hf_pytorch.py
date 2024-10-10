@@ -24,7 +24,7 @@ def getModelList(tp_num):
         'model': item,
         'cuda_prefix': None,
         'tp_num': tp_num
-    } for item in get_torch_model_list(tp_num)]
+    } for item in get_torch_model_list(tp_num, exclude_dup=False)]
 
 
 @pytest.mark.order(7)
@@ -68,7 +68,7 @@ def getKvintModelList(tp_num, quant_policy):
         'tp_num': tp_num,
         'extra': f'--quant-policy {quant_policy}'
     } for item in get_torch_kvint_model_list(
-        tp_num, quant_policy=quant_policy, exclude_dup=True)
+        tp_num, quant_policy=quant_policy, exclude_dup=False)
             if 'qwen2' not in item.lower() or quant_policy == 8]
 
 
