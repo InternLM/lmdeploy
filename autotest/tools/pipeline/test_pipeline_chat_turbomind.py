@@ -54,7 +54,7 @@ def test_pipeline_chat_tp2(config, common_case_config, model, worker_id):
                          get_all_kvint_model_list(tp_num=1, quant_policy=4))
 def test_pipeline_chat_kvint4_tp1(config, common_case_config, model,
                                   worker_id):
-    if 'Qwen2' in model:
+    if 'Qwen2-7' in model:
         return  # kvint4 for qwen2 is not support
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
@@ -78,8 +78,6 @@ def test_pipeline_chat_kvint4_tp1(config, common_case_config, model,
                          get_all_kvint_model_list(tp_num=2, quant_policy=4))
 def test_pipeline_chat_kvint4_tp2(config, common_case_config, model,
                                   worker_id):
-    if 'Qwen2' in model:
-        return  # kvint4 for qwen2 is not support
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
