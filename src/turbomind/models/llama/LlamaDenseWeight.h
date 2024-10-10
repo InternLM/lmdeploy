@@ -181,7 +181,8 @@ struct MoeFfnWeight {
 
         experts.resize(expert_num);
 
-        transpose     = method;
+        // transpose     = method;
+        transpose     = false;
         fuse_silu_act = fuse_silu_act && method;
 
         for (auto& e : experts) {

@@ -591,8 +591,11 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
             }
 
             // K-major
-            fused_ptrs.push_back({e.fused_gating_intermediate.kernel, e.fused_gating_intermediate.input_dims});
-            output_ptrs.push_back({e.output.kernel, e.output.input_dims});
+            fused_ptrs.push_back({e.fused_gating_intermediate.kernel,
+                                  moe_weights.transpose ? e.fused_gating_intermediate.input_dims :
+                                                          e.fused_gating_intermediate.output_dims});
+            output_ptrs.push_back({e.output.kernel,  //
+                                   moe_weights.transpose ? e.output.input_dims : e.output.output_dims});
             // std::cout << e.fused_gating_intermediate.input_dims << "\n";
         }
 
@@ -606,7 +609,7 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
         auto set_desc = [&](LlamaDenseWeight<T>& w) {
             w.k_desc = {
                 gemm::get_data_type_v<T>,
-                gemm::kColMajor,
+                moe_weights.transpose ? gemm::kColMajor : gemm::kRowMajor,
                 (int)w.input_dims,   // k
                 (int)w.output_dims,  // n
             };

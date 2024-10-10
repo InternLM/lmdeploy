@@ -281,11 +281,11 @@ public:
 
         if (1) {
             moe_n_ptrs_.resize(experts_);
-            CHECK(order_b == kColMajor);
+            // CHECK(order_b == kColMajor);
             CHECK(pack_b == 0);
             for (int i = 0; i < experts_; ++i) {
-                moe_n_ptrs_[i] =
-                    StridedPtr{(Tb*)b_pack_.data().get() + (size_t)i * input_dims_ * output_dims_, input_dims_};
+                moe_n_ptrs_[i] = StridedPtr{(Tb*)b_pack_.data().get() + (size_t)i * input_dims_ * output_dims_,
+                                            order_b == kColMajor ? input_dims_ : output_dims_};
             }
         }
 
@@ -348,8 +348,9 @@ public:
         a_pack_desc_.offsets = moe_m_offsets_.data().get();
         a_pack_desc_.idxs    = moe_f2n_.data().get();
 
-        b_pack_desc_         = b_desc_;
-        b_pack_desc_.offsets = moe_n_offsets_.data().get();
+        b_pack_desc_    = b_desc_;
+        b_pack_desc_.ld = 0;
+        // b_pack_desc_.offsets = moe_n_offsets_.data().get();
 
         cudaMemPrefetchAsync(moe_m_offsets_.data().get(), sizeof(int) * moe_m_offsets_.size(), 0, stream_);
         cudaMemPrefetchAsync(moe_n_offsets_.data().get(), sizeof(int) * moe_n_offsets_.size(), 0, stream_);
@@ -373,6 +374,10 @@ public:
         void* A = a_pack_.data().get();
         void* B = b_pack_.data().get();
         void* C = c_e_.data().get();
+
+        if (experts_ && !moe_n_ptrs_.empty()) {
+            B = moe_n_ptrs_.data().get();
+        }
 
         auto status = gemm_.Run(operation,  //
                                 1.f,
@@ -422,7 +427,7 @@ public:
             auto c_desc = c_desc_;
 
             CHECK(a_desc.order == kRowMajor);  // k-major, T
-            CHECK(b_desc.order == kColMajor);  // k-major, N
+            // CHECK(b_desc.order == kColMajor);  // k-major, N
             CHECK(c_desc.order == kRowMajor);  // n-major, T
 
             auto a = a_e_.data().get();
@@ -723,7 +728,7 @@ inline decltype(auto) get_test()
         // constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
         constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
-        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kRowMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;

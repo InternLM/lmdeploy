@@ -40,13 +40,13 @@ void Registry::f16_f16_f16_grouped_sm80_s16816()
                           Operand_A<half, kRowMajor>,  // A
                           Transform_Default,           // tarnsform A
                           VoidOperand,                 // U
-                          Operand_B<half, kRowMajor>,  // B
+                          Operand_B<half, kColMajor>,  // B
                           Transform_Default,           // transform B
                           VoidOperand,                 // V
                           kRowMajor,                   // order_C
                           half,                        // Tc
                           Striding::kIndexed,          // indexed input
-                          Striding::kBlocked,
+                          Striding::kIndexed,
                           Striding::kBlocked,
                           pair<false, false>,
                           pair<Striding::kFlat, Striding::kFlat>,
