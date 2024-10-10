@@ -77,9 +77,12 @@ class CUDASingleGraphRunner:
         self.model(**padded_kwargs)
 
         self._graph = torch.cuda.CUDAGraph()
+        # unsafe kernel call in other thread might invalid the capture
+        # so we set thread_safe capture mode here.
         with torch.cuda.graph(self._graph,
                               pool=self.pool,
-                              stream=current_stream):
+                              stream=current_stream,
+                              capture_error_mode='thread_local'):
             output = self.model(**padded_kwargs)
 
         output_buffers = dict(logits=output)
