@@ -250,3 +250,7 @@ def get_workerid(worker_id):
         return None
     else:
         return int(worker_id.replace('gw', ''))
+
+
+if __name__ == '__main__':
+    print(get_all_model_list(tp_num=1))
