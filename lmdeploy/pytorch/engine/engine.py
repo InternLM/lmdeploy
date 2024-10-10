@@ -166,6 +166,7 @@ class Engine:
         self.req_manager = self._bind_request_manager()
 
         # create main thread
+        self._stop_flag = False
         self._start_loop()
         self._create_buffers()
         self.engine_instance = self.create_instance()
@@ -240,6 +241,18 @@ class Engine:
         req_manager.bind_func(RequestType.END_SESSION, self._on_end_session)
         req_manager.bind_func(RequestType.ADD_MESSAGE, self._on_add_message)
         return req_manager
+
+    def close(self):
+        self._stop_flag = True
+        self.req_manager.close()
+        self.model_agent.close()
+        self.model_agent = None
+        self._seq_length_buf = None
+        self._inputs = None
+        torch._C._cuda_clearCublasWorkspaces()
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
 
     def _start_loop(self):
         """start loop."""
@@ -930,6 +943,10 @@ class Engine:
                     out_que.task_done()
 
         while True:
+            if self._stop_flag:
+                logger.info('Stop _async_loop')
+                loop_background.cancel()
+                break
             if self.req_manager.has_requests():
                 self.req_manager.step()
 

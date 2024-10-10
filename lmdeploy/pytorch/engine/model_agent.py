@@ -2,8 +2,11 @@
 import asyncio
 import atexit
 import os
+import sys
 from datetime import timedelta
+from functools import partial
 from typing import Any, Callable, Dict, List
+from weakref import ReferenceType, ref
 
 import torch
 import torch.distributed as dist
@@ -192,6 +195,10 @@ class AutoModelAgent:
         """get logits of model output."""
         raise NotImplementedError('Not implemented.')
 
+    def close(self):
+        """release model."""
+        pass
+
 
 class BaseModelAgent(AutoModelAgent):
     """Base model agent.
@@ -234,6 +241,9 @@ class BaseModelAgent(AutoModelAgent):
         self.cache_engine = CacheEngine(cache_config, model_config)
 
         self.stream = torch.cuda.Stream()
+
+    def close(self):
+        del self.patched_model
 
     def _build_model(self,
                      model_path: str,
@@ -540,10 +550,11 @@ class TPModelAgent(AutoModelAgent):
                  trust_remote_code: bool = True) -> None:
         import signal
 
-        def __signal_term_handler(sig, frame):
+        def __signal_term_handler(sig, frame, agent):
             """sigterm handler."""
-            if hasattr(self, 'mp_context'):
-                procs = self.mp_context.processes
+            agent = agent()
+            if hasattr(agent, 'mp_context'):
+                procs = agent.mp_context.processes
                 for p in procs:
                     if p.is_alive():
                         p.kill()
@@ -553,8 +564,10 @@ class TPModelAgent(AutoModelAgent):
 
         super().__init__(model_config=model_config, cache_config=cache_config)
 
-        signal.signal(signal.SIGTERM, __signal_term_handler)
+        signal.signal(signal.SIGTERM,
+                      partial(__signal_term_handler, agent=ref(self)))
 
+        self.old_sys_excepthook = sys.excepthook
         self.mp_ctx = mp.get_context('spawn')
         self.world_size = world_size
         self.backend_config = backend_config
@@ -579,6 +592,22 @@ class TPModelAgent(AutoModelAgent):
         self.cache_config = cache_config
         self.cache_engine = cache_engine
         self.stream = torch.cuda.Stream()
+        self.stop = False
+
+    def close(self):
+        _exit_by_sending_exit_flag(0, ref(self))
+        self.stop = True
+        procs: List[mp.Process] = self.mp_context.processes
+        for p in procs:
+            if p.is_alive():
+                logger.info(f'Terminate {p}')
+                p.terminate()
+            else:
+                logger.info(f'Close {p}')
+                p.close()
+        if dist.is_initialized():
+            dist.destroy_process_group()
+        sys.excepthook = self.old_sys_excepthook
 
     def _start_sub_process(self, model_path: str, model_config: ModelConfig,
                            cache_config: CacheConfig,
@@ -627,7 +656,7 @@ class TPModelAgent(AutoModelAgent):
                 dist.destroy_process_group()
             raise e
         # Please see Note [Exit By Sending Exit Flag]
-        atexit.register(_exit_by_sending_exit_flag, rank, self)
+        atexit.register(_exit_by_sending_exit_flag, rank, ref(self))
 
     @torch.inference_mode()
     def _build_model(
@@ -715,10 +744,14 @@ class TPModelAgent(AutoModelAgent):
         return self.patched_model.get_logits(hidden_states)
 
 
-def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):
+def _exit_by_sending_exit_flag(rank: int,
+                               agent: 'ReferenceType[TPModelAgent]'):
     """[Note] Exit By Sending Exit Flag: the registration to `atexit` of this
     function should be called after importing torch.multiprocessing and the
     initialization of distributed process group."""
+    agent = agent()
+    if agent is None or getattr(agent, 'stop', False):
+        return
     if not hasattr(agent, 'stream'):
         # agent is not initialized, just exits normally
         if hasattr(agent, 'patched_model'):
