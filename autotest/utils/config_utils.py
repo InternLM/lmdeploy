@@ -10,8 +10,8 @@ def get_turbomind_model_list(tp_num: int = None,
 
     case_list = config.get('turbomind_' + model_type)
     quatization_case_config = config.get('turbomind_quatization')
-    for key in quatization_case_config.get('awq'):
-        if key in case_list:
+    for key in case_list:
+        if key not in quatization_case_config.get('no_awq'):
             case_list.append(key + '-inner-4bits')
     for key in quatization_case_config.get('gptq'):
         if key in case_list:
@@ -67,17 +67,13 @@ def get_turbomind_kvint_model_list(tp_num: int = None,
                                    model_type: str = 'chat_model'):
     config = get_config()
 
-    case_list_base = config.get('turbomind_' + model_type)
-    case_list = []
-    for key in config.get('turbomind_quatization').get('kvint'):
-        if key in case_list_base:
-            case_list.append(key)
+    case_list = config.get('turbomind_' + model_type)
 
-    for key in config.get('turbomind_quatization').get('awq'):
-        if key in case_list_base and key in case_list:
+    for key in case_list:
+        if key not in config.get('turbomind_quatization').get('no_awq'):
             case_list.append(key + '-inner-4bits')
     for key in config.get('turbomind_quatization').get('gptq'):
-        if key in case_list_base and key in case_list:
+        if key in case_list and key in case_list:
             case_list.append(key + '-inner-gptq')
 
     if tp_num is not None:
@@ -95,24 +91,23 @@ def get_torch_kvint_model_list(tp_num: int = None,
     config = get_config()
 
     if exclude_dup:
-        case_list_base = [
+        case_list = [
             x for x in config.get('pytorch_' + model_type)
-            if x in config.get('turbomind_' + model_type)
+            if x in config.get('turbomind_' + model_type) and x not in config.
+            get('pytorch_quatization').get('no_kvint' + str(quant_policy))
         ]
     else:
-        case_list_base = config.get('pytorch_' + model_type)
-
-    case_list = []
-    for key in config.get('pytorch_quatization').get('kvint' +
-                                                     str(quant_policy)):
-        if key in case_list_base:
-            case_list.append(key)
+        case_list = [
+            x for x in config.get('pytorch_' + model_type)
+            if x not in config.get('pytorch_quatization').get(
+                'no_kvint' + str(quant_policy))
+        ]
 
     for key in config.get('pytorch_quatization').get('awq'):
-        if key in case_list_base and key in case_list:
+        if key in case_list and key in case_list:
             case_list.append(key + '-inner-4bits')
     for key in config.get('pytorch_quatization').get('w8a8'):
-        if key in case_list_base and key in case_list:
+        if key in case_list and key in case_list:
             case_list.append(key + '-inner-w8a8')
 
     if tp_num is not None:
@@ -140,13 +135,15 @@ def get_all_kvint_model_list(tp_num: int = None,
 def get_quantization_model_list(type):
     config = get_config()
     if type == 'awq':
-        case_list = config.get('turbomind_quatization').get('awq')
+        case_list = [
+            x for x in config.get('turbomind_chat_model') +
+            config.get('turbomind_base_model')
+            if x not in config.get('turbomind_quatization').get('no_awq')
+        ]
         for key in config.get('pytorch_quatization').get('awq'):
             if key not in case_list:
                 case_list.append(key)
         return case_list
-    if type == 'kvint':
-        return config.get('turbomind_quatization').get(type)
     if type == 'gptq':
         return config.get('turbomind_quatization').get(type)
     if type == 'w8a8':
@@ -159,8 +156,8 @@ def get_vl_model_list(tp_num: int = None):
 
     case_list = config.get('vl_model')
 
-    for key in config.get('turbomind_quatization').get('awq'):
-        if key in case_list:
+    for key in case_list:
+        if key not in config.get('turbomind_quatization').get('no_awq'):
             case_list.append(key + '-inner-4bits')
 
     if tp_num is not None:
@@ -214,8 +211,9 @@ def get_benchmark_model_list(tp_num,
     else:
         case_list = config.get('benchmark_model')
     quatization_case_config = config.get('turbomind_quatization')
-    for key in quatization_case_config.get('awq'):
-        if key in case_list:
+
+    for key in case_list:
+        if key not in quatization_case_config.get('no_awq'):
             case_list.append(key + '-inner-4bits')
 
     model_list = [
@@ -243,8 +241,7 @@ def get_benchmark_model_list(tp_num,
                 'backend': 'turbomind',
                 'quant_policy': kvint,
                 'tp_num': tp_num
-            } for item in model_list if item.replace('-inner-4bits', '') in
-                       config.get('turbomind_quatization').get('kvint')]
+            } for item in model_list]
     return result
 
 
