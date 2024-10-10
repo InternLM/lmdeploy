@@ -169,6 +169,18 @@ class SelfAttention(torch.nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         attn_metadata: Any = None,
     ):
+        # rotary pos emb helpers:
+        def rotate_half_(x):
+            x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
+            return torch.cat((-x2, x1), dim=x1.ndim - 1)
+
+        def apply_rotary_pos_emb_(q, k, cos, sin):
+            if len(cos.shape) < 3:
+                cos = cos.unsqueeze(1)
+            if len(sin.shape) < 3:
+                sin = sin.unsqueeze(1)
+            return (q * cos) + (rotate_half_(q) * sin), (k * cos) + (rotate_half_(k) * sin)
+
         """Rewrite of LlamaAttention.forward."""
         # qkv proj
         qkv_states = self.query_key_value(hidden_states)
@@ -181,13 +193,19 @@ class SelfAttention(torch.nn.Module):
         cos, sin = rotary_pos_emb
         q_rope = self._extract_rope(query_states)
         k_rope = self._extract_rope(key_states)
-        q_rope, k_rope = self.apply_rotary_pos_emb(
+        q_rope, k_rope = apply_rotary_pos_emb_(
             q_rope,
             k_rope,
             cos,
             sin,
-            inplace=True,
         )
+        # q_rope, k_rope = self.apply_rotary_pos_emb(
+        #     q_rope,
+        #     k_rope,
+        #     cos,
+        #     sin,
+        #     inplace=True,
+        # )
         query_states = self._fill_rope(query_states, q_rope)
         key_states = self._fill_rope(key_states, k_rope)
 
