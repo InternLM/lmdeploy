@@ -258,6 +258,7 @@ struct MatrixLayout {
     int      cols;
     int      ld;
     Pack     pack;
+    int      num;
     int*     offsets;
     int*     idxs;
 };

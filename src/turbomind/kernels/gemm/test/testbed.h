@@ -352,6 +352,8 @@ public:
         b_pack_desc_.ld = 0;
         // b_pack_desc_.offsets = moe_n_offsets_.data().get();
 
+        a_pack_desc_.num = b_pack_desc_.num = c_desc_.num = experts_;
+
         cudaMemPrefetchAsync(moe_m_offsets_.data().get(), sizeof(int) * moe_m_offsets_.size(), 0, stream_);
         cudaMemPrefetchAsync(moe_n_offsets_.data().get(), sizeof(int) * moe_n_offsets_.size(), 0, stream_);
         cudaMemPrefetchAsync(moe_f2n_.data().get(), sizeof(int) * moe_f2n_.size(), 0, stream_);

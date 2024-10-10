@@ -613,6 +613,7 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
                 (int)w.input_dims,   // k
                 (int)w.output_dims,  // n
             };
+            w.k_desc.num = moe_weights.experts.size();
         };
 
         set_desc(moe_weights.block.fused_gating_intermediate);

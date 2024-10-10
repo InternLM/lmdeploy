@@ -32,8 +32,10 @@ static std::optional<GemmDesc> get_gemm_desc(const Operation&    operation,
     const int k1 = Bdesc.rows, n0 = Bdesc.cols;
     const int m1 = Ddesc.rows, n1 = Ddesc.cols;
 
-    if (m0 != m1 || n0 != n1 || k0 != k1) {
-        fprintf(stderr, "%d %d %d %d %d %d\n", m0, m1, n0, n1, k0, k1);
+    const int l0 = Adesc.num, l1 = Bdesc.num, l2 = Ddesc.num;
+
+    if (m0 != m1 || n0 != n1 || k0 != k1 || l0 != l1 || l0 != l2) {
+        fprintf(stderr, "%d %d %d %d %d %d %d %d %d\n", m0, m1, n0, n1, k0, k1, l0, l1, l2);
         return {};
     }
 
@@ -60,7 +62,7 @@ static std::optional<GemmDesc> get_gemm_desc(const Operation&    operation,
     desc.m = desc.align_m = m0;
     desc.n = desc.align_n = n0;
     desc.k = desc.align_k = k0;
-    desc.num              = 1;
+    desc.num              = l0;
 
     return desc;
 }
@@ -356,7 +358,7 @@ std::optional<GemmDesc> MoeGemmContext::Init(const Operation&    operation,
     // fprintf(
     //     stderr, "%d %d %d vs %d %d %d\n", desc_->n, desc_->k, desc_->m, output_dim_, input_dim_, experts_per_token_);
 
-    if (desc_->m % experts_per_token_ != 0) {
+    if (desc_->m % experts_per_token_ != 0 || desc_->num != expert_num_) {
         fprintf(stderr, "Context shape mismatch\n");
         return {};
     }
@@ -365,7 +367,7 @@ std::optional<GemmDesc> MoeGemmContext::Init(const Operation&    operation,
     input_dim_  = desc_->k;
 
     desc_->align_m = 1;  // gcd([m])
-    desc_->num     = expert_num_;
+    // desc_->num     = expert_num_;
 
     tokens_ = desc_->m / experts_per_token_;
 

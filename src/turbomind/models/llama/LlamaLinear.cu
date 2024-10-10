@@ -187,8 +187,8 @@ struct LlamaLinear<T>::Impl {
         // std::cout << "m" << batch_size << "n" << weight.output_dims << "k" << weight.input_dims << " "
         //           << input_data.pitch << "\n";
 
-        a_desc.offsets  = (int*)offsets;
-        a_desc.idxs     = (int*)indexes;
+        a_desc.offsets = (int*)offsets;
+        a_desc.idxs    = (int*)indexes;
 
         MatrixLayout c_desc{
             get_data_type_v<T>,
@@ -198,7 +198,9 @@ struct LlamaLinear<T>::Impl {
             type == kFusedSiluFfn ? (int)weight.output_dims / 2 : (int)weight.output_dims,
         };
 
-        c_desc.offsets  = (int*)offsets;
+        c_desc.offsets = (int*)offsets;
+
+        a_desc.num = c_desc.num = weight.k_desc.num;
 
         auto ec = gemm_.Run(operation,
                             1.f,
