@@ -55,10 +55,11 @@ def get_torch_model_list(tp_num: int = None,
 
 
 def get_all_model_list(tp_num: int = None, model_type: str = 'chat_model'):
-    return list(
-        set(
-            get_turbomind_model_list(tp_num=tp_num, model_type=model_type) +
-            get_torch_model_list(tp_num=tp_num, model_type=model_type)))
+    case_list = get_turbomind_model_list(tp_num=tp_num, model_type=model_type)
+    for case in get_torch_model_list(tp_num=tp_num, model_type=model_type):
+        if case not in case_list:
+            case_list.append(case)
+    return case_list
 
 
 def get_turbomind_kvint_model_list(tp_num: int = None,
@@ -125,14 +126,15 @@ def get_torch_kvint_model_list(tp_num: int = None,
 def get_all_kvint_model_list(tp_num: int = None,
                              quant_policy: int = 8,
                              model_type: str = 'chat_model'):
-    return list(
-        set(
-            get_turbomind_kvint_model_list(tp_num=tp_num,
+    case_list = get_turbomind_kvint_model_list(tp_num=tp_num,
+                                               quant_policy=quant_policy,
+                                               model_type=model_type)
+    for case in get_torch_kvint_model_list(tp_num=tp_num,
                                            quant_policy=quant_policy,
-                                           model_type=model_type) +
-            get_torch_kvint_model_list(tp_num=tp_num,
-                                       quant_policy=quant_policy,
-                                       model_type=model_type)))
+                                           model_type=model_type):
+        if case not in case_list:
+            case_list.append(case)
+    return case_list
 
 
 def get_quantization_model_list(type):
