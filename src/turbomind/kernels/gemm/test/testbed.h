@@ -46,11 +46,10 @@ template<class Ta,
          Order order_a,
          Order order_b,
          Order order_c,
-         class Stridings,
-         Pack pack_a,
-         Pack pack_b,
-         Pack pack_u = 0,
-         Pack pack_v = 0>
+         Pack  pack_a,
+         Pack  pack_b,
+         Pack  pack_u = 0,
+         Pack  pack_v = 0>
 class Testbed {
 public:
     static constexpr int kBatchDim = batch_dim;
@@ -109,9 +108,9 @@ public:
         b_.resize(n * k * E);
         c_.resize(m * n);
 
-        a_desc_ = MatrixLayout{get_data_type_v<Tc>, order_a, m, k, mk2cs<order_a>(m, k).x, 0, Stridings::a};
-        b_desc_ = MatrixLayout{get_data_type_v<Tc>, order_b, k, n, _kn2cs<order_b>(k, n).x, 0, Stridings::b};
-        c_desc_ = MatrixLayout{get_data_type_v<Tc>, order_c, m, n, mk2cs<order_c>(m, n).x, 0, Stridings::c};
+        a_desc_ = MatrixLayout{get_data_type_v<Tc>, order_a, m, k, mk2cs<order_a>(m, k).x, 0};
+        b_desc_ = MatrixLayout{get_data_type_v<Tc>, order_b, k, n, _kn2cs<order_b>(k, n).x, 0};
+        c_desc_ = MatrixLayout{get_data_type_v<Tc>, order_c, m, n, mk2cs<order_c>(m, n).x, 0};
 
         c_f_.resize(c_.size());
         c_ref_.resize(c_.size());
@@ -152,7 +151,6 @@ public:
             Quantize<Ta>(a_, m, k, order_a, g, a_f_, a_q_, u_, stream);
             u_pack_desc_ = u_desc_ = {DataType::U32, kColMajor, m, ceil_div(k, g), m};
             u_pack_desc_.pack      = pack_u;
-            u_pack_desc_.striding  = a_pack_desc_.striding;
             u_pack_.resize(u_.size());
             CHECK(!Convert(u_.data().get(), u_desc_, u_pack_.data().get(), u_pack_desc_, stream_));
             quant_a_ = {QuantType::kDefault, g};
@@ -172,7 +170,6 @@ public:
             Quantize<Tb>(b_, n, k, _order_b, g, b_f_, b_q_, v_, stream);
             v_pack_desc_ = v_desc_ = {DataType::U32, kRowMajor, ceil_div(k, g), n, n};
             v_pack_desc_.pack      = pack_v;
-            v_pack_desc_.striding  = b_pack_desc_.striding;
             v_pack_.resize(v_.size());
             CHECK(!Convert(v_.data().get(), v_desc_, v_pack_.data().get(), v_pack_desc_, stream_));
             quant_b_ = {QuantType::kDefault, g};
@@ -692,75 +689,46 @@ T& gTestbed()
     return inst;
 }
 
-struct FFF {
-    static constexpr Striding a = Striding::kFlat;
-    static constexpr Striding b = Striding::kFlat;
-    static constexpr Striding c = Striding::kFlat;
-};
-
-struct RBR {
-    static constexpr Striding a = Striding::kRagged;
-    static constexpr Striding b = Striding::kBlocked;
-    static constexpr Striding c = Striding::kRagged;
-};
-
-struct RRR {
-    static constexpr Striding a = Striding::kRagged;
-    static constexpr Striding b = Striding::kRagged;
-    static constexpr Striding c = Striding::kRagged;
-};
-
-struct TMP {
-    static constexpr Striding a = Striding::kFlat;
-    static constexpr Striding b = Striding::kFlat;
-    static constexpr Striding c = Striding::kFlat;
-};
-
 inline decltype(auto) get_test()
 {
     if constexpr (0) {
         // native
-        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, FFF, 0, 0, 0, 0>>();
+        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, 0, 0, 0>>();
     }
     else if constexpr (0) {
         // sm80 / sm75
         constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 2;
         constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
-        return gTestbed<
-            gemm::Testbed<uint4_t, half, half, 1, kColMajor, kColMajor, kColMajor, FFF, kPackA, 0, kPackU, 0>>();
+        return gTestbed<gemm::Testbed<uint4_t, half, half, 1, kColMajor, kColMajor, kColMajor, kPackA, 0, kPackU, 0>>();
     }
     else if constexpr (0) {
         // sm80 / sm75
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
         constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
-        return gTestbed<
-            gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kRowMajor, kRowMajor, FFF, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kRowMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // sm70
         constexpr Pack kPackB = HMMA_884 | OPERAND_B | 1;
         constexpr Pack kPackV = HMMA_884 | OPERAND_V | 1;
-        return gTestbed<
-            gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, FFF, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // simt
         constexpr Pack kPackB = HMMA_SIMT | OPERAND_B | 1;
         constexpr Pack kPackV = HMMA_SIMT | OPERAND_V | 1;
-        return gTestbed<
-            gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, FFF, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (1) {
         // constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
         constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
-        return gTestbed<
-            gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, TMP, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;
         constexpr Pack kPackA = 0;
-        return gTestbed<gemm::Testbed<half, half, half, 1, kColMajor, kColMajor, kColMajor, FFF, kPackA, 0, 0, 0>>();
+        return gTestbed<gemm::Testbed<half, half, half, 1, kColMajor, kColMajor, kColMajor, kPackA, 0, 0, 0>>();
     }
 }
 

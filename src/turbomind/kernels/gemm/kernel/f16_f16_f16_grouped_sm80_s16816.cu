@@ -46,7 +46,7 @@ void Registry::f16_f16_f16_grouped_sm80_s16816()
                           kRowMajor,                   // order_C
                           half,                        // Tc
                           Striding::kIndexed,          // indexed input
-                          Striding::kIndexed,
+                          Striding::kBlocked,
                           Striding::kBlocked,
                           pair<false, false>,
                           pair<Striding::kFlat, Striding::kFlat>,

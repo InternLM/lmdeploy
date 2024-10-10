@@ -187,7 +187,6 @@ struct LlamaLinear<T>::Impl {
         // std::cout << "m" << batch_size << "n" << weight.output_dims << "k" << weight.input_dims << " "
         //           << input_data.pitch << "\n";
 
-        a_desc.striding = Striding::kFlat;
         a_desc.offsets  = (int*)offsets;
         a_desc.idxs     = (int*)indexes;
 
@@ -199,7 +198,6 @@ struct LlamaLinear<T>::Impl {
             type == kFusedSiluFfn ? (int)weight.output_dims / 2 : (int)weight.output_dims,
         };
 
-        c_desc.striding = Striding::kFlat;
         c_desc.offsets  = (int*)offsets;
 
         auto ec = gemm_.Run(operation,

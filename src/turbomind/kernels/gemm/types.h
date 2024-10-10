@@ -258,7 +258,6 @@ struct MatrixLayout {
     int      cols;
     int      ld;
     Pack     pack;
-    Striding striding;
     int*     offsets;
     int*     idxs;
 };
@@ -266,6 +265,17 @@ struct MatrixLayout {
 inline int64_t get_size(const MatrixLayout& m)
 {
     return get_size(m.type, (int64_t)m.rows * m.cols);
+}
+
+inline Striding get_mode(const MatrixLayout& m)
+{
+    if (m.idxs) {
+        return Striding::kIndexed;
+    }
+    else if (m.ld == 0 || m.offsets) {
+        return Striding::kBlocked;
+    }
+    return Striding::kFlat;
 }
 
 struct Workspace {

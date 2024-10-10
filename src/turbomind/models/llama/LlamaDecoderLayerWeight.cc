@@ -610,7 +610,6 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
                 (int)w.input_dims,   // k
                 (int)w.output_dims,  // n
             };
-            w.k_desc.striding = gemm::Striding::kFlat;
         };
 
         set_desc(moe_weights.block.fused_gating_intermediate);

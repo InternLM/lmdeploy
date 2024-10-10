@@ -189,7 +189,7 @@ struct MoeFfnWeight {
             memset(&e, 0, sizeof(e));
 
             // inter size is divided by tp in `FfnWeight`
-            e = LlamaFfnWeight<T>{hidden_dim, inter_size, tp, weight_type, group_size, fuse_silu_act};
+            e = LlamaFfnWeight<T>{hidden_dim, (size_t)inter_size, tp, weight_type, group_size, fuse_silu_act};
         }
     }
 
