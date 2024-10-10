@@ -91,7 +91,8 @@ def _update_cache_config(model_config: ModelConfig,
     __adjust_block_size()
 
     cache_block_size = CacheEngine.get_cache_block_size(
-        cache_config.block_size, model_config, world_size)
+        cache_config.block_size, model_config, world_size,
+        cache_config.quant_policy)
     gpu_mem = __get_free_gpu_mem_size(cache_block_size)
     cpu_mem = host_mem_size
     if cache_config.num_cpu_blocks == 0:
@@ -142,6 +143,7 @@ def model_forward(
             inputs=inputs,
             world_size=world_size,
             kv_caches=cache_engine.gpu_cache,
+            kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         with ctx_mgr.context(context):
             input_dict = model.prepare_inputs_for_generation(

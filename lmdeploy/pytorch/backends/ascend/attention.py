@@ -57,6 +57,8 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
         k_cache: Tensor,
         v_cache: Tensor,
         attn_metadata: AscendAttentionMetadata,
+        k_scales_zeros: Tensor = None,
+        v_scales_zeros: Tensor = None,
         inplace: bool = True,
     ) -> Tensor:
         """forward."""

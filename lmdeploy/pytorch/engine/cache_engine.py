@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import Dict, List, Tuple
+from typing import Dict, List, Literal, Tuple
 
 import torch
 
@@ -43,6 +43,8 @@ class CacheEngine:
         self.block_size = cache_config.block_size
         self.num_layers = model_config.num_layers
         self.kv_cache_dtype = model_config.dtype
+        if cache_config.quant_policy > 0:
+            self.kv_cache_dtype = torch.uint8
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -84,6 +86,7 @@ class CacheEngine:
                                   block_size: int,
                                   head_size: int,
                                   world_size: int = 1,
+                                  quant_policy: Literal[0, 4, 8] = 0,
                                   local: bool = True):
         """get single block shape."""
         attn_backend = get_backend()
@@ -93,6 +96,10 @@ class CacheEngine:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
+        if quant_policy == 4:  # pack head_dim to uint8
+            assert head_size % 2 == 0, \
+                f'head_size: {head_size}, quant_policy: {quant_policy}'
+            head_size = head_size // 2
         return attn_backend.get_k_block_shape(block_size, num_heads, head_size,
                                               dtype)
 
@@ -102,6 +109,7 @@ class CacheEngine:
                                     block_size: int,
                                     head_size: int,
                                     world_size: int = 1,
+                                    quant_policy: Literal[0, 4, 8] = 0,
                                     local: bool = True):
         """get single block shape."""
         attn_backend = get_backend()
@@ -111,6 +119,11 @@ class CacheEngine:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
+        if quant_policy == 4:  # pack head_dim to uint8
+            assert head_size % 2 == 0, \
+                f'head_size: {head_size}, quant_policy: {quant_policy}'
+            head_size = head_size // 2
+
         return attn_backend.get_v_block_shape(block_size, num_heads, head_size,
                                               dtype)
 
@@ -124,6 +137,7 @@ class CacheEngine:
             block_size=self.block_size,
             head_size=head_size,
             world_size=self.world_size,
+            quant_policy=self.cache_config.quant_policy,
             local=local,
         )
 
@@ -138,6 +152,7 @@ class CacheEngine:
             block_size=self.block_size,
             head_size=head_size,
             world_size=self.world_size,
+            quant_policy=self.cache_config.quant_policy,
             local=local,
         )
 
@@ -158,7 +173,21 @@ class CacheEngine:
                 dtype=self.kv_cache_dtype,
                 device='cuda',
             )
-            gpu_cache.append((key_blocks, value_blocks))
+            if self.cache_config.quant_policy in (4, 8):
+                key_scales_zeros = torch.empty(
+                    size=(self.num_gpu_blocks, *key_block_shape[:-1], 2),
+                    dtype=self.model_config.dtype,
+                    device='cuda',
+                )
+                value_scales_zeros = torch.empty(
+                    size=(self.num_gpu_blocks, *value_block_shape[:-1], 2),
+                    dtype=self.model_config.dtype,
+                    device='cuda',
+                )
+                gpu_cache.append((key_blocks, value_blocks, key_scales_zeros,
+                                  value_scales_zeros))
+            else:
+                gpu_cache.append((key_blocks, value_blocks))
 
         return gpu_cache
 
@@ -182,7 +211,21 @@ class CacheEngine:
                 dtype=self.kv_cache_dtype,
                 pin_memory=pin_memory,
             )
-            cpu_cache.append((key_blocks, value_blocks))
+            if self.cache_config.quant_policy in (4, 8):
+                key_scales_zeros = torch.empty(
+                    size=(self.num_cpu_blocks, *key_block_shape[:-1], 2),
+                    dtype=self.model_config.dtype,
+                    pin_memory=pin_memory,
+                )
+                value_scales_zeros = torch.empty(
+                    size=(self.num_cpu_blocks, *value_block_shape[:-1], 2),
+                    dtype=self.model_config.dtype,
+                    pin_memory=pin_memory,
+                )
+                cpu_cache.append((key_blocks, value_blocks, key_scales_zeros,
+                                  value_scales_zeros))
+            else:
+                cpu_cache.append((key_blocks, value_blocks))
         return cpu_cache
 
     @torch.inference_mode()
@@ -201,8 +244,9 @@ class CacheEngine:
                 dst_key_cache, dst_value_cache = dst[i]
 
                 for src_id, dst_id in src_to_dst.items():
-                    dst_key_cache[dst_id].copy_(src_key_cache[src_id])
-                    dst_value_cache[dst_id].copy_(src_value_cache[src_id])
+                    if isinstance(dst_key_cache[dst_id], torch.Tensor):
+                        dst_key_cache[dst_id].copy_(src_key_cache[src_id])
+                        dst_value_cache[dst_id].copy_(src_value_cache[src_id])
 
                     event = self.events[i]
                     event.record(stream=self.cache_stream)
@@ -227,7 +271,8 @@ class CacheEngine:
     def get_cache_block_size(cls,
                              block_size: int,
                              model_config: ModelConfig,
-                             world_size: int = 1) -> int:
+                             world_size: int = 1,
+                             quant_policy: int = 0) -> int:
         """Get the required cache size of the model.
 
         Args:
@@ -250,18 +295,43 @@ class CacheEngine:
             head_size=key_head_size,
             world_size=world_size,
             local=True,
+            quant_policy=quant_policy,
         )
         value_shape = cls._get_value_block_shape_impl(
             model_config,
             block_size=block_size,
             head_size=value_head_size,
             world_size=world_size,
+            quant_policy=quant_policy,
             local=True,
         )
-        dtype = model_config.dtype
-        key_block = torch.empty(key_shape, dtype=dtype, device='meta')
-        value_block = torch.empty(value_shape, dtype=dtype, device='meta')
-        mem_key_block = key_block.numel() * key_block.element_size()
-        mem_value_block = value_block.numel() * value_block.element_size()
+        if quant_policy == 0:
+            dtype = model_config.dtype
+            key_block = torch.empty(key_shape, dtype=dtype, device='meta')
+            value_block = torch.empty(value_shape, dtype=dtype, device='meta')
+            mem_key_block = key_block.numel() * key_block.element_size()
+            mem_value_block = value_block.numel() * value_block.element_size()
+        elif quant_policy in (4, 8):
+            key_block = torch.empty(key_shape,
+                                    dtype=torch.uint8,
+                                    device='meta')
+            value_block = torch.empty(value_shape,
+                                      dtype=torch.uint8,
+                                      device='meta')
+            key_scale_zero_block = torch.empty((*key_shape[:-1], 2),
+                                               dtype=model_config.dtype,
+                                               device='meta')
+            value_scale_zero_block = torch.empty((*value_shape[:-1], 2),
+                                                 dtype=model_config.dtype,
+                                                 device='meta')
+            mem_key_block = key_block.numel() * key_block.element_size(
+            ) + key_scale_zero_block.numel(
+            ) * key_scale_zero_block.element_size()
+            mem_value_block = value_block.numel() * value_block.element_size(
+            ) + value_scale_zero_block.numel(
+            ) * value_scale_zero_block.element_size()
+        else:
+            raise ValueError(f'unsupported quant_policy {quant_policy}')
+
         total = num_layers * (mem_key_block + mem_value_block)
         return total

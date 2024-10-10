@@ -302,3 +302,157 @@ class TestPagedAttention:
                             max_seqlen=max_seq_len,
                             window_size=win_size)
         torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
+
+
+def precise_round(x: torch.Tensor):
+    return x.sign() * (x.abs() + 0.5).floor()
+
+
+def quant(kv: torch.Tensor, nbits: int = 8):
+    """Quant kv on the head_dim."""
+    amax = kv.amax(dim=-1, keepdim=True)
+    amin = kv.amin(dim=-1, keepdim=True)
+    scales = (amax - amin) / (2**nbits - 1)
+    zeros = -amin / scales
+    q_kv = precise_round((kv - amin) / scales).to(torch.uint8)
+    if nbits == 4:
+        q_kv1, q_kv2 = q_kv.split(q_kv.shape[-1] // 2, -1)
+        q_kv = q_kv1 + q_kv2 * 16
+    return q_kv, torch.cat([scales, zeros], dim=-1)
+
+
+def _make_blocked_cache_quant(batched_k, batched_v, seq_lens, history_lens,
+                              block_offsets, block_size, num_heads_k, feat_dim,
+                              feat_dim_v, nbits):
+    max_blocks_nums = block_offsets.max() + 1
+    full_seq_lens = seq_lens + history_lens
+    batched_k, k_scales_zeros = quant(batched_k, nbits)
+    batched_v, v_scales_zeros = quant(batched_v, nbits)
+    if nbits == 4:
+        feat_dim //= 2
+        feat_dim_v //= 2
+    blocked_k = batched_k.new_zeros(max_blocks_nums, block_size, num_heads_k,
+                                    feat_dim)
+    blocked_v = batched_v.new_zeros(max_blocks_nums, block_size, num_heads_k,
+                                    feat_dim_v)
+    blocked_ksz = k_scales_zeros.new_zeros(max_blocks_nums, block_size,
+                                           num_heads_k, 2)
+    blocked_vsz = v_scales_zeros.new_zeros(max_blocks_nums, block_size,
+                                           num_heads_k, 2)
+
+    for batch_id, offset in enumerate(block_offsets):
+        ori_k = batched_k[batch_id]
+        ori_v = batched_v[batch_id]
+        ori_ksz = k_scales_zeros[batch_id]
+        ori_vsz = v_scales_zeros[batch_id]
+        seq_len = full_seq_lens[batch_id]
+        for block_id, block_start in enumerate(range(0, seq_len, block_size)):
+            block_off = offset[block_id]
+            tmp_k = ori_k[block_start:block_start + block_size]
+            tmp_v = ori_v[block_start:block_start + block_size]
+            tmp_ksz = ori_ksz[block_start:block_start + block_size]
+            tmp_vsz = ori_vsz[block_start:block_start + block_size]
+            size = tmp_k.size(0)
+            blocked_k[block_off, :size] = tmp_k
+            blocked_v[block_off, :size] = tmp_v
+            blocked_ksz[block_off, :size] = tmp_ksz
+            blocked_vsz[block_off, :size] = tmp_vsz
+
+    return blocked_k, blocked_v, blocked_ksz, blocked_vsz
+
+
+class TestPagedAttentionInt8(TestPagedAttention):
+
+    @pytest.fixture
+    def nbits(self):
+        yield 8
+
+    @pytest.fixture
+    def blocked_kv(self, batched_kv, seq_lens, history_lens, block_offsets,
+                   block_size, num_heads_k, feat_dim, feat_dim_v, nbits):
+        batched_k, batched_v = batched_kv
+        yield _make_blocked_cache_quant(batched_k, batched_v, seq_lens,
+                                        history_lens, block_offsets,
+                                        block_size, num_heads_k, feat_dim,
+                                        feat_dim_v, nbits)
+
+    @pytest.mark.parametrize('feat_dim', [48, 32], indirect=True)
+    @pytest.mark.parametrize('feat_dim_v', [32], indirect=True)
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(8, 2), (2, 2)],
+                             indirect=True)
+    @pytest.mark.parametrize(['seq_lens', 'history_lens'],
+                             [([30, 50, 70, 90], [50, 40, 30, 20]),
+                              ([1, 1, 1, 1], [50, 40, 30, 20])],
+                             indirect=True)
+    @pytest.mark.parametrize('block_size', [16], indirect=True)
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets,
+                             start_loc, seq_lens, history_lens, feat_dim_v,
+                             conti_gt, nbits):
+        from lmdeploy.pytorch.kernels import paged_attention_fwd
+        kv_seq_lens = seq_lens + history_lens
+        max_seq_len = seq_lens.max().item()
+
+        blocked_k, blocked_v, blocked_ksz, blocked_vsz = blocked_kv
+        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
+
+        paged_attention_fwd(conti_q,
+                            blocked_k,
+                            blocked_v,
+                            out,
+                            k_scales_zeros=blocked_ksz,
+                            v_scales_zeros=blocked_vsz,
+                            quant_policy=nbits,
+                            block_offsets=block_offsets,
+                            q_start_loc=start_loc,
+                            q_seqlens=seq_lens,
+                            kv_seqlens=kv_seq_lens,
+                            max_seqlen=max_seq_len)
+        if nbits == 4:
+            torch.testing.assert_close(out, conti_gt, atol=0.05, rtol=0.01)
+        else:
+            torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
+
+    @pytest.mark.parametrize('feat_dim', [16], indirect=True)
+    @pytest.mark.parametrize('feat_dim_v', [16], indirect=True)
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(4, 2)],
+                             indirect=True)
+    @pytest.mark.parametrize(['seq_lens', 'history_lens'], [
+        ([30, 50, 70, 90], [50, 40, 30, 20]),
+        ([1, 1, 1, 1], [50, 40, 30, 20]),
+    ],
+                             indirect=True)
+    @pytest.mark.parametrize('win_size', (32, ), indirect=True)
+    @pytest.mark.parametrize('block_size', [16], indirect=True)
+    def test_window_attention(self, conti_q, blocked_kv, block_offsets,
+                              start_loc, seq_lens, history_lens, feat_dim_v,
+                              win_size, window_gt, nbits):
+        from lmdeploy.pytorch.kernels import paged_attention_fwd
+        kv_seq_lens = seq_lens + history_lens
+        max_seq_len = seq_lens.max().item()
+
+        blocked_k, blocked_v, blocked_ksz, blocked_vsz = blocked_kv
+        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
+        paged_attention_fwd(conti_q,
+                            blocked_k,
+                            blocked_v,
+                            out,
+                            k_scales_zeros=blocked_ksz,
+                            v_scales_zeros=blocked_vsz,
+                            quant_policy=nbits,
+                            block_offsets=block_offsets,
+                            q_start_loc=start_loc,
+                            q_seqlens=seq_lens,
+                            kv_seqlens=kv_seq_lens,
+                            max_seqlen=max_seq_len,
+                            window_size=win_size)
+        if nbits == 4:
+            torch.testing.assert_close(out, window_gt, atol=0.05, rtol=0.01)
+        else:
+            torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
+
+
+class TestPagedAttentionInt4(TestPagedAttentionInt8):
+
+    @pytest.fixture
+    def nbits(self):
+        yield 4

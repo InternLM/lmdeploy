@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 import torch
 
@@ -76,6 +76,7 @@ class CacheConfig:
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 4096
     enable_prefix_caching: bool = False
+    quant_policy: Literal[0, 4, 8] = 0
 
     def __post_init__(self):
         """post init."""
