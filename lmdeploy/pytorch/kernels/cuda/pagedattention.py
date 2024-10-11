@@ -436,7 +436,56 @@ def _fwd_kernel(
         kv_start_loc = start_block_id * BLOCK_N
         block_offset_ptrs += start_block_id
 
-    for start_n in range(kv_start_loc, kv_seqlen, BLOCK_N):
+    loop_start = kv_start_loc
+    loop_end = history_len // BLOCK_N * BLOCK_N
+    for start_n in range(loop_start, loop_end, BLOCK_N):
+        b_offset = tl.load(block_offset_ptrs)
+        block_offset_ptrs += 1
+
+        # -- compute qk ----
+        k = tl.load(k_ptrs + b_offset * stride_kp)
+        if BLOCK_DMODEL1 != 0:
+            k1 = tl.load(k1_ptrs + b_offset * stride_kp)
+
+        v = tl.load(v_ptrs + b_offset * stride_vp)
+
+        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+        qk += tl.dot(q, k)
+        if BLOCK_DMODEL1 != 0:
+            qk += tl.dot(q1, k1)
+        qk *= sm_scale
+        if logit_softcapping > 0.0:
+            qk = qk / logit_softcapping
+            qk = tanh(qk)
+            qk = qk * logit_softcapping
+        # NOTE: inf - inf = nan, and nan will leads to error
+        if window_size > 0:
+            qk_mask = ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+            qk = tl.where(
+                qk_mask,
+                qk,
+                float(-1e30),
+            )
+
+        # -- compute p, m_i and l_i
+        m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+        p = fast_expf(qk - m_i_new[:, None])
+        alpha = fast_expf(m_i - m_i_new)
+        l_i_new = alpha * l_i + tl.sum(p, 1)
+        # -- update output accumulator --
+        # scale acc
+        acc = acc * alpha[:, None]
+
+        # update acc
+        p, v = _convert_pv(p, v)
+        acc += tl.dot(p, v)
+        # update m_i and l_i
+        l_i = l_i_new
+        m_i = m_i_new
+
+    loop_start = loop_end
+    loop_end = kv_seqlen
+    for start_n in range(loop_start, loop_end, BLOCK_N):
         b_offset = tl.load(block_offset_ptrs)
         block_offset_ptrs += 1
 

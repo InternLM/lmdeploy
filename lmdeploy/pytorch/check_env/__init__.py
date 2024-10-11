@@ -56,7 +56,7 @@ def check_env_torch():
         _handle_exception(e, 'PyTorch', logger)
 
 
-MAX_TRITON_VERSION = '2.2.0'
+MAX_TRITON_VERSION = '3.0.0'
 
 
 def check_env_triton():
