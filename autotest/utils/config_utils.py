@@ -2,6 +2,7 @@ import copy
 import os
 
 import yaml
+from utils.get_run_config import get_tp_num
 
 
 def get_turbomind_model_list(tp_num: int = None,
@@ -12,16 +13,16 @@ def get_turbomind_model_list(tp_num: int = None,
     quatization_case_config = config.get('turbomind_quatization')
     for key in config.get('turbomind_' + model_type):
         if key not in quatization_case_config.get(
-                'no_awq') and 'awq' not in key.lower(
-                ) and '4bits' not in key.lower() and 'w4' not in key.lower(
-                ) and 'int4' not in key.lower():
+                'no_awq') and not is_quantization_model(key):
             case_list.append(key + '-inner-4bits')
     for key in quatization_case_config.get('gptq'):
         if key in case_list:
             case_list.append(key + '-inner-gptq')
 
     if tp_num is not None:
-        return [item for item in case_list]
+        return [
+            item for item in case_list if get_tp_num(config, item) == tp_num
+        ]
     else:
         return case_list
 
@@ -48,7 +49,9 @@ def get_torch_model_list(tp_num: int = None,
             case_list.append(key + '-inner-4bits')
 
     if tp_num is not None:
-        return [item for item in case_list]
+        return [
+            item for item in case_list if get_tp_num(config, item) == tp_num
+        ]
     else:
         return case_list
 
@@ -70,16 +73,16 @@ def get_turbomind_kvint_model_list(tp_num: int = None,
 
     for key in config.get('turbomind_' + model_type):
         if key not in config.get('turbomind_quatization').get(
-                'no_awq') and 'awq' not in key.lower(
-                ) and '4bits' not in key.lower() and 'w4' not in key.lower(
-                ) and 'int4' not in key.lower():
+                'no_awq') and not is_quantization_model(key):
             case_list.append(key + '-inner-4bits')
     for key in config.get('turbomind_quatization').get('gptq'):
         if key in case_list and key in case_list:
             case_list.append(key + '-inner-gptq')
 
     if tp_num is not None:
-        return [item for item in case_list]
+        return [
+            item for item in case_list if get_tp_num(config, item) == tp_num
+        ]
     else:
         return case_list
 
@@ -111,7 +114,9 @@ def get_torch_kvint_model_list(tp_num: int = None,
             case_list.append(key + '-inner-w8a8')
 
     if tp_num is not None:
-        return [item for item in case_list]
+        return [
+            item for item in case_list if get_tp_num(config, item) == tp_num
+        ]
     else:
         return case_list
 
@@ -137,8 +142,7 @@ def get_quantization_model_list(type):
             x for x in config.get('turbomind_chat_model') +
             config.get('turbomind_base_model')
             if x not in config.get('turbomind_quatization').get('no_awq')
-            and 'awq' not in x.lower() and '4bits' not in x.lower()
-            and 'w4' not in x.lower() and 'int4' not in x.lower()
+            and not is_quantization_model(x)
         ]
         for key in config.get('pytorch_quatization').get('awq'):
             if key not in case_list:
@@ -158,13 +162,13 @@ def get_vl_model_list(tp_num: int = None):
 
     for key in config.get('vl_model'):
         if key not in config.get('turbomind_quatization').get(
-                'no_awq') and 'awq' not in key.lower(
-                ) and '4bits' not in key.lower() and 'w4' not in key.lower(
-                ) and 'int4' not in key.lower():
+                'no_awq') and not is_quantization_model(key):
             case_list.append(key + '-inner-4bits')
 
     if tp_num is not None:
-        return [item for item in case_list]
+        return [
+            item for item in case_list if get_tp_num(config, item) == tp_num
+        ]
     else:
         return case_list
 
@@ -216,9 +220,7 @@ def get_benchmark_model_list(tp_num,
     case_list = copy.deepcopy(case_list_base)
     for key in case_list_base:
         if key not in quatization_case_config.get(
-                'no_awq') and 'awq' not in key.lower(
-                ) and '4bits' not in key.lower() and 'w4' not in key.lower(
-                ) and 'int4' not in key.lower():
+                'no_awq') and not is_quantization_model(key):
             case_list.append(key + '-inner-4bits')
 
     model_list = [item for item in case_list]
@@ -253,3 +255,8 @@ def get_workerid(worker_id):
         return None
     else:
         return int(worker_id.replace('gw', ''))
+
+
+def is_quantization_model(name):
+    return 'awq' in name.lower() or '4bits' in name.lower(
+    ) or 'w4' in name.lower() or 'int4' in name.lower()
