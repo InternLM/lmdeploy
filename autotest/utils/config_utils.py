@@ -219,8 +219,9 @@ def get_benchmark_model_list(tp_num,
 
     case_list = copy.deepcopy(case_list_base)
     for key in case_list_base:
-        if key not in quatization_case_config.get(
-                'no_awq') and not is_quantization_model(key):
+        if key in config.get('turbomind_chat_model'
+                             ) and key not in quatization_case_config.get(
+                                 'no_awq') and not is_quantization_model(key):
             case_list.append(key + '-inner-4bits')
 
     model_list = [
