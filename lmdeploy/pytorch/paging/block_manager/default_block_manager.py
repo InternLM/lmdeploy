@@ -28,18 +28,13 @@ class DefaultBlockManager(BaseBlockManager):
                             prealloc_size: int = 0):
         """get num required blocks."""
         num_tokens = obj.num_all_tokens() + prealloc_size
+
+        # cross tokens
+        num_cross = obj.num_all_cross_tokens()
+        num_tokens = max(num_tokens, num_cross)
+
         num_all_blocks = _div_up(num_tokens, obj.block_size)
         return max(0, num_all_blocks - len(obj.logical_blocks))
-
-    @classmethod
-    def last_block_size(cls, seq: SchedulerSequence) -> int:
-        """get last block size."""
-        num_blocks = len(seq.logical_blocks)
-        if num_blocks == 0:
-            return 0
-        elif num_blocks * seq.block_size < seq.history_len:
-            return seq.block_size
-        return seq.history_len % seq.block_size
 
     def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return if physical block can be allocated for given message."""
