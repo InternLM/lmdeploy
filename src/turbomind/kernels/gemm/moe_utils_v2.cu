@@ -404,6 +404,8 @@ void invokeMoeReduce(T*           dst,
     };
 
     switch (experts_per_token) {
+        case 1:
+            return invoke(std::integral_constant<int, 1>{});
         case 2:
             return invoke(std::integral_constant<int, 2>{});
         // case 4:

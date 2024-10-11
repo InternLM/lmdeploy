@@ -99,7 +99,7 @@ void Convert_v2_Impl(const void* S, const MatrixLayout& Sdesc, void* D, const Ma
 int Convert(const void*         S,  //
             const MatrixLayout& _Sdesc,
             void*               D,
-            const MatrixLayout& _Ddesc,
+            MatrixLayout&       _Ddesc,
             cudaStream_t        stream)
 {
     const Op_Tag op_tag = get_operand_tag(_Ddesc.pack);
@@ -122,9 +122,15 @@ int Convert(const void*         S,  //
 
             static constexpr int  kPackSize = Operand::SmemCopyAtom::Frag::size() * pack_num_tag;
             static constexpr bool kIsValid  = kPackSize % unit_size(type_c<Dtype>) == 0;
+            constexpr Pack        pack      = mma | operand | pack_num;
 
             if constexpr (kIsValid) {
+                // Launch conversion kernel
                 Convert_v2_Impl<Config<Operand, Dtype, pack_num_tag>>(S, Sdesc, D, Ddesc, stream);
+                // Set leading dimension for destination
+                _Ddesc.ld = mk2cs<order>(Packing_v2<pack, order>::apply({Sdesc.rows, Sdesc.cols})).x;
+                // _Ddesc.ld = mk2cs<order>(Packing_v2<pack, order>::apply(cs2mk<order>(_Ddesc.ld, 0))).x;
+                
                 return true;
             }
 

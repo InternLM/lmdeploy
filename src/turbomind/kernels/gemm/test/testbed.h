@@ -194,11 +194,27 @@ public:
         }
 
         if constexpr (pack_b) {
-            CHECK(experts == 0);
+            // CHECK(experts == 0);
             b_pack_desc_.type = get_data_type_v<Tb>;
             b_pack_desc_.pack = pack_b;
             const auto b_data = is_quant_b ? (void*)b_q_.data().get() : (void*)b_.data().get();
+
+            // ! `experts_` is uninitialized here
+            if (experts) {
+                b_desc_.cols *= experts;
+                b_pack_desc_.cols *= experts;
+            }
+
+            std::cout << "pre-pack: " << b_pack_desc_.ld << "\n";
+
             CHECK(!Convert(b_data, b_desc_, b_pack_.data().get(), b_pack_desc_, stream_));
+
+            std::cout << "post-pack: " << b_pack_desc_.ld << "\n";
+
+            if (experts) {
+                b_desc_.cols /= experts;
+                b_pack_desc_.cols /= experts;
+            }
 
             // {
             //     cudaDeviceSynchronize();
@@ -282,10 +298,10 @@ public:
         if (1) {
             moe_n_ptrs_.resize(experts_);
             // CHECK(order_b == kColMajor);
-            CHECK(pack_b == 0);
+            // CHECK(pack_b == 0);
+            const size_t numel = (size_t)input_dims_ * output_dims_;
             for (int i = 0; i < experts_; ++i) {
-                moe_n_ptrs_[i] = StridedPtr{(Tb*)b_pack_.data().get() + (size_t)i * input_dims_ * output_dims_,
-                                            order_b == kColMajor ? input_dims_ : output_dims_};
+                moe_n_ptrs_[i] = StridedPtr{(Tb*)b_pack_.data().get() + i * numel, b_pack_desc_.ld};
             }
         }
 
@@ -339,20 +355,15 @@ public:
                 a_e_.data().get(), a_f_.data().get(), moe_f2n_.data().get(), batch_size_, top_e, input_dims_, stream_);
         }
 
-        c_desc_.rows = a_desc_.rows = expert_ids_.size();
-        c_desc_.ld = c_desc_.cols = b_desc_.cols = output_dims_;
+        a_pack_desc_.num = b_pack_desc_.num = c_desc_.num = experts_;
 
-        c_desc_.offsets = moe_m_offsets_.data().get();
+        a_pack_desc_.rows = a_desc_.rows = c_desc_.rows = expert_ids_.size();
+        a_pack_desc_.offsets = c_desc_.offsets = moe_m_offsets_.data().get();
 
-        a_pack_desc_         = a_desc_;
-        a_pack_desc_.offsets = moe_m_offsets_.data().get();
-        a_pack_desc_.idxs    = moe_f2n_.data().get();
+        a_pack_desc_.idxs = moe_f2n_.data().get();
 
-        b_pack_desc_    = b_desc_;
         b_pack_desc_.ld = 0;
         // b_pack_desc_.offsets = moe_n_offsets_.data().get();
-
-        a_pack_desc_.num = b_pack_desc_.num = c_desc_.num = experts_;
 
         cudaMemPrefetchAsync(moe_m_offsets_.data().get(), sizeof(int) * moe_m_offsets_.size(), 0, stream_);
         cudaMemPrefetchAsync(moe_n_offsets_.data().get(), sizeof(int) * moe_n_offsets_.size(), 0, stream_);
@@ -727,10 +738,10 @@ inline decltype(auto) get_test()
         return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (1) {
-        // constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
-        constexpr Pack kPackB = 0;
+        constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
+        // constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
-        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kRowMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;

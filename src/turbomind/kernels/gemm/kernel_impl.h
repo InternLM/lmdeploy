@@ -196,14 +196,6 @@ public:
             }();
         }
 
-        /// TODO: move these to conversion
-        if (Gemm::kPackA) {
-            Adesc.ld = mk2cs<Gemm::kOrderA>(Packing_v2<Gemm::kPackA, Gemm::kOrderA>::apply({m, k})).x;
-        }
-        if (Gemm::kPackB) {
-            Bdesc.ld = mk2cs<Gemm::kOrderB>(Packing_v2<Gemm::kPackB, Gemm::kOrderB>::apply({n, k})).x;
-        }
-
         const bool silu_act = ((int)operation.epilogue & (int)Epilogue::kGatedSilu);
 
         MatrixLayout Pdesc = Ddesc;

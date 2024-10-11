@@ -47,8 +47,7 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-[[nodiscard]] int
-Convert(const void* S, const MatrixLayout& Sdesc, void* D, const MatrixLayout& Ddesc, cudaStream_t stream);
+[[nodiscard]] int Convert(const void* S, const MatrixLayout& Sdesc, void* D, MatrixLayout& Ddesc, cudaStream_t stream);
 
 std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(int sm, bool force_simt);
 
