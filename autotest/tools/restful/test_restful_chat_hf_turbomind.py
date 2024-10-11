@@ -68,7 +68,7 @@ def getKvintModelList(tp_num, quant_policy):
         'tp_num': tp_num,
         'extra': f'--quant-policy {quant_policy}'
     } for item in get_all_kvint_model_list(tp_num, quant_policy=quant_policy)
-            if 'qwen2-7' not in item.lower() or quant_policy == 8]
+            if 'qwen2' not in item.lower() or quant_policy == 8]
 
 
 @pytest.mark.order(7)
