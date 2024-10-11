@@ -173,7 +173,6 @@ pytorch_quatization:
         - 01-ai/Yi-6B-Chat
         - internlm/internlm2_5-20b
         - internlm/internlm2_5-7b
-        - meta-llama/Meta-Llama-3-8B-Instruct
     no_kvint4:
         - OpenGVLab/InternVL2-4B
         - deepseek-ai/DeepSeek-V2-Lite-Chat
