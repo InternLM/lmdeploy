@@ -40,7 +40,7 @@ void Registry::f16_f16_f16_grouped_sm80_s16816()
                           Operand_A<half, kRowMajor>,          // A
                           Transform_Default,                   // tarnsform A
                           VoidOperand,                         // U
-                          Operand_B_Pack<half, kRowMajor, 1>,  // B
+                          Operand_B_Pack<half, kColMajor, 1>,  // B
                           Transform_Default,                   // transform B
                           VoidOperand,                         // V
                           kRowMajor,                           // order_C

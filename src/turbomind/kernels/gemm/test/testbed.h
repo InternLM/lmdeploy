@@ -197,24 +197,22 @@ public:
             // CHECK(experts == 0);
             b_pack_desc_.type = get_data_type_v<Tb>;
             b_pack_desc_.pack = pack_b;
-            const auto b_data = is_quant_b ? (void*)b_q_.data().get() : (void*)b_.data().get();
+            auto b_data       = is_quant_b ? (void*)b_q_.data().get() : (void*)b_.data().get();
+            auto b_pack_data  = (void*)b_pack_.data().get();
 
-            // ! `experts_` is uninitialized here
-            if (experts) {
-                b_desc_.cols *= experts;
-                b_pack_desc_.cols *= experts;
-            }
+            using Pointer = get_pointer_type<Tb>;
+
+            const size_t numel = (size_t)b_desc_.rows * b_desc_.cols;
 
             std::cout << "pre-pack: " << b_pack_desc_.ld << "\n";
 
-            CHECK(!Convert(b_data, b_desc_, b_pack_.data().get(), b_pack_desc_, stream_));
+            for (size_t e = 0; e < E; ++e) {
+                CHECK(!Convert(b_data, b_desc_, b_pack_data, b_pack_desc_, stream_));
+                b_data      = Pointer(b_data) + numel;
+                b_pack_data = Pointer(b_pack_data) + numel;
+            }
 
             std::cout << "post-pack: " << b_pack_desc_.ld << "\n";
-
-            if (experts) {
-                b_desc_.cols /= experts;
-                b_pack_desc_.cols /= experts;
-            }
 
             // {
             //     cudaDeviceSynchronize();
@@ -741,7 +739,7 @@ inline decltype(auto) get_test()
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
         // constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
-        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kRowMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;
