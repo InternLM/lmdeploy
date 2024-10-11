@@ -223,7 +223,9 @@ def get_benchmark_model_list(tp_num,
                 'no_awq') and not is_quantization_model(key):
             case_list.append(key + '-inner-4bits')
 
-    model_list = [item for item in case_list]
+    model_list = [
+        item for item in case_list if get_tp_num(config, item) == tp_num
+    ]
 
     result = []
     if len(model_list) > 0:
