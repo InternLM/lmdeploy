@@ -59,6 +59,9 @@ with read_base():
         models as lmdeploy_qwen1_5_7b  # noqa: F401, E501
     from opencompass.configs.models.qwen.lmdeploy_qwen2_7b import \
         models as lmdeploy_qwen2_7b  # noqa: F401, E501
+    # and output the results in a chosen format
+    from opencompass.configs.summarizers.medium import \
+        summarizer  # noqa: F401, E501
 
 turbomind_qwen1_5_7b = deepcopy(*lmdeploy_qwen1_5_7b)
 turbomind_qwen2_7b = deepcopy(*lmdeploy_qwen2_7b)
