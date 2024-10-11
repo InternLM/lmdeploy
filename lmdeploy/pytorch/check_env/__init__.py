@@ -106,29 +106,31 @@ MIN_TRANSFORMERS_VERSION = '4.33.0'
 MAX_TRANSFORMERS_VERSION = '4.44.1'
 
 
-def check_awq(hf_config):
+def check_awq(hf_config, device_type):
     """check awq support."""
     logger = get_logger('lmdeploy')
-    quantization_config = getattr(hf_config, 'quantization_config', dict())
-    quant_method = quantization_config.get('quant_method', None)
-    if quant_method != 'awq':
-        return
-    try:
-        import awq  # noqa
-    except Exception as e:
-        _handle_exception(e, 'autoawq', logger)
+    if device_type == 'cuda':
+        quantization_config = getattr(hf_config, 'quantization_config', dict())
+        quant_method = quantization_config.get('quant_method', None)
+        if quant_method != 'awq':
+            return
+        try:
+            import awq  # noqa
+        except Exception as e:
+            _handle_exception(e, 'autoawq', logger)
 
-    try:
-        import awq_ext  # noqa
-    except Exception:
-        logger.debug('Exception:', exc_info=1)
-        logger.warning('Failed to import `awq_ext`. '
-                       'Try reinstall it from source: '
-                       'https://github.com/casper-hansen/AutoAWQ_kernels')
+        try:
+            import awq_ext  # noqa
+        except Exception:
+            logger.debug('Exception:', exc_info=1)
+            logger.warning('Failed to import `awq_ext`. '
+                           'Try reinstall it from source: '
+                           'https://github.com/casper-hansen/AutoAWQ_kernels')
 
 
 def check_transformers_version(model_path: str,
-                               trust_remote_code: bool = True):
+                               trust_remote_code: bool = True,
+                               device_type: str = 'cuda'):
     """check transformers version."""
     from packaging import version
     logger = get_logger('lmdeploy')
@@ -212,14 +214,16 @@ def check_transformers_version(model_path: str,
     config = __check_config(trans_version)
     __check_model_transformers_version(config, trans_version)
     __check_model_dtype_support(config)
-    check_awq(config)
+    check_awq(config, device_type)
 
 
-def check_model(model_path: str, trust_remote_code: bool = True):
+def check_model(model_path: str,
+                trust_remote_code: bool = True,
+                device_type: str = 'cuda'):
     """check model requirements."""
     logger = get_logger('lmdeploy')
     logger.info('Checking model.')
-    check_transformers_version(model_path, trust_remote_code)
+    check_transformers_version(model_path, trust_remote_code, device_type)
 
 
 def check_adapter(path: str):

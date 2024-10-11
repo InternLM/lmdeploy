@@ -10,6 +10,7 @@ from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             awq_layers, quant_weights,
                                             smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
+from lmdeploy.utils import get_logger
 
 from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
 
@@ -41,6 +42,19 @@ def save_vl_model(vl_model, model_path, dst_path):
         copy_dst = osp.join(dst_path, file)
         if not osp.exists(copy_dst):
             shutil.copyfile(copy_src, copy_dst)
+
+
+def try_import_deeplink(device: str):
+    """import dlinfer if specific device_type is set."""
+    deeplink_device_list = [
+        'npu',
+    ]
+    if device in deeplink_device_list:
+        logger = get_logger('lmdeploy')
+        try:
+            import dlinfer.framework.lmdeploy_ext  # noqa: F401
+        except Exception as e:
+            logger.error(f'{type(e).__name__}: {e}')
 
 
 def auto_awq(model: str,
@@ -79,6 +93,7 @@ def auto_awq(model: str,
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
     """
+    try_import_deeplink(device)
     if not osp.exists(model):
         print(f'can\'t find model from local_path {model}, '
               'try to download from remote')
