@@ -4,6 +4,7 @@ import copy
 import json
 import os.path as osp
 import sys
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from itertools import repeat
@@ -318,7 +319,8 @@ class TurboMind:
         Returns:
             TurboMindInstance: an instance of turbomind
         """
-        return TurboMindInstance(self, self.config, cuda_stream_id)
+        return TurboMindInstance(weakref.proxy(self), self.config,
+                                 cuda_stream_id)
 
 
 class TurboMindInstance:

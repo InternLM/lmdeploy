@@ -250,9 +250,6 @@ class Engine:
         self._seq_length_buf = None
         self._inputs = None
         torch._C._cuda_clearCublasWorkspaces()
-        torch.cuda.empty_cache()
-        import gc
-        gc.collect()
 
     def _start_loop(self):
         """start loop."""
