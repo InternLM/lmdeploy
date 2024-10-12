@@ -76,19 +76,15 @@ class MacaAttentionImpl(AttentionImpl[MacaAttentionMetadata]):
         max_kv_seq_len = attn_metadata.max_kv_seq_len
 
         # fill kv cache
-        # import pdb; pdb.set_trace()
         self.fill_kv_cache(key, value, k_cache, v_cache, kv_start_indices)
-        # import pdb; pdb.set_trace()
 
-        # if inplace:
-        #     attn_output = query[..., :self.v_head_size]
-        # else:
-        #     q_shape = query.shape
-        #     o_shape = q_shape[:-1] + (self.v_head_size, )
-        #     attn_output = query.new_empty(o_shape)
+        if inplace:
+            attn_output = query[..., :self.v_head_size]
+        else:
+            q_shape = query.shape
+            o_shape = q_shape[:-1] + (self.v_head_size, )
+            attn_output = query.new_empty(o_shape)
 
-        attn_output = torch.empty_like(query)
-        # import pdb; pdb.set_trace()
         attn_output = self.paged_attention_fwd(
             query,
             key,
@@ -107,7 +103,6 @@ class MacaAttentionImpl(AttentionImpl[MacaAttentionMetadata]):
             attn_mask=attn_mask,
             is_unpaged_prefill=is_unpaged_prefill,
         )
-        # import pdb; pdb.set_trace()
 
         return attn_output
 

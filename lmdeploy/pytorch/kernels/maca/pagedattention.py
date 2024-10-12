@@ -16,41 +16,50 @@ def prefill_attention(
     q_seq_len: Tensor,
     kv_seq_len: Tensor,
     max_q_seq_len: int,
+    max_kv_seq_len: int,
     block_size: int,
     attn_mask: Sequence[Optional[Tensor]],
     is_unpaged_prefill: Optional[bool],
 ):
     num_q_heads = query_states.shape[1]
     num_kv_heads = value_states.shape[1]
-
-    attn_output = torch.empty_like(query_states)
-
-    return ext_ops.prefill_attention(
-        query_states,
-        key_states,
-        value_states,
-        q_start_loc,
-        q_seq_len,
-        max_q_seq_len,
-        num_q_heads,
-        num_kv_heads,
-        attn_mask,
-        attn_output=attn_output,
-    )
+    if is_unpaged_prefill:
+        return ext_ops.prefill_attention(
+            query_states,
+            key_states,
+            value_states,
+            q_start_loc,
+            q_seq_len,
+            kv_seq_len,
+            max_q_seq_len,
+            max_kv_seq_len,
+            num_q_heads,
+            num_kv_heads,
+            attn_mask,
+            attn_output=attn_output,
+        )
+    else:
+        # import pdb; pdb.set_trace()
+        return ext_ops.paged_prefill_attention(
+            query_states,
+            key_cache,
+            value_cache,
+            block_offsets,
+            block_size,
+            q_start_loc,
+            q_seq_len,
+            kv_seq_len,
+            num_q_heads,
+            num_kv_heads,
+            attn_mask,
+            attn_output=attn_output,
+        )
 
 
 def paged_token_attention(q, k_cache, v_cache, attn_output, kv_seq_len,
                           max_kv_seq_len, block_offsets, block_size):
-    
-    # import pdb; pdb.set_trace()
-    
     num_q_heads, q_head_dim = q.shape[1:3]
-    # num_kv_heads = k_cache.size(-1) // q.size(-1)
     num_kv_heads = k_cache.size(1)
-
-    # import pdb; pdb.set_trace()
-
-    attn_output = torch.empty_like(q)
     return ext_ops.paged_decode_attention(
         q,
         k_cache,
@@ -96,6 +105,7 @@ def paged_attention_fwd(
             q_seqlens,
             kv_seqlens,
             max_q_seq_len,
+            max_kv_seq_len,
             block_size,
             attn_mask,
             is_unpaged_prefill,

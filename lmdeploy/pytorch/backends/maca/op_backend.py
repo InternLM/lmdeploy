@@ -54,8 +54,7 @@ class MacaOpsBackend(DefaultOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        x = 16
-        return (num_heads, head_size // x, block_size, x)
+        return (num_heads, block_size, head_size)
 
     @staticmethod
     def get_v_block_shape(
@@ -70,9 +69,7 @@ class MacaOpsBackend(DefaultOpsBackend):
     def update_step_context(cls, step_context):
         """update step context."""
         kv_start_indices, attention_mask = [], []
-        # import pdb; pdb.set_trace()
-        block_size = 16
-        # _, block_size, _ = step_context.kv_caches[0][0].shape
+        block_size = step_context.kv_caches[0][0].size(-2)
         device = step_context.block_offsets.device
 
         is_unpaged_prefill = False
@@ -137,6 +134,5 @@ class MacaOpsBackend(DefaultOpsBackend):
             max_kv_seq_len=max_kv_seq_len,
         )
 
-        # import pdb; pdb.set_trace()
         step_context.attn_metadata = attn_metadata
         return step_context
