@@ -1,6 +1,5 @@
 import pytest
-from utils.config_utils import (get_torch_kvint_model_list,
-                                get_torch_model_list, get_workerid)
+from utils.config_utils import get_torch_model_list, get_workerid
 from utils.run_restful_chat import (run_all_step, start_restful_api,
                                     stop_restful_api)
 
@@ -67,7 +66,7 @@ def getKvintModelList(tp_num, quant_policy):
         'cuda_prefix': None,
         'tp_num': tp_num,
         'extra': f'--quant-policy {quant_policy}'
-    } for item in get_torch_kvint_model_list(
+    } for item in get_torch_model_list(
         tp_num, quant_policy=quant_policy, exclude_dup=True)
             if 'qwen2' not in item.lower() or quant_policy == 8]
 

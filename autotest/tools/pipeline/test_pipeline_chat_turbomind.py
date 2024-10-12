@@ -2,8 +2,7 @@ import os
 from multiprocessing import Process
 
 import pytest
-from utils.config_utils import (get_all_kvint_model_list, get_all_model_list,
-                                get_cuda_id_by_workerid)
+from utils.config_utils import get_all_model_list, get_cuda_id_by_workerid
 from utils.pipeline_chat import (assert_pipeline_chat_log,
                                  run_pipeline_chat_test)
 
@@ -50,8 +49,7 @@ def test_pipeline_chat_tp2(config, common_case_config, model, worker_id):
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model',
-                         get_all_kvint_model_list(tp_num=1, quant_policy=4))
+@pytest.mark.parametrize('model', get_all_model_list(tp_num=1, quant_policy=4))
 def test_pipeline_chat_kvint4_tp1(config, common_case_config, model,
                                   worker_id):
     if 'Qwen2' in model:
@@ -74,8 +72,7 @@ def test_pipeline_chat_kvint4_tp1(config, common_case_config, model,
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model',
-                         get_all_kvint_model_list(tp_num=2, quant_policy=4))
+@pytest.mark.parametrize('model', get_all_model_list(tp_num=2, quant_policy=4))
 def test_pipeline_chat_kvint4_tp2(config, common_case_config, model,
                                   worker_id):
     if 'gw' in worker_id:
@@ -97,8 +94,7 @@ def test_pipeline_chat_kvint4_tp2(config, common_case_config, model,
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model',
-                         get_all_kvint_model_list(tp_num=1, quant_policy=8))
+@pytest.mark.parametrize('model', get_all_model_list(tp_num=1, quant_policy=8))
 def test_pipeline_chat_kvint8_tp1(config, common_case_config, model,
                                   worker_id):
     if 'gw' in worker_id:
@@ -119,8 +115,7 @@ def test_pipeline_chat_kvint8_tp1(config, common_case_config, model,
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model',
-                         get_all_kvint_model_list(tp_num=2, quant_policy=8))
+@pytest.mark.parametrize('model', get_all_model_list(tp_num=2, quant_policy=8))
 def test_pipeline_chat_kvint8_tp2(config, common_case_config, model,
                                   worker_id):
     if 'gw' in worker_id:
