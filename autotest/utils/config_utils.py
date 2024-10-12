@@ -92,7 +92,7 @@ def get_torch_kvint_model_list(tp_num: int = None,
                                model_type: str = 'chat_model',
                                exclude_dup: bool = False):
     config = get_config()
-
+    exclude_dup = False
     if exclude_dup:
         case_list = [
             x for x in config.get('pytorch_' + model_type)
@@ -132,7 +132,7 @@ def get_all_kvint_model_list(tp_num: int = None,
                                            model_type=model_type):
         if case not in case_list:
             case_list.append(case)
-    return case_list
+    return [x for x in case_list if 'w8a8' not in x]
 
 
 def get_quantization_model_list(type):
