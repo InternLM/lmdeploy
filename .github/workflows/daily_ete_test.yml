@@ -520,7 +520,11 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
-    timeout-minutes: 300 # 5hours
+    timeout-minutes: 120 # 2hours
+    strategy:
+      fail-fast: false
+      matrix:
+        evaluate_type: ['chat', 'base']
     container:
       image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -587,11 +591,19 @@ jobs:
         run: |
           ln -s /root/opencompass-data ./data
           python3 .github/scripts/action_tools.py create_model_links /root/models .
-      - name: Evaluate models
+
+      - name: Evaluate chat models
+        if: matrix.evaluate_type == 'chat'
         run: |
           export LMDEPLOY_DIR=$(pwd)
 
           python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_4bits, turbomind_internlm2_5_7b_chat_kvint4, pt_internlm2_5_7b_chat, turbomind_internlm2_5_20b_chat, turbomind_internlm2_5_20b_chat_4bits, turbomind_internlm2_5_20b_chat_kvint4, pt_internlm2_5_20b_chat, turbomind_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, turbomind_llama_3d1_8b_instruct_4bits, turbomind_llama_3d1_8b_instruct_kvint4, turbomind_qwen2_7b_instruct, turbomind_qwen2_7b_instruct_4bits, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]" "[*race_datasets, *gsm8k_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
+      - name: Evaluate base models
+        if: matrix.evaluate_type == 'base'
+        run: |
+          export LMDEPLOY_DIR=$(pwd)
+
+          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b, turbomind_qwen2_7b, turbomind_internlm2_5_7b_batch1]" "[*mmlu_datasets, *gsm8k_datasets]" /root/evaluation-reports/${{ github.run_id }} base true
       - name: Clear workspace
         if: always()
         run: |

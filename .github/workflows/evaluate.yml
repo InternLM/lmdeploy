@@ -25,19 +25,24 @@ on:
         default: '[*mmlu_datasets, *gsm8k_datasets]'
       base_models:
         required: true
-        description: 'Tested TurboMind models list. eg. [turbomind_internlm2_5_7b, turbomind_qwen2_7b]'
+        description: 'Tested TurboMind models list. eg. [turbomind_internlm2_5_7b, turbomind_qwen2_7b, turbomind_internlm2_5_7b_batch1]'
         type: string
-        default: '[turbomind_internlm2_5_7b, turbomind_qwen2_7b]'
+        default: '[turbomind_internlm2_5_7b, turbomind_qwen2_7b, turbomind_internlm2_5_7b_batch1]'
       baes_datasets:
         required: true
         description: 'Tested datasets list. eg. [*mmlu_datasets, *gsm8k_datasets]'
         type: string
         default: '[*mmlu_datasets, *gsm8k_datasets]'
-      local_config:
-        required: true
-        description: 'Whether use local eval config'
-        type: boolean
-        default: false
+      oc_repo_org:
+        required: false
+        description: 'Tested repository organization name. Default is open-compass/opencompass'
+        type: string
+        default: 'open-compass/opencompass'
+      oc_repo_ref:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -149,8 +154,9 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |
-          git clone --depth=1 https://github.com/open-compass/opencompass.git
+          git clone https://github.com/${{ github.event.inputs.oc_repo_org}}.git
           cd opencompass
+          git checkout ${{ github.event.inputs.oc_repo_ref}}
           python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
@@ -162,9 +168,6 @@ jobs:
         run: |
           ln -s /root/opencompass-data ./data
           python3 .github/scripts/action_tools.py create_model_links /root/models .
-      - name: Use local config
-        if: ${{inputs.local_config}}
-        run: cp /root/models/offline_pkg/eval_config.py .github/scripts/eval_opencompass_config.py
       - name: Evaluate chat models
         if: matrix.evaluate_type == 'chat'
         run: |
