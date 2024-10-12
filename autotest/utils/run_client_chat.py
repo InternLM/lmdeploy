@@ -72,6 +72,11 @@ def hf_command_line_test(config,
 
     if case == 'base_testcase':
         cmd += ' --chat-template ' + TEMPLATE
+
+    if os.getenv('TEST_RUNNER') is not None and 'v100' in os.getenv(
+            'TEST_RUNNER'):
+        cmd += ' --dtype float16'
+
     return command_test(config, [cmd], model_case,
                         '_'.join(['hf', type, case]), case_info, True)
 

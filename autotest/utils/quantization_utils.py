@@ -21,17 +21,17 @@ def quantization(config,
     if quantization_type == 'awq':
         quantization_cmd = ' '.join([
             cuda_prefix, 'lmdeploy lite auto_awq', origin_model_path,
-            '--work-dir', quantization_model_path, '--batch-size 32'
+            '--work-dir', quantization_model_path
         ])
     elif quantization_type == 'gptq':
         quantization_cmd = ' '.join([
             cuda_prefix, 'lmdeploy lite auto_gptq', origin_model_path,
-            '--work-dir', quantization_model_path, '--batch-size 32'
+            '--work-dir', quantization_model_path
         ])
     elif quantization_type == 'w8a8':
         quantization_cmd = ' '.join([
             cuda_prefix, 'lmdeploy lite smooth_quant', origin_model_path,
-            '--work-dir', quantization_model_path, '--batch-size 32'
+            '--work-dir', quantization_model_path
         ])
     else:
         return False, 'quantization type should in [awq, gptq, w8a8], \
@@ -39,6 +39,11 @@ def quantization(config,
 
     if 'llama-3' in origin_model_name.lower():
         quantization_cmd += ' --search-scale True'
+
+    if not os.getenv('TEST_RUNNER'):
+        quantization_cmd += ' --batch-size 32'
+    elif 'v100' in os.getenv('TEST_RUNNER'):
+        quantization_cmd += ' --batch-size 8'
 
     with open(quantization_log, 'w') as f:
         # remove existing folder

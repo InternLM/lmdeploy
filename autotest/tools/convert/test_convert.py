@@ -66,6 +66,10 @@ def convert(config, model_case, cuda_prefix):
                                      True,
                                      cuda_prefix=cuda_prefix)
 
+    if os.getenv('TEST_RUNNER') is not None and 'v100' in os.getenv(
+            'TEST_RUNNER'):
+        cmd += ' --dtype float16'
+
     convert_log = os.path.join(log_path,
                                'convert_' + model_case.split('/')[1] + '.log')
     print('reproduce command convert: ' + cmd + '\n')

@@ -80,18 +80,24 @@ jobs:
           retention-days: 1
           name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
 
-
-  test_tools:
+  test_quant:
     needs: linux-build
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
-    runs-on: [self-hosted, linux-a100]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: "openmmlab/lmdeploy:latest-cu11"
+            runner_lable: "linux-a100"
+    runs-on: ${{matrix.runner_lable}}
     timeout-minutes: 450
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
+      TEST_RUNNER: ${{matrix.runner_lable}}
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: ${{matrix.image}}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -101,6 +107,7 @@ jobs:
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -118,7 +125,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy - dependency
+      - name: Install lmdeploy dependency - cu11
+        if: ${{matrix.runner_lable == 'linux-a100'}}
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
@@ -127,18 +135,17 @@ jobs:
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+          pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
           python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -159,6 +166,119 @@ jobs:
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'quantization'))
+        run: |
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Clear workfile
+        if: always()
+        run: |
+          chmod -R 777 $REPORT_DIR
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir
+
+
+  test_tools:
+    needs: test_quant
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: "openmmlab/lmdeploy:latest-cu11"
+            runner_lable: "linux-a100"
+          - image: "openmmlab/lmdeploy:latest-cu12"
+            runner_lable: "linux-v100"
+    runs-on: ${{matrix.runner_lable}}
+    timeout-minutes: 450
+    env:
+      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /root/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
+      TEST_RUNNER: ${{matrix.runner_lable}}
+    container:
+      image: ${{matrix.image}}
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/github-actions/packages:/root/packages
+        - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
+        - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
+        - /nvme/github-actions/resources/lora:/root/lora
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
+        - /nvme/qa_test_models/lmdeploy/autotest:/local_case
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v2
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Copy repository - offline
+        if: ${{inputs.offline_mode}}
+        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
+      - name: Download Artifacts
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}-py310
+      - name: Install lmdeploy dependency - cu11
+        if: ${{matrix.runner_lable == 'linux-a100'}}
+        run: |
+          # manually install flash attn
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
+          python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -e /root/packages/AutoAWQ_kernels
+          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+          pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
+      - name: Install lmdeploy dependency - cu12
+        if: ${{matrix.runner_lable == 'linux-v100'}}
+        run: |
+          # manually install flash attn
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
+          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+      - name: Install lmdeploy
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        run: |
+          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip install -r requirements/test.txt
+      - name: Install lmdeploy - offline
+        if: ${{inputs.offline_mode}}
+        run: |
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
+          python3 -m pip install -r requirements/test.txt
+      - name: Check env
+        run: |
+          pip uninstall -y nvidia-nccl-cu11
+          python3 -m pip list
+          lmdeploy check_env
+          cp -r /root/lora .
+          rm -rf allure-results
+          # remove tmp log in testcase
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
+      - name: Change testconfig on v100
+        if: ${{matrix.runner_lable == 'linux-v100'}}
+        run: |
+          mv autotest/config-v100.yaml autotest/config.yaml
+      - name: Test lmdeploy - quantization w4a16
+        continue-on-error: true
+        if: (github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))) && matrix.runner_lable == 'linux-v100'
+        run: |
+          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - quantization w8a8
+        continue-on-error: true
+        if: (github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'quantization'))) && matrix.runner_lable == 'linux-v100'
         run: |
           pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
@@ -265,20 +385,34 @@ jobs:
 
   test_restful:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
-    runs-on: [self-hosted, linux-a100]
-    needs: test_tools
     strategy:
       fail-fast: false
       matrix:
-        backend: ['turbomind', 'pytorch']
+        include:
+          - image: "openmmlab/lmdeploy:latest-cu11"
+            runner_lable: "linux-a100"
+            backend: "turbomind"
+          - image: "openmmlab/lmdeploy:latest-cu12"
+            runner_lable: "linux-v100"
+            backend: "turbomind"
+          - image: "openmmlab/lmdeploy:latest-cu11"
+            runner_lable: "linux-a100"
+            backend: "pytorch"
+          - image: "openmmlab/lmdeploy:latest-cu12"
+            runner_lable: "linux-v100"
+            backend: "pytorch"
+    runs-on: ${{matrix.runner_lable}}
+    needs: test_tools
     timeout-minutes: 300
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: ${{matrix.image}}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/187:/mnt/187
+        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -295,11 +429,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy - dependency
+      - name: Install lmdeploy dependency - cu11
+        if: ${{matrix.runner_lable == 'linux-a100'}}
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+      - name: Install lmdeploy dependency - cu12
+        if: ${{matrix.runner_lable == 'linux-v100'}}
+        run: |
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -373,16 +512,26 @@ jobs:
 
   test_pipeline:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
-    runs-on: [self-hosted, linux-a100]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: "openmmlab/lmdeploy:latest-cu11"
+            runner_lable: "linux-a100"
+          - image: "openmmlab/lmdeploy:latest-cu12"
+            runner_lable: "linux-v100"
+    runs-on: ${{matrix.runner_lable}}
     needs: test_tools
     timeout-minutes: 300
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: ${{matrix.image}}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/187:/mnt/187
+        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -399,11 +548,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy - dependency
+      - name: Install lmdeploy dependency - cu11
+        if: ${{matrix.runner_lable == 'linux-a100'}}
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+      - name: Install lmdeploy dependency - cu12
+        if: ${{matrix.runner_lable == 'linux-v100'}}
+        run: |
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -446,16 +600,26 @@ jobs:
 
   test_benchmark:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
-    runs-on: [self-hosted, linux-a100]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: "openmmlab/lmdeploy:latest-cu11"
+            runner_lable: "linux-a100"
+          - image: "openmmlab/lmdeploy:latest-cu12"
+            runner_lable: "linux-v100"
+    runs-on: ${{matrix.runner_lable}}
     needs: test_tools
     timeout-minutes: 300
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: ${{matrix.image}}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/187:/mnt/187
+        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -472,11 +636,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy - dependency
+      - name: Install lmdeploy dependency - cu11
+        if: ${{matrix.runner_lable == 'linux-a100'}}
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+      - name: Install lmdeploy dependency - cu12
+        if: ${{matrix.runner_lable == 'linux-v100'}}
+        run: |
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -495,6 +664,10 @@ jobs:
           lmdeploy check_env
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
+      - name: Change testconfig on v100
+        if: ${{matrix.runner_lable == 'linux-v100'}}
+        run: |
+          mv autotest/config-v100.yaml autotest/config.yaml
       - name: Test benchmark script
         run: |
           pytest autotest/benchmark -n 4 --run_id ${{ github.run_id }} -m function ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
@@ -512,11 +685,19 @@ jobs:
 
   test_evaluation:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
-    runs-on: [self-hosted, linux-a100]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: "openmmlab/lmdeploy:latest-cu11"
+            runner_lable: "linux-a100"
+          - image: "openmmlab/lmdeploy:latest-cu12"
+            runner_lable: "linux-v100"
+    runs-on: ${{matrix.runner_lable}}
     needs: test_tools
     timeout-minutes: 300 # 5hours
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: ${{matrix.image}}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -527,6 +708,7 @@ jobs:
         - /nvme/qa_test_models:/root/models
         - /nvme/qa_test_models/offline_pkg:/nvme/qa_test_models/offline_pkg
         - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
@@ -547,12 +729,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy - dependency
+      - name: Install lmdeploy dependency - cu11
+        if: ${{matrix.runner_lable == 'linux-a100'}}
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+      - name: Install lmdeploy dependency - cu12
+        if: ${{matrix.runner_lable == 'linux-v100'}}
+        run: |
+          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -600,7 +788,15 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     needs: [test_benchmark]
     timeout-minutes: 5
-    runs-on: [self-hosted, linux-a100]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: "openmmlab/lmdeploy:latest-cu11"
+            runner_lable: "linux-a100"
+          - image: "openmmlab/lmdeploy:latest-cu12"
+            runner_lable: "linux-v100"
+    runs-on: ${{matrix.runner_lable}}
     env:
       BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
     steps:
@@ -617,11 +813,19 @@ jobs:
 
   get_coverage_report:
     if: ${{!cancelled()}}
-    runs-on: [self-hosted, linux-a100]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: "openmmlab/lmdeploy:latest-cu11"
+            runner_lable: "linux-a100"
+          - image: "openmmlab/lmdeploy:latest-cu12"
+            runner_lable: "linux-v100"
+    runs-on: ${{matrix.runner_lable}}
     needs: [test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: ${{matrix.image}}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip

@@ -66,6 +66,10 @@ def start_restful_api(config, param, model, model_path, backend_type,
         quant_policy = param['quant_policy']
         cmd += f' --quant-policy {quant_policy}'
 
+    if os.getenv('TEST_RUNNER') is not None and 'v100' in os.getenv(
+            'TEST_RUNNER'):
+        cmd += ' --dtype float16'
+
     start_log = os.path.join(
         log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
 

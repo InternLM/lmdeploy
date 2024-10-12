@@ -50,6 +50,10 @@ def run_pipeline_chat_test(config,
     if 'gptq' in model_case.lower():
         backend_config.model_format = 'gptq'
 
+    if os.getenv('TEST_RUNNER') is not None and 'v100' in os.getenv(
+            'TEST_RUNNER'):
+        backend_config.dtype = 'float16'
+
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     config_log = os.path.join(
