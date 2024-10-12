@@ -200,6 +200,10 @@ print(response)
 > By default, LMDeploy downloads model from HuggingFace. If you would like to use models from ModelScope, please install ModelScope by `pip install modelscope` and set the environment variable:
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
+>
+> If you would like to use models from openMind Hub, please install openMind Hub by `pip install openmind_hub` and set the environment variable:
+>
+> `export LMDEPLOY_USE_OPENMIND_HUB=True`
 
 For more information about inference pipeline, please refer to [here](docs/en/llm/pipeline.md).
 
