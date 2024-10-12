@@ -1,6 +1,6 @@
 markdown>=3.4.0
 myst-parser
-sphinx
+sphinx==8.0.2
 sphinx-book-theme
 sphinx-copybutton
 sphinx-tabs
