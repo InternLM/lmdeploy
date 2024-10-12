@@ -23,11 +23,6 @@ on:
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
         type: boolean
         default: false
-      dependency_pkgs:
-        required: true
-        description: 'Dependency packages, you can also set a specific version'
-        type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -35,7 +30,6 @@ env:
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib jmespath'}}
   FAIL_CONFIG: ${{ github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
 
 jobs:
@@ -115,7 +109,7 @@ jobs:
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install ${{env.dependency_pkgs}}
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
