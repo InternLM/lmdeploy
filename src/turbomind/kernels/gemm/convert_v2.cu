@@ -130,7 +130,7 @@ int Convert(const void*         S,  //
                 // Set leading dimension for destination
                 _Ddesc.ld = mk2cs<order>(Packing_v2<pack, order>::apply({Sdesc.rows, Sdesc.cols})).x;
                 // _Ddesc.ld = mk2cs<order>(Packing_v2<pack, order>::apply(cs2mk<order>(_Ddesc.ld, 0))).x;
-                
+
                 return true;
             }
 
@@ -223,23 +223,35 @@ int Convert(const void*         S,  //
     return dispatch() - 1;
 }
 
-std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(int sm, bool force_simt)
+std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(DataType dtype, int sm, bool force_simt)
 {
-    if (force_simt) {
-        return {kColMajor, HMMA_SIMT | OPERAND_B | 1, kRowMajor, HMMA_SIMT | OPERAND_V | 1};
+    if (dtype == DataType::U4) {
+        if (force_simt) {
+            return {kColMajor, HMMA_SIMT | OPERAND_B | 1, kRowMajor, HMMA_SIMT | OPERAND_V | 1};
+        }
+        if (sm >= 80) {
+            return {kRowMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
+        }
+        else if (sm == 75) {
+            return {kRowMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
+        }
+        else if (sm == 70) {
+            return {kColMajor, HMMA_884 | OPERAND_B | 1, kRowMajor, HMMA_884 | OPERAND_V | 1};
+        }
+        else {
+            std::cerr << "not implemented: sm_" << sm << std::endl;
+            std::abort();
+        }
     }
-    if (sm >= 80) {
-        return {kRowMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
-    }
-    else if (sm == 75) {
-        return {kRowMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
-    }
-    else if (sm == 70) {
-        return {kColMajor, HMMA_884 | OPERAND_B | 1, kRowMajor, HMMA_884 | OPERAND_V | 1};
-    }
-    else {
-        std::cerr << "not implemented: sm_" << sm << std::endl;
-        std::abort();
+    else if (dtype == DataType::F16 || dtype == DataType::BF16) {
+        if (sm >= 80) {
+            return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
+            // return {kRowMajor, {}, {}, {}};
+        }
+        else {
+            std::cerr << "not implemented: sm_" << sm << std::endl;
+            std::abort();
+        }
     }
     return {};
 }

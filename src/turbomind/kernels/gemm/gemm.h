@@ -49,7 +49,7 @@ private:
 
 [[nodiscard]] int Convert(const void* S, const MatrixLayout& Sdesc, void* D, MatrixLayout& Ddesc, cudaStream_t stream);
 
-std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(int sm, bool force_simt);
+std::tuple<Order, Pack, Order, Pack> get_weight_and_scales_layout(DataType dtype, int sm, bool force_simt);
 
 void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream);
 

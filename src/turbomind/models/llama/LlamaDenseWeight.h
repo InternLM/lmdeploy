@@ -181,14 +181,10 @@ struct MoeFfnWeight {
 
         experts.resize(expert_num);
 
-        // transpose     = method;
-        transpose     = false;
+        this->method  = method;
         fuse_silu_act = fuse_silu_act && method;
 
         for (auto& e : experts) {
-            /// FIXME: this is unsafe
-            memset(&e, 0, sizeof(e));
-
             // inter size is divided by tp in `FfnWeight`
             e = LlamaFfnWeight<T>{hidden_dim, (size_t)inter_size, tp, weight_type, group_size, fuse_silu_act};
         }
@@ -199,7 +195,7 @@ struct MoeFfnWeight {
 
     LlamaFfnWeight<T> block;
 
-    bool transpose{};
+    int method{};
 };
 
 }  // namespace turbomind

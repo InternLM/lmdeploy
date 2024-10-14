@@ -84,8 +84,10 @@ void MoeFfnLayer<T>::forward(T* inout, int tokens, int layer_id, const MoeFfnWei
     AllocateBuffer(tokens, padded);
 
     gate(logits_, inout, tokens, moe.gate);
+    sync_check_cuda_error();
 
     check_cuda_error(cudaMemsetAsync(accum_, 0, sizeof(int) * param_.expert_num * kMoeGateMaxTiles, stream_));
+    sync_check_cuda_error();
 
     invokeMoeGate_V2(f2n_,
                      en2f_,

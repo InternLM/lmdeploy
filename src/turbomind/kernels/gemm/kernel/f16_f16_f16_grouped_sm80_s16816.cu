@@ -37,15 +37,16 @@ void Registry::f16_f16_f16_grouped_sm80_s16816()
     // Add<C_<8>::Type<128, 8, 64, 4, 1, 1, D, D, 3, true, 1, 1>>();
 
     using C = Sm80_s16816<Sm80,
-                          Operand_A<half, kRowMajor>,          // A
-                          Transform_Default,                   // tarnsform A
-                          VoidOperand,                         // U
-                          Operand_B_Pack<half, kColMajor, 1>,  // B
-                          Transform_Default,                   // transform B
-                          VoidOperand,                         // V
-                          kRowMajor,                           // order_C
-                          half,                                // Tc
-                          Striding::kIndexed,                  // indexed input
+                          Operand_A<half, kRowMajor>,  // A
+                          Transform_Default,           // tarnsform A
+                          VoidOperand,                 // U
+                          Operand_B_Pack<half, kRowMajor, 1>,  // B
+                        //   Operand_B<half, kColMajor>,  // B
+                          Transform_Default,           // transform B
+                          VoidOperand,                 // V
+                          kRowMajor,                   // order_C
+                          half,                        // Tc
+                          Striding::kIndexed,          // indexed input
                           Striding::kBlocked,
                           Striding::kBlocked,
                           pair<false, false>,

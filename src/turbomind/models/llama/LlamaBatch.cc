@@ -1966,7 +1966,7 @@ void LlamaBatch<T>::tune()
 
         auto tick = std::chrono::steady_clock::now();
 
-        /// NOTE: No barrier can be used here as internal threads are waiting on it now
+        /// NOTE: No explicit barrier can be used here as internal threads are waiting on it now
         for (auto bs : bss) {
             if (rank_ == 0) {
                 TM_LOG_ERROR("[Gemm2] %d", bs);
@@ -1987,7 +1987,7 @@ void LlamaBatch<T>::tune()
                                    1,
                                    nullptr,
                                    nullptr);
-            // barrier for TP
+            // implicit barrier for TP
             check_cuda_error(cudaStreamSynchronize(stream_));
         }
 

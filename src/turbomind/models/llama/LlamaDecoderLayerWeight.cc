@@ -148,19 +148,20 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
 template<typename T>
 size_t LlamaDecoderLayerWeight<T>::workspace_size() const noexcept
 {
-    if (weight_type_ != WeightType::kINT4) {
-        return 0;
-    }
+    // Space to hold the largest weight in full precision
 
     auto get_size = [](const auto& w) { return (size_t)w.input_dims * w.output_dims; };
 
     size_t size = 0;
 
     size = std::max(size, get_size(self_attn_weights.qkv));
+    size = std::max(size, get_size(self_attn_weights.output));
     size = std::max(size, get_size(ffn_weights.gating));
+    size = std::max(size, get_size(ffn_weights.fused_gating_intermediate));
 
-    if (fused_up_and_gate_) {
-        size = std::max(size, get_size(ffn_weights.fused_gating_intermediate));
+    for (const auto& e : moe_weights.experts) {
+        size = std::max(size, get_size(e.gating));
+        size = std::max(size, get_size(e.fused_gating_intermediate));
     }
 
     return size * sizeof(uint16_t);
@@ -394,16 +395,15 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
     return output;
 }
 
-template<class T>
-static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size, bool use_simt)
+// template<class T>
+static void convert_u4(LlamaDenseWeight<half>& weight, bool is_fused_moe, void* workspace, size_t size, bool use_simt)
 {
-    if (weight.type != WeightType::kINT4) {
-        return;
-    }
+    FT_CHECK(weight.type == WeightType::kINT4);
 
     using namespace gemm;
 
-    auto [order_b, pack_b, order_v, pack_v] = get_weight_and_scales_layout(getSMVersion(), use_simt);
+    auto [order_b, pack_b, order_v, pack_v] =
+        get_weight_and_scales_layout(gemm::DataType::U4, getSMVersion(), use_simt);
 
     if (order_b == kColMajor) {
         transpose_u4((uint4_t*)workspace, (const uint4_t*)weight.kernel, weight.input_dims, weight.output_dims);
@@ -432,12 +432,10 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size, b
 
     const int scale_count = (weight.input_dims / weight.group_size) * weight.output_dims;
 
-    if constexpr (std::is_same_v<T, half>) {
-        // std::cout << "fuse_scales_and_zeros\n";
-        fuse_scales_and_zeros((T*)workspace, weight.scales, weight.zeros, scale_count);
-        // cudaMemset((T*)workspace, 0, sizeof(T) * scale_count * 2);
-        sync_check_cuda_error();
-    }
+    // std::cout << "fuse_scales_and_zeros\n";
+    fuse_scales_and_zeros((half*)workspace, weight.scales, weight.zeros, scale_count);
+    // cudaMemset((T*)workspace, 0, sizeof(T) * scale_count * 2);
+    sync_check_cuda_error();
 
     cudaDeviceSynchronize();
 
@@ -445,7 +443,7 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size, b
     cudaFree(weight.zeros);
     weight.scales = weight.zeros = nullptr;
 
-    deviceMalloc((T**)&weight.scales_zeros, scale_count * 2);
+    deviceMalloc((half**)&weight.scales_zeros, scale_count * 2);
 
     MatrixLayout s_desc{
         gemm::DataType::U32,
@@ -465,6 +463,71 @@ static void convert(LlamaDenseWeight<T>& weight, void* workspace, size_t size, b
     weight.q_desc = q_desc;
 
     // FT_CHECK(0);
+}
+
+template<class T>
+static void convert_fp(LlamaDenseWeight<T>& weight, bool is_fused_moe, void* workspace, size_t size, bool use_simt)
+{
+    using namespace gemm;
+
+    if (!is_fused_moe) {
+        return;
+    }
+
+    const auto [order_b, pack_b, order_v, pack_v] =
+        get_weight_and_scales_layout(get_data_type_v<T>, getSMVersion(), use_simt);
+
+    const int input_dim  = weight.input_dims;
+    const int output_dim = weight.output_dims;
+
+    if (order_b == kColMajor) {
+        invokeTransposeAxis01((uint16_t*)workspace, (uint16_t*)weight.kernel, input_dim, output_dim, 1, nullptr);
+        sync_check_cuda_error();
+        // FT_CHECK(0);
+    }
+    else {
+        check_cuda_error(cudaMemcpy(workspace, weight.kernel, sizeof(T) * input_dim * output_dim,
+        cudaMemcpyDefault));
+    }
+
+    MatrixLayout src{
+        get_data_type_v<T>,
+        order_b,
+        input_dim,   // k
+        output_dim,  // n
+        order_b == kRowMajor ? output_dim : input_dim,
+    };
+
+    MatrixLayout dst = src;
+    dst.pack         = pack_b;
+
+    if (pack_b) {
+        FT_CHECK(Convert(workspace, src, weight.kernel, dst, nullptr) == 0);
+        sync_check_cuda_error();
+        // FT_CHECK(0);
+    }
+    else {
+        check_cuda_error(cudaMemcpy(weight.kernel, workspace, sizeof(T) * input_dim * output_dim,
+        cudaMemcpyDefault));
+    }
+
+    weight.k_desc = dst;
+}
+
+template<class T>
+static void convert(LlamaDenseWeight<T>& weight, bool is_fused_moe, void* workspace, size_t size, bool use_simt)
+{
+    if (weight.type == WeightType::kINT4) {
+        if constexpr (std::is_same_v<T, half>) {
+            convert_u4(weight, is_fused_moe, workspace, size, use_simt);
+        }
+        else {
+            FT_CHECK(0);
+        }
+    }
+    else {
+        convert_fp(weight, is_fused_moe, workspace, size, use_simt);
+    }
 }
 
 template<class T>
@@ -532,24 +595,14 @@ void chunk(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& 
 }
 
 template<typename T>
-static void transpose(LlamaDenseWeight<T>& x)
-{
-    uint16_t* tmp{};
-    deviceMalloc(&tmp, x.input_dims * x.output_dims, false);
-    invokeTransposeAxis01(tmp, (uint16_t*)x.kernel, x.input_dims, x.output_dims, 1, 0);
-    cudaFree(x.kernel);
-    x.kernel = tmp;
-}
-
-template<typename T>
 void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cudaDeviceProp& prop)
 {
     const bool is_16xx = is_16xx_series(prop.name);
 
-    convert(self_attn_weights.qkv, workspace, size, is_16xx);
-    convert(self_attn_weights.output, workspace, size, is_16xx);
+    convert(self_attn_weights.qkv, false, workspace, size, is_16xx);
+    convert(self_attn_weights.output, false, workspace, size, is_16xx);
 
-    auto process_ffn = [&](LlamaFfnWeight<T>& ffn) {
+    auto process_ffn = [&](LlamaFfnWeight<T>& ffn, bool is_fused_moe) {
         if (fused_up_and_gate_) {
             auto& fused_up_and_gate = ffn.fused_gating_intermediate;
 
@@ -562,62 +615,46 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
                 chunk(fused_up_and_gate, ffn.gating, ffn.intermediate, workspace, size);
             }
 
-            convert(ffn.fused_gating_intermediate, workspace, size, is_16xx);
+            convert(ffn.fused_gating_intermediate, is_fused_moe, workspace, size, is_16xx);
 
             freeWeights(ffn.gating);
             freeWeights(ffn.intermediate);
         }
         else {
-            convert(ffn.gating, workspace, size, is_16xx);
-            convert(ffn.intermediate, workspace, size, is_16xx);
+            convert(ffn.gating, is_fused_moe, workspace, size, is_16xx);
+            convert(ffn.intermediate, is_fused_moe, workspace, size, is_16xx);
         }
-        convert(ffn.output, workspace, size, is_16xx);
+
+        convert(ffn.output, is_fused_moe, workspace, size, is_16xx);
     };
 
     if (moe_weights.experts.empty()) {
-        process_ffn(ffn_weights);
+        process_ffn(ffn_weights, false);
     }
     else {
         std::vector<std::pair<void*, int>> fused_ptrs;
         std::vector<std::pair<void*, int>> output_ptrs;
 
         for (auto& e : moe_weights.experts) {
-            process_ffn(e);
 
-            // MoE kernel is using K-major weights
-            if (moe_weights.transpose) {
-                transpose(e.fused_gating_intermediate);
-                transpose(e.output);
-            }
+            process_ffn(e, moe_weights.method);
 
-            // K-major
-            fused_ptrs.push_back({e.fused_gating_intermediate.kernel,
-                                  moe_weights.transpose ? e.fused_gating_intermediate.input_dims :
-                                                          e.fused_gating_intermediate.output_dims});
-            output_ptrs.push_back({e.output.kernel,  //
-                                   moe_weights.transpose ? e.output.input_dims : e.output.output_dims});
-            // std::cout << e.fused_gating_intermediate.input_dims << "\n";
+            fused_ptrs.push_back({e.fused_gating_intermediate.kernel, e.fused_gating_intermediate.k_desc.ld});
+            output_ptrs.push_back({e.output.kernel, e.output.k_desc.ld});
         }
 
         // Note: This assumes all experts has the same shape
-        moe_weights.block = moe_weights.experts[0];
+        moe_weights.block = moe_weights.experts.at(0);
+
+        auto& fused  = moe_weights.block.fused_gating_intermediate;
+        auto& output = moe_weights.block.output;
 
         // TODO: free these ptrs
-        moe_weights.block.fused_gating_intermediate.kernel = gemm::make_blocked_ptrs(fused_ptrs, nullptr);
-        moe_weights.block.output.kernel                    = gemm::make_blocked_ptrs(output_ptrs, nullptr);
+        fused.kernel  = gemm::make_blocked_ptrs(fused_ptrs, nullptr);
+        output.kernel = gemm::make_blocked_ptrs(output_ptrs, nullptr);
 
-        auto set_desc = [&](LlamaDenseWeight<T>& w) {
-            w.k_desc = {
-                gemm::get_data_type_v<T>,
-                moe_weights.transpose ? gemm::kColMajor : gemm::kRowMajor,
-                (int)w.input_dims,   // k
-                (int)w.output_dims,  // n
-            };
-            w.k_desc.num = moe_weights.experts.size();
-        };
-
-        set_desc(moe_weights.block.fused_gating_intermediate);
-        set_desc(moe_weights.block.output);
+        fused.k_desc.ld = output.k_desc.ld = 0;
+        fused.k_desc.num = output.k_desc.num = moe_weights.experts.size();
     }
 }
 

@@ -739,7 +739,7 @@ inline decltype(auto) get_test()
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
         // constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
-        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kRowMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;

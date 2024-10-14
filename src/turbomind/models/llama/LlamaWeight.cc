@@ -157,8 +157,15 @@ TensorMap LlamaWeight<T>::getParams()
 template<typename T>
 void LlamaWeight<T>::prepare(const cudaDeviceProp& prop)
 {
-    const auto workspace_size = decoder_layer_weights[0]->workspace_size();
-    char*      workspace{};
+    const auto workspace_size = [&] {
+        size_t size{};
+        for (const auto& layer : decoder_layer_weights) {
+            size = std::max(size, layer->workspace_size());
+        }
+        return size;
+    }();
+
+    char* workspace{};
 
     TM_LOG_INFO("[LlamaWeight<T>::prepare] workspace size: %d\n", workspace_size);
 
