@@ -20,7 +20,6 @@
 |         Qwen2         | 1.5B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Mistral        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 |        Qwen-VL        |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|       Qwen2-VL        | 2B, 7B, 72B | MLLM |    Yes    |   Yes   |   Yes   |   -   |
 |      DeepSeek-VL      |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan2       |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -63,7 +62,7 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |    QWen1.5     | 0.5B - 110B | LLM  |    Yes    |   No    |  No  |  Yes  |
 |  QWen1.5-MoE   |    A2.7B    | LLM  |    Yes    |   No    |  No  |  No   |
 |     QWen2      | 0.5B - 72B  | LLM  |    Yes    |   No    |  No  |  Yes  |
-|    QWen2-VL    |   2B, 7B    | MLLM |    Yes    |   No    |  No  |  No   |
+|    QWen2-VL    | 2B, 7B, 72B | MLLM |    Yes    |   No    |  No  |  No   |
 |  DeepSeek-MoE  |     16B     | LLM  |    Yes    |   No    |  No  |  No   |
 |  DeepSeek-V2   |  16B, 236B  | LLM  |    Yes    |   No    |  No  |  No   |
 |    MiniCPM3    |     4B      | LLM  |    Yes    |   No    |  No  |  No   |
