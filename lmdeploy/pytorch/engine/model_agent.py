@@ -726,8 +726,7 @@ def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):
         return
 
     import sys
-    if agent.backend_config.device_type == 'ascend' \
-            and 'uvicorn.server' in sys.modules:
+    if 'torch_npu' in sys.modules and 'uvicorn.server' in sys.modules:
         # Workaround for CLI serve mode with device_type ascend:
         # using uvicorn server causes ascend low-level backend of subprocesses
         # corrupted, and using _broadcast_inputs in this case leads to
