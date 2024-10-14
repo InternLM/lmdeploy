@@ -231,9 +231,13 @@ def _fwd_grouped_split_kernel(
         m_i = m_i_new
 
     # initialize pointers to output
-    off_acc = (cur_batch * stride_obs + split_k_id * stride_ok +
-               cur_head[:, None] * stride_oh + offs_dv[None, :] * stride_od)
-    tl.store(Acc_out + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
+    if loop_end > loop_start:
+        off_acc = (cur_batch * stride_obs + split_k_id * stride_ok +
+                   cur_head[:, None] * stride_oh +
+                   offs_dv[None, :] * stride_od)
+        tl.store(Acc_out + off_acc,
+                 acc,
+                 mask=mask_h[:, None] & mask_dv[None, :])
 
     off_meta = (cur_batch * stride_obs + split_k_id * stride_ok +
                 cur_head * stride_oh + head_size_v)
@@ -284,9 +288,11 @@ def _reduce_split_kernel(
     offs_mi = (cur_batch * stride_abs + cur_head * stride_ah +
                stride_ak * offs_k + head_size_v)
 
-    acc_k = tl.load(Acc + offs_acc, mask=mask_dv[None, :], other=0.0)
     m_k = tl.load(Acc + offs_mi)
     l_k = tl.load(Acc + offs_mi + 1)
+    acc_k = tl.load(Acc + offs_acc,
+                    mask=mask_dv[None, :] & (m_k[:, None] > -float('inf')),
+                    other=0.0)
 
     m_max = tl.max(m_k, 0)
     alpha = fast_expf(m_k - m_max)
