@@ -128,7 +128,8 @@ def check_awq(hf_config):
 
 
 def check_transformers_version(model_path: str,
-                               trust_remote_code: bool = True):
+                               trust_remote_code: bool = True,
+                               dtype: str = 'auto'):
     """check transformers version."""
     from packaging import version
     logger = get_logger('lmdeploy')
@@ -192,7 +193,8 @@ def check_transformers_version(model_path: str,
 
         try:
             model_config = ModelConfig.from_hf_config(config,
-                                                      model_path=model_path)
+                                                      model_path=model_path,
+                                                      dtype=dtype)
             if model_config.dtype == torch.bfloat16:
                 assert torch.cuda.is_bf16_supported(), (
                     'bf16 is not supported on your device')
@@ -215,11 +217,13 @@ def check_transformers_version(model_path: str,
     check_awq(config)
 
 
-def check_model(model_path: str, trust_remote_code: bool = True):
+def check_model(model_path: str,
+                trust_remote_code: bool = True,
+                dtype: str = 'auto'):
     """check model requirements."""
     logger = get_logger('lmdeploy')
     logger.info('Checking model.')
-    check_transformers_version(model_path, trust_remote_code)
+    check_transformers_version(model_path, trust_remote_code, dtype)
 
 
 def check_adapter(path: str):

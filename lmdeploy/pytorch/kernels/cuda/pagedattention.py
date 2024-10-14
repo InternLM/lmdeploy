@@ -13,11 +13,12 @@ from .triton_utils import get_kernel_meta, wrap_jit_func
 logger = get_logger('lmdeploy')
 
 TRITON_VERSION = version.parse(triton.__version__)
+VERSION_300 = version.parse('3.0.0')
 
 assert TRITON_VERSION >= version.parse('2.1.0')
 
 # TODO: fast op might not work on non-nv device
-if TRITON_VERSION >= version.parse('3.0.0'):
+if TRITON_VERSION >= VERSION_300:
     tanh = tl.extra.cuda.libdevice.tanh
     fast_expf = tl.extra.cuda.libdevice.fast_expf
     fast_dividef = tl.extra.cuda.libdevice.fast_dividef
@@ -310,7 +311,7 @@ def _reduce_split_kernel(
 
 def _get_convert_pv(nv_capability):
     """lazy load convert_pv."""
-    if nv_capability[0] >= 8:
+    if TRITON_VERSION >= VERSION_300 or nv_capability[0] >= 8:
 
         @triton.jit
         def convert_pv(p, v):
