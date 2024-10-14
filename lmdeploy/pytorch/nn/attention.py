@@ -59,6 +59,8 @@ class Attention(nn.Module):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
@@ -69,5 +71,7 @@ class Attention(nn.Module):
             k_cache,
             v_cache,
             attn_metadata=attn_metadata,
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
             inplace=inplace,
         )
