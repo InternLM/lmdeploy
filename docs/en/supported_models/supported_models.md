@@ -62,8 +62,8 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |      QWen      | 1.8B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |    QWen1.5     | 0.5B - 110B | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |  QWen1.5-MoE   |    A2.7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-|     QWen2      | 0.5B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
-|    QWen2-VL    |   2B, 7B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|     QWen2      | 0.5B - 72B  | LLM  |    Yes    |   Yes   |   No    |  No  |  Yes  |
+|    QWen2-VL    |   2B, 7B    | MLLM |    Yes    |   Yes   |   No    |  No  |  No   |
 |  DeepSeek-MoE  |     16B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |  DeepSeek-V2   |  16B, 236B  | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |    MiniCPM3    |     4B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
