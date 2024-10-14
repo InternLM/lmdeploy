@@ -24,12 +24,13 @@ def prepare_environment(request, config, worker_id):
     stop_restful_api(pid, startRes, param)
 
 
-def getModelList(tp_num):
+def getModelList(tp_num, quant_policy: int = None):
     return [{
         'model': item,
         'cuda_prefix': None,
-        'tp_num': tp_num
-    } for item in get_vl_model_list(tp_num)]
+        'tp_num': tp_num,
+        'quant_policy': quant_policy
+    } for item in get_vl_model_list(tp_num, quant_policy)]
 
 
 @pytest.mark.order(7)
@@ -52,6 +53,58 @@ def test_restful_chat_tp1(config, worker_id):
                          getModelList(tp_num=2),
                          indirect=True)
 def test_restful_chat_tp2(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config)
+    else:
+        run_all_step(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.restful_api_vl
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('prepare_environment',
+                         getModelList(tp_num=1, quant_policy=4),
+                         indirect=True)
+def test_restful_chat_kvint4_tp1(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config)
+    else:
+        run_all_step(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.restful_api_vl
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('prepare_environment',
+                         getModelList(tp_num=2, quant_policy=4),
+                         indirect=True)
+def test_restful_chat_kvint4_tp2(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config)
+    else:
+        run_all_step(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.restful_api_vl
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('prepare_environment',
+                         getModelList(tp_num=1, quant_policy=8),
+                         indirect=True)
+def test_restful_chat_kvint8_tp1(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config)
+    else:
+        run_all_step(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.restful_api_vl
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('prepare_environment',
+                         getModelList(tp_num=2, quant_policy=8),
+                         indirect=True)
+def test_restful_chat_kvint8_tp2(config, worker_id):
     if get_workerid(worker_id) is None:
         run_all_step(config)
     else:

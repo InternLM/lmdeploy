@@ -276,7 +276,7 @@ PIC2 = 'https://raw.githubusercontent.com/' + \
     'open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'
 
 
-def run_pipeline_vl_chat_test(config, model_case):
+def run_pipeline_vl_chat_test(config, model_case, quant_policy: int = None):
     log_path = config.get('log_path')
     tp = get_tp_num(config, model_case)
     model_path = config.get('model_path')
@@ -290,6 +290,8 @@ def run_pipeline_vl_chat_test(config, model_case):
         backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
     if '4bit' in model_case.lower() or 'awq' in model_case.lower():
         backend_config.model_format = 'awq'
+    if None is not quant_policy:
+        backend_config.quant_policy = quant_policy
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     pipeline_chat_log = os.path.join(
