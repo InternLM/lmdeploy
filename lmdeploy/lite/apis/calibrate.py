@@ -132,19 +132,21 @@ def _prepare_for_calibrate(model: nn.Module,
             print(f'Move {mod_name} to GPU.')
 
 
-
 # TODO to be removed
 def make_compatible_internvl_config(model_path):
-    """Patch model.config since after transformers v4.45.0,
-    InternVL models can't use `save_pretrained`"""
+    """Patch model.config since after transformers v4.45.0, InternVL models
+    can't use `save_pretrained`"""
     if 'internvl' in model_path.lower():
         import transformers
         from packaging import version
-        if version.parse(transformers.__version__) >=version.parse('4.45.0'):
+        if version.parse(transformers.__version__) >= version.parse('4.45.0'):
+
             def _get_non_default_generation_parameters(self):
                 return {}
+
             from transformers import PretrainedConfig
-            PretrainedConfig._get_non_default_generation_parameters = _get_non_default_generation_parameters # noqa
+            PretrainedConfig._get_non_default_generation_parameters = _get_non_default_generation_parameters  # noqa
+
 
 def calibrate(model: str,
               calib_dataset: str = 'ptb',
