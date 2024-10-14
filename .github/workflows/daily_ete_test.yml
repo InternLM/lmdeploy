@@ -114,10 +114,10 @@ jobs:
           name: my-artifact-${{ github.run_id }}-py310
       - name: Copy Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -p && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
       - name: Copy Artifacts - offline
         if: ${{inputs.offline_mode}}
-        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -p && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
 
   test_quantization:
     needs: download_pkgs
