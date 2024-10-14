@@ -378,10 +378,8 @@ def _fwd_kernel(
 ):
     """paged attention kernel."""
     cur_batch = tl.program_id(2)
-    cur_head = tl.program_id(1)
+    cur_kv_head = tl.program_id(1)
     start_m = tl.program_id(0)
-
-    cur_kv_head = cur_head // kv_group_num
 
     q_seqlen = tl.load(Q_seqlens + cur_batch)
     kv_seqlen = tl.load(KV_seqlens + cur_batch)
@@ -389,7 +387,7 @@ def _fwd_kernel(
     history_len = kv_seqlen - q_seqlen
 
     block_start_loc = BLOCK_M * start_m
-    if block_start_loc >= q_seqlen:
+    if block_start_loc >= q_seqlen * kv_group_num:
         return
 
     # initialize offsets
@@ -400,9 +398,11 @@ def _fwd_kernel(
     offs_d = offs_d % head_size
     mask_dv = offs_dv < head_size_v
     offs_dv = offs_dv % head_size_v
-    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_mh = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_m = offs_mh // kv_group_num
+    cur_head = offs_mh % kv_group_num + cur_kv_head * kv_group_num
     off_q = ((q_start_loc + offs_m[:, None]) * stride_qbs +
-             cur_head * stride_qh + offs_d[None, :] * stride_qd)
+             cur_head[:, None] * stride_qh + offs_d[None, :] * stride_qd)
     off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd +
              offs_n[None, :] * stride_kbs)
     off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd +
@@ -423,7 +423,7 @@ def _fwd_kernel(
         mask_d1 = offs_d1 < head_size
         offs_d1 = offs_d1 % head_size
         off_q1 = ((q_start_loc + offs_m[:, None]) * stride_qbs +
-                  cur_head * stride_qh + offs_d1[None, :] * stride_qd)
+                  cur_head[:, None] * stride_qh + offs_d1[None, :] * stride_qd)
         q1 = tl.load(Q + off_q1, mask=(offs_m[:, None] < q_seqlen) & mask_d1)
         off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd +
                   offs_n[None, :] * stride_kbs)
@@ -543,7 +543,7 @@ def _fwd_kernel(
     acc = fast_dividef(acc, l_i[:, None])
     # initialize pointers to output
     off_o = ((q_start_loc + offs_m[:, None]) * stride_obs +
-             cur_head * stride_oh + offs_dv[None, :] * stride_od)
+             cur_head[:, None] * stride_oh + offs_dv[None, :] * stride_od)
     out_ptrs = Out + off_o
     tl.store(out_ptrs,
              acc,
@@ -630,7 +630,9 @@ def paged_attention_fwd(
         BLOCK_M = max(16, 16384 // BLOCK_DMODEL)
         num_warps = 4
         num_stages = 2
-        grid = (triton.cdiv(max_seqlen, BLOCK_M), head, batch)
+        kv_head = k.shape[h_dim]
+        grid = (triton.cdiv(max_seqlen * kv_group_num,
+                            BLOCK_M), kv_head, batch)
         _fwd_kernel[grid](q,
                           k,
                           v,
