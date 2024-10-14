@@ -305,7 +305,7 @@ def run_pipeline_vl_chat_test(config, model_case, quant_policy: int = None):
     else:
         prompt = 'describe this image'
 
-    file.writelines('engineconfig:' + backend_config)
+    file.writelines('engineconfig:' + str(backend_config))
     response = pipe((prompt, image))
     result = 'tiger' in response.text.lower() or '虎' in response.text.lower()
     file.writelines('result:' + str(result) +
