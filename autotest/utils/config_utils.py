@@ -124,12 +124,13 @@ def get_vl_model_list(tp_num: int = None, quant_policy: int = None):
                     'no_awq') and not is_quantization_model(
                         key) and key + '-inner-4bits' not in case_list:
             case_list.append(key + '-inner-4bits')
-        if key in config.get('pytorch_chat_model') and key not in config.get(
-                'pytorch_quatization').get(
-                    'no_kvint' + str(quant_policy)) and key in config.get(
-                        'pytorch_quatization').get(
-                            'awq') and not is_quantization_model(
-                                key) and key + '-inner-4bits' not in case_list:
+        if key in config.get('pytorch_chat_model') and key in config.get(
+                'pytorch_quatization'
+        ).get('awq') and not is_quantization_model(
+                key) and key + '-inner-4bits' not in case_list and (
+                    None is not quant_policy
+                    and key not in config.get('pytorch_quatization').get(
+                        'no_kvint' + str(quant_policy))):
             case_list.append(key + '-inner-4bits')
 
     if tp_num is not None:
