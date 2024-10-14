@@ -210,6 +210,7 @@ class StepContext:
     vision_inputs: VisionModelInputs = None
     mrope_position_ids: torch.Tensor = None
     attn_metadata: Any = None
+    cross_attn_metadata: Any = None
 
     _outputs: Dict = field(default_factory=dict)
 

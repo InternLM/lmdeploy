@@ -112,7 +112,11 @@ class CudaOpsBackend(DefaultOpsBackend):
             kv_seqlens=step_context.kv_seqlens,
         )
 
+        cross_attn_metadata = None
+        # TODO: update cross_attn_metadata here
+
         step_context.attn_metadata = attn_metadata
+        step_context.cross_attn_metadata = cross_attn_metadata
         return step_context
 
     @staticmethod

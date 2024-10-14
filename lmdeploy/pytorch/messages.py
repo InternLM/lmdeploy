@@ -484,6 +484,10 @@ class SchedulerSequence:
         """num all tokens."""
         return self.num_all_ids
 
+    def num_all_cross_tokens(self):
+        """num of all cross tokens."""
+        return sum([emb.end - emb.start for emb in self.history_embeddings])
+
     def update_token_ids(self,
                          token_ids: Tensor,
                          embeddings: List[InputEmbeddings] = None):

@@ -84,6 +84,8 @@ class CudaGraphMixin:
                                                          dtype=torch.int64,
                                                          device=device)
 
+        # TODO: create buffer for cross_attn_metadata here
+
         return input_buffers
 
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta,
@@ -136,6 +138,11 @@ class CudaGraphMixin:
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
         )
+
+        cross_attn_metadata = kwargs.get('cross_attn_metadata', None)
+        if cross_attn_metadata is not None:
+            # TODO: update cross_attn_metadata here
+            new_inputs['cross_attn_metadata'] = cross_attn_metadata
 
         if is_decoding:
             new_inputs['input_ids'] = input_buffers[
