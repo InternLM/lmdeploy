@@ -21,7 +21,7 @@ void gemm_bench(nvbench::state& state)
 
     auto [output_dims, input_dims] = config[idx];
 
-    constexpr int group_size = 1;
+    constexpr int group_size = 128;
 
     if (idx % 4 == 0 || idx % 4 == 2) {
         if (output_dims % tp)
@@ -75,7 +75,7 @@ void gemm_bench(nvbench::state& state)
 
 NVBENCH_BENCH(gemm_bench)
     .add_int64_axis("idx", nvbench::range(0, (int)config.size() - 1))
-    .add_int64_power_of_two_axis("bs", nvbench::range(0, 16))
+    .add_int64_power_of_two_axis("bs", nvbench::range(0, 14))
     .add_int64_axis("tp", {1, 2, 4})
     .add_int64_axis("e_num", {0})
     .add_int64_axis("e_tok", {1});

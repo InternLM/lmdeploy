@@ -167,12 +167,21 @@ public:
         if constexpr (is_quant_b) {
             static_assert(pack_b && pack_v);
             constexpr Order _order_b = transpose(order_b);
-            Quantize<Tb>(b_, n, k, _order_b, g, b_f_, b_q_, v_, stream);
-            v_pack_desc_ = v_desc_ = {DataType::U32, kRowMajor, ceil_div(k, g), n, n};
+            Quantize<Tb>(b_, n * E, k, _order_b, g, b_f_, b_q_, v_, stream);
+            quant_b_ = {QuantType::kDefault, g};
+
+            v_pack_desc_ = v_desc_ = {DataType::U32, kRowMajor, ceil_div(k, g), n, int(n * E)};
             v_pack_desc_.pack      = pack_v;
             v_pack_.resize(v_.size());
-            CHECK(!Convert(v_.data().get(), v_desc_, v_pack_.data().get(), v_pack_desc_, stream_));
-            quant_b_ = {QuantType::kDefault, g};
+            auto v_src_data = (uint32_t*)v_.data().get();
+            auto v_dst_data = (uint32_t*)v_pack_.data().get();
+            std::cout << "pre-pack: " << v_pack_desc_.ld << "\n";
+            for (size_t e = 0; e < E; ++e) {
+                CHECK(!Convert(v_src_data, v_desc_, v_dst_data, v_pack_desc_, stream_));
+                v_src_data += n;
+                v_dst_data += (size_t)v_desc_.rows * v_desc_.cols;
+            }
+            std::cout << "post-pack: " << v_pack_desc_.ld << "\n";
 
             // cudaDeviceSynchronize();
 
@@ -197,21 +206,18 @@ public:
             // CHECK(experts == 0);
             b_pack_desc_.type = get_data_type_v<Tb>;
             b_pack_desc_.pack = pack_b;
-            auto b_data       = is_quant_b ? (void*)b_q_.data().get() : (void*)b_.data().get();
-            auto b_pack_data  = (void*)b_pack_.data().get();
-
-            using Pointer = get_pointer_type<Tb>;
-
-            const size_t numel = (size_t)b_desc_.rows * b_desc_.cols;
-
+            // clang-format off
+            auto b_src_data = [&] { if constexpr (is_quant_b) return b_q_.data().get(); else return b_.data().get(); }();
+            // clang-format on
+            get_pointer_type<Tb> b_dst_data{(Tb*)b_pack_.data().get()};
+            const size_t         numel = (size_t)b_desc_.rows * b_desc_.cols;
             std::cout << "pre-pack: " << b_pack_desc_.ld << "\n";
-
             for (size_t e = 0; e < E; ++e) {
-                CHECK(!Convert(b_data, b_desc_, b_pack_data, b_pack_desc_, stream_));
-                b_data      = Pointer(b_data) + numel;
-                b_pack_data = Pointer(b_pack_data) + numel;
+                CHECK(!Convert((Tb*)b_src_data, b_desc_, (Tb*)b_dst_data, b_pack_desc_, stream_));
+                // NOTE: This is not correct when b is quantized in n-major
+                b_src_data = b_src_data + numel;
+                b_dst_data = b_dst_data + numel;
             }
-
             std::cout << "post-pack: " << b_pack_desc_.ld << "\n";
 
             // {
@@ -295,11 +301,18 @@ public:
 
         if (1) {
             moe_n_ptrs_.resize(experts_);
-            // CHECK(order_b == kColMajor);
-            // CHECK(pack_b == 0);
-            const size_t numel = (size_t)input_dims_ * output_dims_;
+            const size_t         numel = (size_t)input_dims_ * output_dims_;
+            get_pointer_type<Tb> p{(Tb*)b_pack_.data().get()};
             for (int i = 0; i < experts_; ++i) {
-                moe_n_ptrs_[i] = StridedPtr{(Tb*)b_pack_.data().get() + i * numel, b_pack_desc_.ld};
+                moe_n_ptrs_[i] = StridedPtr{static_cast<Tb*>(p + i * numel), b_pack_desc_.ld};
+            }
+        }
+        if (1) {
+            moe_v_ptrs_.resize(experts_);
+            const size_t numel = (size_t)v_desc_.rows * v_desc_.cols;
+            const auto   p     = (uint32_t*)v_pack_.data().get();
+            for (int i = 0; i < experts_; ++i) {
+                moe_v_ptrs_[i] = StridedPtr{p + i * numel, v_pack_desc_.ld};
             }
         }
 
@@ -360,8 +373,15 @@ public:
 
         a_pack_desc_.idxs = moe_f2n_.data().get();
 
-        b_pack_desc_.ld = 0;
+        if (!moe_n_ptrs_.empty()) {
+            b_pack_desc_.ld = 0;
+        }
         // b_pack_desc_.offsets = moe_n_offsets_.data().get();
+
+        v_pack_desc_.num = b_pack_desc_.num;
+        if (!moe_v_ptrs_.empty()) {
+            v_pack_desc_.ld = 0;
+        }
 
         cudaMemPrefetchAsync(moe_m_offsets_.data().get(), sizeof(int) * moe_m_offsets_.size(), 0, stream_);
         cudaMemPrefetchAsync(moe_n_offsets_.data().get(), sizeof(int) * moe_n_offsets_.size(), 0, stream_);
@@ -384,10 +404,16 @@ public:
 
         void* A = a_pack_.data().get();
         void* B = b_pack_.data().get();
+        void* V = v_pack_.data().get();
         void* C = c_e_.data().get();
 
-        if (experts_ && !moe_n_ptrs_.empty()) {
-            B = moe_n_ptrs_.data().get();
+        if (experts_) {
+            if (!moe_n_ptrs_.empty()) {
+                B = moe_n_ptrs_.data().get();
+            }
+            if (!moe_v_ptrs_.empty()) {
+                V = moe_v_ptrs_.data().get();
+            }
         }
 
         auto status = gemm_.Run(operation,  //
@@ -398,7 +424,7 @@ public:
                                 u_pack_desc_,
                                 B,
                                 b_pack_desc_,
-                                u_pack_.data().get(),
+                                V,
                                 v_pack_desc_,
                                 0.f,
                                 C,
@@ -615,6 +641,7 @@ public:
     universal_vector<int>        moe_m_offsets_;
     universal_vector<int>        moe_n_offsets_;
     universal_vector<StridedPtr> moe_n_ptrs_;
+    universal_vector<StridedPtr> moe_v_ptrs_;
     universal_vector<float>      moe_scales_;
 
     universal_vector<Tc> a_;      // A in fp
@@ -740,6 +767,13 @@ inline decltype(auto) get_test()
         // constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
         return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+    }
+    else if constexpr (0) {
+        constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
+        // constexpr Pack kPackB = 0;
+        constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
+        // constexpr Pack kPackV = 0;
+        return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
         // constexpr Pack kPackA = HMMA_16816 | OPERAND_A | 1;
