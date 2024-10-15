@@ -87,16 +87,16 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 
 ## PyTorchEngine on Huawei Ascend Platform
 
-|     Model      |   Size   | Type | FP16/BF16 |
-| :------------: | :------: | :--: | :-------: |
-|     Llama2     | 7B - 70B | LLM  |    Yes    |
-|     Llama3     |    8B    | LLM  |    Yes    |
-|    Llama3.1    |    8B    | LLM  |    Yes    |
-|   InternLM2    | 7B - 20B | LLM  |    Yes    |
-|  InternLM2.5   | 7B - 20B | LLM  |    Yes    |
-|    Mixtral     |   8x7B   | LLM  |    Yes    |
-|  QWen1.5-MoE   |  A2.7B   | LLM  |    Yes    |
-|     QWen2      |    7B    | LLM  |    Yes    |
-|   QWen2-MoE    | A14.57B  | LLM  |    Yes    |
-| InternVL(v1.5) |  2B-26B  | MLLM |    Yes    |
-|   InternVL2    |  1B-40B  | MLLM |    Yes    |
+|     Model      |   Size   | Type | FP16/BF16 | W4A16 |
+| :------------: | :------: | :--: | :-------: | :---: |
+|     Llama2     | 7B - 70B | LLM  |    Yes    |  Yes  |
+|     Llama3     |    8B    | LLM  |    Yes    |  Yes  |
+|    Llama3.1    |    8B    | LLM  |    Yes    |  Yes  |
+|   InternLM2    | 7B - 20B | LLM  |    Yes    |  Yes  |
+|  InternLM2.5   | 7B - 20B | LLM  |    Yes    |  Yes  |
+|    Mixtral     |   8x7B   | LLM  |    Yes    |  No   |
+|  QWen1.5-MoE   |  A2.7B   | LLM  |    Yes    |  No   |
+|     QWen2      |    7B    | LLM  |    Yes    |  No   |
+|   QWen2-MoE    | A14.57B  | LLM  |    Yes    |  No   |
+| InternVL(v1.5) |  2B-26B  | MLLM |    Yes    |  Yes  |
+|   InternVL2    |  1B-40B  | MLLM |    Yes    |  Yes  |
