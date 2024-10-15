@@ -40,7 +40,6 @@ class InternLM2Attention(nn.Module):
         )
 
         # rotary embedding
-        # import pdb; pdb.set_trace()
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
 
         # attention
@@ -75,8 +74,6 @@ class InternLM2Attention(nn.Module):
             qkv_states)
 
         # apply rotary embedding
-        # import pdb; pdb.set_trace()
-
         cos, sin = rotary_pos_emb
         query_states, key_states = self.apply_rotary_pos_emb(
             query_states,
@@ -85,7 +82,6 @@ class InternLM2Attention(nn.Module):
             sin,
             inplace=True,
         )
-        # import pdb; pdb.set_trace()
 
         # attention
         attn_output = self.attn_fwd(
@@ -97,13 +93,8 @@ class InternLM2Attention(nn.Module):
             attn_metadata,
             inplace=True,
         )
-        # import pdb; pdb.set_trace()
-
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
 
-        is_decoding = query_states.shape[0] == 1
-        # if is_decoding:
-        #     import pdb; pdb.set_trace()
         # o proj
         attn_output = self.wo(attn_output)
         return attn_output
@@ -159,7 +150,6 @@ class InternLM2DecoderLayer(nn.Module):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
-        # import pdb; pdb.set_trace()
 
         # build attention layer
         self.attention = InternLM2Attention(config, dtype=dtype, device=device)
@@ -196,8 +186,6 @@ class InternLM2DecoderLayer(nn.Module):
         else:
             hidden_states, residual = self.attention_norm(
                 hidden_states, residual)
-
-        # import pdb; pdb.set_trace()
 
         # Self Attention
         hidden_states = self.attention(

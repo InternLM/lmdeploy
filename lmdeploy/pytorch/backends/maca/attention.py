@@ -76,7 +76,8 @@ class MacaAttentionImpl(AttentionImpl[MacaAttentionMetadata]):
         max_kv_seq_len = attn_metadata.max_kv_seq_len
 
         # fill kv cache
-        self.fill_kv_cache(key, value, k_cache, v_cache, kv_start_indices)
+        k_cache, v_cache = self.fill_kv_cache(key, value, k_cache, v_cache,
+                                              kv_start_indices)
 
         if inplace:
             attn_output = query[..., :self.v_head_size]

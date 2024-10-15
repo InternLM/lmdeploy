@@ -16,7 +16,6 @@ def prefill_attention(
     q_seq_len: Tensor,
     kv_seq_len: Tensor,
     max_q_seq_len: int,
-    max_kv_seq_len: int,
     block_size: int,
     attn_mask: Sequence[Optional[Tensor]],
     is_unpaged_prefill: Optional[bool],
@@ -30,16 +29,13 @@ def prefill_attention(
             value_states,
             q_start_loc,
             q_seq_len,
-            kv_seq_len,
             max_q_seq_len,
-            max_kv_seq_len,
             num_q_heads,
             num_kv_heads,
             attn_mask,
             attn_output=attn_output,
         )
     else:
-        # import pdb; pdb.set_trace()
         return ext_ops.paged_prefill_attention(
             query_states,
             key_cache,
@@ -105,7 +101,6 @@ def paged_attention_fwd(
             q_seqlens,
             kv_seqlens,
             max_q_seq_len,
-            max_kv_seq_len,
             block_size,
             attn_mask,
             is_unpaged_prefill,

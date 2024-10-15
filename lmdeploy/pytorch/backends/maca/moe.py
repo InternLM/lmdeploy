@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from lmdeploy.pytorch.kernels.maca import moe_topk_softmax
+from lmdeploy.pytorch.kernels.maca import moe_gating_topk_softmax
 from lmdeploy.pytorch.kernels.maca import silu_and_mul
 
 from ..moe import (FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder,
@@ -18,7 +18,7 @@ class MacaSoftmaxTopKImpl(SoftmaxTopKImpl):
         self.dim = dim
 
     def forward(self, x: torch.Tensor):
-        routing_weights, selected_experts = moe_topk_softmax(
+        routing_weights, selected_experts = moe_gating_topk_softmax(
             x, self.top_k)
         return routing_weights.to(torch.float32), selected_experts.to(
             torch.int64)
