@@ -17,12 +17,12 @@ on:
         required: true
         description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
         type: string
-        default: "['turbomind', 'pytorch', 'turbomind-vl']"
+        default: "['turbomind', 'pytorch', 'turbomind_vl']"
       model:
         required: true
         description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
         type: string
-        default: "['quantization','convert','pipeline','restful','chat','local_case']"
+        default: "['pipeline','restful','chat']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -32,7 +32,7 @@ on:
         required: true
         description: 'regression functions'
         type: string
-        default: "['tools','restful','pipeline','benchmark','evaluation']"
+        default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
   schedule:
     - cron:  '00 16 * * 0-4'
 
@@ -85,7 +85,7 @@ jobs:
 
   download_pkgs:
     needs: linux-build
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
+    if: ${{!cancelled()}}
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 50
     container:
@@ -121,7 +121,7 @@ jobs:
 
   test_quantization:
     needs: download_pkgs
-    if: ${{!cancelled() && (github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.regression_func), 'tools') && contains(fromJSON(github.event.inputs.model), 'quantization')))}}
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 450
     env:
@@ -160,6 +160,7 @@ jobs:
           pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
       - name: Check env
         run: |
+          pip install transformers==4.44.2 --no-deps
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -205,8 +206,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend) || fromJSON('["turbomind", "pytorch", "turbomind-vl"]')}}
-        model: ${{ fromJSON(inputs.model) || fromJSON('["pipeline","restful","chat","local_case"]')}}
+        backend: ${{ fromJSON(inputs.backend) || fromJSON('["turbomind", "pytorch", "turbomind_vl"]')}}
+        model: ${{ fromJSON(inputs.model) || fromJSON('["pipeline","restful","chat"]')}}
+        include:
+          - backend: turbomind
+          - model: lcoal_case
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
