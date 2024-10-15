@@ -14,6 +14,7 @@ class AttentionMetadata:
     q_start_loc: torch.Tensor = None
     q_seqlens: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
+    fill_seqlens: torch.Tensor = None
 
 
 T = TypeVar('T', bound=AttentionMetadata)

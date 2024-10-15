@@ -120,6 +120,7 @@ class ModelInputs:
     local_adapter_ids: torch.LongTensor = None
     vision_inputs: VisionModelInputs = None
     mrope_inputs: MRopeModelInputs = None
+    cross_attention_states: torch.Tensor = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -211,6 +212,7 @@ class StepContext:
     mrope_position_ids: torch.Tensor = None
     attn_metadata: Any = None
     cross_attn_metadata: Any = None
+    cross_attention_states: torch.Tensor = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -278,6 +280,7 @@ class StepContext:
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             mrope_position_ids=mrope_position_ids,
+            cross_attention_states=inputs.cross_attention_states,
         )
 
         ret = get_backend().update_step_context(ret)

@@ -83,8 +83,10 @@ class CudaGraphMixin:
         input_buffers['local_adapter_ids'] = torch.zeros(max_batches,
                                                          dtype=torch.int64,
                                                          device=device)
-
-        # TODO: create buffer for cross_attn_metadata here
+        # create buffer for cross_attn_metadata here
+        input_buffers['fill_seqlens'] = torch.zeros(max_batches,
+                                                    dtype=torch.int64,
+                                                    device=device)
 
         return input_buffers
 

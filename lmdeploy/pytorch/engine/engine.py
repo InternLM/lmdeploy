@@ -340,6 +340,8 @@ class Engine:
                     input_embeddings=req.data.get('input_embeddings'),
                     mrope_position_ids=req.data.get('mrope_position_ids'),
                     mrope_position_delta=req.data.get('mrope_position_delta'),
+                    cross_attention_states=req.data.get(
+                        'cross_attention_states'),
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_bad_words(msg)
@@ -482,6 +484,10 @@ class Engine:
                 input_embedding_indexing=input_embedding_indexing,
                 input_embedding_ranges=input_embedding_ranges)
 
+        # only for llama3.2
+        cross_attention_states = [
+            msg.cross_attention_states for msg in messages
+        ]
         return ModelInputs(
             input_ids=input_ids,
             seq_length=seq_length,
@@ -492,6 +498,7 @@ class Engine:
             local_adapter_ids=local_adapter_ids,
             vision_inputs=vision_embedding_inputs,
             mrope_inputs=mrope_inputs,
+            cross_attention_states=cross_attention_states,
         )
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,

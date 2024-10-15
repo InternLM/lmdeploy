@@ -265,7 +265,7 @@ def _get_and_verify_max_len(
         return max_model_len if max_model_len else session_len
 
     # vl configs hide session-len inside llm configs
-    llm_keys = ['language_config', 'llm_config']
+    llm_keys = ['language_config', 'llm_config', 'text_config']
     for key in llm_keys:
         hf_tm_config = getattr(hf_tm_config, key, hf_tm_config)
 

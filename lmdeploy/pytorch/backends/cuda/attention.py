@@ -76,21 +76,26 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         block_offsets = attn_metadata.block_offsets
         q_start_loc = attn_metadata.q_start_loc
         q_seqlens = attn_metadata.q_seqlens
+        fill_seqlens = q_seqlens
         kv_seqlens = attn_metadata.kv_seqlens
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+        if attn_metadata.fill_seqlens is not None:
+            fill_seqlens = attn_metadata.fill_seqlens
+            max_q_seqlen = fill_seqlens.sum()
 
         # fill kv cache
-        self.fill_kv_cache(
-            key,
-            value,
-            k_cache,
-            v_cache,
-            q_start_loc,
-            q_seqlens,
-            kv_seq_length=kv_seqlens,
-            max_q_seq_length=max_q_seqlen,
-            block_offsets=block_offsets,
-        )
+        if key is not None and value is not None:
+            self.fill_kv_cache(
+                key,
+                value,
+                k_cache,
+                v_cache,
+                q_start_loc,
+                fill_seqlens,
+                kv_seq_length=kv_seqlens,
+                max_q_seq_length=max_q_seqlen,
+                block_offsets=block_offsets,
+            )
 
         if inplace:
             attn_output = query[..., :self.v_head_size]

@@ -200,15 +200,15 @@ class SchedulerSession:
         self.seq_manager = seq_manager
 
     def add_sequence(
-        self,
-        token_ids: Tensor,
-        sampling_param: SamplingParam = None,
-        adapter_name: str = None,
-        return_logits: bool = False,
-        input_embeddings: List[InputEmbeddings] = None,
-        mrope_position_ids: Tensor = None,
-        mrope_position_delta: Tensor = None,
-    ) -> 'SchedulerSequence':
+            self,
+            token_ids: Tensor,
+            sampling_param: SamplingParam = None,
+            adapter_name: str = None,
+            return_logits: bool = False,
+            input_embeddings: List[InputEmbeddings] = None,
+            mrope_position_ids: Tensor = None,
+            mrope_position_delta: Tensor = None,
+            cross_attention_states: Tensor = None) -> 'SchedulerSequence':
         """Add a new message."""
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
@@ -231,6 +231,7 @@ class SchedulerSession:
             return_logits=return_logits,
             mrope_position_ids=mrope_position_ids,
             mrope_position_delta=mrope_position_delta,
+            cross_attention_states=cross_attention_states,
         )
         self.sequences[seq.seq_id] = seq
         if self.seq_manager is not None:
@@ -383,6 +384,7 @@ class SchedulerSequence:
     num_ignored_history: int = 0
     mrope_position_ids: Optional[Tensor] = None
     mrope_position_delta: Optional[int] = None
+    cross_attention_states: Optional[Tensor] = None
 
     def __post_init__(self):
         """post init."""
@@ -486,7 +488,12 @@ class SchedulerSequence:
 
     def num_all_cross_tokens(self):
         """num of all cross tokens."""
-        return sum([emb.end - emb.start for emb in self.history_embeddings])
+        if self.cross_attention_states is None:
+            return 0
+        return sum([
+            state.shape[-2] for state in self.cross_attention_states
+            if state is not None
+        ])
 
     def update_token_ids(self,
                          token_ids: Tensor,
