@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 import torch
 
@@ -210,6 +210,7 @@ class StepContext:
     vision_inputs: VisionModelInputs = None
     mrope_position_ids: torch.Tensor = None
     attn_metadata: Any = None
+    kv_quant_policy: Literal[0, 4, 8] = 0
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -219,6 +220,7 @@ class StepContext:
         inputs: ModelInputs,
         world_size: int = 1,
         kv_caches: List = None,
+        kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """build step context.
 
@@ -277,6 +279,7 @@ class StepContext:
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             mrope_position_ids=mrope_position_ids,
+            kv_quant_policy=kv_quant_policy,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -307,12 +310,14 @@ class StepContextManager:
         inputs: ModelInputs,
         world_size: int = 1,
         kv_caches: List = None,
+        kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """build context."""
         return StepContext.new(
             inputs,
             world_size,
             kv_caches,
+            kv_quant_policy,
         )
 
     @contextmanager
