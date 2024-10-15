@@ -11,21 +11,24 @@ class TurbomindModel(BaseOutputModel):
         """Get turbomind config."""
         final_cfg = super().get_config(cfg).__dict__
         # attn_bias, inter_size
-        visit = False
-        attn_bias = 0
-        for bin in self.input_model.bins():
-            for i in range(bin.start_layer_id, bin.end_layer_id):
-                visit = True
-                w1, w2, w3 = bin.ffn(i)
-                inter_size = w2.size(-1)
-                qb, _, _, _ = bin.attn_bias(i)
-                if qb is not None:
-                    attn_bias = 1
-                break
-            if visit:
-                break
-        inter_size = self._pad_inter_size(inter_size, final_cfg)
-        final_cfg.update(dict(attn_bias=attn_bias, inter_size=inter_size))
+        # visit = False
+        # attn_bias = 0
+        # for bin in self.input_model.bins():
+        #     for i in range(bin.start_layer_id, bin.end_layer_id):
+        #         visit = True
+        #         w1, w2, w3 = bin.ffn(i)
+        #         inter_size = w2.size(-1)
+        #         qb, _, _, _ = bin.attn_bias(i)
+        #         if qb is not None:
+        #             attn_bias = 1
+        #         break
+        #     if visit:
+        #         break
+        # inter_size = self._pad_inter_size(inter_size, final_cfg)
+        # final_cfg.update(dict(attn_bias=attn_bias, inter_size=inter_size))
+        # print(final_cfg)
+        # assert 0
+        final_cfg.update(dict(attn_bias=0))
         return TurbomindModelConfig.from_dict(final_cfg)
 
     def _pad_inter_size(self, inter_size: int, cfg: dict):

@@ -10,7 +10,7 @@ from safetensors.torch import load_file
 from lmdeploy.archs import get_model_arch
 from lmdeploy.tokenizer import Tokenizer
 
-from .base import INPUT_MODELS, BaseInputModel, BaseReader
+from .base import INPUT_MODELS, BaseInputModel, BaseReader, create_loader
 
 
 class LlamaReader(BaseReader):
@@ -33,25 +33,25 @@ class LlamaReader(BaseReader):
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
         self.weight_suffix, self.processor = policy
-        self.init_layer_id()
+        # self.init_layer_id()
 
-    def init_layer_id(self):
-        """Get start/end transformer layer id."""
-        super().init_layer_id()
+    # def init_layer_id(self):
+    #     """Get start/end transformer layer id."""
+    #     super().init_layer_id()
 
-    def clean_up(self, last: bool) -> None:
-        """Clean up unused params."""
-        super().clean_up(last)
+    # def clean_up(self, last: bool) -> None:
+    #     """Clean up unused params."""
+    #     super().clean_up(last)
 
-    @property
-    def start_layer_id(self):
-        """Get start transformer layer id."""
-        return self._start_layer_id
+    # @property
+    # def start_layer_id(self):
+    #     """Get start transformer layer id."""
+    #     return self._start_layer_id
 
-    @property
-    def end_layer_id(self):
-        """Get end transformer layer id."""
-        return self._end_layer_id
+    # @property
+    # def end_layer_id(self):
+    #     """Get end transformer layer id."""
+    #     return self._end_layer_id
 
     def tok_embeddings(self):
         """Get embeddings."""
@@ -135,55 +135,38 @@ class LlamaModel(BaseInputModel):
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
-        ckpt_path = kwargs.get('ckpt_path')
+        # ckpt_path = kwargs.get('ckpt_path')
         self.policy = kwargs.get('input_policy')
-        if ckpt_path is None:
-            ckpt_path = model_path
-        self.ckpt_path = ckpt_path
-        self.ckpt_files = self.get_ckpt()
+        # if ckpt_path is None:
+        #     ckpt_path = model_path
+        # self.ckpt_path = ckpt_path
+        # self.ckpt_files = self.get_ckpt()
         _, self.model_config = get_model_arch(model_path)
         self.model_config = self.model_config.to_dict()
 
-    def get_ckpt(self):
-        """Get weight files."""
-        patterns = ['*.safetensors', 'pytorch_model*.bin']
-        files = []
-        for pattern in patterns:
-            files = glob(os.path.join(self.ckpt_path, pattern))
-            files = [os.path.basename(file) for file in files]
-            if len(files) > 0:
-                break
-        files = sorted(files)
-        return files
+    # def get_ckpt(self):
+    #     """Get weight files."""
+    #     patterns = ['*.safetensors', 'pytorch_model*.bin']
+    #     files = []
+    #     for pattern in patterns:
+    #         files = glob(os.path.join(self.ckpt_path, pattern))
+    #         files = [os.path.basename(file) for file in files]
+    #         if len(files) > 0:
+    #             break
+    #     files = sorted(files)
+    #     return files
 
-    @property
-    def nmgrs(self):
-        """Get number of checkpoint."""
-        return len(self.ckpt_files)
+    # @property
+    # def nmgrs(self):
+    #     """Get number of checkpoint."""
+    #     return len(self.ckpt_files)
 
-    def get_mgrs(self):
-        """Conctruct all Reader."""
-        assert self.nmgrs > 0, \
-            f'could not find checkpoints in {self.ckpt_path}'
-        unused_params = {}
-        try:
-            for i, ckpt in enumerate(self.ckpt_files):
-                is_last_bin = i == len(self.ckpt_files) - 1
-                if ckpt.endswith('.bin'):
-                    new_params = torch.load(osp.join(self.ckpt_path, ckpt),
-                                            map_location='cpu')
-                else:
-                    new_params = load_file(osp.join(self.ckpt_path, ckpt))
-                ret = self.Reader(new_params,
-                                  unused_params,
-                                  i == self.nmgrs - 1,
-                                  self.model_config,
-                                  policy=self.policy)
-                yield ret
-                ret.clean_up(is_last_bin)
-        except GeneratorExit:
-            ret.clean_up(True)
-
+    def readers(self):
+        loader = create_loader(self.model_path, self.Reader.attn_layer_patten)
+        for i, param in loader.items():
+            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
+            yield i, reader
+        
     def tokenizer_info(self):
         """Read tokenizer info."""
         assert osp.isdir(self.model_path), self.model_path
@@ -203,6 +186,8 @@ class LlamaModel(BaseInputModel):
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
             attn_head_num = model_arg['num_attention_heads']
+            vocab_size = model_arg['vocab_size']
+            inter_size = model_arg['intermediate_size']
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
             else:
@@ -243,6 +228,8 @@ class LlamaModel(BaseInputModel):
             head_num=attn_head_num,
             kv_head_num=kv_head_num,
             hidden_units=hidden_units,
+            inter_size=inter_size,
+            vocab_size=vocab_size,
             rope_theta=rope_theta,
             max_position_embeddings=max_position_embeddings,
             original_max_position_embeddings=original_max_position_embeddings,

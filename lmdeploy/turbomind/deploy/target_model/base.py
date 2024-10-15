@@ -194,13 +194,16 @@ class BaseOutputModel(ABC):
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model.model_info())
 
+        print(final_cfg)
+
         # vocab_size
-        for bin in self.input_model.bins():
-            emb = bin.tok_embeddings()
-            if emb is not None:
-                _vocab_size, dim = emb.shape
-                break
-        final_cfg.update(dict(vocab_size=_vocab_size))
+        # for bin in self.input_model.bins():
+        #     emb = bin.tok_embeddings()
+        #     if emb is not None:
+        #         _vocab_size, dim = emb.shape
+        #         break
+        # final_cfg.update(dict(vocab_size=_vocab_size))
+        
         return TurbomindModelConfig.from_dict(final_cfg, allow_none=True)
 
     def export_config(self) -> None:
@@ -248,6 +251,9 @@ class BaseOutputModel(ABC):
                     torch_tensor = torch_tensor.bfloat16()
                 else:
                     torch_tensor = torch_tensor.float()
+            # print(tm_params.keys())
+            # assert(0)
+            # print(f'pop {name}')
             for tm_tensor in tm_params[name]:
                 tm_tensor.copy_from(torch_tensor)
             tm_params.pop(name)
@@ -304,10 +310,11 @@ class BaseOutputModel(ABC):
                     desc='Convert to turbomind format',
                     leave=self.to_file)
         self.export_config()
-        for bin in self.input_model.bins():
-            self.export_misc(bin)
-            for i in range(bin.start_layer_id, bin.end_layer_id):
-                self.export_transformer_block(bin, i)
+        for i, reader in self.input_model.readers():
+            if i < 0:
+                self.export_misc(reader)
+            else:
+                self.export_transformer_block(reader, i)
                 pbar.update(1)
         pbar.close()
         # manually clean up meta reader

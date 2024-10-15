@@ -16,7 +16,7 @@ using D = cache_policy::Default;
 void Registry::f16_f16_f16_grouped_sm80_s16816()
 {
 
-    {
+    if constexpr (1) {
         using C = Sm80_s16816<Sm80,
                               Operand_A<half, kRowMajor>,          // A
                               Transform_Default,                   // tarnsform A
@@ -52,7 +52,7 @@ void Registry::f16_f16_f16_grouped_sm80_s16816()
         // clang-format on
     }
 
-    {
+    if constexpr (1) {
         using C = Sm80_s16816<Sm80,
                               Operand_A<half, kRowMajor>,             // A
                               Transform_Default,                      // tarnsform A

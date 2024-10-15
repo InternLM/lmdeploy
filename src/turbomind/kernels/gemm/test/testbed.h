@@ -762,13 +762,13 @@ inline decltype(auto) get_test()
         constexpr Pack kPackV = HMMA_SIMT | OPERAND_V | 1;
         return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
-    else if constexpr (1) {
+    else if constexpr (0) {
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 1;
         // constexpr Pack kPackB = 0;
         constexpr Pack kPackV = 0;
         return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
-    else if constexpr (0) {
+    else if constexpr (1) {
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
         // constexpr Pack kPackB = 0;
         constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
