@@ -46,6 +46,7 @@ env:
   FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
+  DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
 
 jobs:
   linux-build:
@@ -157,7 +158,7 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip install transformers==4.44.2 --no-deps
@@ -244,7 +245,7 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -344,7 +345,7 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -437,7 +438,7 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -499,7 +500,7 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -560,7 +561,7 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
