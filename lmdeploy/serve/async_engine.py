@@ -188,14 +188,20 @@ class AsyncEngine(LogitsMixin):
 
     def close(self):
         self.gens_set.clear()
-        if hasattr(self, 'engine'):
+        if self.engine is not None:
             if isinstance(self.backend_config, PytorchEngineConfig):
                 self.engine.close()
-            del self.engine
-            import torch
-            torch.cuda.empty_cache()
+            self.engine = None
             import gc
             gc.collect()
+            import torch
+            torch.cuda.empty_cache()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        self.close()
 
     def _build_turbomind(
             self,
