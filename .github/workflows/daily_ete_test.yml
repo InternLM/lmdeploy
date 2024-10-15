@@ -161,7 +161,7 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip install transformers==4.44.2 --no-deps
+          pip install transformers==4.44.2
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
