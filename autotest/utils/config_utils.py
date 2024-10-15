@@ -35,7 +35,7 @@ def get_torch_model_list(tp_num: int = None,
     exclude_dup = False
 
     if exclude_dup:
-        if None is quant_policy:
+        if quant_policy is None:
             case_list = [
                 x for x in config.get('pytorch_' + model_type)
                 if x in config.get('turbomind_' + model_type)
@@ -48,7 +48,7 @@ def get_torch_model_list(tp_num: int = None,
                                                       str(quant_policy))
             ]
     else:
-        if None is quant_policy:
+        if quant_policy is None:
             case_list = config.get('pytorch_' + model_type)
         else:
             case_list = [
@@ -108,7 +108,7 @@ def get_quantization_model_list(type):
 def get_vl_model_list(tp_num: int = None, quant_policy: int = None):
     config = get_config()
 
-    if None is quant_policy:
+    if quant_policy is None:
         case_list = copy.deepcopy(config.get('vl_model'))
     else:
         case_list = [
@@ -128,7 +128,7 @@ def get_vl_model_list(tp_num: int = None, quant_policy: int = None):
                 'pytorch_quatization'
         ).get('awq') and not is_quantization_model(
                 key) and key + '-inner-4bits' not in case_list and (
-                    None is not quant_policy
+                    quant_policy is not None
                     and key not in config.get('pytorch_quatization').get(
                         'no_kvint' + str(quant_policy))):
             case_list.append(key + '-inner-4bits')

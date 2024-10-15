@@ -290,7 +290,7 @@ def run_pipeline_vl_chat_test(config, model_case, quant_policy: int = None):
         backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
     if '4bit' in model_case.lower() or 'awq' in model_case.lower():
         backend_config.model_format = 'awq'
-    if None is not quant_policy:
+    if quant_policy is not None:
         backend_config.quant_policy = quant_policy
     pipe = pipeline(hf_path, backend_config=backend_config)
 

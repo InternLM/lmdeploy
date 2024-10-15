@@ -151,7 +151,6 @@ turbomind_quatization:
         - codellama/CodeLlama-7b-Instruct-hf
     gptq:
         - internlm/internlm2_5-7b-chat
-    no_kvint:
 
 pytorch_quatization:
     awq:
