@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Optional
 
-import dlinfer.ops as ext_ops
 import torch
+
+from lmdeploy.pytorch.kernels.ascend import awq_linear
 
 from ..awq_modules import LinearW4A16Builder, LinearW4A16Impl
 
@@ -25,13 +26,8 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
                 bias: Optional[torch.Tensor] = None,
                 all_reduce: bool = False):
         """forward."""
-        out = ext_ops.weight_quant_matmul(
-            x.squeeze(0),
-            qweight,
-            scales,
-            offset=qzeros,
-            bias=bias,
-            group_size=self.group_size).unsqueeze(0)
+        out = awq_linear(x, qweight, scales, qzeros, bias, all_reduce,
+                         self.group_size)
         return out
 
 
