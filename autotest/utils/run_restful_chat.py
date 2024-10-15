@@ -62,7 +62,7 @@ def start_restful_api(config, param, model, model_path, backend_type,
         cmd += ' --backend pytorch'
     if 'llava' in model:
         cmd += ' --model-name vicuna'
-    if backend_type == 'turbomind' and 'quant_policy' in param.keys():
+    if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
         quant_policy = param['quant_policy']
         cmd += f' --quant-policy {quant_policy}'
 

@@ -30,14 +30,13 @@ def run_pipeline_chat_test(config,
     else:
         hf_path = model_case
 
-    if 'pytorch' == type:
+    if 'pytorch' in type:
         backend_config = PytorchEngineConfig(tp=tp)
-    elif 'pytorch_lora' == type:
-        backend_config = PytorchEngineConfig(tp=tp,
-                                             adapters=extra.get('adapters'))
     else:
         backend_config = TurbomindEngineConfig(tp=tp)
 
+    if 'lora' in type:
+        backend_config.adapters = extra.get('adapters')
     if 'kvint' in type:
         backend_config.quant_policy = extra.get('quant_policy')
 
@@ -281,7 +280,7 @@ PIC2 = 'https://raw.githubusercontent.com/' + \
     'open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'
 
 
-def run_pipeline_vl_chat_test(config, model_case):
+def run_pipeline_vl_chat_test(config, model_case, quant_policy: int = None):
     log_path = config.get('log_path')
     tp = get_tp_num(config, model_case)
     model_path = config.get('model_path')
@@ -295,6 +294,8 @@ def run_pipeline_vl_chat_test(config, model_case):
         backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
     if '4bit' in model_case.lower() or 'awq' in model_case.lower():
         backend_config.model_format = 'awq'
+    if quant_policy is not None:
+        backend_config.quant_policy = quant_policy
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     pipeline_chat_log = os.path.join(
@@ -307,6 +308,8 @@ def run_pipeline_vl_chat_test(config, model_case):
         prompt = f'describe this image{IMAGE_TOKEN}'
     else:
         prompt = 'describe this image'
+
+    file.writelines('engineconfig:' + str(backend_config))
     response = pipe((prompt, image))
     result = 'tiger' in response.text.lower() or '虎' in response.text.lower()
     file.writelines('result:' + str(result) +
