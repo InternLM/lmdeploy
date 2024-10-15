@@ -69,6 +69,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
@@ -77,6 +79,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         q_start_loc = attn_metadata.q_start_loc
         q_seqlens = attn_metadata.q_seqlens
         kv_seqlens = attn_metadata.kv_seqlens
+        quant_policy = attn_metadata.quant_policy
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
 
         # fill kv cache
@@ -90,6 +93,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             kv_seq_length=kv_seqlens,
             max_q_seq_length=max_q_seqlen,
             block_offsets=block_offsets,
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
+            quant_policy=quant_policy,
         )
 
         if inplace:
@@ -110,6 +116,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 q_seqlens=q_seqlens,
                 kv_seqlens=kv_seqlens,
                 max_seqlen=max_q_seqlen,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                quant_policy=quant_policy,
                 window_size=self.sliding_window,
                 sm_scale=self.scale,
                 logit_softcapping=self.logit_softcapping,
@@ -127,6 +136,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 max_input_len=max_q_seqlen,
                 head_offset=self.alibi_head_offset,
                 num_heads=self.alibi_num_heads,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                quant_policy=quant_policy,
             )
 
         return attn_output
