@@ -138,7 +138,6 @@ jobs:
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
         - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
-        - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
@@ -166,7 +165,6 @@ jobs:
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -352,7 +350,6 @@ jobs:
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -445,7 +442,6 @@ jobs:
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -507,7 +503,6 @@ jobs:
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -568,7 +563,6 @@ jobs:
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
