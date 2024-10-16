@@ -166,6 +166,21 @@ class LlamaModel(BaseInputModel):
         for i, param in loader.items():
             reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
             yield i, reader
+
+        # async version with a prefetching thread
+        # it = loader.items()
+        # with ThreadPoolExecutor(1) as pool:
+        #     prefetch = pool.submit(next, it, None)
+        #     while True:
+        #         data = prefetch.result()
+        #         prefetch = pool.submit(next, it, None)
+        #         if data:
+        #             i, param = data
+        #             reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
+        #             yield i, reader
+        #         else:
+        #             break
+        #     prefetch.result()
         
     def tokenizer_info(self):
         """Read tokenizer info."""

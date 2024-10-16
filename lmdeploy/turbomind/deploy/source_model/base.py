@@ -254,10 +254,11 @@ class SafetensorsLoader(BaseLoader):
                         yield (-1, {k: tensor})
                     else:
                         idx = int(match[0])
-                        layer = params[idx]
-                        layer[k] = tensor
-                        if len(layer) == self.item_count[idx]:
+                        param = params[idx]
+                        param[k] = tensor
+                        if len(param) == self.item_count[idx]:
                             yield (idx, params.pop(idx))
+        assert not params
 
 
 class PytorchLoader(BaseLoader):
@@ -272,8 +273,8 @@ class PytorchLoader(BaseLoader):
 
     def items(self):
         params = defaultdict(dict)
-        misc = {}
         for shard in self.shards:
+            misc = {}
             tmp = torch.load(shard, map_location='cpu')
             for k, v in tmp.items():
                 match = re.findall(self.pattern, k)
@@ -286,14 +287,18 @@ class PytorchLoader(BaseLoader):
             if misc:
                 yield (-1, misc)
                 misc.clear()
-            max_count = max(map(len, params.values()))
             ready = []
-            for idx, param in params.items():
-                item_count = self.item_count[idx] or max_count
-                if len(param) == item_count:
-                    ready.append(idx)
+            if self.item_count:
+                for idx, param in params.items():
+                    if len(param) == self.item_count[idx]:
+                        ready.append(idx)
+            else:
+                ready = sorted(params.keys())[:-1]
             for idx in ready:
                 yield (idx, params.pop(idx))
+        idxs = sorted(params.key())
+        for idx in idxs:
+            yield (idx, params.pop(idx))
 
 
 def create_loader(model_path: str, pattern: str) -> BaseLoader:
