@@ -3,10 +3,213 @@
 from typing import Dict, List
 
 import torch
+import torch.nn.functional as F
 from PIL.Image import Image
+from transformers.modeling_outputs import BaseModelOutput
+from transformers.models.mllama.modeling_mllama import MllamaPreTrainedModel
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
+
+
+class MllamaVisionEncoderLayerPatch(torch.nn.Module):
+
+    def forward(
+        self,
+        hidden_state: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        output_attentions: bool = None,
+    ):
+        # Self Attention
+        residual = hidden_state
+        hidden_state = self.input_layernorm(hidden_state)
+        hidden_state, attn_weights = self.self_attn(
+            hidden_state, attention_mask=attention_mask)
+        if self.is_gated:
+            hidden_state = self.gate_attn.tanh() * hidden_state
+        hidden_state = residual + hidden_state
+
+        # Feed forward
+        residual = hidden_state
+        hidden_state = self.post_attention_layernorm(hidden_state)
+        hidden_state = self.mlp(hidden_state)
+        if self.is_gated:
+            hidden_state = self.gate_ffn.tanh() * hidden_state
+        # add device sync for accelrate pipeline parallel
+        residual = residual.to(hidden_state.device)
+        hidden_state = residual + hidden_state
+
+        outputs = (hidden_state, )
+
+        if output_attentions:
+            outputs += (attn_weights, )
+
+        return outputs
+
+
+class MllamaVisionModelPatch(MllamaPreTrainedModel):
+
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        aspect_ratio_ids: torch.Tensor,
+        aspect_ratio_mask: torch.Tensor,
+        output_attentions: bool = None,
+        output_hidden_states: bool = None,
+        return_dict: bool = None,
+    ):
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions  # noqa
+        output_hidden_states = (output_hidden_states
+                                if output_hidden_states is not None else
+                                self.config.output_hidden_states)
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict  # noqa
+
+        batch_size, num_concurrent_media, num_tiles, num_channels, height, width = pixel_values.shape  # noqa
+
+        pixel_values = pixel_values.reshape(
+            batch_size * num_concurrent_media * num_tiles, num_channels,
+            height, width)
+        aspect_ratio_ids = aspect_ratio_ids.reshape(
+            batch_size * num_concurrent_media, -1)
+
+        # Patch embedding
+        patch_embeds = self.patch_embedding(
+            pixel_values.to(self.dtype).to(self.device))
+        hidden_state = patch_embeds.flatten(2).transpose(1, 2)
+
+        # Tile embeddings
+        _, num_patches, dim = hidden_state.shape
+        hidden_state = hidden_state.reshape(batch_size * num_concurrent_media,
+                                            num_tiles, -1, dim)
+        hidden_state = self.pre_tile_positional_embedding(
+            hidden_state, aspect_ratio_ids)
+
+        # Add cls token
+        hidden_state = hidden_state.reshape(
+            batch_size * num_concurrent_media * num_tiles, num_patches, dim)
+        hidden_state = self.apply_class_embedding(hidden_state)
+        num_patches += 1
+
+        # Position embeddings
+        hidden_state = hidden_state.reshape(batch_size * num_concurrent_media,
+                                            num_tiles, num_patches, dim)
+        hidden_state = self.gated_positional_embedding(hidden_state,
+                                                       aspect_ratio_ids)
+
+        hidden_state = self.layernorm_pre(hidden_state)
+
+        # Compute the number of tokens to pad
+        num_padding_patches = (8 - (hidden_state.shape[-2] % 8)) % 8
+        # Compute padding tuple for pad function
+        padding = (
+            0, 0, 0, num_padding_patches
+        )  # (pad_left, pad_right, pad_left for dim -2, pad_right for dim -2)
+        # Pad the tensor
+        hidden_state = F.pad(hidden_state, padding, mode='constant', value=0)
+        slice_index = -num_padding_patches if num_padding_patches > 0 else None
+
+        # Prepare attention mask
+        attention_mask = aspect_ratio_mask.reshape(
+            batch_size * num_concurrent_media, -1)
+        from transformers.models.mllama.modeling_mllama import \
+            _prepare_aspect_ratio_attention_mask
+        attention_mask = _prepare_aspect_ratio_attention_mask(
+            aspect_ratio_mask=attention_mask,
+            num_patches=self.num_patches,
+            target_length=hidden_state.shape[2],
+            dtype=self.dtype,
+        )
+
+        # Apply encoder
+        hidden_state = hidden_state.view(batch_size * num_concurrent_media, -1,
+                                         dim)
+        output = self.transformer(
+            hidden_state,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            output_attentions=output_attentions,
+        )
+        hidden_state = output[0]
+
+        hidden_state = self.layernorm_post(hidden_state)
+
+        # Apply global encoder
+        hidden_state = hidden_state.reshape(batch_size * num_concurrent_media,
+                                            num_tiles,
+                                            num_patches + num_padding_patches,
+                                            dim)
+        hidden_state = self.post_tile_positional_embedding(
+            hidden_state, aspect_ratio_ids)
+        hidden_state = hidden_state.reshape(
+            batch_size * num_concurrent_media,
+            num_tiles * (num_patches + num_padding_patches), dim)
+        global_output = self.global_transformer(
+            hidden_state,
+            attention_mask=attention_mask,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
+        )
+        hidden_state = global_output[0]
+
+        # Remove padding form hidden state
+        hidden_state = hidden_state.reshape(batch_size * num_concurrent_media,
+                                            num_tiles,
+                                            num_patches + num_padding_patches,
+                                            dim)
+        hidden_state = hidden_state[:, :, :slice_index]
+        hidden_state = hidden_state.reshape(batch_size, num_concurrent_media,
+                                            num_tiles, num_patches, dim)
+
+        # Collect intermediate layer outputs from encoder output
+        all_intermediate_hidden_states = output[1]
+        # rewrite to sync device during accelerate pipeline parallel
+        device = hidden_state.device
+        all_intermediate_hidden_states = [
+            s.to(device) for s in all_intermediate_hidden_states
+        ]
+        intermediate_hidden_states = torch.stack(
+            all_intermediate_hidden_states, dim=-1)
+        intermediate_hidden_states = intermediate_hidden_states[
+            ..., self.intermediate_layers_indices]
+
+        # Remove padding from intermediate hidden states
+        intermediate_hidden_states = intermediate_hidden_states.reshape(
+            batch_size * num_concurrent_media, num_tiles,
+            num_patches + num_padding_patches, -1)
+        intermediate_hidden_states = intermediate_hidden_states[:, :, :
+                                                                slice_index]
+        intermediate_hidden_states = intermediate_hidden_states.reshape(
+            batch_size, num_concurrent_media, num_tiles, num_patches, -1)
+
+        # Concatenate final hidden state and intermediate hidden states
+        hidden_state = torch.cat([hidden_state, intermediate_hidden_states],
+                                 dim=-1)
+
+        if output_hidden_states:
+            hidden_states = tuple(all_intermediate_hidden_states) + tuple(
+                global_output[1])
+        else:
+            hidden_states = None
+
+        if output_attentions:
+            # global transformer in contrast to `self.transformer` doesn't
+            # always return hidden states so we might go index out-of-range
+            global_attn = tuple(
+                global_output[2]) if output_hidden_states else tuple(
+                    global_output[1])
+            attentions = tuple(output[2]) + global_attn
+        else:
+            attentions = None
+
+        if not return_dict:
+            return tuple(v for v in [hidden_state, hidden_states, attentions]
+                         if v is not None)
+
+        return BaseModelOutput(
+            last_hidden_state=hidden_state,
+            hidden_states=hidden_states,
+            attentions=attentions,
+        )
 
 
 def check_transformers():
@@ -28,14 +231,16 @@ class MllamaVLModel(VisonModel):
     def build_model(self):
         check_transformers()
 
+        from transformers.models.mllama.modeling_mllama import (
+            MllamaVisionEncoderLayer, MllamaVisionModel)
+        MllamaVisionModel.forward = MllamaVisionModelPatch.forward
+        MllamaVisionEncoderLayer.forward = MllamaVisionEncoderLayerPatch.forward  # noqa
         from accelerate import init_empty_weights
         with init_empty_weights():
             config = self.hf_config
             config.quantization_config = {}  # disable vision part quantization
             # disable accelerate check_tied_parameters_in_config
-            # for Qwen2-VL-2B-Instruct
             config.tie_word_embeddings = False
-
             from transformers import MllamaForConditionalGeneration
             model = MllamaForConditionalGeneration._from_config(config)
             if not self.with_llm:

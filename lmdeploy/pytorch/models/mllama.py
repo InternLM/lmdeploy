@@ -110,25 +110,6 @@ class LlamaAttention(nn.Module):
         return attn_output
 
 
-# Copied from transformers.models.llama.modeling_llama.repeat_kv
-def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """This is the equivalent of torch.repeat_interleave(x, dim=1,
-    repeats=n_rep).
-
-    The hidden states go from (batch, num_key_value_heads, seqlen, head_dim) to
-    (batch, num_attention_heads, seqlen, head_dim)
-    """
-    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
-    if n_rep == 1:
-        return hidden_states
-    hidden_states = hidden_states[:, :,
-                                  None, :, :].expand(batch,
-                                                     num_key_value_heads,
-                                                     n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen,
-                                 head_dim)
-
-
 class MllamaTextCrossAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper."""
 
@@ -147,29 +128,17 @@ class MllamaTextCrossAttention(nn.Module):
         self.layer_idx = layer_idx
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
 
-        self.q_proj = build_rowwise_linear(self.hidden_size,
-                                           self.num_heads * self.head_dim,
-                                           bias=False,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
-        self.k_proj = build_rowwise_linear(self.hidden_size,
-                                           self.num_key_value_heads *
-                                           self.head_dim,
-                                           bias=False,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
-        self.v_proj = build_rowwise_linear(self.hidden_size,
-                                           self.num_key_value_heads *
-                                           self.head_dim,
-                                           bias=False,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
+        # packed qkv
+        self.qkv_proj = build_qkv_proj(
+            self.hidden_size,
+            num_q_heads=self.num_heads,
+            num_kv_heads=self.num_key_value_heads,
+            head_size=self.head_dim,
+            bias=getattr(config, 'attention_bias', False),
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+        )
         self.o_proj = build_rowwise_linear(self.num_heads * self.head_dim,
                                            self.hidden_size,
                                            bias=False,
@@ -199,16 +168,20 @@ class MllamaTextCrossAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel."""
-        query_states = self.q_proj(hidden_states)
-        query_states = query_states.view(-1, self.num_heads, self.head_dim)
+        qkv_states = self.qkv_proj(hidden_states)
+        qkv_states = qkv_states.flatten(0, -2)
+        query_states, _, _ = self.qkv_proj.split_qkv(qkv_states)
+        query_states = query_states.view(-1, query_states.shape[-2],
+                                         self.head_dim)
         query_states = self.q_norm(query_states)
 
         if cross_attention_states is not None:
-            key_states = self.k_proj(cross_attention_states)
-            value_states = self.v_proj(cross_attention_states)
-            key_states = key_states.view(-1, self.num_key_value_heads,
+            qkv_states = self.qkv_proj(cross_attention_states)
+            qkv_states = qkv_states.flatten(0, -2)
+            _, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
+            key_states = key_states.view(-1, key_states.shape[-2],
                                          self.head_dim)
-            value_states = value_states.view(-1, self.num_key_value_heads,
+            value_states = value_states.view(-1, value_states.shape[-2],
                                              self.head_dim)
             key_states = self.k_norm(key_states)
         else:
@@ -762,8 +735,6 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin):
                 continue
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
                 if weight_name not in name:
-                    continue
-                if 'cross_attn' in name:
                     continue
                 name = name.replace(weight_name, param_name)
                 param = params_dict[name]
