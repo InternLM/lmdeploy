@@ -186,7 +186,7 @@ def get_model(pretrained_model_name_or_path: str,
               download_dir: str = None,
               revision: str = None,
               token: str = None):
-    """Get model from huggingface or modelscope."""
+    """Get model from huggingface, modelscope or openmind_hub."""
     import os
     if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
         from modelscope import snapshot_download

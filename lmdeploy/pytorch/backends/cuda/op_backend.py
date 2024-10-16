@@ -110,6 +110,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
             kv_seqlens=step_context.kv_seqlens,
+            quant_policy=step_context.kv_quant_policy,
         )
 
         cross_attn_metadata = None
@@ -125,6 +126,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             q_seqlens=q_seqlens,
             kv_seqlens=step_context.cross_kv_seqlens,
             fill_seqlens=fill_seqlens,
+            quant_policy=step_context.kv_quant_policy,
         )
 
         step_context.attn_metadata = attn_metadata

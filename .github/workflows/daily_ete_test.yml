@@ -28,11 +28,6 @@ on:
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
         type: boolean
         default: false
-      dependency_pkgs:
-        required: true
-        description: 'Dependency packages, you can also set a specific version'
-        type: string
-        default: 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord auto_gptq qwen_vl_utils mmengine-lite==0.10.5'
       regression_func:
         required: true
         description: 'regression functions'
@@ -43,7 +38,6 @@ on:
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
-  dependency_pkgs: ${{inputs.dependency_pkgs || 'packaging transformers_stream_generator transformers datasets matplotlib openai attrdict timm modelscope jmespath decord auto_gptq qwen_vl_utils mmengine-lite==0.10.5'}}
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
@@ -132,7 +126,7 @@ jobs:
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install ${{env.dependency_pkgs}}
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
@@ -306,7 +300,7 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install ${{env.dependency_pkgs}}
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
@@ -410,7 +404,7 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install ${{env.dependency_pkgs}}
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
@@ -483,7 +477,7 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install ${{env.dependency_pkgs}}
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
@@ -559,7 +553,7 @@ jobs:
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install ${{env.dependency_pkgs}}
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
