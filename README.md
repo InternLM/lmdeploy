@@ -26,7 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/09\] LMDeploy PyTorchEngine adds support for[Huawei Ascend](./docs/en/get_started/ascend/get_started.md). See supported models [here](docs/en/supported_models/supported_models.md)
+- \[2024/09\] LMDeploy PyTorchEngine adds support for [Huawei Ascend](./docs/en/get_started/ascend/get_started.md). See supported models [here](docs/en/supported_models/supported_models.md)
 - \[2024/09\] LMDeploy PyTorchEngine achieves 1.3x faster on Llama3-8B inference by introducing CUDA graph
 - \[2024/08\] LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
 - \[2024/07\] Support Llama3.1 8B, 70B and its TOOLS CALLING
@@ -149,7 +149,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>InternLM-XComposer2.5 (7B)</li>
   <li>Qwen-VL (7B)</li>
-  <li>Qwen2-VL (2B, 7B)</li>
+  <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
@@ -199,6 +199,10 @@ print(response)
 > By default, LMDeploy downloads model from HuggingFace. If you would like to use models from ModelScope, please install ModelScope by `pip install modelscope` and set the environment variable:
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
+>
+> If you would like to use models from openMind Hub, please install openMind Hub by `pip install openmind_hub` and set the environment variable:
+>
+> `export LMDEPLOY_USE_OPENMIND_HUB=True`
 
 For more information about inference pipeline, please refer to [here](docs/en/llm/pipeline.md).
 

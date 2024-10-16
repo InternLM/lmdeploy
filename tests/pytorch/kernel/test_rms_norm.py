@@ -2,6 +2,11 @@ import pytest
 import torch
 
 
+def _bf16_mark():
+    return pytest.mark.skipif(not torch.cuda.is_bf16_supported(),
+                              reason='bf16 not supported.')
+
+
 class TestRMSNorm:
 
     @pytest.fixture(scope='class')
@@ -28,8 +33,10 @@ class TestRMSNorm:
         input = input * torch.rsqrt(variance + eps)
         return weight * input.to(input_dtype)
 
-    @pytest.mark.parametrize('dtype',
-                             [torch.bfloat16, torch.float16, torch.float32],
+    @pytest.mark.parametrize('dtype', [
+        pytest.param(torch.bfloat16, marks=_bf16_mark()), torch.float16,
+        torch.float32
+    ],
                              indirect=True)
     def test_rms_norm(self, input, weight, eps, gt):
         from lmdeploy.pytorch.kernels import rms_norm

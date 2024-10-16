@@ -197,6 +197,10 @@ print(response)
 > デフォルトでは、LMDeployはHuggingFaceからモデルをダウンロードします。ModelScopeからモデルを使用する場合は、`pip install modelscope`コマンドでModelScopeをインストールし、環境変数を設定してください：
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
+>
+> openMind Hubからモデルを使用する場合は、`pip install openmind_hub`コマンドでopenMind Hubをインストールし、環境変数を設定してください：
+>
+> `export LMDEPLOY_USE_OPENMIND_HUB=True`
 
 推論パイプラインに関する詳細情報は[こちら](./docs/en/llm/pipeline.md)を参照してください。
 

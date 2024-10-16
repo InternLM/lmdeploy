@@ -11,6 +11,11 @@ def _rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
+def _bf16_mark():
+    return pytest.mark.skipif(not torch.cuda.is_bf16_supported(),
+                              reason='bf16 not supported.')
+
+
 class TestApplyRotary:
 
     @pytest.fixture
@@ -87,8 +92,10 @@ class TestApplyRotary:
 
         yield q_embed, k_embed
 
-    @pytest.mark.parametrize('dtype',
-                             [torch.bfloat16, torch.float16, torch.float32],
+    @pytest.mark.parametrize('dtype', [
+        pytest.param(torch.bfloat16, marks=_bf16_mark()), torch.float16,
+        torch.float32
+    ],
                              indirect=True)
     @pytest.mark.parametrize(('num_heads_q', 'num_heads_k'), [(8, 8), (8, 4)],
                              indirect=True)

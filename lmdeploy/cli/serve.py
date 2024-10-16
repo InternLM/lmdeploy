@@ -145,6 +145,7 @@ class SubCliServe:
         ArgumentHelper.ssl(parser)
         ArgumentHelper.model_name(parser)
         ArgumentHelper.max_log_len(parser)
+        ArgumentHelper.disable_fastapi_docs(parser)
 
         # chat template args
         ArgumentHelper.chat_template(parser)
@@ -168,6 +169,7 @@ class SubCliServe:
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(
             pt_group)
+        quant_policy = ArgumentHelper.quant_policy(pt_group)
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
@@ -179,8 +181,8 @@ class SubCliServe:
         tb_group._group_actions.append(cache_block_seq_len_act)
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(max_prefill_token_num_act)
+        tb_group._group_actions.append(quant_policy)
         ArgumentHelper.model_format(tb_group)
-        ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
@@ -258,6 +260,7 @@ class SubCliServe:
                 session_len=args.session_len,
                 enable_prefix_caching=args.enable_prefix_caching,
                 device_type=args.device,
+                quant_policy=args.quant_policy,
                 max_prefill_token_num=args.max_prefill_token_num)
         else:
             backend_config = TurbomindEngineConfig(
@@ -307,6 +310,7 @@ class SubCliServe:
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
                 device_type=args.device,
+                quant_policy=args.quant_policy,
                 max_prefill_token_num=args.max_prefill_token_num)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
@@ -342,7 +346,8 @@ class SubCliServe:
                        api_keys=args.api_keys,
                        ssl=args.ssl,
                        proxy_url=args.proxy_url,
-                       max_log_len=args.max_log_len)
+                       max_log_len=args.max_log_len,
+                       disable_fastapi_docs=args.disable_fastapi_docs)
 
     @staticmethod
     def api_client(args):
