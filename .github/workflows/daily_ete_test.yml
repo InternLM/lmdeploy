@@ -316,7 +316,7 @@ jobs:
   test_restful:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, linux-a100]
-    needs: test_tools
+    needs: test_quantization
     strategy:
       fail-fast: false
       matrix:
@@ -413,7 +413,7 @@ jobs:
   test_pipeline:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
     runs-on: [self-hosted, linux-a100]
-    needs: test_tools
+    needs: test_quantization
     timeout-minutes: 120
     container:
       image: openmmlab/lmdeploy:latest-cu11
@@ -475,7 +475,7 @@ jobs:
   test_benchmark:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     runs-on: [self-hosted, linux-a100]
-    needs: test_tools
+    needs: test_quantization
     timeout-minutes: 120
     container:
       image: openmmlab/lmdeploy:latest-cu11
@@ -531,7 +531,7 @@ jobs:
   test_evaluation:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
     runs-on: [self-hosted, linux-a100]
-    needs: test_tools
+    needs: test_quantization
     timeout-minutes: 120 # 5hours
     container:
       image: openmmlab/lmdeploy:latest-cu11
