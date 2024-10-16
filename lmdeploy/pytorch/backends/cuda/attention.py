@@ -77,14 +77,17 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
 
         block_offsets = attn_metadata.block_offsets
         q_start_loc = attn_metadata.q_start_loc
+        fill_q_start_loc = q_start_loc
         q_seqlens = attn_metadata.q_seqlens
         fill_seqlens = q_seqlens
         kv_seqlens = attn_metadata.kv_seqlens
         quant_policy = attn_metadata.quant_policy
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+        fill_max_q_seqlen = max_q_seqlen
         if attn_metadata.fill_seqlens is not None:
             fill_seqlens = attn_metadata.fill_seqlens
-            max_q_seqlen = fill_seqlens.sum()
+            fill_max_q_seqlen = key.numel() // (key.size(-1) * key.size(-2))
+            fill_q_start_loc = fill_seqlens.cumsum(0) - fill_seqlens
 
         # fill kv cache
         if key is not None and value is not None:
@@ -93,10 +96,10 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 value,
                 k_cache,
                 v_cache,
-                q_start_loc,
+                fill_q_start_loc,
                 fill_seqlens,
                 kv_seq_length=kv_seqlens,
-                max_q_seq_length=max_q_seqlen,
+                max_q_seq_length=fill_max_q_seqlen,
                 block_offsets=block_offsets,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,

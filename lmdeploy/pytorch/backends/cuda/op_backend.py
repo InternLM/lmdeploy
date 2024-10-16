@@ -114,8 +114,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
 
         cross_attn_metadata = None
-        fill_seqlens = torch.zeros_like(q_seqlens)
+        fill_seqlens = None
         if step_context.cross_attention_states is not None:
+            fill_seqlens = torch.zeros_like(q_seqlens)
             for idx, state in enumerate(step_context.cross_attention_states):
                 if state is not None:
                     fill_seqlens[idx] = state.shape[-2]

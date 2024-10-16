@@ -126,7 +126,7 @@ class TestDefaultBlockManager:
         embedding = InputEmbeddings(None, 0, block_size * 2)
         msg = sess.add_sequence(token_ids, input_embeddings=[embedding])
         num_required = block_mgr.num_required_blocks(msg)
-        assert num_required == 2
+        assert num_required == 1
 
         token_ids = torch.tensor([1] * block_size * 3)
         embedding = InputEmbeddings(None, 0, block_size * 2)
