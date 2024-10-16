@@ -17,7 +17,7 @@ logger = get_logger('lmdeploy')
 TRITON_VERSION = version.parse(triton.__version__)
 VERSION_300 = version.parse('3.0.0')
 
-assert TRITON_VERSION >= version.parse('2.1.0')
+assert TRITON_VERSION >= version.parse('2.2.0')
 
 # TODO: fast op might not work on non-nv device
 if TRITON_VERSION >= VERSION_300:
@@ -656,7 +656,7 @@ def _fwd_kernel(
     stride_oh: tl.constexpr,
     stride_od: tl.constexpr,
     stride_boffb,
-    kv_group_num: tl.constexpr,
+    kv_group_num,
     window_size: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
@@ -886,7 +886,7 @@ def _fwd_kernel_quant(
     stride_oh: tl.constexpr,
     stride_od: tl.constexpr,
     stride_boffb,
-    kv_group_num: tl.constexpr,
+    kv_group_num,
     window_size: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,

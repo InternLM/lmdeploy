@@ -93,15 +93,13 @@ def check_env_triton(device: str):
 
     if device == 'cuda':
         device_cap = torch.cuda.get_device_capability()
-        TRITON_VER_220 = version.parse('2.2.0')
         TRITON_VER_231 = version.parse('2.3.1')
 
         if device_cap[0] <= 7:
-            if (triton_version >= TRITON_VER_220
-                    and triton_version <= TRITON_VER_231):
+            if triton_version <= TRITON_VER_231:
                 err = RuntimeError(
                     'Attention triton kernel does not fully support '
-                    'triton[2.2.0~2.3.1] on device with capability<8. '
+                    'triton<3.0.0 on device with capability<8. '
                     'Please upgrade your triton version.')
                 _handle_exception(err, 'Triton', logger)
 
