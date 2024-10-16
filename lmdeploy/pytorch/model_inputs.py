@@ -121,6 +121,7 @@ class ModelInputs:
     vision_inputs: VisionModelInputs = None
     mrope_inputs: MRopeModelInputs = None
     cross_attention_states: torch.Tensor = None
+    history_cross_kv_seqlens: torch.LongTensor = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -165,6 +166,7 @@ class ModelInputs:
                 local_adapter_ids=self.local_adapter_ids,
                 vision_inputs=self.vision_inputs,
                 mrope_inputs=self.mrope_inputs,
+                cross_attention_states=self.cross_attention_states,
             )
             ret.append(inp)
             block_start += num_blocks
@@ -213,6 +215,7 @@ class StepContext:
     attn_metadata: Any = None
     cross_attn_metadata: Any = None
     cross_attention_states: torch.Tensor = None
+    cross_kv_seqlens: torch.LongTensor = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -247,9 +250,11 @@ class StepContext:
                 history_seqlens, q_seqlens)
 
         # kv_seqlens
+        cross_attention_states = inputs.cross_attention_states
         if inputs.is_decoding:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
             position_ids = history_seqlens.unsqueeze(-1)
+            cross_attention_states = None
         else:
             max_q_seqlen = q_seqlens.max().item()
             mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
@@ -280,7 +285,8 @@ class StepContext:
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             mrope_position_ids=mrope_position_ids,
-            cross_attention_states=inputs.cross_attention_states,
+            cross_attention_states=cross_attention_states,
+            cross_kv_seqlens=inputs.history_cross_kv_seqlens,
         )
 
         ret = get_backend().update_step_context(ret)

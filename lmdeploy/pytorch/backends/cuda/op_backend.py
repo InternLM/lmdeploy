@@ -113,24 +113,19 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
 
         cross_attn_metadata = None
-        if any([
-                state is not None
-                for state in step_context.cross_attention_states
-        ]):
-            # currently, llama3.2-vl models
-            # can't handle different rounds of images
-            kv_seqlens = torch.tensor([
-                state.shape[-2]
-                for state in step_context.cross_attention_states
-            ]).to(q_start_loc.device)
-            cross_attn_metadata = attn_meta_cls(
-                step_context.is_decoding,
-                step_context.block_offsets,
-                q_start_loc=q_start_loc,
-                q_seqlens=q_seqlens,
-                kv_seqlens=kv_seqlens,
-                fill_seqlens=kv_seqlens,
-            )
+        fill_seqlens = torch.zeros_like(q_seqlens)
+        if step_context.cross_attention_states is not None:
+            for idx, state in enumerate(step_context.cross_attention_states):
+                if state is not None:
+                    fill_seqlens[idx] = state.shape[-2]
+        cross_attn_metadata = attn_meta_cls(
+            step_context.is_decoding,
+            step_context.block_offsets,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seqlens,
+            kv_seqlens=step_context.cross_kv_seqlens,
+            fill_seqlens=fill_seqlens,
+        )
 
         step_context.attn_metadata = attn_metadata
         step_context.cross_attn_metadata = cross_attn_metadata

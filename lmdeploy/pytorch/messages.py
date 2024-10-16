@@ -385,6 +385,7 @@ class SchedulerSequence:
     mrope_position_ids: Optional[Tensor] = None
     mrope_position_delta: Optional[int] = None
     cross_attention_states: Optional[Tensor] = None
+    history_cross_kv_seqlens: Optional[int] = None
 
     def __post_init__(self):
         """post init."""
@@ -488,17 +489,22 @@ class SchedulerSequence:
 
     def num_all_cross_tokens(self):
         """num of all cross tokens."""
-        if self.cross_attention_states is None:
-            return 0
-        return sum([
-            state.shape[-2] for state in self.cross_attention_states
-            if state is not None
-        ])
+        if self.history_cross_kv_seqlens is None:
+            if self.cross_attention_states is None:
+                self.history_cross_kv_seqlens = 0
+            else:
+                self.history_cross_kv_seqlens = self.cross_attention_states.shape[  # noqa
+                    -2]
+        return self.history_cross_kv_seqlens
 
     def update_token_ids(self,
                          token_ids: Tensor,
-                         embeddings: List[InputEmbeddings] = None):
+                         embeddings: List[InputEmbeddings] = None,
+                         cross_attention_states: List[Tensor] = None):
         """Update token ids, old token ids will be added to history."""
+        # cross attention
+        if cross_attention_states is not None:
+            self.history_cross_kv_seqlens += cross_attention_states.shape[-2]
         self._num_history_ids += self._num_token_ids
         # update history image nums
         self._num_history_images += self._num_images
