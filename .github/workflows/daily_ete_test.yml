@@ -208,9 +208,12 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend) || fromJSON('["turbomind", "pytorch", "turbomind_vl"]')}}
         model: ${{ fromJSON(inputs.model) || fromJSON('["pipeline","restful","chat"]')}}
+        exclude:
+          - backend: turbomind_vl
+            model: chat
         include:
           - backend: turbomind
-          - model: lcoal_case
+            model: local_case
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
