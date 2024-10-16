@@ -14,6 +14,7 @@ logger = get_logger('lmdeploy')
 class AscendOpsBackend(DlinferOpsBackend):
     """ascend layer backend."""
     eager_mode = True
+    half_negative_inf = torch.finfo(torch.float16).min
 
     @staticmethod
     def get_name() -> str:
@@ -99,41 +100,25 @@ class AscendOpsBackend(DlinferOpsBackend):
         if not cls.eager_mode:
             kv_start_indices = kv_start_indices.flatten().to(torch.int32)
             import torch._dynamo as dynamo
-            step_context.block_offsets = step_context.block_offsets.to(torch.int32).contiguous()
-            dynamo.mark_dynamic(step_context.block_offsets, [0, 1])
-            if not step_context.is_decoding and is_unpaged_prefill:
-                attention_mask = [mask.half() for mask in attention_mask]
-            kv_seqlens = step_context.kv_seqlens.to(torch.int32)
-        else:
-            kv_seqlens = step_context.kv_seqlens.cpu()
-
-
-        if step_context.is_decoding:
-            # prepare somae params of paged_decode attention stage.
-            q_start_loc_cpu, q_seqlens_cpu = None, None
-            kv_seqlens_cpu = step_context.kv_seqlens.cpu()
-        elif is_unpaged_prefill:
-            # prepare somae params of unpaged_prefill attention stage.
-            q_start_loc_cpu, kv_seqlens_cpu = None, None
-            q_seqlens_cpu = step_context.q_seqlens.cpu()
-            single_attention_mask = torch.logical_not(
-                torch.tril(
-                    torch.ones(max_q_seq_len, max_kv_seq_len,
-                               dtype=torch.bool).cuda(),
-                    diagonal=max_kv_seq_len - max_q_seq_len,
-                ))
-            attention_mask.append(single_attention_mask)
-        else:
-            # prepare somae params of paged_prefill attention stage.
-            q_start_loc_cpu, q_seqlens_cpu = None, None
-            kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(
-                step_context.q_seqlens, 0).cpu()
             block_offsets_int32 = step_context.block_offsets.to(torch.int32)
             step_context.block_offsets = block_offsets_int32.repeat_interleave(
                 step_context.q_seqlens, 0)
-            attention_mask = [
-                torch.cat([mask for mask in attention_mask]).unsqueeze(1)
-            ]
+            dynamo.mark_dynamic(step_context.block_offsets, [0, 1])
+            kv_seqlens = step_context.kv_seqlens.to(torch.int32)
+            if not step_context.is_decoding:
+                if is_unpaged_prefill:
+                    attention_mask = [mask.half() for mask in attention_mask]
+                else:
+                    attention_mask = [
+                        torch.cat([
+                            mask.half() * cls.half_negative_inf
+                            for mask in attention_mask
+                        ]).unsqueeze(1)
+                    ]
+                    kv_seqlens = kv_seqlens.repeat_interleave(
+                        step_context.q_seqlens, 0)
+        else:
+            kv_seqlens = step_context.kv_seqlens.cpu()
 
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
