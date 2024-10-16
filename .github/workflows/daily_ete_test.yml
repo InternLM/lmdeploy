@@ -46,6 +46,7 @@ env:
   FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
+  OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/lmdeploy
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
 
 jobs:
@@ -124,7 +125,7 @@ jobs:
     needs: download_pkgs
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 450
+    timeout-minutes: 120
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
@@ -153,7 +154,7 @@ jobs:
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_CODE_PATH}}/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
@@ -203,7 +204,7 @@ jobs:
     needs: test_quantization
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 450
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -240,7 +241,7 @@ jobs:
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
@@ -320,7 +321,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ['turbomind', 'pytorch']
-    timeout-minutes: 300
+    timeout-minutes: 60
     container:
       image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -340,7 +341,7 @@ jobs:
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_CODE_PATH}}/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
@@ -413,7 +414,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
-    timeout-minutes: 300
+    timeout-minutes: 120
     container:
       image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -433,7 +434,7 @@ jobs:
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_CODE_PATH}}/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
@@ -475,7 +476,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
-    timeout-minutes: 300
+    timeout-minutes: 120
     container:
       image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -495,7 +496,7 @@ jobs:
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_CODE_PATH}}/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
@@ -531,7 +532,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
-    timeout-minutes: 300 # 5hours
+    timeout-minutes: 120 # 5hours
     container:
       image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -556,7 +557,7 @@ jobs:
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_CODE_PATH}}/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
