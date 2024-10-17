@@ -560,6 +560,12 @@ jobs:
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
+      - name: Install opencompass
+        run: |
+          git clone --depth=1 https://github.com/open-compass/opencompass.git
+          cd opencompass
+          python3 -m pip install -e .
+          echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
