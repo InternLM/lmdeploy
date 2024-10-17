@@ -95,8 +95,19 @@ class ImageEncoder:
         torch.cuda.empty_cache()
         self._que: asyncio.Queue = None
         self._loop_task: asyncio.Task = None
+        self._stop = False
         if vision_config.thread_safe:
             self._create_thread_safe_task()
+
+    def close(self):
+        if self.model is not None:
+            self._stop = True
+            if self.vision_config.thread_safe:
+                self._loop_thread.join()
+            else:
+                if hasattr(self, '_loop'):
+                    self._loop.run_until_complete(self._loop_task)
+            self.model = None
 
     def _create_thread_safe_task(self):
         """thread safe loop task."""
@@ -138,6 +149,8 @@ class ImageEncoder:
             while record.total == 0 or (self._que.qsize() and
                                         record.total < self.max_batch_size):
                 while self._que.qsize() == 0:
+                    if self._stop and record.total == 0:
+                        return
                     await asyncio.sleep(0.01)
                 item = await self._que.get()
                 record.enqueue(item[0], item[1], item[2])

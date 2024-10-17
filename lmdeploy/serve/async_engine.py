@@ -186,6 +186,23 @@ class AsyncEngine(LogitsMixin):
         self._session_id = count(0)
         self.request_logger = RequestLogger(max_log_len)
 
+    def close(self):
+        self.gens_set.clear()
+        if self.engine is not None:
+            if isinstance(self.backend_config, PytorchEngineConfig):
+                self.engine.close()
+            self.engine = None
+            import gc
+            gc.collect()
+            import torch
+            torch.cuda.empty_cache()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        self.close()
+
     def _build_turbomind(
             self,
             model_path: str,

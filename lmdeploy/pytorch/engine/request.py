@@ -377,6 +377,23 @@ class RequestManager:
         if thread_safe:
             self.thread_requests = Queue()
 
+    def close(self):
+        if not self._thread_safe:
+            if self._loop_task is not None:
+                _run_until_complete(self._loop_task)
+        else:
+            loop = self.event_loop
+            tasks = asyncio.all_tasks(loop=loop)
+
+            async def cancel_tasks():
+                for task in tasks:
+                    task.cancel()
+
+            f = asyncio.run_coroutine_threadsafe(cancel_tasks(), loop=loop)
+            f.result()
+            loop.call_soon_threadsafe(loop.stop)
+            self._loop_thread.join()
+
     def create_loop_task(self):
         """create coro task."""
         logger.debug('creating engine loop task.')
