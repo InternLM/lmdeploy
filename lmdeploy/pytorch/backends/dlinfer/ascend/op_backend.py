@@ -92,6 +92,15 @@ class AscendOpsBackend(DlinferOpsBackend):
             slot_indices = [p for p in range(history_length, kv_seq_len)]
             slots = slot_tables[slot_indices].reshape((-1, 1))
             kv_start_indices.append(slots)
+        if not (step_context.is_decoding or is_unpaged_prefill):
+            block_offsets_int32 = step_context.block_offsets.to(torch.int32)
+            step_context.block_offsets = block_offsets_int32.repeat_interleave(
+                step_context.q_seqlens, 0)
+            attention_mask = [
+                torch.cat([mask for mask in attention_mask]).unsqueeze(1)
+            ]
+            kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(
+                step_context.q_seqlens, 0).cpu()
         kv_start_indices = torch.cat(kv_start_indices)
 
         attn_meta_cls = cls.get_attention_metadata_cls()
