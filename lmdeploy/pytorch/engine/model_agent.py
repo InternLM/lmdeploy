@@ -2,6 +2,7 @@
 import asyncio
 import atexit
 import os
+import threading
 from datetime import timedelta
 from typing import Any, Callable, Dict, List
 
@@ -415,6 +416,7 @@ def _tp_model_loop(
     backend_config: BackendConfig,
     adapters: Dict[str, str],
     world_size: int,
+    barrier: mp.Barrier,
 ):
     """Start model loops for tensor parallel model inference.
 
@@ -438,6 +440,7 @@ def _tp_model_loop(
                                                      world_size=world_size)
 
     while True:
+        barrier.wait()
         inputs, swap_in_map, swap_out_map, exit_flag = _broadcast_inputs(
             rank, None, stream)
 
@@ -499,14 +502,16 @@ def _check_context_alive(mp_context: mp.ProcessContext):
     """check context alive."""
     procs: List[mp.Process] = mp_context.processes
     failed_ranks = list(idx for idx, p in enumerate(procs) if not p.is_alive())
-    if len(failed_ranks) > 0:
-        for p in procs:
-            if p.is_alive():
-                p.terminate()
-            else:
-                p.close()
-        logger.error(f'TP process Rank{failed_ranks} failed.')
-        exit(1)
+    if len(failed_ranks) == 0:
+        return
+    for p in procs:
+        if p.is_alive():
+            p.terminate()
+        else:
+            p.close()
+    logger.error(f'TP process {failed_ranks} failed.')
+    # TODO: not safe exit.
+    os._exit(1)
 
 
 def _find_available_port() -> bool:
@@ -561,13 +566,14 @@ class TPModelAgent(AutoModelAgent):
         self.world_size = world_size
         self.backend_config = backend_config
 
+        self.mp_bar = self.mp_ctx.Barrier(world_size)
         self._start_sub_process(model_path,
                                 model_config=model_config,
                                 cache_config=cache_config,
                                 backend_config=backend_config,
                                 adapters=adapters,
                                 world_size=world_size,
-                                trust_remote_code=trust_remote_code)
+                                barrier=self.mp_bar)
 
         model, cache_engine, cache_config = self._build_model(
             model_path=model_path,
@@ -575,18 +581,29 @@ class TPModelAgent(AutoModelAgent):
             cache_config=cache_config,
             backend_config=backend_config,
             adapters=adapters,
-            world_size=world_size,
-        )
+            world_size=world_size)
         self.patched_model = model
         self.cache_config = cache_config
         self.cache_engine = cache_engine
         self.stream = torch.cuda.Stream()
 
+    def _mp_watchdog(self, mp_context: mp.ProcessContext, timeout: int = 1):
+        """watch dog of mp context.
+
+        Args:
+            mp_context: context of multiprocess.
+            timeout: timeout
+        """
+        import time
+        while True:
+            _check_context_alive(mp_context)
+            time.sleep(timeout)
+
     def _start_sub_process(self, model_path: str, model_config: ModelConfig,
                            cache_config: CacheConfig,
                            backend_config: BackendConfig, adapters: Dict[str,
                                                                          str],
-                           world_size: int, trust_remote_code: bool):
+                           world_size: int, barrier: mp.Barrier):
         """Start tensor parallel sub process."""
         port = _find_available_port()
         os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
@@ -603,17 +620,24 @@ class TPModelAgent(AutoModelAgent):
                 _tp_model_loop,
                 device_context,
                 (model_path, ),
-                dict(model_config=model_config,
-                     cache_config=cache_config,
-                     backend_config=backend_config,
-                     adapters=adapters,
-                     world_size=world_size),
+                dict(
+                    model_config=model_config,
+                    cache_config=cache_config,
+                    backend_config=backend_config,
+                    adapters=adapters,
+                    world_size=world_size,
+                    barrier=barrier,
+                ),
             ),
             nprocs=world_size - 1,
             join=False,
             daemon=True,
         )
-        _check_context_alive(self.mp_context)
+
+        t_watchdog = threading.Thread(target=self._mp_watchdog,
+                                      args=[self.mp_context, 1.0],
+                                      daemon=True)
+        t_watchdog.start()
 
         rank = 0
         try:
@@ -642,7 +666,6 @@ class TPModelAgent(AutoModelAgent):
         world_size: int,
     ):
         """build model."""
-        _check_context_alive(self.mp_context)
         rank = 0
         model, cache_engine, cache_config = _tp_build_model(
             rank,
@@ -664,7 +687,7 @@ class TPModelAgent(AutoModelAgent):
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
         """forward impl."""
-        _check_context_alive(self.mp_context)
+        self.mp_bar.wait()
         rank = 0
         exit_flag = False
         _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map, exit_flag],
