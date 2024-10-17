@@ -341,6 +341,8 @@ class Engine:
                     input_embeddings=req.data.get('input_embeddings'),
                     mrope_position_ids=req.data.get('mrope_position_ids'),
                     mrope_position_delta=req.data.get('mrope_position_delta'),
+                    cross_attention_states=req.data.get(
+                        'cross_attention_states'),
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_bad_words(msg)
@@ -349,7 +351,8 @@ class Engine:
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(req.data['token_ids'],
-                                     req.data.get('input_embeddings'))
+                                     req.data.get('input_embeddings'),
+                                     req.data.get('cross_attention_states'))
                 msg.num_new_tokens = 0
                 msg.sampling_param = req.data['sampling_param']
                 msg.return_logits = req.data.get('return_logits', False)
@@ -483,6 +486,16 @@ class Engine:
                 input_embedding_indexing=input_embedding_indexing,
                 input_embedding_ranges=input_embedding_ranges)
 
+        # only for mllama
+        cross_attention_states = None
+        history_cross_kv_seqlens = None
+        if any([msg.cross_attention_states is not None for msg in messages]):
+            cross_attention_states = [
+                msg.cross_attention_states for msg in messages
+            ]
+        history_cross_kv_seqlens = torch.tensor(
+            [msg.history_cross_kv_seqlens for msg in messages])
+
         return ModelInputs(
             input_ids=input_ids,
             seq_length=seq_length,
@@ -493,6 +506,8 @@ class Engine:
             local_adapter_ids=local_adapter_ids,
             vision_inputs=vision_embedding_inputs,
             mrope_inputs=mrope_inputs,
+            cross_attention_states=cross_attention_states,
+            history_cross_kv_seqlens=history_cross_kv_seqlens,
         )
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,

@@ -250,11 +250,6 @@ class BaseBlockManager:
         """get num required blocks."""
         raise NotImplementedError('Not implemented.')
 
-    @classmethod
-    def last_block_size(cls, seq: SchedulerSequence) -> int:
-        """get last block size."""
-        raise NotImplementedError('Not implemented.')
-
     def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return if physical block can be allocated for given message."""
         raise NotImplementedError('Not implemented.')

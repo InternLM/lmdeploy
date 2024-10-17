@@ -165,4 +165,10 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.minicpm3.MiniCPM3ForCausalLM',
 })
 
+# mllama
+MODULE_MAP.update({
+    'MllamaForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mllama.MllamaForConditionalGeneration',
+})
+
 CUSTOM_MODULE_MAP = dict()

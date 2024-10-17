@@ -352,6 +352,14 @@ class MiniGeminiLlamaTempateWrapper(VLChatTemplateWrapper):
         return res
 
 
+class MllamaTempateWrapper(VLChatTemplateWrapper):
+    """Mllama chat template."""
+
+    def append_image_token(self, prompt, num_images: int):
+        """append image tokens to user prompt."""
+        return f'{IMAGE_TOKEN * num_images}{prompt}'
+
+
 class MiniCPMVTempateWrapper(VLChatTemplateWrapper):
     """MiniCPM-Llama3-V-2_5 chat template."""
 
@@ -438,6 +446,8 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return LlavaVLChatTemplateWrapper(chat_template)
     elif arch == 'MultiModalityCausalLM':  # deepseek-vl
         return DeepSeekVLChatTemplateWrapper(chat_template)
+    elif arch == 'MllamaForConditionalGeneration':  # llama 3.2
+        return MllamaTempateWrapper(chat_template)
     elif arch == 'CogVLMForCausalLM':
         return CogVLMChatTemplateWrapper(chat_template)
     elif arch in ['InternLMXComposer2ForCausalLM', 'InternLM2ForCausalLM']:
