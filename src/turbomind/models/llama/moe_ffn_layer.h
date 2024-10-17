@@ -27,15 +27,19 @@ public:
         allocator_(ctx.allocator.get())
     {
         model.inter_size = param.inter_size;
-        expert_ffn_      = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
+
+        if (param_.method == MoeParam::kFused) {
+            context_ = std::make_unique<gemm::MoeGemmContext>(
+                param.expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
+        }
+        else {
+            expert_ffn_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx, false);
+        }
 
         h_offsets_ = (int*)allocator_->malloc(sizeof(int) * (param_.expert_num + 1), false, true);
 
         offsets_ = (int*)allocator_->malloc(sizeof(int) * (param_.expert_num + 1));
         accum_   = (int*)allocator_->malloc(sizeof(int) * param_.expert_num * kMoeGateMaxTiles);
-
-        context_ = std::make_unique<gemm::MoeGemmContext>(
-            param.expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
     }
 
     void AllocateBuffer(size_t tokens, size_t padded);

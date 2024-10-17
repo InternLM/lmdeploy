@@ -31,13 +31,14 @@ namespace turbomind {
 template<typename T>
 class LlamaFfnLayer {
 public:
-    LlamaFfnLayer(const ModelParam& model, const NcclParam& tp, const Context<T>& ctx):
+    LlamaFfnLayer(const ModelParam& model, const NcclParam& tp, const Context<T>& ctx, bool all_reduce):
         inter_size_(model.inter_size / tp.world_size_),
         hidden_units_(model.hidden_units),
         tensor_para_(tp),
         stream_(ctx.stream),
         linear_(ctx.linear.get()),
-        allocator_(ctx.allocator.get())
+        allocator_(ctx.allocator.get()),
+        all_reduce_(all_reduce)
     {
     }
 
@@ -61,6 +62,7 @@ private:
     cudaStream_t const    stream_;
     LlamaLinear<T>* const linear_;
     IAllocator* const     allocator_;
+    const bool            all_reduce_;
     bool                  is_free_buffer_after_forward_{};
 
     T* gating_buf_{};

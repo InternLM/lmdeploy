@@ -1,17 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-import os
+import re
 import os.path as osp
-from glob import glob
 
 import torch
-from safetensors.torch import load_file
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.tokenizer import Tokenizer
 
-from .base import INPUT_MODELS, BaseInputModel, BaseReader, create_loader
-
+from .base import INPUT_MODELS, BaseInputModel, BaseReader
+from ..loader import create_loader
 
 class LlamaReader(BaseReader):
     """LlamaReader."""
@@ -21,6 +19,9 @@ class LlamaReader(BaseReader):
     tok_embeddings_key = 'model.embed_tokens.weight'
     norm_weight_key = 'model.norm.weight'
     output_weight_key = 'lm_head.weight'
+
+    attn_pattern = r'self_attn.\w+.(\w+)'
+    ffn_pattern = r'mlp.\w+.(\w+)'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict, policy):
@@ -33,25 +34,14 @@ class LlamaReader(BaseReader):
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
         self.weight_suffix, self.processor = policy
-        # self.init_layer_id()
 
-    # def init_layer_id(self):
-    #     """Get start/end transformer layer id."""
-    #     super().init_layer_id()
-
-    # def clean_up(self, last: bool) -> None:
-    #     """Clean up unused params."""
-    #     super().clean_up(last)
-
-    # @property
-    # def start_layer_id(self):
-    #     """Get start transformer layer id."""
-    #     return self._start_layer_id
-
-    # @property
-    # def end_layer_id(self):
-    #     """Get end transformer layer id."""
-    #     return self._end_layer_id
+    def get_kinds(self, pattern: str):
+        res = set()
+        for k in self.params.keys():
+            match = re.findall(pattern, k)
+            if match:
+                res.add(match[-1])
+        return res
 
     def tok_embeddings(self):
         """Get embeddings."""
@@ -77,22 +67,11 @@ class LlamaReader(BaseReader):
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-
-    def attn(self, i: int):
-        """Get q, k, v, o weight for layer i."""
-        return self._attn(i, self.weight_suffix)
-
-    def attn_bias(self, i: int):
-        """Get q, k, v, o bias for layer i."""
-        return self._attn(i, 'bias')
-
-    def attn_zero(self, i: int):
-        """Get q, k, v, o zero point for layer i."""
-        return self._attn(i, 'qzeros')
-
-    def attn_scale(self, i: int):
-        """Get q, k, v, o scale for layer i."""
-        return self._attn(i, 'scales')
+    
+    def attn(self, i: int, kind: str):
+        if not kind:
+            return self.get_kinds(self.attn_pattern)
+        return self._attn(i, kind)
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
@@ -101,6 +80,8 @@ class LlamaReader(BaseReader):
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
+        if not kind:
+            return self.get_kinds(self.ffn_pattern)
         result = []
         for key in ['gate', 'down', 'up']:
             tensor = self.params[
@@ -108,18 +89,11 @@ class LlamaReader(BaseReader):
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-
-    def ffn(self, i: int):
-        """Get ffn weight for layer i."""
-        return self._ffn(i, self.weight_suffix)
-
-    def ffn_zero(self, i: int):
-        """Get ffn zero point for layer i."""
-        return self._ffn(i, 'qzeros')
-
-    def ffn_scale(self, i: int):
-        """Get ffn scale for layer i."""
-        return self._ffn(i, 'scales')
+    
+    def ffn(self, i: int, kind: str):
+        if not kind:
+            return self.get_kinds(self.ffn_pattern)
+        return self._ffn(i, kind)
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
@@ -135,52 +109,15 @@ class LlamaModel(BaseInputModel):
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
-        # ckpt_path = kwargs.get('ckpt_path')
         self.policy = kwargs.get('input_policy')
-        # if ckpt_path is None:
-        #     ckpt_path = model_path
-        # self.ckpt_path = ckpt_path
-        # self.ckpt_files = self.get_ckpt()
         _, self.model_config = get_model_arch(model_path)
         self.model_config = self.model_config.to_dict()
-
-    # def get_ckpt(self):
-    #     """Get weight files."""
-    #     patterns = ['*.safetensors', 'pytorch_model*.bin']
-    #     files = []
-    #     for pattern in patterns:
-    #         files = glob(os.path.join(self.ckpt_path, pattern))
-    #         files = [os.path.basename(file) for file in files]
-    #         if len(files) > 0:
-    #             break
-    #     files = sorted(files)
-    #     return files
-
-    # @property
-    # def nmgrs(self):
-    #     """Get number of checkpoint."""
-    #     return len(self.ckpt_files)
 
     def readers(self):
         loader = create_loader(self.model_path, self.Reader.attn_layer_patten)
         for i, param in loader.items():
             reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
             yield i, reader
-
-        # async version with a prefetching thread
-        # it = loader.items()
-        # with ThreadPoolExecutor(1) as pool:
-        #     prefetch = pool.submit(next, it, None)
-        #     while True:
-        #         data = prefetch.result()
-        #         prefetch = pool.submit(next, it, None)
-        #         if data:
-        #             i, param = data
-        #             reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
-        #             yield i, reader
-        #         else:
-        #             break
-        #     prefetch.result()
         
     def tokenizer_info(self):
         """Read tokenizer info."""

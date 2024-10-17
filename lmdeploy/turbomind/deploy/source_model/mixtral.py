@@ -5,18 +5,16 @@ from .llama import LlamaReader, LlamaModel
 
 class MixtralReader(LlamaReader):
 
-    def moe_ffn_expert(self, e, i):
+    def moe_ffn_expert(self, e=None, i=None, kind=None):
+        if not kind:
+            return self.get_kinds(r'experts.\d+.\w+.(\w+)')
         result = []
-        for k in ['w1', 'w2', 'w3']:
-            name = f'model.layers.{i}.block_sparse_moe.experts.{e}.{k}.weight'
+        for x in ['w1', 'w2', 'w3']:
+            name = f'model.layers.{i}.block_sparse_moe.experts.{e}.{x}.{kind}'
             tensor = self.params.get(name)
-            tensor = self.transform(tensor, 'weight')
+            tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-    
-    # This is only used to obtain `inter_size` in model config
-    def ffn(self, i):
-        return self.moe_ffn_expert(0, i)
         
     def moe_ffn_gate(self, i):
         return self.params.get(

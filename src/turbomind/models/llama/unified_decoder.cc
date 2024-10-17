@@ -27,7 +27,7 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
 {
 
     attn_layer_    = std::make_unique<UnifiedAttentionLayer<T>>(model, attn, lora, tp, ctx);
-    ffn_layer_     = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
+    ffn_layer_     = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx, true);
     moe_ffn_layer_ = std::make_unique<MoeFfnLayer<T>>(model, moe, tp, ctx);
 
     check_cuda_error(cudaEventCreateWithFlags(&ev_h_cu_x_, cudaEventDisableTiming));

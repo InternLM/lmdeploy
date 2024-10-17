@@ -46,7 +46,7 @@ class TurbomindModelConfig:
     num_layer: int = None
     inter_size: int = None
     norm_eps: float = None
-    attn_bias: int = None
+    attn_bias: int = 0
     start_id: int = None
     end_id: int = None
     session_len: int = None
@@ -175,7 +175,7 @@ class BaseOutputModel(ABC):
         self.cfg = cfg
         if not cfg.valid:
             self.cfg = self.get_config(cfg)
-        assert self.cfg.valid
+        assert self.cfg.valid, self.cfg
         assert self.cfg.kv_head_num % self.cfg.tensor_para_size == 0
         self.out_dir = out_dir
         self.to_file = True if out_dir else False
@@ -185,7 +185,6 @@ class BaseOutputModel(ABC):
         # ! Dependency on `self`
         self.exporters = exporter_factory(self)
 
-    @abstractmethod
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
         """Generate turbomind model config (config.ini)."""
         _, bos_id, eos_id = self.input_model.tokenizer_info()
@@ -193,16 +192,6 @@ class BaseOutputModel(ABC):
         final_cfg = cfg.__dict__
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model.model_info())
-
-        print(final_cfg)
-
-        # vocab_size
-        # for bin in self.input_model.bins():
-        #     emb = bin.tok_embeddings()
-        #     if emb is not None:
-        #         _vocab_size, dim = emb.shape
-        #         break
-        # final_cfg.update(dict(vocab_size=_vocab_size))
         
         return TurbomindModelConfig.from_dict(final_cfg, allow_none=True)
 
@@ -311,10 +300,7 @@ class BaseOutputModel(ABC):
                     leave=self.to_file)
         self.export_config()
         for i, reader in self.input_model.readers():
-            if i < 0:
-                self.export_misc(reader)
-            else:
-                self.export_transformer_block(reader, i)
+            if self.exporters(i, reader):
                 pbar.update(1)
         pbar.close()
         # manually clean up meta reader
@@ -322,35 +308,3 @@ class BaseOutputModel(ABC):
             self.input_model.meta_reader.clean_up(True)
             del self.input_model.meta_reader
             torch.cuda.empty_cache()
-
-    def export_misc(self, bin: BaseReader) -> None:
-        """Export embedding, norm, output weight."""
-        emb = bin.tok_embeddings()
-        norm_weight = bin.norm_weight()
-        output_weight = bin.output_weight()
-
-        def pad_weight(tensor):
-            pad_size = None
-            vocab_size = self.cfg.vocab_size
-            tp = self.cfg.tensor_para_size
-            if vocab_size % tp != 0:
-                pad_size = (vocab_size + tp - 1) // tp * tp - vocab_size
-
-            if pad_size is None:
-                return tensor
-            return torch.nn.functional.pad(tensor, (0, 0, 0, pad_size),
-                                           'constant', 0)
-
-        if emb is not None:
-            emb = pad_weight(emb)
-            self.export_weight(emb, 'tok_embeddings.weight')
-        if norm_weight is not None:
-            self.export_weight(norm_weight, 'norm.weight')
-        if output_weight is not None:
-            output_weight = pad_weight(output_weight)
-            self.export_weight(output_weight, 'output.weight')
-
-    def export_transformer_block(self, bin: BaseReader, i: int) -> None:
-        """Export transformer block."""
-        for e in self.exporters:
-            e.export(bin, i)
