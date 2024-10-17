@@ -3,8 +3,15 @@ import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
+from packaging import version
 
 from .triton_utils import get_kernel_meta
+
+TRITON_VERSION = version.parse(triton.__version__)
+if TRITON_VERSION >= version.parse('3.0.0'):
+    tl_round = tl.extra.cuda.libdevice.round
+else:
+    tl_round = tl.math.round
 
 
 def per_channel_quant(x, n_bits, dtype):
@@ -305,7 +312,7 @@ def _per_token_quant_int8(
     # Quant
     _absmax = tl.maximum(tl.max(tl.abs(y)), eps)
     y_s = _absmax / 127
-    y_q = tl.math.round(y / y_s).to(tl.int8)
+    y_q = tl_round(y / y_s).to(tl.int8)
 
     tl.store(y_q_ptr + cols, y_q, mask=mask)
     tl.store(y_s_ptr, y_s)
@@ -373,7 +380,7 @@ def _rms_norm_fwd_fused_dynamic_symmetric(
     scale = tl.max(tl.abs(y)).to(tl.float32) / 127
     tl.store(Scale + row, scale)
 
-    y = tl.math.round(y / scale)
+    y = tl_round(y / scale)
     y = tl.minimum(y, 127)
     y = tl.maximum(y, -128)
     tl.store(Y + cols, y, mask=mask)

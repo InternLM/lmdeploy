@@ -93,15 +93,13 @@ def check_env_triton(device: str):
 
     if device == 'cuda':
         device_cap = torch.cuda.get_device_capability()
-        TRITON_VER_220 = version.parse('2.2.0')
         TRITON_VER_231 = version.parse('2.3.1')
 
         if device_cap[0] <= 7:
-            if (triton_version >= TRITON_VER_220
-                    and triton_version <= TRITON_VER_231):
+            if triton_version <= TRITON_VER_231:
                 err = RuntimeError(
                     'Attention triton kernel does not fully support '
-                    'triton[2.2.0~2.3.1] on device with capability<8. '
+                    'triton<3.0.0 on device with capability<8. '
                     'Please upgrade your triton version.')
                 _handle_exception(err, 'Triton', logger)
 
@@ -142,7 +140,8 @@ def check_awq(hf_config):
 
 
 def check_transformers_version(model_path: str,
-                               trust_remote_code: bool = True):
+                               trust_remote_code: bool = True,
+                               dtype: str = 'auto'):
     """check transformers version."""
     from packaging import version
     logger = get_logger('lmdeploy')
@@ -206,7 +205,8 @@ def check_transformers_version(model_path: str,
 
         try:
             model_config = ModelConfig.from_hf_config(config,
-                                                      model_path=model_path)
+                                                      model_path=model_path,
+                                                      dtype=dtype)
             if model_config.dtype == torch.bfloat16:
                 assert torch.cuda.is_bf16_supported(), (
                     'bf16 is not supported on your device')
@@ -229,11 +229,13 @@ def check_transformers_version(model_path: str,
     check_awq(config)
 
 
-def check_model(model_path: str, trust_remote_code: bool = True):
+def check_model(model_path: str,
+                trust_remote_code: bool = True,
+                dtype: str = 'auto'):
     """check model requirements."""
     logger = get_logger('lmdeploy')
     logger.info('Checking model.')
-    check_transformers_version(model_path, trust_remote_code)
+    check_transformers_version(model_path, trust_remote_code, dtype)
 
 
 def check_adapter(path: str):
