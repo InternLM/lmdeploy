@@ -1,20 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
-import torch.distributed as dist
+
+from lmdeploy.pytorch.distributed import get_world_rank
 
 from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
-
-
-def get_world_rank():
-    """get current world size and rank."""
-    world_size = 1
-    rank = 0
-
-    if dist.is_initialized():
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-
-    return world_size, rank
 
 
 class TritonAttentionMetadata(AttentionMetadata):
