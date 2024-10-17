@@ -17,4 +17,5 @@ def awq_linear(x: Tensor,
                                        scales,
                                        offset=qzeros,
                                        bias=bias,
+                                       all_reduce=all_reduce,
                                        group_size=group_size).unsqueeze(0)
