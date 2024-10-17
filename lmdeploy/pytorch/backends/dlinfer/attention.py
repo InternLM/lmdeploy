@@ -8,7 +8,7 @@ from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
 
 
 @dataclass
-class AscendAttentionMetadata(AttentionMetadata):
+class DlinferAttentionMetadata(AttentionMetadata):
     kv_start_indices: Optional[Tensor] = None
     block_size: int = 64
     attention_mask: Sequence[Tensor] = tuple()
@@ -17,8 +17,8 @@ class AscendAttentionMetadata(AttentionMetadata):
     max_kv_seq_len: int = 1
 
 
-class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
-    """ascend attention implementation."""
+class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
+    """dlinfer attention implementation."""
 
     def __init__(
         self,
@@ -44,8 +44,8 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
             **kwargs,
         )
 
-        from lmdeploy.pytorch.kernels.ascend import (fill_kv_cache,
-                                                     paged_attention_fwd)
+        from lmdeploy.pytorch.kernels.dlinfer import (fill_kv_cache,
+                                                      paged_attention_fwd)
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = paged_attention_fwd
 
@@ -56,7 +56,7 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
         value: Tensor,
         k_cache: Tensor,
         v_cache: Tensor,
-        attn_metadata: AscendAttentionMetadata,
+        attn_metadata: DlinferAttentionMetadata,
         k_scales_zeros: Tensor = None,
         v_scales_zeros: Tensor = None,
         inplace: bool = True,
@@ -108,8 +108,8 @@ class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
         return attn_output
 
 
-class AscendAttentionBuilder(AttentionBuilder[AscendAttentionMetadata]):
-    """ascend attention builder."""
+class DlinferAttentionBuilder(AttentionBuilder[DlinferAttentionMetadata]):
+    """dlinfer attention builder."""
 
     @staticmethod
     def build(
@@ -122,14 +122,14 @@ class AscendAttentionBuilder(AttentionBuilder[AscendAttentionMetadata]):
         sliding_window: int = None,
         logical_softcapping: float = None,
         **kwargs,
-    ) -> AscendAttentionImpl:
+    ) -> DlinferAttentionImpl:
         """build."""
-        return AscendAttentionImpl(num_heads,
-                                   head_size,
-                                   scale=scale,
-                                   num_kv_heads=num_kv_heads,
-                                   v_head_size=v_head_size,
-                                   alibi_scale=alibi_scale,
-                                   sliding_window=sliding_window,
-                                   logical_softcapping=logical_softcapping,
-                                   **kwargs)
+        return DlinferAttentionImpl(num_heads,
+                                    head_size,
+                                    scale=scale,
+                                    num_kv_heads=num_kv_heads,
+                                    v_head_size=v_head_size,
+                                    alibi_scale=alibi_scale,
+                                    sliding_window=sliding_window,
+                                    logical_softcapping=logical_softcapping,
+                                    **kwargs)

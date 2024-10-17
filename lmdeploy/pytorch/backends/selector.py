@@ -13,7 +13,7 @@ def get_backend():
         from .cuda import CudaOpsBackend
         return CudaOpsBackend
     if device_type == 'ascend':
-        from .ascend import AscendOpsBackend
+        from .dlinfer import AscendOpsBackend
         return AscendOpsBackend
     else:
         raise RuntimeError(f'Unsupported device type: {device_type}')
