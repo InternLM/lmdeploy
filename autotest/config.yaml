@@ -12,6 +12,7 @@ tp_config:
     Qwen-VL-Chat: 2
     llava-v1.5-13b: 2
     internlm2_5-20b-chat: 2
+    internlm2_5-20b: 2
     Meta-Llama-3-1-70B-Instruct: 4
     internlm2_5-7b-chat-1m: 4
     Qwen2-7B-Instruct-GPTQ-Int4: 2

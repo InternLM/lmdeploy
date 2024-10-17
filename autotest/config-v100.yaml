@@ -12,9 +12,11 @@ tp_config:
     Qwen-VL-Chat: 2
     llava-v1.5-13b: 2
     internlm2_5-20b-chat: 2
+    internlm2_5-20b: 2
     Meta-Llama-3-1-70B-Instruct: 4
     internlm2_5-7b-chat-1m: 4
     Qwen2-7B-Instruct-GPTQ-Int4: 2
+    InternVL2-26B: 2
     InternVL2-40B: 2
     MiniCPM-V-2_6: 2
 
@@ -27,10 +29,8 @@ turbomind_chat_model:
     - internlm/internlm2_5-20b-chat
     - internlm/internlm-xcomposer2d5-7b
     - OpenGVLab/InternVL2-2B
-    - OpenGVLab/InternVL2-4B
     - OpenGVLab/InternVL2-8B
     - OpenGVLab/InternVL2-26B
-    - OpenGVLab/InternVL2-40B
     - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
     - Qwen/Qwen2-7B-Instruct
     - Qwen/Qwen2-7B-Instruct-AWQ
@@ -50,7 +50,6 @@ pytorch_chat_model:
     - OpenGVLab/InternVL2-4B
     - OpenGVLab/InternVL2-8B
     - OpenGVLab/InternVL2-26B
-    - OpenGVLab/InternVL2-40B
     - Qwen/Qwen2-7B-Instruct
     - Qwen/Qwen2-1.5B-Instruct
     - Qwen/Qwen1.5-MoE-A2.7B-Chat
@@ -100,8 +99,6 @@ pytorch_quatization:
     awq:
         - internlm/internlm2_5-7b-chat
         - internlm/internlm2_5-20b-chat
-        - internlm/internlm2-chat-20b
-        - Qwen/Qwen1.5-7B-Chat
         - Qwen/Qwen2-7B-Instruct
         - Qwen/Qwen2-1.5B-Instruct
     w8a8:
