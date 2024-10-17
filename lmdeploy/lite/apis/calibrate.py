@@ -136,7 +136,9 @@ def _prepare_for_calibrate(model: nn.Module,
 def make_compatible_internvl_config(model_path):
     """Patch model.config since after transformers v4.45.0, InternVL models
     can't use `save_pretrained`"""
-    if 'internvl' in model_path.lower():
+    from lmdeploy.archs import get_model_arch
+    arch, _ = get_model_arch(model_path)
+    if arch == 'InternVLChatModel':
         import transformers
         from packaging import version
         if version.parse(transformers.__version__) >= version.parse('4.45.0'):
