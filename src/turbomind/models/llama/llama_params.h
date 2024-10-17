@@ -34,6 +34,9 @@ struct AttentionParam {
     float       rope_scaling_factor;
     float       low_freq_factor;
     float       high_freq_factor;
+    float       attention_factor;
+    float       beta_fast;
+    float       beta_slow;
     bool        use_dynamic_ntk;
     bool        use_logn_attn;
     int         cache_block_seq_len;
