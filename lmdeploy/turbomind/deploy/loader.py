@@ -27,6 +27,7 @@ class BaseLoader(ABC):
         self.item_count = defaultdict(int)
     
     def get_index(self, index_path: str, file_pattern: str) -> Tuple[dict, list]:
+        """get shards and weight map (if possible) for the model"""
         index_path = osp.join(self.model_path, index_path)
         if osp.exists(index_path):
             with open(index_path, 'r') as f:
@@ -55,6 +56,7 @@ class SafetensorsLoader(BaseLoader):
             for shard in self.shards:
                     with safe_open(shard, 'pt') as f:
                         index.update({k: shard for k in f.keys()})
+        # count layer-wise parameters
         for k in index.keys():
             match = re.findall(self.pattern, k)
             if match:
