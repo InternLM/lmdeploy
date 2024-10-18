@@ -637,7 +637,7 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin):
         **kwargs,
     ):
         """model forward, return logits."""
-        if cross_attn_metadata is None:
+        if cross_attn_metadata is None or cross_attention_states is None:
             full_text_row_masked_out_mask = None
         elif cross_attn_metadata.is_decoding:
             cross_attention_states = None
