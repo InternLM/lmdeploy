@@ -66,6 +66,16 @@ class CLI(object):
             default=None,
             help='the name of the built-in chat template, which can be '
             'overviewed by `lmdeploy list`')
+        parser.add_argument(
+            '--dtype',
+            type=str,
+            default='auto',
+            choices=['auto', 'float16', 'bfloat16'],
+            help='data type for model weights and activations. '
+            'The "auto" option will use FP16 precision '
+            'for FP32 and FP16 models, and BF16 precision '
+            'for BF16 models. This option will be ignored if '
+            'the model is a quantized model')
         parser.set_defaults(run=CLI.convert)
 
     @staticmethod
@@ -113,20 +123,23 @@ class CLI(object):
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
         # common engine args
+        dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+        quant_policy = ArgumentHelper.quant_policy(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
+        tb_group._group_actions.append(dtype_act)
         tb_group._group_actions.append(tp_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(prefix_caching_act)
+        tb_group._group_actions.append(quant_policy)
         ArgumentHelper.model_format(tb_group)
-        ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
 
     @staticmethod
@@ -245,12 +258,14 @@ class CLI(object):
 
             adapters = get_lora_adapters(args.adapters)
             engine_config = PytorchEngineConfig(
+                dtype=args.dtype,
                 tp=args.tp,
                 session_len=args.session_len,
                 cache_max_entry_count=args.cache_max_entry_count,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
-                device_type=args.device)
+                device_type=args.device,
+                quant_policy=args.quant_policy)
             run_chat(args.model_path,
                      engine_config,
                      chat_template_config=chat_template_config)

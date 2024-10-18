@@ -8,7 +8,7 @@
 [![open issues](https://img.shields.io/github/issues-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
 
 [📘Documentation](https://lmdeploy.readthedocs.io/en/latest/) |
-[🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started.html) |
+[🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started/get_started.html) |
 [🤔Reporting Issues](https://github.com/InternLM/lmdeploy/issues/new/choose)
 
 English | [简体中文](README_zh-CN.md) | [日本語](README_ja.md)
@@ -26,8 +26,10 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/08\] 🔥🔥 LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
-- \[2024/07\] 🎉🎉 Support Llama3.1 8B, 70B and its TOOLS CALLING
+- \[2024/09\] LMDeploy PyTorchEngine adds support for [Huawei Ascend](./docs/en/get_started/ascend/get_started.md). See supported models [here](docs/en/supported_models/supported_models.md)
+- \[2024/09\] LMDeploy PyTorchEngine achieves 1.3x faster on Llama3-8B inference by introducing CUDA graph
+- \[2024/08\] LMDeploy is integrated into [modelscope/swift](https://github.com/modelscope/swift) as the default accelerator for VLMs inference
+- \[2024/07\] Support Llama3.1 8B, 70B and its TOOLS CALLING
 - \[2024/07\] Support [InternVL2](docs/en/multi_modal/internvl.md) full-series models, [InternLM-XComposer2.5](docs/en/multi_modal/xcomposer2d5.md) and [function call](docs/en/llm/api_server_tools.md) of InternLM2.5
 - \[2024/06\] PyTorch engine support DeepSeek-V2 and several VLMs, such as CogVLM2, Mini-InternVL, LlaVA-Next
 - \[2024/05\] Balance vision model when deploying VLMs with multiple GPUs
@@ -138,6 +140,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Phi-3-mini (3.8B)</li>
   <li>Phi-3.5-mini (3.8B)</li>
   <li>Phi-3.5-MoE (16x3.8B)</li>
+  <li>MiniCPM3 (4B)</li>
 </ul>
 </td>
 <td>
@@ -146,6 +149,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>InternLM-XComposer2.5 (7B)</li>
   <li>Qwen-VL (7B)</li>
+  <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
@@ -180,7 +184,7 @@ pip install lmdeploy
 ```
 
 The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
-For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](./docs/en/installation.md).
+For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](docs/en/get_started/installation.md).
 
 ## Offline Batch Inference
 
@@ -195,12 +199,16 @@ print(response)
 > By default, LMDeploy downloads model from HuggingFace. If you would like to use models from ModelScope, please install ModelScope by `pip install modelscope` and set the environment variable:
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
+>
+> If you would like to use models from openMind Hub, please install openMind Hub by `pip install openmind_hub` and set the environment variable:
+>
+> `export LMDEPLOY_USE_OPENMIND_HUB=True`
 
 For more information about inference pipeline, please refer to [here](docs/en/llm/pipeline.md).
 
 # Tutorials
 
-Please review [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
+Please review [getting_started](docs/en/get_started/get_started.md) section for the basic usage of LMDeploy.
 
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 

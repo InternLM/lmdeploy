@@ -1,4 +1,3 @@
-import configparser
 import os
 import tempfile
 
@@ -23,13 +22,12 @@ def test_get_names_from_turbomind_model():
     os.makedirs(os.path.join(workspace, 'triton_models', 'weights'),
                 exist_ok=True)
 
-    expected_chat_template = 'internlm2'
-    config = configparser.ConfigParser()
-    config.add_section('llama')
-    config.set('llama', 'chat_template', expected_chat_template)
+    import yaml
 
-    with open(f'{workspace}/triton_models/weights/config.ini', 'w') as f:
-        config.write(f)
+    expected_chat_template = 'internlm2'
+    config = dict(model_config=dict(chat_template=expected_chat_template))
+    with open(f'{workspace}/triton_models/weights/config.yaml', 'w') as f:
+        yaml.safe_dump(config, f)
 
     _, chat_template = get_names_from_model(workspace)
     assert chat_template == expected_chat_template

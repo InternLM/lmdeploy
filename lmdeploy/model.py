@@ -765,6 +765,9 @@ class Llama3(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
+        # reject InternVL2-Llama3-76B
+        if 'internvl2' in model_path.lower():
+            return None
         if 'llama-3-' in model_path.lower() or 'llama3-' in model_path.lower():
             return 'llama3'
 
@@ -835,10 +838,12 @@ Reminder:
             return self.get_prompt(messages, sequence_start)
         box_map = dict(user=self.user,
                        ipython=self.ipython,
+                       tool=self.ipython,
                        assistant=self.assistant,
                        system=self.system)
         eox_map = dict(user=self.eoh,
                        ipython=self.eoi,
+                       tool=self.eoi,
                        assistant=self.eoa + self.separator,
                        system=self.eosys)
         ret = ''
@@ -884,6 +889,7 @@ Reminder:
 
 
 @MODELS.register_module(name='minicpmv-2d6')
+@MODELS.register_module(name='minicpm3')
 @MODELS.register_module(name='qwen')
 class Qwen7BChat(BaseChatTemplate):
     """Chat template for Qwen-7B-Chat."""
@@ -921,6 +927,8 @@ class Qwen7BChat(BaseChatTemplate):
             return 'qwen'
         if 'minicpm-v-2_6' in model_path.lower():
             return 'minicpmv-2d6'
+        if 'minicpm3-' in model_path.lower():
+            return 'minicpm3'
 
 
 @MODELS.register_module(name='codellama')

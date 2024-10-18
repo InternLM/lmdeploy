@@ -1,10 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
-from typing import Dict, Union
+from typing import Dict
 
 import numpy as np
 
-from ...adapter.adapter import AdapterManager, SchedulerAdapter
 from ...messages import SchedulerSequence
 
 
@@ -236,10 +235,7 @@ class BaseBlockManager:
         num_cpu_blocks (int): number of cpu blocks.
     """
 
-    def __init__(self,
-                 num_gpu_blocks: int,
-                 num_cpu_blocks: int,
-                 adapter_manager: AdapterManager = None) -> None:
+    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int) -> None:
         self.num_gpu_blocks = num_gpu_blocks
         self.num_cpu_blocks = num_cpu_blocks
 
@@ -247,13 +243,9 @@ class BaseBlockManager:
 
         self.block_tables: Dict[int, BlockTable] = {}
 
-        if adapter_manager is None:
-            adapter_manager = AdapterManager(dict(), 0)
-        self.adapter_manager = adapter_manager
-
     @classmethod
     def num_required_blocks(cls,
-                            obj: Union[SchedulerSequence, SchedulerAdapter],
+                            obj: SchedulerSequence,
                             prealloc_size: int = 0):
         """get num required blocks."""
         raise NotImplementedError('Not implemented.')
@@ -272,23 +264,19 @@ class BaseBlockManager:
         blocks."""
         raise NotImplementedError('Not implemented.')
 
-    def allocate_adapter(self, adapter: SchedulerAdapter):
-        """Allocate cpu blocks for given adapter."""
-        raise NotImplementedError('Not implemented.')
-
     def free(self, msg: SchedulerSequence):
         """Free all physical blocks allocated for the session."""
         raise NotImplementedError('Not implemented.')
 
-    def try_swap_out(self, msg: Union[SchedulerSequence, SchedulerAdapter]):
+    def try_swap_out(self, msg: SchedulerSequence):
         """Try swap msg out."""
         raise NotImplementedError('Not implemented.')
 
-    def try_swap_in(self, msg: Union[SchedulerSequence, SchedulerAdapter]):
+    def try_swap_in(self, msg: SchedulerSequence):
         """Try swap msg in."""
         raise NotImplementedError('Not implemented.')
 
-    def get_block_table(self, msg: Union[SchedulerSequence, SchedulerAdapter]):
+    def get_block_table(self, msg: SchedulerSequence):
         """Get the block table of given msg.
 
         Args:
@@ -298,14 +286,10 @@ class BaseBlockManager:
         return self.allocator.get_physical_blocks(
             logical_blocks.get_real_blocks())
 
-    def allocate(self,
-                 data: Union[SchedulerSequence, SchedulerAdapter],
-                 prealloc_size: int = 0):
+    def allocate(self, data: SchedulerSequence, prealloc_size: int = 0):
         """allocate stuff."""
         if isinstance(data, SchedulerSequence):
             return self.allocate_msg(data, prealloc_size)
-        elif isinstance(data, SchedulerAdapter):
-            return self.allocate_adapter(data)
         else:
             raise TypeError(f'Unsupported allocate type: {type(data)}')
 

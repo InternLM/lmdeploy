@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from .base import OUTPUT_MODELS, BaseOutputModel, TurbomindModelConfig
+from ..config import ModelConfig, config_from_dict, config_to_dict
+from .base import OUTPUT_MODELS, BaseOutputModel
 
 
 @OUTPUT_MODELS.register_module(name='tm')

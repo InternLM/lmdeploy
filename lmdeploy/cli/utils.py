@@ -101,6 +101,19 @@ class ArgumentHelper:
             '`model_path` will be adopted')
 
     @staticmethod
+    def dtype(parser, default: str = 'auto'):
+        return parser.add_argument(
+            '--dtype',
+            type=str,
+            default=default,
+            choices=['auto', 'float16', 'bfloat16'],
+            help='data type for model weights and activations. '
+            'The "auto" option will use FP16 precision '
+            'for FP32 and FP16 models, and BF16 precision '
+            'for BF16 models. This option will be ignored if '
+            'the model is a quantized model')
+
+    @staticmethod
     def model_format(parser, default: str = None):
         return parser.add_argument(
             '--model-format',
@@ -160,10 +173,12 @@ class ArgumentHelper:
     def max_batch_size(parser):
         """Add argument max_batch_size to parser."""
 
-        return parser.add_argument('--max-batch-size',
-                                   type=int,
-                                   default=128,
-                                   help='Maximum batch size')
+        return parser.add_argument(
+            '--max-batch-size',
+            type=int,
+            default=None,
+            help='Maximum batch size. If not specified, the engine will '
+            'automatically set it according to the device')
 
     @staticmethod
     def quant_policy(parser, default: int = 0):
@@ -463,3 +478,20 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='the vision model batch size')
+
+    @staticmethod
+    def max_log_len(parser):
+        return parser.add_argument(
+            '--max-log-len',
+            type=int,
+            default=None,
+            help='Max number of prompt characters or prompt tokens being'
+            'printed in log. Default: Unlimited')
+
+    @staticmethod
+    def disable_fastapi_docs(parser):
+        return parser.add_argument('--disable-fastapi-docs',
+                                   action='store_true',
+                                   default=False,
+                                   help="Disable FastAPI's OpenAPI schema,"
+                                   ' Swagger UI, and ReDoc endpoint')

@@ -11,6 +11,11 @@ def _rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
+def _bf16_mark():
+    return pytest.mark.skipif(not torch.cuda.is_bf16_supported(),
+                              reason='bf16 not supported.')
+
+
 class TestApplyRotary:
 
     @pytest.fixture
@@ -72,25 +77,30 @@ class TestApplyRotary:
         yield torch.rand(max_seqlen, feature_dim, dtype=dtype, device='cuda')
 
     @pytest.fixture
-    def gt(self, q_states, k_states, cached_cos, cached_sin, position_ids_1d):
-        cos = cached_cos[position_ids_1d, None, :]
-        sin = cached_sin[position_ids_1d, None, :]
+    def cos(self, cached_cos, position_ids_1d):
+        yield cached_cos[position_ids_1d, None, :]
+
+    @pytest.fixture
+    def sin(self, cached_sin, position_ids_1d):
+        yield cached_sin[position_ids_1d, None, :]
+
+    @pytest.fixture
+    def gt(self, q_states, k_states, cos, sin, position_ids_1d):
 
         q_embed = q_states * cos + _rotate_half(q_states) * sin
         k_embed = k_states * cos + _rotate_half(k_states) * sin
 
         yield q_embed, k_embed
 
-    @pytest.mark.parametrize('dtype',
-                             [torch.bfloat16, torch.float16, torch.float32],
+    @pytest.mark.parametrize('dtype', [
+        pytest.param(torch.bfloat16, marks=_bf16_mark()), torch.float16,
+        torch.float32
+    ],
                              indirect=True)
     @pytest.mark.parametrize(('num_heads_q', 'num_heads_k'), [(8, 8), (8, 4)],
                              indirect=True)
-    def test_apply_rotary(self, q_states, k_states, cached_cos, cached_sin,
-                          position_ids_1d, gt):
-        q_embed, k_embed = apply_rotary_pos_emb(q_states, k_states, cached_cos,
-                                                cached_sin, None,
-                                                position_ids_1d)
+    def test_apply_rotary(self, q_states, k_states, cos, sin, gt):
+        q_embed, k_embed = apply_rotary_pos_emb(q_states, k_states, cos, sin)
         q_gt, k_gt = gt
 
         rtol = None

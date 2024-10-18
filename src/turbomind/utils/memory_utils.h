@@ -50,13 +50,12 @@ template<typename T>
 void cudaRandomUniform(T* buffer, const size_t size);
 
 template<typename T>
-int loadWeightFromBin(T*                        ptr,
-                      std::vector<size_t>       shape,
-                      std::string               filename,
-                      FtCudaDataType            model_file_type = FtCudaDataType::FP32);
+int loadWeightFromBin(T*                  ptr,
+                      std::vector<size_t> shape,
+                      std::string         filename,
+                      FtCudaDataType      model_file_type = FtCudaDataType::FP32);
 
-std::vector<float> loadArrayFromBin(std::vector<size_t>       shape,
-                                    std::string               filename);
+std::vector<float> loadArrayFromBin(std::vector<size_t> shape, std::string filename);
 
 // template<typename T>
 // int loadWeightFromBinAndQuantizeForWeightOnly(int8_t*             quantized_weight_ptr,
@@ -109,7 +108,8 @@ template<typename T>
 void invokeInPlaceTranspose0213(T* data, T* workspace, const int dim0, const int dim1, const int dim2, const int dim3);
 
 template<typename T>
-void invokeInPlaceTranspose102(T* data, T* workspace, const int dim0, const int dim1, const int dim2);
+void invokeInPlaceTranspose102(
+    T* data, T* workspace, const int dim0, const int dim1, const int dim2, bool copy = true, cudaStream_t stream = 0);
 
 template<typename T>
 void invokeMultiplyScale(T* tensor, float scale, const size_t size, cudaStream_t stream);

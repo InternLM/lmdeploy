@@ -23,14 +23,19 @@ def _handle_exception(e: Exception,
 
 
 def check_env_deeplink(device_type: str):
-    """check Deeplink environment if specific device_type is set."""
+    """check Deeplink environment."""
+    try_import_deeplink(device_type)
+
+
+def try_import_deeplink(device_type: str):
+    """import dlinfer if specific device_type is set."""
     deeplink_device_type_list = [
         'ascend',
     ]
     if device_type in deeplink_device_type_list:
         logger = get_logger('lmdeploy')
         try:
-            import deeplink_ext  # noqa: F401
+            import dlinfer.framework.lmdeploy_ext  # noqa: F401
         except Exception as e:
             _handle_exception(e, 'PyTorch', logger)
 
@@ -51,10 +56,10 @@ def check_env_torch():
         _handle_exception(e, 'PyTorch', logger)
 
 
-MAX_TRITON_VERSION = '2.2.0'
+MAX_TRITON_VERSION = '3.0.0'
 
 
-def check_env_triton():
+def check_env_triton(device: str):
     """check OpenAI Triton environment."""
     from packaging import version
     logger = get_logger('lmdeploy')
@@ -63,10 +68,10 @@ def check_env_triton():
         logger.debug('Checking <Triton> environment.')
         import torch
         import triton
-        if version.parse(
-                triton.__version__) > version.parse(MAX_TRITON_VERSION):
-            logger.warning(f'Install triton<={MAX_TRITON_VERSION}'
-                           ' if you want to get better performance.')
+        triton_version = version.parse(triton.__version__)
+        if triton_version > version.parse(MAX_TRITON_VERSION):
+            logger.warning(
+                f'Engine has not been tested on triton>{MAX_TRITON_VERSION}.')
 
         from .triton_custom_add import custom_add
         a = torch.tensor([1, 2], device='cuda')
@@ -86,6 +91,18 @@ def check_env_triton():
     except Exception as e:
         _handle_exception(e, 'Triton', logger)
 
+    if device == 'cuda':
+        device_cap = torch.cuda.get_device_capability()
+        TRITON_VER_231 = version.parse('2.3.1')
+
+        if device_cap[0] <= 7:
+            if triton_version <= TRITON_VER_231:
+                err = RuntimeError(
+                    'Attention triton kernel does not fully support '
+                    'triton<3.0.0 on device with capability<8. '
+                    'Please upgrade your triton version.')
+                _handle_exception(err, 'Triton', logger)
+
 
 def check_env(device_type: str):
     """check all environment."""
@@ -94,11 +111,11 @@ def check_env(device_type: str):
     check_env_deeplink(device_type)
     check_env_torch()
     if device_type == 'cuda':
-        check_env_triton()
+        check_env_triton('cuda')
 
 
 MIN_TRANSFORMERS_VERSION = '4.33.0'
-MAX_TRANSFORMERS_VERSION = '4.41.2'
+MAX_TRANSFORMERS_VERSION = '4.44.1'
 
 
 def check_awq(hf_config):
@@ -123,7 +140,8 @@ def check_awq(hf_config):
 
 
 def check_transformers_version(model_path: str,
-                               trust_remote_code: bool = True):
+                               trust_remote_code: bool = True,
+                               dtype: str = 'auto'):
     """check transformers version."""
     from packaging import version
     logger = get_logger('lmdeploy')
@@ -187,7 +205,8 @@ def check_transformers_version(model_path: str,
 
         try:
             model_config = ModelConfig.from_hf_config(config,
-                                                      model_path=model_path)
+                                                      model_path=model_path,
+                                                      dtype=dtype)
             if model_config.dtype == torch.bfloat16:
                 assert torch.cuda.is_bf16_supported(), (
                     'bf16 is not supported on your device')
@@ -210,11 +229,13 @@ def check_transformers_version(model_path: str,
     check_awq(config)
 
 
-def check_model(model_path: str, trust_remote_code: bool = True):
+def check_model(model_path: str,
+                trust_remote_code: bool = True,
+                dtype: str = 'auto'):
     """check model requirements."""
     logger = get_logger('lmdeploy')
     logger.info('Checking model.')
-    check_transformers_version(model_path, trust_remote_code)
+    check_transformers_version(model_path, trust_remote_code, dtype)
 
 
 def check_adapter(path: str):

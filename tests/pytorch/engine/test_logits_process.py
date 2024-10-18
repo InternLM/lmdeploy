@@ -1,13 +1,11 @@
-import pytest
 import torch
 from transformers.generation.logits_process import (
-    RepetitionPenaltyLogitsProcessor, TemperatureLogitsWarper,
-    TopKLogitsWarper, TopPLogitsWarper)
+    MinPLogitsWarper, RepetitionPenaltyLogitsProcessor,
+    TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper)
 
 
-@pytest.mark.parametrize('inplace', [True, False])
-def test_process_temperature(inplace):
-    from lmdeploy.pytorch.engine.logits_process import _process_temperature
+def test_process_temperature():
+    from lmdeploy.pytorch.engine.logits_process import _process_temperature_
 
     batch_size = 4
     num_tokens = 16
@@ -20,13 +18,12 @@ def test_process_temperature(inplace):
         gt.append(warper(None, score[None]))
     gt = torch.cat(gt)
 
-    out = _process_temperature(scores, temperatures, inplace=inplace)
+    out = _process_temperature_(scores, temperatures)
     torch.testing.assert_close(out, gt)
 
 
-@pytest.mark.parametrize('inplace', [True, False])
-def test_process_bad_words(inplace):
-    from lmdeploy.pytorch.engine.logits_process import _process_bad_words
+def test_process_bad_words():
+    from lmdeploy.pytorch.engine.logits_process import _process_bad_words_
 
     filter_value: float = -float('inf')
     batch_size = 4
@@ -39,7 +36,7 @@ def test_process_bad_words(inplace):
         [-1, -1],
     ])
 
-    out_scores = _process_bad_words(scores, bad_words, inplace=inplace)
+    out_scores = _process_bad_words_(scores, bad_words)
 
     for score, bw in zip(out_scores, bad_words):
         bw = bw.tolist()
@@ -49,10 +46,9 @@ def test_process_bad_words(inplace):
                 assert score[w] == filter_value
 
 
-@pytest.mark.parametrize('inplace', [True, False])
-def test_processrepetition_penalty(inplace):
+def test_processrepetition_penalty():
     from lmdeploy.pytorch.engine.logits_process import \
-        _process_repetition_penalty
+        _process_repetition_penalty_
     batch_size = 4
     num_tokens = 16
     scores = torch.rand(batch_size, num_tokens)
@@ -70,16 +66,12 @@ def test_processrepetition_penalty(inplace):
         gt.append(warper(ids[None], score[None].clone()))
     gt = torch.cat(gt)
 
-    out = _process_repetition_penalty(scores,
-                                      input_ids,
-                                      penalties,
-                                      inplace=inplace)
+    out = _process_repetition_penalty_(scores, input_ids, penalties)
     torch.testing.assert_close(out, gt)
 
 
-@pytest.mark.parametrize('inplace', [True, False])
-def test_filter_topk_sorted(inplace):
-    from lmdeploy.pytorch.engine.logits_process import _filter_topk_sorted
+def test_filter_topk_sorted():
+    from lmdeploy.pytorch.engine.logits_process import _filter_topk_sorted_
 
     batch_size = 4
     num_tokens = 16
@@ -92,13 +84,12 @@ def test_filter_topk_sorted(inplace):
         gt.append(warper(None, score[None].clone()))
     gt = torch.cat(gt)
 
-    out = _filter_topk_sorted(scores, top_k, inplace=inplace)
+    out = _filter_topk_sorted_(scores, top_k)
     torch.testing.assert_close(out, gt)
 
 
-@pytest.mark.parametrize('inplace', [True, False])
-def test_filter_topp_sorted(inplace):
-    from lmdeploy.pytorch.engine.logits_process import _filter_topp_sorted
+def test_filter_topp_sorted():
+    from lmdeploy.pytorch.engine.logits_process import _filter_topp_sorted_
 
     batch_size = 4
     num_tokens = 16
@@ -111,5 +102,23 @@ def test_filter_topp_sorted(inplace):
         gt.append(warper(None, score[None].clone()))
     gt = torch.cat(gt)
 
-    out = _filter_topp_sorted(scores, top_p, inplace=inplace)
+    out = _filter_topp_sorted_(scores, top_p)
+    torch.testing.assert_close(out, gt)
+
+
+def test_filter_minp_sorted():
+    from lmdeploy.pytorch.engine.logits_process import _filter_minp_sorted_
+
+    batch_size = 4
+    num_tokens = 16
+    scores = torch.rand(batch_size, num_tokens).sort(1, descending=True)[0]
+    min_p = torch.rand(batch_size)
+
+    gt = []
+    for score, p in zip(scores, min_p):
+        warper = MinPLogitsWarper(p.item())
+        gt.append(warper(None, score[None].clone()))
+    gt = torch.cat(gt)
+
+    out = _filter_minp_sorted_(scores, min_p)
     torch.testing.assert_close(out, gt)

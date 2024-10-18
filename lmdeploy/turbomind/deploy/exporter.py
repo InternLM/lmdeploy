@@ -298,9 +298,9 @@ class Ffn:
 
     def __init__(self, model: BaseOutputModel):
         self.model = model
-        self.tp = model.cfg.tensor_para_size
-        self.inter_size = model.cfg.inter_size
-        self.group_size = max(1, model.cfg.group_size)
+        self.tp = model.tensor_para_size
+        self.inter_size = model.model_config.inter_size
+        self.group_size = max(1, model.model_config.group_size)
 
     def _export(self, fmt: str, idx: int, w123, kind: str, pack_fn=identity, apply_gs=False):
         is_lora_a, is_lora_b = get_lora_flags(kind)
@@ -344,7 +344,7 @@ class MoeFfn(Ffn):
 
     def __init__(self, model: BaseOutputModel):
         super().__init__(model)
-        self.expert_num = model.cfg.expert_num
+        self.expert_num = model.model_config.expert_num
 
     def export(self, i: int, r: BaseReader):
         for compose in get_weight_exporters(r.moe_ffn_expert()):
@@ -367,8 +367,8 @@ class Attn:
 
     def __init__(self, model: BaseOutputModel):
         self.model = model
-        self.tp = model.cfg.tensor_para_size
-        self.head_dim = model.cfg.size_per_head
+        self.tp = model.tensor_para_size
+        self.head_dim = model.model_config.size_per_head
 
     def _reorder_and_merge(self, qkvo):
         q, k, v, o = map(transpose, qkvo)
@@ -419,8 +419,8 @@ class Misc(BaseExporter):
 
         def pad_weight(tensor):
             pad_size = None
-            vocab_size = self.model.cfg.vocab_size
-            tp = self.model.cfg.tensor_para_size
+            vocab_size = self.model.model_config.vocab_size
+            tp = self.model.tensor_para_size
             if vocab_size % tp != 0:
                 pad_size = (vocab_size + tp - 1) // tp * tp - vocab_size
 
@@ -431,18 +431,18 @@ class Misc(BaseExporter):
 
         if emb is not None:
             emb = pad_weight(emb)
-            self.model.export_weight(emb, 'tok_embeddings.weight')
+            self.model.save_split(emb, 'tok_embeddings.weight', split_dim=1)
         if norm_weight is not None:
             self.model.export_weight(norm_weight, 'norm.weight')
         if output_weight is not None:
             output_weight = pad_weight(output_weight)
-            self.model.export_weight(output_weight, 'output.weight')
+            self.model.save_split(output_weight, 'output.weight', split_dim=0)
 
 
 class Transformer:
     def __init__(self, model: BaseOutputModel):
         self.model = model
-        ffn = MoeFfn if model.cfg.expert_num else Ffn
+        ffn = MoeFfn if model.model_config.expert_num else Ffn
         modules = [Attn, LayerNorm, ffn]
         self.modules = [c(model) for c in modules]
         self.misc = Misc(model)

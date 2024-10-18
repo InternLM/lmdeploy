@@ -13,7 +13,7 @@ The next chapter demonstrates how to deploy an Phi-3 model using LMDeploy, with 
 
 ## Installation
 
-Please install LMDeploy by following the [installation guide](../installation.md) and install the dependency [Flash-Attention](https://github.com/Dao-AILab/flash-attention)
+Please install LMDeploy by following the [installation guide](../get_started/installation.md) and install the dependency [Flash-Attention](https://github.com/Dao-AILab/flash-attention)
 
 ```shell
 # It is recommended to find the whl package that matches the environment from the releases on https://github.com/Dao-AILab/flash-attention.

@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer
+from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer, Tokenizer
 
 
 @pytest.mark.parametrize('model_path', [
@@ -20,7 +20,7 @@ from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer
 @pytest.mark.parametrize('skip_special_tokens', [True, False])
 def test_tokenizer(model_path, input, interval, add_special_tokens,
                    skip_special_tokens):
-    tokenizer = HuggingFaceTokenizer(model_path)
+    tokenizer = Tokenizer(model_path).model
     encoded = tokenizer.encode(input,
                                False,
                                add_special_tokens=add_special_tokens)

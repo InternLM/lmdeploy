@@ -74,13 +74,15 @@ class FilterDuplicateWarning(logging.Filter):
         return False
 
 
-def get_logger(
-    name: Optional[str] = None,
-    log_file: Optional[str] = None,
-    log_level: int = logging.INFO,
-    file_mode: str = 'w',
-    log_formatter: str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-) -> Logger:
+_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d' \
+          ' - %(message)s'
+
+
+def get_logger(name: Optional[str] = None,
+               log_file: Optional[str] = None,
+               log_level: int = logging.INFO,
+               file_mode: str = 'w',
+               log_formatter: str = _FORMAT) -> Logger:
     """Initialize and get a logger by name.
 
     If the logger has not been initialized, this method will initialize the
@@ -184,10 +186,12 @@ def get_model(pretrained_model_name_or_path: str,
               download_dir: str = None,
               revision: str = None,
               token: str = None):
-    """Get model from huggingface or modelscope."""
+    """Get model from huggingface, modelscope or openmind_hub."""
     import os
     if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
         from modelscope import snapshot_download
+    elif os.getenv('LMDEPLOY_USE_OPENMIND_HUB', 'False').lower() == 'true':
+        from openmind_hub import snapshot_download
     else:
         from huggingface_hub import snapshot_download
 
@@ -200,6 +204,7 @@ def get_model(pretrained_model_name_or_path: str,
         download_kwargs['token'] = token
 
     model_path = snapshot_download(pretrained_model_name_or_path,
+                                   ignore_patterns=['*.pth'],
                                    **download_kwargs)
     return model_path
 
@@ -318,3 +323,30 @@ def _get_and_verify_max_len(
                 f'({max_len_key}={derived_max_model_len} or model_max_length='
                 f"{model_max_length} in model's config.json).")
     return int(max_model_len)
+
+
+def get_max_batch_size(device_type: str):
+    """Get the max inference batch size for LLM models according to the device
+    type.
+
+    Args:
+        device_type (str): the type of device
+    """
+    assert device_type in ['cuda', 'ascend']
+    if device_type == 'cuda':
+        max_batch_size_map = {
+            'a100': 256,
+            'a800': 256,
+            'h100': 512,
+            'h800': 512
+        }
+        import torch
+        device_name = torch.cuda.get_device_name(0).lower()
+        for name, size in max_batch_size_map.items():
+            if name in device_name:
+                return size
+        # for devices that are not in `max_batch_size_map`, set
+        # the max_batch_size 128
+        return 128
+    elif device_type == 'ascend':
+        return 16

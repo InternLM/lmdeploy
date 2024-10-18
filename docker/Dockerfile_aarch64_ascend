@@ -1,0 +1,121 @@
+FROM ubuntu:20.04 as base_builder
+
+WORKDIR /tmp
+
+ARG http_proxy
+ARG https_proxy
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN sed -i 's@http://.*.ubuntu.com@http://mirrors.tuna.tsinghua.edu.cn@g' /etc/apt/sources.list && \
+    apt update && \
+    apt install --no-install-recommends ca-certificates -y && \
+    apt install --no-install-recommends bc wget -y && \
+    apt install --no-install-recommends git curl gcc make g++ pkg-config unzip -y && \
+    apt install --no-install-recommends libsqlite3-dev libblas3 liblapack3 gfortran vim -y && \
+    apt install --no-install-recommends liblapack-dev libblas-dev libhdf5-dev libffi-dev -y && \
+    apt install --no-install-recommends libssl-dev zlib1g-dev xz-utils cython3 python3-h5py -y && \
+    apt install --no-install-recommends libopenblas-dev libgmpxx4ldbl liblzma-dev -y && \
+    apt install --no-install-recommends libicu66 libxml2 pciutils libgl1-mesa-glx libbz2-dev -y && \
+    apt install --no-install-recommends libreadline-dev libncurses5 libncurses5-dev libncursesw5 -y && \
+    sed -i 's@http://mirrors.tuna.tsinghua.edu.cn@https://mirrors.tuna.tsinghua.edu.cn@g' /etc/apt/sources.list && \
+    apt clean && rm -rf /var/lib/apt/lists/*
+
+ARG PYVERSION=3.10.5
+
+ENV LD_LIBRARY_PATH=/usr/local/python${PYVERSION}/lib: \
+    PATH=/usr/local/python${PYVERSION}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN umask 0022  && \
+    wget https://repo.huaweicloud.com/python/${PYVERSION}/Python-${PYVERSION}.tar.xz && \
+    tar -xf Python-${PYVERSION}.tar.xz && cd Python-${PYVERSION} && ./configure --prefix=/usr/local/python${PYVERSION} --enable-shared && \
+    make -j 16 && make install && \
+    ln -sf /usr/local/python${PYVERSION}/bin/python3 /usr/bin/python3 && \
+    ln -sf /usr/local/python${PYVERSION}/bin/python3 /usr/bin/python && \
+    ln -sf /usr/local/python${PYVERSION}/bin/pip3 /usr/bin/pip3 && \
+    ln -sf /usr/local/python${PYVERSION}/bin/pip3 /usr/bin/pip && \
+    cd .. && \
+    rm -rf Python*
+
+RUN --mount=type=cache,target=/root/.cache/pip pip3 config set global.index-url http://mirrors.aliyun.com/pypi/simple && \
+    pip3 config set global.trusted-host mirrors.aliyun.com && \
+    pip3 install -U pip && \
+    pip3 install wheel==0.43.0 scikit-build==0.18.0 numpy==1.24 setuptools==69.5.1 && \
+    pip3 install decorator sympy cffi && \
+    pip3 install cmake ninja pyyaml && \
+    pip3 install pathlib2 protobuf attrs attr scipy && \
+    pip3 install requests psutil absl-py
+
+ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/hdf5/serial:$LD_LIBRARY_PATH
+ENV LD_PRELOAD=/lib/aarch64-linux-gnu/libGLdispatch.so.0:$LD_PRELOAD
+
+RUN if [ ! -d "/lib64" ]; \
+    then \
+        mkdir /lib64 && ln -sf /lib/ld-linux-aarch64.so.1 /lib64/ld-linux-aarch64.so.1; \
+    fi
+
+FROM ubuntu:20.04 as build_temp
+COPY . /tmp
+
+FROM base_builder as cann_builder
+
+ARG ASCEND_BASE=/usr/local/Ascend
+ARG TOOLKIT_PATH=$ASCEND_BASE/ascend-toolkit/latest
+
+ENV LD_LIBRARY_PATH=\
+$ASCEND_BASE/driver/lib64:\
+$ASCEND_BASE/driver/lib64/common:\
+$ASCEND_BASE/driver/lib64/driver:\
+$ASCEND_BASE/driver/tools/hccn_tool/:\
+$TOOLKIT_PATH/opp/built-in/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64/:\
+$LD_LIBRARY_PATH
+
+# run files should be placed at the root dir of repo
+ARG CHIP=all
+ARG TOOLKIT_PKG=Ascend-cann-toolkit_*.run
+ARG KERNELS_PKG=Ascend-cann-kernels-*.run
+
+RUN --mount=type=cache,target=/tmp,from=build_temp,source=/tmp \
+    umask 0022 && \
+    mkdir -p $ASCEND_BASE/driver && \
+    if [ "$CHIP" != "all" ]; \
+    then \
+        CHIPOPTION="--chip=$CHIP"; \
+    else \
+        CHIPOPTION=""; \
+    fi && \
+    chmod +x $TOOLKIT_PKG $KERNELS_PKG && \
+    ./$TOOLKIT_PKG --quiet --install --install-path=$ASCEND_BASE --install-for-all $CHIPOPTION && \
+    ./$KERNELS_PKG --quiet --install --install-path=$ASCEND_BASE --install-for-all && \
+    rm -f $TOOLKIT_PKG $KERNELS_PKG
+
+ENV GLOG_v=2 \
+    LD_LIBRARY_PATH=$TOOLKIT_PATH/lib64:$LD_LIBRARY_PATH \
+    TBE_IMPL_PATH=$TOOLKIT_PATH/opp/op_impl/built-in/ai_core/tbe \
+    PATH=$TOOLKIT_PATH/ccec_compiler/bin:$PATH \
+    ASCEND_OPP_PATH=$TOOLKIT_PATH/opp \
+    ASCEND_AICPU_PATH=$TOOLKIT_PATH
+
+ENV PYTHONPATH=$TBE_IMPL_PATH:$PYTHONPATH
+
+SHELL ["/bin/bash", "-c"]
+RUN echo "source /usr/local/Ascend/ascend-toolkit/set_env.sh" >> ~/.bashrc && \
+    . ~/.bashrc
+
+# dlinfer
+# transformers>=4.41.0 is required for internlm2 model
+# timm is required for internvl2 model
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install transformers>=4.41.0 timm && \
+    pip3 install dlinfer-ascend==0.1.0.post1
+
+# lmdeploy
+FROM build_temp as copy_temp
+RUN rm -rf /tmp/*.run
+
+FROM cann_builder as final_builder
+COPY --from=copy_temp /tmp /opt/lmdeploy
+WORKDIR /opt/lmdeploy
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    sed -i '/triton/d' requirements/runtime.txt && \
+    pip3 install -v --no-build-isolation -e .

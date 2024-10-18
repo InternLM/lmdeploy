@@ -16,17 +16,21 @@ cmake_minimum_required(VERSION 3.8)
 
 find_package(CUDAToolkit REQUIRED)
 
-add_library(BaseSamplingLayer STATIC BaseSamplingLayer.cc)
-set_property(TARGET BaseSamplingLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET BaseSamplingLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(BaseSamplingLayer PUBLIC CUDA::cudart sampling_penalty_kernels memory_utils)
+add_library(LogitsProcessorLayer STATIC LogitsProcessorLayer.cc)
+set_property(TARGET LogitsProcessorLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET LogitsProcessorLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(LogitsProcessorLayer PUBLIC CUDA::cudart ban_bad_words memory_utils
+    sampling_penalty_kernels
+)
 
-add_library(TopKSamplingLayer STATIC TopKSamplingLayer.cc)
-set_property(TARGET TopKSamplingLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET TopKSamplingLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(TopKSamplingLayer PUBLIC CUDA::cudart BaseSamplingLayer sampling_topk_kernels)
+add_library(SamplingLayer STATIC SamplingLayer.cc)
+set_property(TARGET SamplingLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET SamplingLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(SamplingLayer PUBLIC CUDA::cudart memory_utils
+    sampling_topk_kernels sampling_topp_kernels sampling_kernels
+)
 
-add_library(TopPSamplingLayer STATIC TopPSamplingLayer.cc)
-set_property(TARGET TopPSamplingLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET TopPSamplingLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(TopPSamplingLayer PUBLIC CUDA::cudart BaseSamplingLayer sampling_topk_kernels sampling_topp_kernels)
+add_library(StopCriteriaLayer STATIC StopCriteriaLayer.cc)
+set_property(TARGET StopCriteriaLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET StopCriteriaLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(StopCriteriaLayer PUBLIC CUDA::cudart stop_criteria memory_utils)

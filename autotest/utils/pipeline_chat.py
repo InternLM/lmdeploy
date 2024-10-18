@@ -9,8 +9,7 @@ from utils.get_run_config import get_model_name, get_tp_num
 from utils.rule_condition_assert import assert_result
 
 from lmdeploy import pipeline
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 
@@ -31,14 +30,13 @@ def run_pipeline_chat_test(config,
     else:
         hf_path = model_case
 
-    if 'pytorch' == type:
+    if 'pytorch' in type:
         backend_config = PytorchEngineConfig(tp=tp)
-    elif 'pytorch_lora' == type:
-        backend_config = PytorchEngineConfig(tp=tp,
-                                             adapters=extra.get('adapters'))
     else:
         backend_config = TurbomindEngineConfig(tp=tp)
 
+    if 'lora' in type:
+        backend_config.adapters = extra.get('adapters')
     if 'kvint' in type:
         backend_config.quant_policy = extra.get('quant_policy')
 
@@ -53,9 +51,6 @@ def run_pipeline_chat_test(config,
 
     pipe = pipeline(hf_path, backend_config=backend_config)
 
-    # run testcases
-    gen_config = GenerationConfig(top_k=1)
-
     config_log = os.path.join(
         log_path, '_'.join([
             'pipeline', 'config', type, worker_id,
@@ -63,10 +58,12 @@ def run_pipeline_chat_test(config,
         ]))
     file = open(config_log, 'w')
     log_string = '\n'.join([
-        'reproduce config info:', 'engine_config = ' + str(backend_config),
-        'gen_config = ' + str(gen_config),
+        'reproduce config info:',
+        'from lmdeploy.messages import PytorchEngineConfig',
+        'from lmdeploy.messages import TurbomindEngineConfig',
+        'engine_config = ' + str(backend_config),
         'pipe = pipeline("' + hf_path + '",  backend_config=engine_config)',
-        'res = pipe("Hi, pls introduce shanghai", gen_config=gen_config)'
+        'res = pipe("Hi, pls introduce shanghai")'
     ])
     file.writelines(log_string)
     print(log_string)
@@ -91,7 +88,7 @@ def run_pipeline_chat_test(config,
             prompts.append({'role': 'user', 'content': prompt})
             file.writelines('prompt:' + prompt + '\n')
 
-            response = pipe([prompts], gen_config=gen_config)[0].text
+            response = pipe([prompts])[0].text
 
             case_result, reason = assert_result(response,
                                                 prompt_detail.values(),
@@ -279,7 +276,7 @@ PIC2 = 'https://raw.githubusercontent.com/' + \
     'open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'
 
 
-def run_pipeline_vl_chat_test(config, model_case):
+def run_pipeline_vl_chat_test(config, model_case, quant_policy: int = None):
     log_path = config.get('log_path')
     tp = get_tp_num(config, model_case)
     model_path = config.get('model_path')
@@ -293,6 +290,8 @@ def run_pipeline_vl_chat_test(config, model_case):
         backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
     if '4bit' in model_case.lower() or 'awq' in model_case.lower():
         backend_config.model_format = 'awq'
+    if quant_policy is not None:
+        backend_config.quant_policy = quant_policy
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     pipeline_chat_log = os.path.join(
@@ -305,6 +304,8 @@ def run_pipeline_vl_chat_test(config, model_case):
         prompt = f'describe this image{IMAGE_TOKEN}'
     else:
         prompt = 'describe this image'
+
+    file.writelines('engineconfig:' + str(backend_config))
     response = pipe((prompt, image))
     result = 'tiger' in response.text.lower() or '虎' in response.text.lower()
     file.writelines('result:' + str(result) +

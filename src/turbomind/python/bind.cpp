@@ -373,13 +373,13 @@ PYBIND11_MODULE(_turbomind, m)
                         PyGILState_Release(state);
                     }
                 };
-                if (data_type == "half" || data_type == "fp16" || data_type == "int4") {
+                if (data_type == "half" || data_type == "fp16" || data_type == "float16" || data_type == "int4") {
                     auto model = std::make_shared<LlamaTritonModel<half>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
                     model->set_ffi_lock(gil_control);
                     return model;
                 }
-                else if (data_type == "bf16") {
+                else if (data_type == "bf16" || data_type == "bfloat16") {
 #ifdef ENABLE_BF16
                     auto model = std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);

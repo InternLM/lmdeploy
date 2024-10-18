@@ -8,7 +8,7 @@ LMDeploy设计了TurboMind推理引擎用来加速大模型推理，其推理精
 
 ### 安装 lmdeploy
 
-请参考[安装指南](../installation.md)安装 lmdeploy
+请参考[安装指南](../get_started/installation.md)安装 lmdeploy
 
 ### 安装 OpenCompass
 

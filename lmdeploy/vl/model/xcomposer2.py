@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import enum
+import os
+import sys
 import warnings
 from contextlib import contextmanager
 from typing import Any, List, Tuple
@@ -48,7 +50,7 @@ def _CLIPVisionModel_from_pretrained(vision_tower_name):
 
 
 @contextmanager
-def init_empty_vit():
+def init_empty_vit(model_path):
     """skip download vision model."""
     origin_func_path = [
         'transformers.CLIPVisionModel.from_pretrained',
@@ -56,6 +58,23 @@ def init_empty_vit():
     rewrite_func = [
         _CLIPVisionModel_from_pretrained,
     ]
+
+    model_type, _ = get_xcomposer_type(model_path)
+    if model_type == ModelType.XCOMPOSER2D5:
+        from transformers.dynamic_module_utils import \
+            get_class_from_dynamic_module
+        from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
+        _ = get_class_from_dynamic_module(
+            'modeling_internlm_xcomposer2.get_font', model_path)
+        folder = model_path.rstrip(os.sep).split(os.sep)[-1]
+        module_path = '.'.join([
+            TRANSFORMERS_DYNAMIC_MODULE_NAME, folder,
+            'modeling_internlm_xcomposer2'
+        ])
+        origin_get_font_func = getattr(sys.modules[module_path], 'get_font')
+        origin_func_path.append(origin_get_font_func)
+        rewrite_func.append(lambda: None)
+
     with rewrite_ctx(origin_func_path, rewrite_func):
         yield
 
@@ -77,7 +96,8 @@ class Xcomposer2VisionModel(VisonModel):
 
     def build_model(self):
         from accelerate import init_empty_weights
-        with init_empty_weights(), warnings.catch_warnings(), init_empty_vit():
+        with init_empty_weights(), warnings.catch_warnings(), \
+                init_empty_vit(self.model_path):
             warnings.simplefilter('ignore')
             config = self.hf_config
             model = AutoModelForCausalLM.from_config(config,

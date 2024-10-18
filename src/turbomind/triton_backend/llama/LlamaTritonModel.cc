@@ -19,7 +19,6 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
 
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
-#include "3rdparty/INIReader.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
@@ -28,34 +27,40 @@
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <cuda_runtime.h>
+#include <mutex>
+#include <yaml-cpp/yaml.h>
 
 namespace ft = turbomind;
 
-std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaModel(std::string inifile)
+std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaModel(std::string config_file)
 {
-    INIReader reader = INIReader(inifile);
-    if (reader.ParseError() < 0) {
-        std::cout << "[ERROR] Can't load '" << inifile << "'\n";
-        return nullptr;
+    YAML::Node reader;
+    try {
+        reader = YAML::Load(config_file);
+    }
+    catch (const YAML::Exception& e) {
+        std::cerr << "Error reading YAML config: " << e.what() << std::endl;
+        ft::FT_CHECK(false);
     }
 
-    const std::string data_type        = reader.Get("ft_instance_hyperparameter", "data_type");
-    int               tensor_para_size = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
-    std::string       model_dir        = reader.Get("ft_instance_hyperparameter", "model_dir");
+    const auto        ft_instance_hyperparameter = reader["ft_instance_hyperparameter"];
+    const std::string data_type                  = ft_instance_hyperparameter["data_type"].as<std::string>();
+    int               tensor_para_size           = ft_instance_hyperparameter["tensor_para_size"].as<int>();
+    std::string       model_dir                  = ft_instance_hyperparameter["model_dir"].as<std::string>();
 
-    if (data_type == "half" || data_type == "fp16") {
+    if (data_type == "half" || data_type == "fp16" || data_type == "float16") {
         return std::make_shared<LlamaTritonModel<half>>(
-            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
+            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
+            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
+            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
             model_dir);
     }
-    else if (data_type == "bf16") {
+    else if (data_type == "bf16" || data_type == "bfloat16") {
 #ifdef ENABLE_BF16
         return std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
-            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
+            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
+            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
+            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
             model_dir);
 #else
         TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF16");
@@ -65,9 +70,9 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
     else {
 #ifdef ENABLE_FP32
         return std::make_shared<LlamaTritonModel<float>>(
-            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
+            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
+            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
+            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
             model_dir);
 #else
         TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF32");
@@ -187,88 +192,89 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     weights_(ft::getDeviceCount()),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
-    INIReader reader;
     FT_CHECK_WITH_INFO(!(config.empty() && model_dir.empty()), "invalid init options");
 
-    if (!model_dir.empty()) {
-        model_dir_ = model_dir;
-        const std::string inifile{model_dir + "/config.ini"};
-        reader = INIReader(inifile);
-        if (reader.ParseError() < 0) {
-            TM_LOG_ERROR("[ERROR] Can't load %s", inifile.c_str());
-            ft::FT_CHECK(false);
+    YAML::Node reader;
+
+    try {
+        if (!model_dir.empty()) {
+            model_dir_ = model_dir;
+            const std::string config_file{model_dir + "/config.yaml"};
+            reader = YAML::LoadFile(config_file);
+        }
+
+        if (!config.empty()) {
+            reader = YAML::Load(config);
         }
     }
-
-    if (!config.empty()) {
-        std::FILE* tmpf = std::tmpfile();
-        std::fputs(config.c_str(), tmpf);
-        std::rewind(tmpf);
-        reader = INIReader(tmpf);
-        if (reader.ParseError() < 0) {
-            TM_LOG_ERROR("[ERROR] Can't init with config %s", config.c_str());
-            ft::FT_CHECK(false);
-        }
+    catch (const YAML::Exception& e) {
+        std::cerr << "Error reading YAML config: " << e.what() << std::endl;
+        ft::FT_CHECK(false);
     }
 
-    model_name_                     = reader.Get("llama", "model_name");
-    model_param_.head_num           = reader.GetInteger("llama", "head_num");
-    model_param_.head_dim           = reader.GetInteger("llama", "size_per_head");
-    model_param_.kv_head_num        = reader.GetInteger("llama", "kv_head_num", 0);
-    model_param_.hidden_units       = reader.GetInteger("llama", "hidden_units");
-    model_param_.layer_num          = reader.GetInteger("llama", "num_layer");
-    model_param_.inter_size         = reader.GetInteger("llama", "inter_size");
-    model_param_.vocab_size         = reader.GetInteger("llama", "vocab_size");
-    model_param_.norm_eps           = reader.GetFloat("llama", "norm_eps");
-    model_param_.start_id           = reader.GetInteger("llama", "start_id");
-    model_param_.end_id             = reader.GetInteger("llama", "end_id");
-    attn_param_.cache_block_seq_len = reader.GetInteger("llama", "cache_block_seq_len", 0);
-    model_param_.quant_policy       = reader.GetInteger("llama", "quant_policy", 0);
+    const auto model_reader     = reader["model_config"];
+    const auto attention_reader = reader["attention_config"];
+    const auto lora_reader      = reader["lora_config"];
+    const auto engine_reader    = reader["engine_config"];
+
+    model_name_                     = model_reader["model_name"].as<std::string>();
+    model_param_.head_num           = model_reader["head_num"].as<int>();
+    model_param_.head_dim           = model_reader["size_per_head"].as<int>();
+    model_param_.kv_head_num        = model_reader["kv_head_num"].as<int>(0);
+    model_param_.hidden_units       = model_reader["hidden_units"].as<int>();
+    model_param_.layer_num          = model_reader["num_layer"].as<int>();
+    model_param_.inter_size         = model_reader["inter_size"].as<int>();
+    model_param_.vocab_size         = model_reader["vocab_size"].as<int>();
+    model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
+    model_param_.start_id           = model_reader["start_id"].as<int>();
+    model_param_.end_id             = model_reader["end_id"].as<int>();
+    attn_param_.cache_block_seq_len = attention_reader["cache_block_seq_len"].as<int>(0);
+    model_param_.quant_policy       = engine_reader["quant_policy"].as<int>(0);
 
     // Only weight classes need these
-    attn_bias_  = reader.GetInteger("llama", "attn_bias", 0);
-    group_size_ = reader.GetInteger("llama", "group_size", 0);
+    attn_bias_  = model_reader["attn_bias"].as<int>(0);
+    group_size_ = model_reader["group_size"].as<int>(0);
 
     // rotary embedding parameters
-    attn_param_.rotary_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
-    attn_param_.rotary_embedding_base   = reader.GetFloat("llama", "rope_theta", 10000.0f);
-    attn_param_.rope_scaling_type       = reader.Get("llama", "rope_scaling_type", "");
-    attn_param_.rope_scaling_factor     = reader.GetFloat("llama", "rope_scaling_factor", 0.f);
-    attn_param_.low_freq_factor         = reader.GetFloat("llama", "low_freq_factor", 1.0);
-    attn_param_.high_freq_factor        = reader.GetFloat("llama", "high_freq_factor", 1.0);
-    attn_param_.max_position_embeddings = reader.GetInteger("llama", "max_position_embeddings", 0);
-    attn_param_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
-    attn_param_.use_logn_attn           = reader.GetInteger("llama", "use_logn_attn", 0);
+    attn_param_.rotary_embedding_dim    = attention_reader["rotary_embedding"].as<int>();
+    attn_param_.rotary_embedding_base   = attention_reader["rope_theta"].as<float>(10000.0f);
+    attn_param_.rope_scaling_type       = attention_reader["rope_scaling_type"].as<std::string>("");
+    attn_param_.rope_scaling_factor     = attention_reader["rope_scaling_factor"].as<float>(0.f);
+    attn_param_.low_freq_factor         = attention_reader["low_freq_factor"].as<float>(1.0);
+    attn_param_.high_freq_factor        = attention_reader["high_freq_factor"].as<float>(1.0);
+    attn_param_.max_position_embeddings = attention_reader["max_position_embeddings"].as<int>(0);
+    attn_param_.use_dynamic_ntk         = attention_reader["use_dynamic_ntk"].as<int>(0);
+    attn_param_.use_logn_attn           = attention_reader["use_logn_attn"].as<int>(0);
 
-    attn_param_.original_max_position_embeddings = reader.GetInteger("llama", "original_max_position_embeddings", 0);
+    attn_param_.original_max_position_embeddings = attention_reader["original_max_position_embeddings"].as<int>(0);
 
-    engine_param_.max_batch_size        = reader.GetInteger("llama", "max_batch_size", 0);
-    engine_param_.max_prefill_token_num = reader.GetInteger("llama", "max_prefill_token_num", 0);
-    engine_param_.max_context_token_num = reader.GetInteger("llama", "max_context_token_num", 0);
-    engine_param_.session_len           = reader.GetInteger("llama", "session_len", 0);
-    engine_param_.step_length           = reader.GetInteger("llama", "step_length", 0);
+    engine_param_.max_batch_size        = engine_reader["max_batch_size"].as<int>(0);
+    engine_param_.max_prefill_token_num = engine_reader["max_prefill_token_num"].as<int>(0);
+    engine_param_.max_context_token_num = engine_reader["max_context_token_num"].as<int>(0);
+    engine_param_.session_len           = model_reader["session_len"].as<int>(0);
 
-    engine_param_.cache_max_block_count = reader.GetFloat("llama", "cache_max_entry_count", 0);
-    engine_param_.cache_chunk_size      = reader.GetInteger("llama", "cache_chunk_size", 0);
-    engine_param_.enable_prefix_caching = reader.GetBoolean("llama", "enable_prefix_caching", false);
+    engine_param_.cache_max_block_count = engine_reader["cache_max_entry_count"].as<float>(0);
+    engine_param_.cache_chunk_size      = engine_reader["cache_chunk_size"].as<int>(0);
+    engine_param_.enable_prefix_caching = engine_reader["enable_prefix_caching"].as<bool>(false);
 
-    engine_param_.num_tokens_per_iter = reader.GetInteger("llama", "num_tokens_per_iter", 0);
-    engine_param_.max_prefill_iters   = reader.GetInteger("llama", "max_prefill_iters", 1);
+    engine_param_.num_tokens_per_iter = engine_reader["num_tokens_per_iter"].as<int>(0);
+    engine_param_.max_prefill_iters   = engine_reader["max_prefill_iters"].as<int>(1);
 
+    lora_param_.policy        = ft::getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
+    lora_param_.r             = lora_reader["lora_r"].as<int>(0);
+    lora_param_.scale         = lora_reader["lora_scale"].as<float>(0);
+    lora_param_.max_wo_r      = lora_reader["lora_max_wo_r"].as<int>(0);
+    lora_param_.rank_pattern  = getLoraPattern<int>(lora_reader["lora_rank_pattern"].as<std::string>(""),
+                                                   [](const std::string& s) { return std::stoi(s); });
+    lora_param_.scale_pattern = getLoraPattern<float>(lora_reader["lora_scale_pattern"].as<std::string>(""),
+                                                      [](const std::string& s) { return std::stof(s); });
+    
     moe_param_.method = turbomind::MoeParam::kFused;
     // moe_param_.method            = turbomind::MoeParam::kNaive;
-    moe_param_.expert_num        = reader.GetInteger("llama", "expert_num", 0);
-    moe_param_.experts_per_token = reader.GetInteger("llama", "experts_per_token", 0);
-    moe_param_.inter_size        = reader.GetInteger("llama", "expert_inter_size", 0);
-
-    lora_param_.policy        = ft::getLoraPolicy(reader.Get("llama", "lora_policy", ""));
-    lora_param_.r             = reader.GetInteger("llama", "lora_r", 0);
-    lora_param_.scale         = reader.GetFloat("llama", "lora_scale", 0);
-    lora_param_.max_wo_r      = reader.GetInteger("llama", "lora_max_wo_r", 0);
-    lora_param_.rank_pattern  = getLoraPattern<int>(reader.Get("llama", "lora_rank_pattern", ""),
-                                                   [](const std::string& s) { return std::stoi(s); });
-    lora_param_.scale_pattern = getLoraPattern<float>(reader.Get("llama", "lora_scale_pattern", ""),
-                                                      [](const std::string& s) { return std::stof(s); });
+    moe_param_.expert_num        = model_reader["expert_num"].as<int>(0);
+    moe_param_.experts_per_token = model_reader["experts_per_token"].as<int>(0);
+    moe_param_.inter_size        = model_reader["expert_inter_size"].as<int>(0);
+    
     handleMissingParams();
 
     shared_state_          = std::make_shared<ft::SharedState>();
@@ -277,11 +283,11 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     const auto device_count = ft::getDeviceCount();
     engines_.resize(device_count);
 
-    const std::string weight_type_str = reader.Get("llama", "weight_type");
-    if (weight_type_str == "fp16") {
+    const std::string weight_type_str = model_reader["weight_type"].as<std::string>();
+    if (weight_type_str == "fp16" || weight_type_str == "float16") {
         weight_type_ = ft::WeightType::kFP16;
     }
-    else if (weight_type_str == "bf16") {
+    else if (weight_type_str == "bf16" || weight_type_str == "bfloat16") {
         weight_type_ = ft::WeightType::kBF16;
     }
     else if (weight_type_str == "fp32") {

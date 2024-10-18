@@ -8,7 +8,7 @@
 [![open issues](https://img.shields.io/github/issues-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
 
 [📘Documentation](https://lmdeploy.readthedocs.io/zh-cn/latest/) |
-[🛠️Quick Start](https://lmdeploy.readthedocs.io/zh-cn/latest/get_started.html) |
+[🛠️Quick Start](https://lmdeploy.readthedocs.io/zh-cn/latest/get_started/get_started.html) |
 [🤔Reporting Issues](https://github.com/InternLM/lmdeploy/issues/new/choose)
 
 [English](README.md) | 简体中文 | [日本語](README_ja.md)
@@ -26,8 +26,10 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/08\] 🔥🔥 LMDeploy现已集成至 [modelscope/swift](https://github.com/modelscope/swift)，成为 VLMs 推理的默认加速引擎
-- \[2024/07\] 🎉🎉 支持 Llama3.1 8B 和 70B 模型，以及工具调用功能
+- \[2024/09\] LMDeploy PyTorchEngine 增加了对 [华为 Ascend](docs/zh_cn/get_started/ascend/get_started.md) 的支持。支持的模型请见[这里](docs/zh_cn/supported_models/supported_models.md)
+- \[2024/09\] 通过引入 CUDA Graph，LMDeploy PyTorchEngine 在 Llama3-8B 推理上实现了 1.3 倍的加速
+- \[2024/08\] LMDeploy现已集成至 [modelscope/swift](https://github.com/modelscope/swift)，成为 VLMs 推理的默认加速引擎
+- \[2024/07\] 支持 Llama3.1 8B 和 70B 模型，以及工具调用功能
 - \[2024/07\] 支持 [InternVL2](docs/zh_cn/multi_modal/internvl.md) 全系列模型，[InternLM-XComposer2.5](docs/zh_cn/multi_modal/xcomposer2d5.md) 模型和 InternLM2.5 的 [function call 功能](docs/zh_cn/llm/api_server_tools.md)
 - \[2024/06\] PyTorch engine 支持了 DeepSeek-V2 和若干 VLM 模型推理, 比如 CogVLM2，Mini-InternVL，LlaVA-Next
 - \[2024/05\] 在多 GPU 上部署 VLM 模型时，支持把视觉部分的模型均分到多卡上
@@ -139,6 +141,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Phi-3-mini (3.8B)</li>
   <li>Phi-3.5-mini (3.8B)</li>
   <li>Phi-3.5-MoE (16x3.8B)</li>
+  <li>MiniCPM3 (4B)</li>
 </ul>
 </td>
 <td>
@@ -147,6 +150,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>InternLM-XComposer2.5 (7B)</li>
   <li>Qwen-VL (7B)</li>
+  <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
@@ -180,7 +184,7 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-自 v0.3.0 起，LMDeploy 预编译包默认基于 CUDA 12 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](./docs/zh_cn/installation.md)
+自 v0.3.0 起，LMDeploy 预编译包默认基于 CUDA 12 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](docs/zh_cn/get_started/installation.md)
 
 ## 离线批处理
 
@@ -195,12 +199,16 @@ print(response)
 > LMDeploy 默认从 HuggingFace 上面下载模型，如果要从 ModelScope 上面下载模型，请通过命令 `pip install modelscope` 安装ModelScope，并设置环境变量：
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
+>
+> 如果要从 openMind Hub 上面下载模型，请通过命令 `pip install openmind_hub` 安装openMind Hub，并设置环境变量：
+>
+> `export LMDEPLOY_USE_OPENMIND_HUB=True`
 
 关于 pipeline 的更多推理参数说明，请参考[这里](docs/zh_cn/llm/pipeline.md)
 
 # 用户教程
 
-请阅读[快速上手](./docs/zh_cn/get_started.md)章节，了解 LMDeploy 的基本用法。
+请阅读[快速上手](docs/zh_cn/get_started/get_started.md)章节，了解 LMDeploy 的基本用法。
 
 为了帮助用户更进一步了解 LMDeploy，我们准备了用户指南和进阶指南，请阅读我们的[文档](https://lmdeploy.readthedocs.io/zh-cn/latest/)：
 

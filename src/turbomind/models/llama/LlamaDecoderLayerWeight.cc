@@ -267,13 +267,19 @@ template<typename T>
 void loadWeights(
     LlamaDenseWeight<T>& w, std::string prefix, int rank, FtCudaDataType model_file_type, size_t tensor_para_size)
 {
-    auto       max_prefix = prefix + "." + std::to_string(tensor_para_size - 1);
-    const auto type       = model_file_type;
-
-    size_t dim0 = w.input_dims;
-    size_t dim1 = w.output_dims;
+    auto weight_file  = prefix + "." + std::to_string(tensor_para_size - 1) + ".weight";
+    auto qweight_file = prefix + "." + std::to_string(tensor_para_size - 1) + ".qweight";
+    
+    if (!std::filesystem::exists(weight_file) && !std::filesystem::exists(qweight_file)) {
+        TM_LOG_ERROR("%s and %s does not exist", weight_file.c_str(), qweight_file.c_str());
+        FT_CHECK(false);
+    }
 
     prefix += "." + std::to_string(rank);
+
+    size_t     dim0 = w.input_dims;
+    size_t     dim1 = w.output_dims;
+    const auto type = model_file_type;
 
     if (w.bias) {
         loadWeightFromBin((T*)w.bias, {1, dim1}, prefix + ".bias", type);
