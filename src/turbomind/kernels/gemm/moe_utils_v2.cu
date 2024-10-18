@@ -13,12 +13,7 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
-#include "src/turbomind/kernels/core/smem.h"
-#include "src/turbomind/kernels/gemm/cp_async.h"
-#include "src/turbomind/kernels/gemm/cta_map.h"
-#include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
-#include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind {
 
@@ -389,12 +384,11 @@ void invokeMoeReduce(T*           dst,
                      int          dims,
                      cudaStream_t st)
 {
-    constexpr int threads  = 256;
-    constexpr int vec_size = 16 / sizeof(T);
-
     // std::cout << __PRETTY_FUNCTION__ << std::endl;
 
     const auto invoke = [&](auto e) {
+        constexpr int threads     = 256;
+        constexpr int vec_size    = 16 / sizeof(T);
         constexpr int exp_per_tok = decltype(e)::value;
         MoeReduceKernel<vec_size, exp_per_tok, threads><<<tokens, threads, 0, st>>>(  //
             dst,
