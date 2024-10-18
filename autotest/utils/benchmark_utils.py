@@ -168,7 +168,7 @@ def restful_test(config,
     if not health_check(http_url):
         return False, 'server not start'
 
-    command = f'python3 benchmark/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True '  # noqa: F401, E501
+    command = f'python3 benchmark/profile_restful_api.py --port {port} --tokenizer {model_path} --dataset-path {dataset_path}'  # noqa: F401, E501
     if is_smoke:
         command += ' --num-prompts 200'
     else:
