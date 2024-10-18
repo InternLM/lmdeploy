@@ -1,5 +1,15 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <algorithm>
+#include <cstdio>
+#include <limits>
+#include <numeric>
+#include <random>
+
+#include <cub/block/block_reduce.cuh>
+#include <cub/block/block_scan.cuh>
+#include <cuda_pipeline_primitives.h>
+
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
@@ -9,14 +19,6 @@
 #include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include <algorithm>
-#include <cstdio>
-#include <limits>
-#include <random>
-
-#include <cub/block/block_reduce.cuh>
-#include <cub/block/block_scan.cuh>
-#include <cuda_pipeline_primitives.h>
 
 namespace turbomind {
 
