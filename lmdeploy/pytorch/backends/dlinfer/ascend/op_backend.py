@@ -94,7 +94,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         if step_context.is_decoding:
             # calculate somae params of paged_decode attention stage.
             kv_seqlens_cpu = step_context.kv_seqlens.cpu()
-            max_kv_seq_len = torch.max(kv_seqlens_cpu).item()
+            max_kv_seq_len = -1 # not used in paged_decode attention stage.
         elif is_unpaged_prefill:
             # calculate somae params of unpaged_prefill attention stage.
             kv_seqlens_cpu = step_context.kv_seqlens.cpu()
@@ -110,7 +110,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             # calculate somae params of paged_prefill attention stage.
             kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(
                 step_context.q_seqlens, 0).cpu()
-            max_kv_seq_len = torch.max(kv_seqlens_cpu).item()
+            max_kv_seq_len = -1 # not used in paged_decode attention stage.
             block_offsets_int32 = step_context.block_offsets.to(torch.int32)
             step_context.block_offsets = block_offsets_int32.repeat_interleave(
                 step_context.q_seqlens, 0)
