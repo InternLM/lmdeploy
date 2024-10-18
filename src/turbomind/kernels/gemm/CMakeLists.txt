@@ -16,7 +16,7 @@ add_library(gemm2
         tuner/stopping_criterion.cc
         tuner/params.cc
         # kernel/f16_u4g128_f16_tnt_sm90_s16816.cu
-        # kernel/f16_u4g128_f16_tnt_sm80_s16816.cu
+        kernel/f16_u4g128_f16_tnt_sm80_s16816.cu
         # kernel/f16_u4g128_f16_tnt_sm75_s16816.cu
         # kernel/f16_u4g128_f16_tnt_sm70_s884.cu
         # kernel/f16_u4g128_f16_tnt_sm75_simt.cu

@@ -269,13 +269,13 @@ def export_plora(f, g, i):
     f(i, g('Plora_B.weight'), 'lora_b.weight', identity)
 
 
-def get_weight_exporters(kinds):
+def get_weight_exporters(kinds, bias=0):
     e = []
     if 'qweight' in kinds:
         e.append(export_quant_weight_only)
     if 'weight' in kinds:
         e.append(export_weight)
-    if 'bias' in kinds:
+    if bias and 'bias' in kinds:
         e.append(export_bias)
     if 'Plora_A.weight' in kinds:
         e.append(export_plora)
@@ -302,7 +302,7 @@ class Ffn:
         self.inter_size = model.cfg.inter_size
         self.group_size = max(1, model.cfg.group_size)
 
-    def _export(self, fmt: str, idx: int, w123, kind: str, pack_fn=identity, gs=False):
+    def _export(self, fmt: str, idx: int, w123, kind: str, pack_fn=identity, apply_gs=False):
         is_lora_a, is_lora_b = get_lora_flags(kind)
         w1, w2, w3 = map(transpose, w123)
 
@@ -310,7 +310,7 @@ class Ffn:
             w1 = pad_out_dims(w1, self.inter_size)
             w3 = pad_out_dims(w3, self.inter_size)
         if not is_lora_b:
-            group_size = self.group_size if gs else 1
+            group_size = self.group_size if apply_gs else 1
             w2 = pad_in_dims(w2, self.inter_size // group_size)
 
         w1, w2, w3 = map(pack_fn, (w1, w2, w3))
@@ -382,7 +382,7 @@ class Attn:
             o = torch.zeros_like(q)
         return qkv, o
 
-    def _export(self, idx: int, qkvo, kind: str, pack_fn=identity):
+    def _export(self, idx: int, qkvo, kind: str, pack_fn=identity, **kwargs):
         if all(x is None for x in qkvo):
             return
         is_lora_a, is_lora_b = get_lora_flags(kind)
@@ -400,7 +400,7 @@ class Attn:
                               copy=is_lora_b)
 
     def export(self, i: int, r: BaseReader):
-        for e in get_weight_exporters(r.attn(i, None)):
+        for e in get_weight_exporters(r.attn(i, None), bias=1):
             e(self._export, partial(r.attn, i), i)
 
 

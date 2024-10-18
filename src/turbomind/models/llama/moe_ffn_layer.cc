@@ -89,6 +89,9 @@ void MoeFfnLayer<T>::forward(T* inout, int tokens, int layer_id, const MoeFfnWei
     check_cuda_error(cudaMemsetAsync(accum_, 0, sizeof(int) * param_.expert_num * kMoeGateMaxTiles, stream_));
     sync_check_cuda_error();
 
+    // dump_logits(tokens, layer_id);
+
+    /// TODO: fix illegal memory access even if NaN are present in logits
     invokeMoeGate_V2(f2n_,
                      en2f_,
                      offsets_,
@@ -259,6 +262,24 @@ void MoeFfnLayer<T>::forward(T* inout, int tokens, int layer_id, const MoeFfnWei
     //     check_cuda_error(cudaStreamSynchronize(stream_));
     //     std::abort();
     // }
+}
+
+template<class T>
+void MoeFfnLayer<T>::dump_logits(int token_num, int layer_id)
+{
+    std::vector<float> logits(token_num * param_.expert_num);
+    check_cuda_error(
+        cudaMemcpyAsync(logits.data(), logits_, sizeof(float) * logits.size(), cudaMemcpyDefault, stream_));
+    check_cuda_error(cudaStreamSynchronize(stream_));
+
+    auto ptr = logits.data();
+    std::cout << "layer_id: " << layer_id << std::endl;
+    for (int i = 0; i < token_num; ++i) {
+        for (int e = 0; e < param_.expert_num; ++e) {
+            std::cout << *ptr++ << " ";
+        }
+        std::cout << std::endl;
+    }
 }
 
 #ifdef ENABLE_FP32

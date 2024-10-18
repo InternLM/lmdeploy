@@ -59,10 +59,10 @@ static std::optional<GemmDesc> get_gemm_desc(const Operation&    operation,
                   operation.batch_dim,
                   operation.context && operation.context->is_dynamic_sched()};
 
-    desc.m = desc.align_m = m0;
-    desc.n = desc.align_n = n0;
-    desc.k = desc.align_k = k0;
-    desc.num              = l0;
+    desc.m   = m0;
+    desc.n   = n0;
+    desc.k   = k0;
+    desc.num = l0;
 
     return desc;
 }
@@ -157,13 +157,13 @@ std::vector<LaunchSpec> StaticGemmContext::Populate(const Kernel& kernel, const 
     int max_splits =
         kernel.GetMaxSplits({m, n, k, 1}, tiled_shape_m * tiled_shape_n, param.barriers_size, param.partials_size);
 
-    std::cout << "max_splits: " << max_splits << std::endl;
+    // std::cout << "max_splits: " << max_splits << std::endl;
 
     max_splits = std::min(param.max_splits, max_splits);
 
     std::vector<LaunchSpec> specs;
 
-    for (int splits = 1; splits <= param.max_splits; ++splits) {
+    for (int splits = 1; splits <= max_splits; ++splits) {
         // Split quantization, penalize uneven splits
         const int64_t split_ceil_k = cdiv(chunk_cnt_k, splits) * kernel.chunk_size_k();
         // Footprint for single split
@@ -366,7 +366,7 @@ std::optional<GemmDesc> MoeGemmContext::Init(const Operation&    operation,
     output_dim_ = desc_->n;
     input_dim_  = desc_->k;
 
-    desc_->align_m = 1;  // gcd([m])
+    // desc_->align_m = 1;  // gcd([m])
     // desc_->num     = expert_num_;
 
     tokens_ = desc_->m / experts_per_token_;

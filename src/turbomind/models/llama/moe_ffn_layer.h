@@ -55,6 +55,8 @@ public:
 
     void gate(float* logits, const T* input, int tokens, const LlamaDenseWeight<T>& weight);
 
+    void dump_logits(int token_num, int layer_id);
+
 private:
     const size_t           inter_size_;
     const size_t           hidden_dim_;

@@ -29,9 +29,6 @@ struct GemmDesc {
     Epilogue  epilogue;
     int       batch_dim;
     int       sched;
-    int       align_m;
-    int       align_n;
-    int       align_k;
     int       m;
     int       n;
     int       k;

@@ -21,6 +21,7 @@
 
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include <cuda_bf16.h>
 
 namespace turbomind {
 
@@ -33,6 +34,24 @@ enum class WeightType : int
     kINT8,
     kINT4
 };
+
+template<class T>
+constexpr WeightType get_default_weight_type()
+{
+    if constexpr (std::is_same_v<T, half>) {
+        return WeightType::kFP16;
+    }
+    else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+        return WeightType::kBF16;
+    }
+    else if constexpr (std::is_same_v<T, float>) {
+        return WeightType::kFP32;
+    }
+    else {
+        static_assert(sizeof(T) != sizeof(T), "not implemented");
+        return {};
+    }
+}
 
 inline size_t getBitSize(WeightType type)
 {
@@ -176,7 +195,7 @@ struct MoeFfnWeight {
 
         gate.input_dims  = hidden_dim;
         gate.output_dims = expert_num;
-        gate.type        = weight_type;
+        gate.type        = get_default_weight_type<T>();
         gate.group_size  = group_size;
 
         experts.resize(expert_num);

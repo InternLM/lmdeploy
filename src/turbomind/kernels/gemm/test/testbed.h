@@ -94,6 +94,8 @@ public:
         reference_.set_stream(stream);
         stream_ = stream;
 
+        cudaGetDeviceProperties(&prop_, 0);
+
         m_ = m;
         n_ = n;
         k_ = k;
@@ -240,8 +242,7 @@ public:
                 (Tb*)b_pack_.data().get(), b_.data().get(), sizeof(Tb) * b_.size(), cudaMemcpyDefault, stream);
         }
 
-        cudaGetDeviceProperties(&prop_, 0);
-        ctx_ = std::make_unique<DynamicGemmContext>(prop_, stream_);
+        // ctx_ = std::make_unique<DynamicGemmContext>(prop_, stream_);
 
         InitMoE(batch_size_, experts, top_e);
     }
@@ -405,9 +406,10 @@ public:
         void* A = a_pack_.data().get();
         void* B = b_pack_.data().get();
         void* V = v_pack_.data().get();
-        void* C = c_e_.data().get();
+        void* C = c_.data().get();
 
         if (experts_) {
+            C = c_e_.data().get();
             if (!moe_n_ptrs_.empty()) {
                 B = moe_n_ptrs_.data().get();
             }

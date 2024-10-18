@@ -150,7 +150,7 @@ std::string Kernel::GetName() const
        << "_" << desc_.stages                                                            //
        << "_" << to_string(desc_.op_class)                                               //
        << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z;
-    ss << "_" << (desc_.sched ? "dynamic" : "");
+    ss << (desc_.sched ? "_dynamic" : "");
     ss << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y                        //
        << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z  //
        << "_" << desc_.policy_a << desc_.policy_b;

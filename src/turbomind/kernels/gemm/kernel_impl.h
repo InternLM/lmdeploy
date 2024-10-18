@@ -274,7 +274,7 @@ public:
         return Map::get_log_tile(tiles, 1 << swizzle);
     }
 
-    int FixSplits(const int4& shape, int2 tiled_mn, int splits, Workspace& ws)
+    int FixSplits(const int4& shape, int2 tiled_mn, int splits, Workspace& ws) const
     {
         const int tiles            = tiled_mn.x * tiled_mn.y;
         const auto& [bsize, psize] = GetWorkspaceSizesV2(shape, tiles, splits);

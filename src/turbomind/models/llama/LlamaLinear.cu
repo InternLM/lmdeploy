@@ -168,10 +168,16 @@ struct LlamaLinear<T>::Impl {
     {
         using namespace gemm;
 
+        QuantDesc quant_b{};
+        if (weight.k_desc.type == gemm::DataType::U4) {
+            quant_b.type       = QuantType::kDefault;
+            quant_b.group_size = weight.group_size;
+        }
+
         const Operation operation{dispatch_policy_,
                                   type == kFusedSiluFfn ? Epilogue::kGatedSilu : Epilogue::kNone,
                                   {QuantType::kNone},
-                                  {QuantType::kNone},
+                                  quant_b,
                                   0,
                                   context,
                                   nullptr};

@@ -9,7 +9,7 @@ INPUT_MODELS = Registry(
     'source model', locations=['lmdeploy.turbomind.deploy.source_model.base'])
 
 class BaseReader(ABC):
-    """Base checkpoint manager."""
+    """Mapping between TM modules and source modules"""
 
     def __init__(self):
         pass

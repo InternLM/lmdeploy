@@ -110,9 +110,6 @@ void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc,
                     g.epilogue,
                     g.batch_dim,
                     g.sched,
-                    g.align_m,
-                    g.align_n,
-                    g.align_k,
                     g.m,
                     g.n,
                     g.k,
@@ -177,9 +174,6 @@ void ImportDispatchCache(std::istream&                                 is,
                     g.epilogue,
                     g.batch_dim,
                     g.sched,
-                    g.align_m,
-                    g.align_n,
-                    g.align_k,
                     g.m,
                     g.n,
                     g.k,
@@ -260,9 +254,6 @@ inline decltype(auto) as_tuple(const GemmDesc& d)
                     d.quant_b.group_size,
                     d.batch_dim,
                     d.sched,
-                    d.align_m,
-                    d.align_n,
-                    d.align_k,
                     d.m,
                     d.n,
                     d.k,
@@ -302,7 +293,8 @@ struct DispatchCache::Impl {
     std::optional<LaunchSpec> Find(GemmDesc desc, bool exact) const
     {
         const int batch_size = extract_batch_size(desc);
-        // std::cerr << batch_size << " " << desc.m << " " << desc.n << " " << desc.k << "\n";
+        // std::cerr << batch_size << " " << desc.m << " " << desc.n << " " << desc.k << " " << std::boolalpha << exact
+        //           << "\n";
         const auto it = cache_.find(desc);
         if (it != cache_.end()) {
             const auto& [idxs, specs] = it->second;
@@ -311,8 +303,9 @@ struct DispatchCache::Impl {
                 std::lower_bound(idxs.begin(), idxs.end(), std::make_pair(batch_size, 0), [](auto& a, auto& b) {  //
                     return a.first < b.first;
                 });
-            // std::cerr << p->first << " " << p->second << "\n";
+            // std::cout << it->second.specs.size() << std::endl;
             if (p != idxs.end() && (!exact || p->first == batch_size)) {
+                // std::cerr << p->first << " " << p->second << "\n";
                 return specs[p->second];
             }
         }
