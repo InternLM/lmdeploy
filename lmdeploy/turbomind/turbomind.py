@@ -4,6 +4,7 @@ import copy
 import json
 import os.path as osp
 import sys
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from itertools import repeat
@@ -129,6 +130,10 @@ class TurboMind:
 
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
+
+    def __del__(self):
+        """release hardware resources."""
+        self.model_comm.destroy_nccl_params(self.nccl_params)
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
@@ -314,7 +319,8 @@ class TurboMind:
         Returns:
             TurboMindInstance: an instance of turbomind
         """
-        return TurboMindInstance(self, self.config, cuda_stream_id)
+        return TurboMindInstance(weakref.proxy(self), self.config,
+                                 cuda_stream_id)
 
 
 class TurboMindInstance:

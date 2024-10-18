@@ -32,6 +32,10 @@ class VLAsyncEngine(AsyncEngine):
         self.vl_prompt_template = get_vl_prompt_template(
             model_path, self.chat_template, self.model_name)
 
+    def close(self):
+        self.vl_encoder.close()
+        super().close()
+
     def _convert_prompts(self,
                          prompts: Union[VLPromptType, List[Dict],
                                         List[VLPromptType], List[List[Dict]]]):

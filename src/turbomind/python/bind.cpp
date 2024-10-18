@@ -411,6 +411,7 @@ PYBIND11_MODULE(_turbomind, m)
              "node_id"_a,
              "device_id_start"_a = 0,
              "multi_node"_a      = false)
+        .def("destroy_nccl_params", &AbstractTransformerModel::destroyNcclParams, "params"_a)
         .def(
             "create_custom_comms",
             [](AbstractTransformerModel* model, int world_size) {
