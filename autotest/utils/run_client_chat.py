@@ -24,7 +24,6 @@ def command_line_test(config,
                                      '/workspace_' + model_case,
                                      config,
                                      model_case,
-                                     need_tp=True,
                                      cuda_prefix=cuda_prefix)
         if type == 'turbomind':
             if ('w4' in model_case

@@ -56,9 +56,6 @@ pytorch_chat_model:
     - Qwen/Qwen2-VL-2B-Instruct
     - Qwen/Qwen2-VL-7B-Instruct
     - mistralai/Mistral-7B-Instruct-v0.2
-    - mistralai/Mixtral-8x7B-Instruct-v0.1
-    - google/gemma-2-9b-it
-    - deepseek-ai/DeepSeek-V2-Lite-Chat
     - THUDM/glm-4v-9b
     - THUDM/glm-4-9b-chat
     - microsoft/Phi-3-mini-4k-instruct
@@ -103,8 +100,6 @@ pytorch_quatization:
         - Qwen/Qwen2-1.5B-Instruct
     w8a8:
         - internlm/internlm2_5-7b-chat
-        - internlm/internlm2_5-20b-chat
-        - internlm/internlm2_5-20b
         - internlm/internlm2_5-7b
     no_kvint4:
         - OpenGVLab/InternVL2-4B
