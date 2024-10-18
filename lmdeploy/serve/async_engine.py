@@ -455,6 +455,10 @@ class AsyncEngine(LogitsMixin):
             prompt = chat_template.messages2prompt(prompt,
                                                    sequence_start,
                                                    tools=tools)
+        if prompt is None:
+            raise ValueError(
+                f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
+            )
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         return {'prompt': prompt, 'input_ids': input_ids}
 
