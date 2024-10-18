@@ -113,7 +113,7 @@ class PytorchLoader(BaseLoader):
                 ready = sorted(params.keys())[:-1]
             for idx in ready:
                 yield (idx, params.pop(idx))
-        idxs = sorted(params.key())
+        idxs = sorted(params.keys())
         for idx in idxs:
             yield (idx, params.pop(idx))
 
@@ -122,11 +122,11 @@ def create_loader(model_path: str, pattern: str) -> BaseLoader:
     cls = None
     if osp.exists(osp.join(model_path, SAFE_WEIGHT_INDEX_NAME)):
         cls = SafetensorsLoader
-    elif glob(osp.exists(osp.join(model_path, SAFE_WEIGHT_PATTERN))):
+    elif glob(osp.join(model_path, SAFE_WEIGHT_PATTERN)):
         cls = SafetensorsLoader
     elif osp.exists(osp.join(model_path, WEIGHT_INDEX_NAME)):
         cls = PytorchLoader
-    elif glob(osp.exists(osp.join(model_path, WEIGHT_PATTERN))):
+    elif glob(osp.join(model_path, WEIGHT_PATTERN)):
         cls = PytorchLoader
     assert cls is not None, f'Failed to find valid loader for {model_path}'
     return cls(model_path, pattern)
