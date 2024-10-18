@@ -4,6 +4,7 @@
 
 #include "src/turbomind/kernels/core/common.h"
 #include <cassert>
+#include <cstdint>
 
 namespace turbomind {
 
