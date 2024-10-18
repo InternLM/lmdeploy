@@ -886,6 +886,9 @@ Reminder:
         if 'llama-3.1-' in model_path.lower(
         ) or 'llama3.1-' in model_path.lower():
             return 'llama3_1'
+        if 'llama-3.2-' in model_path.lower(
+        ) or 'llama3.2-' in model_path.lower():
+            return 'llama3_1'
 
 
 @MODELS.register_module(name='minicpmv-2d6')

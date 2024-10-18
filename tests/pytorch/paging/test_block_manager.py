@@ -114,6 +114,26 @@ class TestDefaultBlockManager:
         msg = sess.add_sequence(token_ids)
         assert not block_mgr.can_allocate(msg)
 
+    def test_num_required_blocks(self, block_mgr, block_size, num_gpu_blocks):
+        from lmdeploy.pytorch.messages import InputEmbeddings
+        sess = SchedulerSession(0, block_size)
+
+        token_ids = torch.tensor([1])
+        msg = sess.add_sequence(token_ids)
+        num_required = block_mgr.num_required_blocks(msg)
+        assert num_required == 1
+
+        embedding = InputEmbeddings(None, 0, block_size * 2)
+        msg = sess.add_sequence(token_ids, input_embeddings=[embedding])
+        num_required = block_mgr.num_required_blocks(msg)
+        assert num_required == 1
+
+        token_ids = torch.tensor([1] * block_size * 3)
+        embedding = InputEmbeddings(None, 0, block_size * 2)
+        msg = sess.add_sequence(token_ids, input_embeddings=[embedding])
+        num_required = block_mgr.num_required_blocks(msg)
+        assert num_required == 3
+
     def test_append_slot(self, block_mgr, block_size, num_gpu_blocks):
         sess = SchedulerSession(0, block_size)
 

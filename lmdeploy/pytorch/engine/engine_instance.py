@@ -168,7 +168,8 @@ class EngineInstance:
                    adapter_name=adapter_name,
                    input_embeddings=input_embeddings_new,
                    mrope_position_ids=kwargs.get('mrope_position_ids'),
-                   mrope_position_delta=kwargs.get('mrope_position_delta'))
+                   mrope_position_delta=kwargs.get('mrope_position_delta'),
+                   cross_attention_states=kwargs.get('cross_attention_states'))
         req_id = await self.req_sender.async_send_async(
             RequestType.ADD_MESSAGE, msg)
 
