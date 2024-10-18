@@ -460,6 +460,7 @@ def _tp_model_loop(
 def _start_tp_process(proc_id: int,
                       world_size: int,
                       func: Callable,
+                      log_level: int,
                       device_context: DeviceContext,
                       args: List = None,
                       kwargs: Dict = None):
@@ -473,6 +474,7 @@ def _start_tp_process(proc_id: int,
         kwargs (Dict): The keyword arguments of the func.
     """
     rank = proc_id + 1
+    logger.setLevel(log_level)
     try:
         from lmdeploy.pytorch.check_env import check_env_deeplink
         check_env_deeplink(device_context.device_type)
@@ -615,6 +617,7 @@ class TPModelAgent(AutoModelAgent):
             args=(
                 world_size,
                 _tp_model_loop,
+                logger.level,
                 device_context,
                 (model_path, ),
                 dict(
