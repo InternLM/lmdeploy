@@ -243,6 +243,7 @@ class MllamaVLModel(VisonModel):
         from transformers.models.mllama.modeling_mllama import (
             MllamaVisionEncoderLayer, MllamaVisionModel)
         MllamaVisionModel.forward = MllamaVisionModelPatch.forward
+        MllamaVisionModel.apply_class_embedding = MllamaVisionModelPatch.apply_class_embedding  # noqa
         MllamaVisionEncoderLayer.forward = MllamaVisionEncoderLayerPatch.forward  # noqa
         from accelerate import init_empty_weights
         with init_empty_weights():
