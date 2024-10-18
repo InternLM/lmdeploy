@@ -269,7 +269,7 @@ void loadWeights(
 {
     auto weight_file  = prefix + "." + std::to_string(tensor_para_size - 1) + ".weight";
     auto qweight_file = prefix + "." + std::to_string(tensor_para_size - 1) + ".qweight";
-    
+
     if (!std::filesystem::exists(weight_file) && !std::filesystem::exists(qweight_file)) {
         TM_LOG_ERROR("%s and %s does not exist", weight_file.c_str(), qweight_file.c_str());
         FT_CHECK(false);
@@ -645,7 +645,8 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
 
             process_ffn(e, moe_weights.method);
 
-            const auto &fused = e.fused_gating_intermediate, output = e.output;
+            const auto& fused  = e.fused_gating_intermediate;
+            const auto& output = e.output;
 
             fused_ptrs.push_back({fused.kernel, fused.k_desc.ld});
             output_ptrs.push_back({output.kernel, output.k_desc.ld});

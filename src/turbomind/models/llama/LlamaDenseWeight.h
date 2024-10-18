@@ -126,7 +126,7 @@ struct LlamaDenseWeight {
 
     std::pair<size_t, size_t> lora_size() const noexcept
     {
-        return {input_dims * lora.r, lora.r * output_dims};
+        return {sizeof(T) * input_dims * lora.r, sizeof(T) * lora.r * output_dims};
     }
 };
 
