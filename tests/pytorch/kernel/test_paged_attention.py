@@ -26,9 +26,16 @@ def _make_bias(seq_lens, history_lens, neg_val):
     return mask.float() * neg_val
 
 
-def _make_blocked_cache(batched_k, batched_v, seq_lens, history_lens,
-                        block_offsets, block_size, num_heads_k, feat_dim,
-                        feat_dim_v):
+def _make_blocked_cache(batched_k,
+                        batched_v,
+                        seq_lens,
+                        history_lens,
+                        block_offsets,
+                        block_size,
+                        num_heads_k,
+                        feat_dim,
+                        feat_dim_v,
+                        layout: str = 'bshd'):
     max_blocks_nums = block_offsets.max() + 1
     full_seq_lens = seq_lens + history_lens
     blocked_k = batched_k.new_zeros(max_blocks_nums, block_size, num_heads_k,
@@ -47,6 +54,10 @@ def _make_blocked_cache(batched_k, batched_v, seq_lens, history_lens,
             size = tmp_k.size(0)
             blocked_k[block_off, :size] = tmp_k
             blocked_v[block_off, :size] = tmp_v
+
+    if layout == 'bhsd':
+        blocked_k = blocked_k.transpose(1, 2).contiguous()
+        blocked_v = blocked_v.transpose(1, 2).contiguous()
 
     return blocked_k, blocked_v
 
@@ -130,6 +141,10 @@ class TestPagedAttention:
         yield request.param
 
     @pytest.fixture
+    def layout(self, request):
+        yield request.param
+
+    @pytest.fixture
     def seq_lens(self, request):
         yield torch.tensor(request.param, device='cuda')
 
@@ -208,11 +223,11 @@ class TestPagedAttention:
 
     @pytest.fixture
     def blocked_kv(self, batched_kv, seq_lens, history_lens, block_offsets,
-                   block_size, num_heads_k, feat_dim, feat_dim_v):
+                   block_size, num_heads_k, feat_dim, feat_dim_v, layout):
         batched_k, batched_v = batched_kv
         yield _make_blocked_cache(batched_k, batched_v, seq_lens, history_lens,
                                   block_offsets, block_size, num_heads_k,
-                                  feat_dim, feat_dim_v)
+                                  feat_dim, feat_dim_v, layout)
 
     @pytest.fixture
     def mask(self, seq_lens, history_lens):
@@ -236,9 +251,10 @@ class TestPagedAttention:
                               ([1, 1, 1, 1], [50, 40, 30, 20])],
                              indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
+    @pytest.mark.parametrize('layout', ['bshd', 'bhsd'], indirect=True)
     def test_paged_attention(self, conti_q, blocked_kv, block_offsets,
                              start_loc, seq_lens, history_lens, feat_dim_v,
-                             conti_gt):
+                             layout, conti_gt):
         from lmdeploy.pytorch.kernels import paged_attention_fwd
         kv_seq_lens = seq_lens + history_lens
         max_seq_len = seq_lens.max().item()
@@ -254,7 +270,8 @@ class TestPagedAttention:
                             q_start_loc=start_loc,
                             q_seqlens=seq_lens,
                             kv_seqlens=kv_seq_lens,
-                            max_seqlen=max_seq_len)
+                            max_seqlen=max_seq_len,
+                            kv_layout=layout)
         torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
 
     @pytest.fixture
@@ -282,9 +299,10 @@ class TestPagedAttention:
                              indirect=True)
     @pytest.mark.parametrize('win_size', (32, ), indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
+    @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
     def test_window_attention(self, conti_q, blocked_kv, block_offsets,
                               start_loc, seq_lens, history_lens, feat_dim_v,
-                              win_size, window_gt):
+                              win_size, layout, window_gt):
         from lmdeploy.pytorch.kernels import paged_attention_fwd
         kv_seq_lens = seq_lens + history_lens
         max_seq_len = seq_lens.max().item()
@@ -300,7 +318,8 @@ class TestPagedAttention:
                             q_seqlens=seq_lens,
                             kv_seqlens=kv_seq_lens,
                             max_seqlen=max_seq_len,
-                            window_size=win_size)
+                            window_size=win_size,
+                            kv_layout=layout)
         torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
 
 
