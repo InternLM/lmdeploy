@@ -5,47 +5,18 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from ..base import OpType
-from ..default import DefaultOpsBackend
+from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
 
 
-class AscendOpsBackend(DefaultOpsBackend):
+class AscendOpsBackend(DlinferOpsBackend):
     """ascend layer backend."""
 
     @staticmethod
     def get_name() -> str:
         """backend name."""
         return 'ascend'
-
-    @classmethod
-    def get_layer_impl_builder(cls, layer_type: OpType):
-        """get ascend layer builder."""
-        if layer_type == OpType.Attention:
-            from .attention import AscendAttentionBuilder
-            return AscendAttentionBuilder
-        elif layer_type == OpType.ApplyRotaryEmb:
-            from .apply_rotary_emb import AscendApplyRotaryEmbBuilder
-            return AscendApplyRotaryEmbBuilder
-        elif layer_type == OpType.RMSNorm:
-            from .norm import AscendRMSNormBuilder
-            return AscendRMSNormBuilder
-        elif layer_type == OpType.SoftmaxTopK:
-            from .moe import AscendSoftmaxTopKBuilder
-            return AscendSoftmaxTopKBuilder
-        elif layer_type == OpType.FusedMoE:
-            from .moe import AscendFusedMoEBuilder
-            return AscendFusedMoEBuilder
-        else:
-            logger.debug(
-                f'Op {layer_type} fallback to default implementation.')
-            return super().get_layer_impl_builder(layer_type)
-
-    @staticmethod
-    def get_attention_metadata_cls():
-        from .attention import AscendAttentionMetadata
-        return AscendAttentionMetadata
 
     @staticmethod
     def get_k_block_shape(

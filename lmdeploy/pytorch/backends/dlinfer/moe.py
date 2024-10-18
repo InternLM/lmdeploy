@@ -2,14 +2,14 @@
 
 import torch
 
-from lmdeploy.pytorch.kernels.ascend import moe_gating_topk_softmax
+from lmdeploy.pytorch.kernels.dlinfer import moe_gating_topk_softmax
 
 from ..moe import (FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder,
                    SoftmaxTopKImpl)
 
 
-class AscendSoftmaxTopKImpl(SoftmaxTopKImpl):
-    """ascend softmax topk implementation."""
+class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
+    """dlinfer softmax topk implementation."""
 
     def __init__(self, top_k: int, dim: int = -1):
         self.top_k = top_k
@@ -22,17 +22,17 @@ class AscendSoftmaxTopKImpl(SoftmaxTopKImpl):
             torch.int64)
 
 
-class AscendSoftmaxTopKBuilder(SoftmaxTopKBuilder):
-    """ascend softmax topk implementation builder."""
+class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
+    """dlinfer softmax topk implementation builder."""
 
     @staticmethod
     def build(top_k: int, dim: int = -1):
         """build."""
-        return AscendSoftmaxTopKImpl(top_k, dim)
+        return DlinferSoftmaxTopKImpl(top_k, dim)
 
 
-class AscendFusedMoEImpl(FusedMoEImpl):
-    """ascend fused moe implementation."""
+class DlinferFusedMoEImpl(FusedMoEImpl):
+    """dlinfer fused moe implementation."""
 
     def __init__(self, top_k: int, renormalize: bool = False):
         self.top_k = top_k
@@ -68,10 +68,10 @@ class AscendFusedMoEImpl(FusedMoEImpl):
         return moe_output
 
 
-class AscendFusedMoEBuilder(FusedMoEBuilder):
-    """ascend fused moe builder."""
+class DlinferFusedMoEBuilder(FusedMoEBuilder):
+    """dlinfer fused moe builder."""
 
     @staticmethod
     def build(top_k: int, renormalize: bool = False):
         """build from mlp."""
-        return AscendFusedMoEImpl(top_k=top_k, renormalize=renormalize)
+        return DlinferFusedMoEImpl(top_k=top_k, renormalize=renormalize)

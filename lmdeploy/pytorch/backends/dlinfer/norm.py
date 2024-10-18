@@ -1,13 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.pytorch.kernels.ascend import rms_norm
+from lmdeploy.pytorch.kernels.dlinfer import rms_norm
 
 from ..norm import RMSNormBuilder, RMSNormImpl
 
 
-class AscendRMSNormImpl(RMSNormImpl):
-    """ascend RMS norm implementation."""
+class DlinferRMSNormImpl(RMSNormImpl):
+    """dlinfer RMS norm implementation."""
 
     def __init__(self, hidden_size: int, eps: float = 1e-6):
         self.hidden_size = hidden_size
@@ -26,10 +26,10 @@ class AscendRMSNormImpl(RMSNormImpl):
             return x, residual
 
 
-class AscendRMSNormBuilder(RMSNormBuilder):
-    """ascend RMS norm implementation builder."""
+class DlinferRMSNormBuilder(RMSNormBuilder):
+    """dlinfer RMS norm implementation builder."""
 
     @staticmethod
     def build(weight: torch.Tensor, eps: float = 1e-6):
         """build."""
-        return AscendRMSNormImpl(weight, eps)
+        return DlinferRMSNormImpl(weight, eps)
