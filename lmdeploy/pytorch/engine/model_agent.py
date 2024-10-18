@@ -401,7 +401,7 @@ def _broadcast_inputs(rank: int, inputs: Any, stream: torch.cuda.Stream):
     """get input tensor parallel."""
     # broadcast meta info
     if rank != 0:
-        inputs = [None, None, None, None]
+        inputs = [None, None, None]
 
     with torch.cuda.stream(stream):
         dist.broadcast_object_list(inputs)
@@ -441,11 +441,8 @@ def _tp_model_loop(
 
     while True:
         barrier.wait()
-        inputs, swap_in_map, swap_out_map, exit_flag = _broadcast_inputs(
+        inputs, swap_in_map, swap_out_map = _broadcast_inputs(
             rank, None, stream)
-
-        if exit_flag:
-            break
 
         cache_swapping(cache_engine,
                        swap_in_map=swap_in_map,
@@ -652,8 +649,7 @@ class TPModelAgent(AutoModelAgent):
             if dist.is_initialized():
                 dist.destroy_process_group()
             raise e
-        # Please see Note [Exit By Sending Exit Flag]
-        atexit.register(_exit_by_sending_exit_flag, rank, self)
+        atexit.register(_exit_handler, self)
 
     @torch.inference_mode()
     def _build_model(
@@ -689,8 +685,7 @@ class TPModelAgent(AutoModelAgent):
         """forward impl."""
         self.mp_bar.wait()
         rank = 0
-        exit_flag = False
-        _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map, exit_flag],
+        _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
                           self.stream)
         cache_swapping(self.cache_engine,
                        swap_in_map=swap_in_map,
@@ -740,32 +735,9 @@ class TPModelAgent(AutoModelAgent):
         return self.patched_model.get_logits(hidden_states)
 
 
-def _exit_by_sending_exit_flag(rank: int, agent: TPModelAgent):
-    """[Note] Exit By Sending Exit Flag: the registration to `atexit` of this
-    function should be called after importing torch.multiprocessing and the
-    initialization of distributed process group."""
-    if not hasattr(agent, 'stream'):
-        # agent is not initialized, just exits normally
-        if hasattr(agent, 'patched_model'):
-            del agent.patched_model
-        return
-
-    import sys
-    if 'torch_npu' in sys.modules and 'uvicorn.server' in sys.modules:
-        # Workaround for CLI serve mode with device_type ascend:
-        # using uvicorn server causes ascend low-level backend of subprocesses
-        # corrupted, and using _broadcast_inputs in this case leads to
-        # main process hanging, just exits normally
+def _exit_handler(agent: TPModelAgent):
+    if hasattr(agent, 'patched_model'):
         del agent.patched_model
-        return
-
-    # send exit_flag to all subprocess relying on all subprocess are alive
-    # and wait at _broadcast_inputs
-    exit_flag = True
-    _broadcast_inputs(rank, [None, None, None, exit_flag], agent.stream)
-    agent.stream.synchronize()
-
-    del agent.patched_model
 
 
 def build_model_agent(model_path: str,
