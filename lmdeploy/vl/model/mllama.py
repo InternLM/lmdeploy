@@ -49,6 +49,15 @@ class MllamaVisionEncoderLayerPatch(torch.nn.Module):
 
 class MllamaVisionModelPatch(MllamaPreTrainedModel):
 
+    def apply_class_embedding(self,
+                              hidden_state: torch.Tensor) -> torch.Tensor:
+        batch_size, _, hidden_size = hidden_state.shape
+        class_embedding = self.class_embedding.expand(batch_size, 1,
+                                                      hidden_size)
+        class_embedding = class_embedding.to(hidden_state.device)
+        hidden_state = torch.cat([class_embedding, hidden_state], dim=1)
+        return hidden_state
+
     def forward(
         self,
         pixel_values: torch.Tensor,
