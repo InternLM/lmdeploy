@@ -1,23 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
-import torch.distributed as dist
-
-
 def div_up(a: int, b: int):
     """div up."""
     return (a + b - 1) // b
-
-
-def get_world_rank():
-    """get current world size and rank."""
-    world_size = 1
-    rank = 0
-
-    if dist.is_initialized():
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-
-    return world_size, rank
 
 
 def get_distribute_size(feature_size: int,

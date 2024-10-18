@@ -3,24 +3,14 @@ import json
 import os.path as osp
 
 import torch
-import torch.distributed as dist
 from transformers.modeling_utils import load_state_dict
 from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME,
                                 WEIGHTS_INDEX_NAME, WEIGHTS_NAME)
 
+from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
-
-
-def _get_world_rank():
-    """get rank."""
-    rank = 0
-    world_size = 1
-    if dist.is_initialized():
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
-    return world_size, rank
 
 
 def load_weight(param: torch.nn.Parameter, loaded_weight: torch.Tensor,
@@ -141,7 +131,7 @@ class ModelWeightLoader:
         """load model weights implementation."""
         assert hasattr(model, 'load_weights')
         paths = self._shard_paths
-        world_size, rank = _get_world_rank()
+        world_size, rank = get_world_rank()
         for path in paths:
 
             # log

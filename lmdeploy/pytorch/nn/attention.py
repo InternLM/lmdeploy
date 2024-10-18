@@ -2,9 +2,11 @@
 import torch
 from torch import nn
 
+from lmdeploy.pytorch.distributed import get_world_rank
+
 from ..backends import OpType, get_backend
 from ..backends.attention import AttentionMetadata
-from .utils import get_distribute_size, get_world_rank
+from .utils import get_distribute_size
 
 
 class Attention(nn.Module):
