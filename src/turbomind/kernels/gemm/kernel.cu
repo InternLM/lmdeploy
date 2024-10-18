@@ -12,12 +12,40 @@
 
 namespace turbomind::gemm {
 
+bool accept(Striding a, Striding b)
+{
+    if (a == Striding::kBlocked) {
+        switch (b) {
+            case Striding::kBlocked:
+            case Striding::kFlat:
+                return true;
+            default:
+                return false;
+        }
+    }
+    else if (a == Striding::kIndexed) {
+        switch (b) {
+            case Striding::kFlat:
+            case Striding::kBlocked:
+            case Striding::kIndexed:
+                return true;
+            default:
+                return false;
+        }
+    }
+    else {
+        return a == b;
+    }
+}
+
 bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
 {
     constexpr bool debug = 0;
 
     if constexpr (debug)
         printf("S\n");
+
+    // printf("%d %d\n", desc.arch, desc_.arch);
 
     if (!is_arch_compatible(desc_.arch, desc.arch)) {
         return false;
@@ -27,6 +55,16 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
         printf("S0\n");
 
     if (std::tie(desc.order_a, desc.order_b, desc.order_c) != std::tie(desc_.order_a, desc_.order_b, desc_.order_c)) {
+        return false;
+    }
+
+    if (desc.sched != desc_.sched) {
+        return false;
+    }
+
+    if (!(accept(desc_.striding_a, desc.striding_a)     //
+          && accept(desc_.striding_b, desc.striding_b)  //
+          && accept(desc_.striding_c, desc.striding_c))) {
         return false;
     }
 
@@ -82,64 +120,9 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
     return true;
 }
 
-std::vector<std::pair<int, KernelMetric>>
-Kernel::Estimate_v2(std::array<int, 3> size, int max_splits, int max_waves, int sm_count) const
-{
-    const auto [m, n, k]        = size;
-    const int64_t tiled_shape_m = ceil_div(m, desc_.cta_tile.x);
-    const int64_t tiled_shape_n = ceil_div(n, desc_.cta_tile.y);
-    const int     chunk_cnt_k   = ceil_div(k, chunk_size_k_);
-
-    // Despite we only have sm_count * constant tensor cores, this is the granularity for scheduling
-    const int   concurrency     = sm_count * desc_.max_active_ctas;
-    const float waves_per_split = float(tiled_shape_m * tiled_shape_n) / concurrency;
-    const float splits_per_wave = 1.f / waves_per_split;
-
-    // Tile quantization
-    const int64_t ceil_m = tiled_shape_m * desc_.cta_tile.x;
-    const int64_t ceil_n = tiled_shape_n * desc_.cta_tile.y;
-
-    std::vector<std::pair<int, KernelMetric>> metrics;
-
-    for (int splits = 1; splits <= max_splits; ++splits) {
-        // Split quantization, penalize uneven splits
-        const int64_t split_ceil_k = ceil_div(chunk_cnt_k, splits) * chunk_size_k_;
-        // Footprint for single split
-        const int64_t split_mma_cost = ceil_m * ceil_n * split_ceil_k;
-        // Footprint for single wave
-        const int64_t wave_mma_cost = split_mma_cost * splits_per_wave;
-
-        // Wave quantization
-        // const int waves = (int)std::ceil(wave_per_split * splits);
-
-        // Bold simulation of thread block scheduling
-        const int   grid_size    = tiled_shape_m * tiled_shape_n * splits;
-        const int   full_waves   = grid_size / concurrency;
-        const int   residue      = grid_size % concurrency;
-        const float partial_wave = (float)ceil_div(residue, sm_count) / desc_.max_active_ctas;
-        const float waves        = full_waves + partial_wave;
-
-        if (splits > 1 && waves > max_waves) {
-            break;
-        }
-        // ceil(tiled_mn / C * splits) * C / tiled_mn * ceil_m * ceil_n * split_ceil_k
-        const int64_t mma_cost = wave_mma_cost * waves;
-
-        // IO has less severe quantization effect
-        const int64_t mio_cost_a = get_size(desc_.type_a, tiled_shape_n * m * split_ceil_k) * splits;
-        const int64_t mio_cost_b = get_size(desc_.type_b, tiled_shape_m * n * split_ceil_k) * splits;
-        /// TODO: read type from `desc_.accum` when added
-        const int64_t mio_cost_c = get_size(DataType::F32, (int64_t)m * n) * (splits - 1) * 2;
-        const int64_t mio_cost   = mio_cost_a + mio_cost_b + mio_cost_c;
-
-        // std::cout << name() << " " << splits << " " << waves << " " << (float)mio_cost << " " << (float)mma_cost
-        //           << "\n";
-
-        metrics.emplace_back(splits, KernelMetric{mio_cost, mma_cost});
-    }
-
-    return metrics;
-}
+//  mm:     m * n * k,     m * k,     n * k,     m * n
+// Bmm: b * m * n * k, b * m * k, b * n * k, b * m * n
+// Gmm: S $ M * n * k, S $ M * k, S $ n * k, S $ M * n
 
 std::string Kernel::GetName() const
 {
@@ -155,16 +138,21 @@ std::string Kernel::GetName() const
         ss << "g" << desc_.quant_b.group_size;
     }
     ss << "_" << to_string(desc_.type_c);
-    ss << "_"                                                                            //
-       << (desc_.order_a == kColMajor ? 'n' : 't')                                       //
-       << (desc_.order_b == kColMajor ? 'n' : 't')                                       //
-       << (desc_.order_c == kColMajor ? 'n' : 't');                                      //
+    ss << "_"                                        //
+       << (desc_.order_a == kColMajor ? 'n' : 't')   //
+       << (desc_.order_b == kColMajor ? 'n' : 't')   //
+       << (desc_.order_c == kColMajor ? 'n' : 't');  //
+    ss << "_"                                        //
+       << to_string(desc_.striding_a)                //
+       << to_string(desc_.striding_b)                //
+       << to_string(desc_.striding_c);
     ss << "_" << desc_.cta_tile.x << "x" << desc_.cta_tile.y << "x" << desc_.cta_tile.z  //
        << "_" << desc_.stages                                                            //
        << "_" << to_string(desc_.op_class)                                               //
-       << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z  //
-       << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y                                //
-       << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z          //
+       << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z;
+    ss << (desc_.sched ? "_dynamic" : "");
+    ss << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y                        //
+       << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z  //
        << "_" << desc_.policy_a << desc_.policy_b;
 
     return ss.str();

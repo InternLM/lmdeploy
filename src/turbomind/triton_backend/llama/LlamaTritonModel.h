@@ -86,6 +86,7 @@ private:
 
     ft::ModelParam     model_param_;
     ft::AttentionParam attn_param_;
+    ft::MoeParam       moe_param_;
     ft::LoraParam      lora_param_;
     ft::EngineParam    engine_param_;
     size_t             tensor_para_size_;

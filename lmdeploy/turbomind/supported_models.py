@@ -38,7 +38,9 @@ SUPPORTED_ARCHS = dict(
     MiniGeminiLlamaForCausalLM='llama',
     # chatglm2/3, glm4
     ChatGLMModel='glm4',
-    ChatGLMForConditionalGeneration='glm4')
+    ChatGLMForConditionalGeneration='glm4',
+    # mixtral
+    MixtralForCausalLM='mixtral')
 
 
 def is_supported(model_path: str):

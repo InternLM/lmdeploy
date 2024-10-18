@@ -15,27 +15,27 @@ struct SubBytePtr {
 
     constexpr __host__ __device__ SubBytePtr(char* ptr): ptr_(ptr) {}
 
-    __device__ T& operator[](int i)
+    __host__ __device__ T& operator[](int i)
     {
         return *reinterpret_cast<T*>(ptr_ + i * bitsof<T> / bitsof<char>);
     }
 
-    friend __device__ SubBytePtr operator+(const SubBytePtr a, int n)
+    friend __host__ __device__ SubBytePtr operator+(const SubBytePtr a, int n)
     {
         return SubBytePtr{a.ptr_ + n * bitsof<T> / bitsof<char>};
     }
 
-    friend __device__ SubBytePtr operator+(int n, const SubBytePtr a)
+    friend __host__ __device__ SubBytePtr operator+(int n, const SubBytePtr a)
     {
         return a + n;
     }
 
-    friend __device__ bool operator==(const SubBytePtr& a, const SubBytePtr& b)
+    friend __host__ __device__ bool operator==(const SubBytePtr& a, const SubBytePtr& b)
     {
         return a.ptr_ == b.ptr_;
     }
 
-    __device__ explicit operator T*() const
+    __host__ __device__ explicit operator T*() const
     {
         return (T*)ptr_;
     }

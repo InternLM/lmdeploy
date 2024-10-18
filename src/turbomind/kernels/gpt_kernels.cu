@@ -236,6 +236,9 @@ invokeTransposeAxis01(half* out, half* in, const int dim0, const int dim1, const
 template void
 invokeTransposeAxis01(int* out, int* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
 
+template void
+invokeTransposeAxis01(uint16_t* out, uint16_t* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
+
 template<typename T>
 __global__ void transposeAxis01(T* out, T* in, const int* in_skipping_dim1, const int dim0, const int dim1)
 {

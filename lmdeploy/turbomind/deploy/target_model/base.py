@@ -68,7 +68,6 @@ class BaseOutputModel(ABC):
         # ! Dependency on `self`
         self.exporters = exporter_factory(self)
 
-    @abstractmethod
     def update_model_config(self):
         """Update `self.model_config` according to the input_model's
         `tokenizer_info` and `model_info`"""
@@ -78,13 +77,6 @@ class BaseOutputModel(ABC):
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model_info)
 
-        # get vocab_size
-        for bin in self.input_model.bins():
-            emb = bin.tok_embeddings()
-            if emb is not None:
-                _vocab_size, _ = emb.shape
-                break
-        final_cfg.update(dict(vocab_size=_vocab_size))
         self.model_config = config_from_dict(ModelConfig, final_cfg)
 
     def update_attention_config(self):
@@ -196,10 +188,8 @@ class BaseOutputModel(ABC):
                     desc='Convert to turbomind format',
                     leave=self.to_file)
         self.export_config()
-        for bin in self.input_model.bins():
-            self.export_misc(bin)
-            for i in range(bin.start_layer_id, bin.end_layer_id):
-                self.export_transformer_block(bin, i)
+        for i, reader in self.input_model.readers():
+            if self.exporters(i, reader):
                 pbar.update(1)
         pbar.close()
         # manually clean up meta reader
@@ -207,38 +197,6 @@ class BaseOutputModel(ABC):
             self.input_model.meta_reader.clean_up(True)
             del self.input_model.meta_reader
             torch.cuda.empty_cache()
-
-    def export_misc(self, bin: BaseReader) -> None:
-        """Export embedding, norm, output weight."""
-        emb = bin.tok_embeddings()
-        norm_weight = bin.norm_weight()
-        output_weight = bin.output_weight()
-
-        def pad_weight(tensor):
-            pad_size = None
-            vocab_size = self.model_config.vocab_size
-            tp = self.tensor_para_size
-            if vocab_size % tp != 0:
-                pad_size = (vocab_size + tp - 1) // tp * tp - vocab_size
-
-            if pad_size is None:
-                return tensor
-            return torch.nn.functional.pad(tensor, (0, 0, 0, pad_size),
-                                           'constant', 0)
-
-        if emb is not None:
-            emb = pad_weight(emb)
-            self.save_split(emb, 'tok_embeddings.weight', 1)
-        if norm_weight is not None:
-            self.export_weight(norm_weight, 'norm.weight')
-        if output_weight is not None:
-            output_weight = pad_weight(output_weight)
-            self.save_split(output_weight, 'output.weight', 0)
-
-    def export_transformer_block(self, bin: BaseReader, i: int) -> None:
-        """Export transformer block."""
-        for e in self.exporters:
-            e.export(bin, i)
 
     @property
     def tm_config(self):
