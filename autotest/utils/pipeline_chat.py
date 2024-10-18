@@ -296,6 +296,9 @@ def run_pipeline_vl_chat_test(config, model_case, quant_policy: int = None):
         backend_config.model_format = 'awq'
     if quant_policy is not None:
         backend_config.quant_policy = quant_policy
+    if os.getenv('TEST_RUNNER') is not None and 'v100' in os.getenv(
+            'TEST_RUNNER'):
+        backend_config.dtype = 'float16'
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     pipeline_chat_log = os.path.join(
