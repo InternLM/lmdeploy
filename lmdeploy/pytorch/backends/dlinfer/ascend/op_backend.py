@@ -49,10 +49,6 @@ class AscendOpsBackend(DlinferOpsBackend):
         block_num, block_size, _ = step_context.kv_caches[0][0].shape
         device = step_context.block_offsets.device
 
-        q_start_loc_cpu = step_context.q_start_loc.cpu()
-        q_seqlens_cpu = step_context.q_seqlens.cpu()
-        max_q_seq_len = torch.max(q_seqlens_cpu).item()
-
         is_unpaged_prefill = False
         if not step_context.is_decoding:
             is_unpaged_prefill = \
@@ -66,6 +62,9 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         q_seqlens_list = step_context.q_seqlens.tolist()
         kv_seqlens_list = step_context.kv_seqlens.tolist()
+        max_q_seq_len = max(q_seqlens_list)
+        max_kv_seq_len = max(kv_seqlens_list)
+
         for i in range(step_context.q_start_loc.size(0)):
             q_seq_len = q_seqlens_list[i]
             kv_seq_len = kv_seqlens_list[i]
@@ -92,13 +91,13 @@ class AscendOpsBackend(DlinferOpsBackend):
         kv_start_indices = torch.cat(kv_start_indices)
 
         if step_context.is_decoding:
-            # calculate somae params of paged_decode attention stage.
+            # prepare somae params of paged_decode attention stage.
+            q_start_loc_cpu, q_seqlens_cpu = None, None
             kv_seqlens_cpu = step_context.kv_seqlens.cpu()
-            max_kv_seq_len = -1 # not used in paged_decode attention stage.
         elif is_unpaged_prefill:
-            # calculate somae params of unpaged_prefill attention stage.
-            kv_seqlens_cpu = step_context.kv_seqlens.cpu()
-            max_kv_seq_len = torch.max(kv_seqlens_cpu).item()
+            # prepare somae params of unpaged_prefill attention stage.
+            q_start_loc_cpu, kv_seqlens_cpu = None, None
+            q_seqlens_cpu = step_context.q_seqlens.cpu()
             single_attention_mask = torch.logical_not(
                 torch.tril(
                     torch.ones(max_q_seq_len, max_kv_seq_len,
@@ -107,10 +106,10 @@ class AscendOpsBackend(DlinferOpsBackend):
                 ))
             attention_mask.append(single_attention_mask)
         else:
-            # calculate somae params of paged_prefill attention stage.
+            # prepare somae params of paged_prefill attention stage.
+            q_start_loc_cpu, q_seqlens_cpu = None, None
             kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(
                 step_context.q_seqlens, 0).cpu()
-            max_kv_seq_len = -1 # not used in paged_decode attention stage.
             block_offsets_int32 = step_context.block_offsets.to(torch.int32)
             step_context.block_offsets = block_offsets_int32.repeat_interleave(
                 step_context.q_seqlens, 0)
