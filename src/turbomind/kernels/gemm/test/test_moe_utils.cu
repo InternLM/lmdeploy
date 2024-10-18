@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <numeric>
 #include <string>
+#include <sstream>
 #include <thrust/host_vector.h>
 #include <thrust/universal_vector.h>
 
