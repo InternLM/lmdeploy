@@ -757,10 +757,15 @@ inline decltype(auto) get_test()
         return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kRowMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
     else if constexpr (0) {
-        // sm70
+        // sm70 int4
         constexpr Pack kPackB = HMMA_884 | OPERAND_B | 1;
         constexpr Pack kPackV = HMMA_884 | OPERAND_V | 1;
         return gTestbed<gemm::Testbed<half, uint4_t, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
+    }
+    else if constexpr (0) {
+        // sm70 half
+        constexpr Pack kPackB = HMMA_884 | OPERAND_B | 1;
+        return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, 0>>();
     }
     else if constexpr (0) {
         // simt

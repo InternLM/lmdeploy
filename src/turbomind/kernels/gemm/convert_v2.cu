@@ -231,7 +231,7 @@ get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool for
         if (dtype == DataType::BF16 && sm >= 80) {
             return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
         }
-        
+
         if (dtype == DataType::F16) {
             if (sm >= 80) {
                 return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
