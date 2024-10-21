@@ -4,7 +4,8 @@ from functools import partial
 
 import torch
 
-from .target_model.base import BaseOutputModel, BaseReader
+from .source_model.base import BaseReader
+from .target_model.base import BaseOutputModel
 
 
 def permute_v2(x: torch.Tensor, size_per_head: int = 128):
