@@ -37,6 +37,9 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoE:
             from .moe import DlinferFusedMoEBuilder
             return DlinferFusedMoEBuilder
+        elif layer_type == OpType.Linear:
+            from .linear import AscendLinearBuilder
+            return AscendLinearBuilder
         else:
             logger.debug(
                 f'Op {layer_type} fallback to default implementation.')
