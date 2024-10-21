@@ -17,12 +17,12 @@ on:
         required: true
         description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
         type: string
-        default: "['turbomind', 'pytorch', 'turbomind-vl']"
+        default: "['turbomind', 'pytorch', 'turbomind_vl']"
       model:
         required: true
         description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
         type: string
-        default: "['quantization','convert','pipeline','restful','chat','local_case']"
+        default: "['pipeline','restful','chat']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -32,7 +32,7 @@ on:
         required: true
         description: 'regression functions'
         type: string
-        default: "['tools','restful','pipeline','benchmark','evaluation']"
+        default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
   schedule:
     - cron:  '00 16 * * 0-4'
 
@@ -44,6 +44,10 @@ env:
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
+  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy
+  OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
+  OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
+  DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
 
 jobs:
   linux-build:
@@ -80,35 +84,17 @@ jobs:
           retention-days: 1
           name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
 
-  test_quant:
+
+  download_pkgs:
     needs: linux-build
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: "openmmlab/lmdeploy:latest-cu11"
-            runner_lable: "linux-a100"
-    runs-on: ${{matrix.runner_lable}}
-    timeout-minutes: 450
-    env:
-      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
-      MODELSCOPE_CACHE: /root/modelscope_hub
-      MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
-      TEST_RUNNER: ${{matrix.runner_lable}}
+    if: ${{!cancelled()}}
+    runs-on: [self-hosted, linux-a100]
+    timeout-minutes: 50
     container:
-      image: ${{matrix.image}}
+      image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
-        - /nvme/github-actions/pip-cache:/root/.cache/pip
-        - /nvme/github-actions/packages:/root/packages
-        - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
-        - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
-        - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/shared:/mnt/shared
-        - /mnt/187:/mnt/187
-        - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -117,16 +103,49 @@ jobs:
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Copy repository
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}}
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy dependency - cu11
-        if: ${{matrix.runner_lable == 'linux-a100'}}
+      - name: Copy Artifacts
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Copy Artifacts - offline
+        if: ${{inputs.offline_mode}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+
+  test_quantization:
+    needs: download_pkgs
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
+    runs-on: [self-hosted, linux-a100]
+    timeout-minutes: 120
+    env:
+      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+      MODELSCOPE_CACHE: /root/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
+    container:
+      image: openmmlab/lmdeploy:latest-cu11
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/github-actions/packages:/root/packages
+        - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
+        - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/shared:/mnt/shared
+        - /nvme/qa_test_models/lmdeploy/autotest:/local_case
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Copy repository and Artifacts
+        run: cp -r ${{env.TEST_CODE_PATH}}/. .
+      - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
@@ -134,24 +153,18 @@ jobs:
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
-          pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
-        run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
+          pip install transformers
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -159,15 +172,21 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
+        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
           pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'quantization'))
+        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'pytorch')
         run: |
           pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - convert
+        continue-on-error: true
+        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'turbomind')
+        run: |
+          pytest autotest/tools/convert -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()
@@ -179,27 +198,28 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
-
   test_tools:
-    needs: test_quant
+    needs: test_quantization
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
+    runs-on: [self-hosted, linux-a100]
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
+        backend: ${{ fromJSON(inputs.backend) || fromJSON('["turbomind", "pytorch", "turbomind_vl"]')}}
+        model: ${{ fromJSON(inputs.model) || fromJSON('["pipeline","restful","chat"]')}}
+        exclude:
+          - backend: turbomind_vl
+            model: chat
         include:
-          - image: "openmmlab/lmdeploy:latest-cu11"
-            runner_lable: "linux-a100"
-          - image: "openmmlab/lmdeploy:latest-cu12"
-            runner_lable: "linux-v100"
-    runs-on: ${{matrix.runner_lable}}
-    timeout-minutes: 450
+          - backend: turbomind
+            model: local_case
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
-      TEST_RUNNER: ${{matrix.runner_lable}}
     container:
-      image: ${{matrix.image}}
+      image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -209,26 +229,12 @@ jobs:
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
-        - /mnt/187:/mnt/187
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Copy repository - offline
-        if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
-      - name: Download Artifacts
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        uses: actions/download-artifact@v4
-        with:
-          name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy dependency - cu11
-        if: ${{matrix.runner_lable == 'linux-a100'}}
+      - name: Copy repository and Artifacts
+        run: cp -r ${{env.TEST_CODE_PATH}}/. .
+      - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
@@ -236,26 +242,12 @@ jobs:
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
-          pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
-      - name: Install lmdeploy dependency - cu12
-        if: ${{matrix.runner_lable == 'linux-v100'}}
-        run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
-        run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -264,112 +256,51 @@ jobs:
           cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
+          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Change testconfig on v100
-        if: ${{matrix.runner_lable == 'linux-v100'}}
-        run: |
-          mv autotest/config-v100.yaml autotest/config.yaml
-      - name: Test lmdeploy - quantization w4a16
-        continue-on-error: true
-        if: (github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))) && matrix.runner_lable == 'linux-v100'
-        run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - quantization w8a8
-        continue-on-error: true
-        if: (github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'quantization'))) && matrix.runner_lable == 'linux-v100'
-        run: |
-          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - convert
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'convert'))
-        run: |
-          pytest autotest/tools/convert -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - chat workspace
         continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
+        if: matrix.backend == 'turbomind' && matrix.model == 'chat'
         run: |
           pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
           pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - chat hf turbomind
+      - name: Test lmdeploy - chat
         continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
+        if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'chat'
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - chat hf torch
+      - name: Test lmdeploy - pipeline
         continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'chat'))
+        if: matrix.model == 'pipeline'
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - pipeline turbomind
+      - name: Test lmdeploy - restful
         continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
+        if: matrix.model == 'restful'
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - pipeline turbomind vl
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
-        run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - restful turbomind
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
-        run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful workspace
         continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
+        if: matrix.backend == 'turbomind' && matrix.model == 'restful'
         run: |
           pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
           pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - restful turbomind vl
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'restful'))
-        run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - pipeline torch
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
-        run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - restful torch
-        continue-on-error: true
-        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'restful'))
-        run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - local testcase
-        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.model), 'local_case')
+        if: matrix.backend == 'turbomind' && matrix.model == 'local_case'
         run: |
           pytest /local_case/issue_regression --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}|| true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
@@ -385,77 +316,46 @@ jobs:
 
   test_restful:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
+    runs-on: [self-hosted, linux-a100]
+    needs: test_quantization
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - image: "openmmlab/lmdeploy:latest-cu11"
-            runner_lable: "linux-a100"
-            backend: "turbomind"
-          - image: "openmmlab/lmdeploy:latest-cu12"
-            runner_lable: "linux-v100"
-            backend: "turbomind"
-          - image: "openmmlab/lmdeploy:latest-cu11"
-            runner_lable: "linux-a100"
-            backend: "pytorch"
-          - image: "openmmlab/lmdeploy:latest-cu12"
-            runner_lable: "linux-v100"
-            backend: "pytorch"
-    runs-on: ${{matrix.runner_lable}}
-    needs: test_tools
-    timeout-minutes: 300
+        backend: ['turbomind', 'pytorch']
+    timeout-minutes: 60
     container:
-      image: ${{matrix.image}}
+      image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/187:/mnt/187
-        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Copy repository - offline
-        if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
-      - name: Download Artifacts
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        uses: actions/download-artifact@v4
-        with:
-          name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy dependency - cu11
-        if: ${{matrix.runner_lable == 'linux-a100'}}
+      - name: Copy repository and Artifacts
+        run: cp -r ${{env.TEST_CODE_PATH}}/. .
+      - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
-      - name: Install lmdeploy dependency - cu12
-        if: ${{matrix.runner_lable == 'linux-v100'}}
-        run: |
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+          python3 -m pip install -e /root/packages/AutoAWQ_kernels
+          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
-        run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
+          # remove tmp log in testcase
+          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Start restful api turbomind
@@ -512,69 +412,42 @@ jobs:
 
   test_pipeline:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: "openmmlab/lmdeploy:latest-cu11"
-            runner_lable: "linux-a100"
-          - image: "openmmlab/lmdeploy:latest-cu12"
-            runner_lable: "linux-v100"
-    runs-on: ${{matrix.runner_lable}}
-    needs: test_tools
-    timeout-minutes: 300
+    runs-on: [self-hosted, linux-a100]
+    needs: test_quantization
+    timeout-minutes: 120
     container:
-      image: ${{matrix.image}}
+      image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/187:/mnt/187
-        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Copy repository - offline
-        if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
-      - name: Download Artifacts
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        uses: actions/download-artifact@v4
-        with:
-          name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy dependency - cu11
-        if: ${{matrix.runner_lable == 'linux-a100'}}
+      - name: Copy repository and Artifacts
+        run: cp -r ${{env.TEST_CODE_PATH}}/. .
+      - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
-      - name: Install lmdeploy dependency - cu12
-        if: ${{matrix.runner_lable == 'linux-v100'}}
-        run: |
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+          python3 -m pip install -e /root/packages/AutoAWQ_kernels
+          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
-        run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
+          # remove tmp log in testcase
+          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - interface pipeline case
@@ -600,74 +473,44 @@ jobs:
 
   test_benchmark:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: "openmmlab/lmdeploy:latest-cu11"
-            runner_lable: "linux-a100"
-          - image: "openmmlab/lmdeploy:latest-cu12"
-            runner_lable: "linux-v100"
-    runs-on: ${{matrix.runner_lable}}
-    needs: test_tools
-    timeout-minutes: 300
+    runs-on: [self-hosted, linux-a100]
+    needs: test_quantization
+    timeout-minutes: 120
     container:
-      image: ${{matrix.image}}
+      image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/187:/mnt/187
-        - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Copy repository - offline
-        if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
-      - name: Download Artifacts
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        uses: actions/download-artifact@v4
-        with:
-          name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy dependency - cu11
-        if: ${{matrix.runner_lable == 'linux-a100'}}
+      - name: Copy repository and Artifacts
+        run: cp -r ${{env.TEST_CODE_PATH}}/. .
+      - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
-      - name: Install lmdeploy dependency - cu12
-        if: ${{matrix.runner_lable == 'linux-v100'}}
-        run: |
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+          python3 -m pip install -e /root/packages/AutoAWQ_kernels
+          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
-        run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
+          rm -rf allure-results
+          # remove tmp log in testcase
+          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Change testconfig on v100
-        if: ${{matrix.runner_lable == 'linux-v100'}}
-        run: |
-          mv autotest/config-v100.yaml autotest/config.yaml
       - name: Test benchmark script
         run: |
           pytest autotest/benchmark -n 4 --run_id ${{ github.run_id }} -m function ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
@@ -685,19 +528,11 @@ jobs:
 
   test_evaluation:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: "openmmlab/lmdeploy:latest-cu11"
-            runner_lable: "linux-a100"
-          - image: "openmmlab/lmdeploy:latest-cu12"
-            runner_lable: "linux-v100"
-    runs-on: ${{matrix.runner_lable}}
-    needs: test_tools
-    timeout-minutes: 300 # 5hours
+    runs-on: [self-hosted, linux-a100]
+    needs: test_quantization
+    timeout-minutes: 120 # 5hours
     container:
-      image: ${{matrix.image}}
+      image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -705,53 +540,26 @@ jobs:
         - /nvme/github-actions/resources:/root/resources
         - /nvme/github-actions/opencompass-data:/root/opencompass-data
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
-        - /nvme/qa_test_models:/root/models
-        - /nvme/qa_test_models/offline_pkg:/nvme/qa_test_models/offline_pkg
+        - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
-        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Setup systems
-        run: |
-          export TIME_STAMP="$(date +'%Y%m%d-%H%M%S')"
-          echo "TIME_STAMP=$TIME_STAMP" >> $GITHUB_ENV
-      - name: Clone repository
-        uses: actions/checkout@v2
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Copy repository - offline
-        if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
-      - name: Download Artifacts
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        uses: actions/download-artifact@v4
-        with:
-          name: my-artifact-${{ github.run_id }}-py310
-      - name: Install lmdeploy dependency - cu11
-        if: ${{matrix.runner_lable == 'linux-a100'}}
+      - name: Copy repository and Artifacts
+        run: cp -r ${{env.TEST_CODE_PATH}}/. .
+      - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install -e /root/packages/AutoAWQ_kernels
+          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
-      - name: Install lmdeploy dependency - cu12
-        if: ${{matrix.runner_lable == 'linux-v100'}}
-        run: |
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
-        run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Install opencompass
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
@@ -763,12 +571,15 @@ jobs:
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
+          rm -rf allure-results
+          # remove tmp log in testcase
+          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Setup paths for evaluation
         run: |
           ln -s /root/opencompass-data ./data
-          python3 .github/scripts/action_tools.py create_model_links /root/models .
+          python3 .github/scripts/action_tools.py create_model_links /nvme/qa_test_models .
       - name: Evaluate models
         run: |
           export LMDEPLOY_DIR=$(pwd)
@@ -788,15 +599,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     needs: [test_benchmark]
     timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: "openmmlab/lmdeploy:latest-cu11"
-            runner_lable: "linux-a100"
-          - image: "openmmlab/lmdeploy:latest-cu12"
-            runner_lable: "linux-v100"
-    runs-on: ${{matrix.runner_lable}}
+    runs-on: [self-hosted, linux-a100]
     env:
       BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
     steps:
@@ -813,19 +616,11 @@ jobs:
 
   get_coverage_report:
     if: ${{!cancelled()}}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: "openmmlab/lmdeploy:latest-cu11"
-            runner_lable: "linux-a100"
-          - image: "openmmlab/lmdeploy:latest-cu12"
-            runner_lable: "linux-v100"
-    runs-on: ${{matrix.runner_lable}}
+    runs-on: [self-hosted, linux-a100]
     needs: [test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
     container:
-      image: ${{matrix.image}}
+      image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -833,29 +628,11 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Copy repository - offline
-        if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
-      - name: Download Artifacts
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        uses: actions/download-artifact@v4
-        with:
-          name: my-artifact-${{ github.run_id }}-py310
+      - name: Copy repository and Artifacts
+        run: cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
-      - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
-        run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Get coverage report
         run: |

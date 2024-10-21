@@ -1,4 +1,4 @@
-name: daily_ete_test_v100
+name: daily_ete_test
 
 on:
   workflow_dispatch:
@@ -17,12 +17,12 @@ on:
         required: true
         description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
         type: string
-        default: "['turbomind', 'pytorch', 'turbomind-vl']"
+        default: "['turbomind', 'pytorch', 'turbomind_vl']"
       model:
         required: true
         description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
         type: string
-        default: "['quantization','convert','pipeline','restful','chat','local_case']"
+        default: "['pipeline','restful','chat']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -32,7 +32,7 @@ on:
         required: true
         description: 'regression functions'
         type: string
-        default: "['tools','restful','pipeline','benchmark','evaluation']"
+        default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
   schedule:
     - cron:  '00 16 * * 0-4'
 
@@ -46,6 +46,8 @@ env:
   FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
+  OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
+  DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   TEST_RUNNER: linux-v100
 
 jobs:
@@ -86,9 +88,15 @@ jobs:
 
   download_pkgs:
     needs: linux-build
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
+    if: ${{!cancelled()}}
     runs-on: linux-v100
     timeout-minutes: 50
+    container:
+      image: openmmlab/lmdeploy:latest-cu12
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
         uses: actions/checkout@v2
@@ -112,16 +120,16 @@ jobs:
           name: my-artifact-${{ github.run_id }}-py310
       - name: Copy Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
       - name: Copy Artifacts - offline
         if: ${{inputs.offline_mode}}
-        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
 
   test_quantization:
     needs: download_pkgs
-    if: ${{!cancelled() && (github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.regression_func), 'tools') && contains(fromJSON(github.event.inputs.model), 'quantization')))}}
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
     runs-on: linux-v100
-    timeout-minutes: 450
+    timeout-minutes: 120
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
@@ -134,7 +142,6 @@ jobs:
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
         - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
-        - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
@@ -148,18 +155,18 @@ jobs:
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_CODE_PATH}}/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
+          pip install transformers
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -197,12 +204,18 @@ jobs:
     needs: test_quantization
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: linux-v100
-    timeout-minutes: 450
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend) || fromJSON('["turbomind", "pytorch", "turbomind-vl"]')}}
-        model: ${{ fromJSON(inputs.model) || fromJSON('["pipeline","restful","chat","local_case"]')}}
+        backend: ${{ fromJSON(inputs.backend) || fromJSON('["turbomind", "pytorch", "turbomind_vl"]')}}
+        model: ${{ fromJSON(inputs.model) || fromJSON('["pipeline","restful","chat"]')}}
+        exclude:
+          - backend: turbomind_vl
+            model: chat
+        include:
+          - backend: turbomind
+            model: local_case
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
@@ -229,12 +242,12 @@ jobs:
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
-          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install /nvme/qa_test_models/offline_pkg/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -304,12 +317,12 @@ jobs:
   test_restful:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: linux-v100
-    needs: test_tools
+    needs: test_quantization
     strategy:
       fail-fast: false
       matrix:
         backend: ['turbomind', 'pytorch']
-    timeout-minutes: 300
+    timeout-minutes: 60
     container:
       image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -327,18 +340,17 @@ jobs:
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_CODE_PATH}}/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -349,13 +361,13 @@ jobs:
         run: |
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 480s
+          sleep 120s
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
         run: |
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 --backend pytorch > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 480s
+          sleep 180s
       - name: Test lmdeploy - restful api
         timeout-minutes: 75
         run: |
@@ -370,13 +382,13 @@ jobs:
         run: |
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 480s
+          sleep 120s
       - name: Start restful api pytorch - base
         if: matrix.backend == 'pytorch'
         run: |
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 --backend pytorch > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 480s
+          sleep 180s
       - name: Test lmdeploy - restful api - base
         timeout-minutes: 40
         run: |
@@ -399,8 +411,8 @@ jobs:
   test_pipeline:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
     runs-on: linux-v100
-    needs: test_tools
-    timeout-minutes: 300
+    needs: test_quantization
+    timeout-minutes: 120
     container:
       image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -412,24 +424,23 @@ jobs:
     steps:
       - name: Copy repository and Artifacts
         run: cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lm and key in case_listdeploy - dependency
+      - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_CODE_PATH}}/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -459,8 +470,8 @@ jobs:
   test_benchmark:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     runs-on: linux-v100
-    needs: test_tools
-    timeout-minutes: 300
+    needs: test_quantization
+    timeout-minutes: 120
     container:
       image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -478,18 +489,17 @@ jobs:
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_CODE_PATH}}/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -513,8 +523,8 @@ jobs:
   test_evaluation:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
     runs-on: linux-v100
-    needs: test_tools
-    timeout-minutes: 300 # 5hours
+    needs: test_quantization
+    timeout-minutes: 120 # 5hours
     container:
       image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -524,8 +534,7 @@ jobs:
         - /nvme/github-actions/resources:/root/resources
         - /nvme/github-actions/opencompass-data:/root/opencompass-data
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
-        - /nvme/qa_test_models:/root/models
-        - /nvme/qa_test_models/offline_pkg:/nvme/qa_test_models/offline_pkg
+        - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -537,18 +546,23 @@ jobs:
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
           python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_CODE_PATH}}/requirements.txt
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.OFFLINE_CODE_PATH}}/DeepSeek-VL --no-deps
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
+      - name: Install opencompass
+        run: |
+          git clone --depth=1 https://github.com/open-compass/opencompass.git
+          cd opencompass
+          python3 -m pip install -e .
+          echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -557,7 +571,7 @@ jobs:
       - name: Setup paths for evaluation
         run: |
           ln -s /root/opencompass-data ./data
-          python3 .github/scripts/action_tools.py create_model_links /root/models .
+          python3 .github/scripts/action_tools.py create_model_links /nvme/qa_test_models .
       - name: Evaluate models
         run: |
           export LMDEPLOY_DIR=$(pwd)
@@ -638,8 +652,4 @@ jobs:
       - name: notify
         if: contains(needs.*.result, 'failure')
         run: |
-          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test finished！！！","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.FEISHU_USER_ID }}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}test_restful_chat_hf_turbomind-vl.py
-
-
-          export PATH=/cpfs01/shared/public/xiaolinchen/shared_conda_envs/llm-torch2.1-flash2.6.1-cuda118-0808-interntrain-oc/bin:$PATH; export PYTHONPATH=/cpfs01/shared/public/qa-llm-cicd/jenkins/workspace/opencompass_eval/compass@4/ocplayground:$PYTHONPATH; export HF_HUB_CACHE=/cpfs01/shared/public/public_hdd/llmeval/model_weights/hf_hub; export HUGGINGFACE_HUB_CACHE=/cpfs01/shared/public/public_hdd/llmeval/model_weights/hf_hub; export TORCH_HOME=/cpfs01/shared/public/public_hdd/llmeval/model_weights/torch; export HF_DATASETS_OFFLINE=1; export TRANSFORMERS_OFFLINE=1; export HF_EVALUATE_OFFLINE=1; export HF_HUB_OFFLINE=1; export HF_ENDPOINT=https://hf-mirror.com; export COMPASS_DATA_CACHE=/cpfs01/shared/public/llmeval/compass_data_cache; export NO_PROXY="22.8.20.219"; export TIKTOKEN_CACHE_DIR=/cpfs01/shared/public/public_hdd/llmeval/share_tiktoken; cd /cpfs01/shared/public/qa-llm-cicd/jenkins/workspace/opencompass_eval/compass@4/ocplayground; umask 0000; /cpfs01/shared/public/xiaolinchen/shared_conda_envs/llm-torch2.1-flash2.6.1-cuda118-0808-interntrain-oc/bin/python /cpfs01/shared/public/qa-llm-cicd/miniconda3/envs/fullbench_v1_0/lib/python3.10/site-packages/opencompass/tasks/openicl_infer.py tmp/3161922_params.py
-          export PATH=/cpfs01/shared/public/xiaolinchen/shared_conda_envs/llm-torch2.1-flash2.2.1-cuda118-interntrain-oc/bin:$PATH; export PYTHONPATH=/cpfs01/shared/public/qa-llm-cicd/jenkins/workspace/opencompass_eval/compass/ocplayground:$PYTHONPATH; export HF_HUB_CACHE=/cpfs01/shared/public/public_hdd/llmeval/model_weights/hf_hub; export HUGGINGFACE_HUB_CACHE=/cpfs01/shared/public/public_hdd/llmeval/model_weights/hf_hub; export TORCH_HOME=/cpfs01/shared/public/public_hdd/llmeval/model_weights/torch; export HF_DATASETS_OFFLINE=1; export TRANSFORMERS_OFFLINE=1; export HF_EVALUATE_OFFLINE=1; export HF_HUB_OFFLINE=1; export HF_ENDPOINT=https://hf-mirror.com; export COMPASS_DATA_CACHE=/cpfs01/shared/public/llmeval/compass_data_cache; export NO_PROXY="22.8.20.219"; export TIKTOKEN_CACHE_DIR=/cpfs01/shared/public/public_hdd/llmeval/share_tiktoken; cd /cpfs01/shared/public/qa-llm-cicd/jenkins/workspace/opencompass_eval/compass/ocplayground; umask 0000; /cpfs01/shared/public/xiaolinchen/shared_conda_envs/llm-torch2.1-flash2.6.1-cuda118-0808-interntrain-oc/bin/python /cpfs01/shared/public/qa-llm-cicd/miniconda3/envs/fullbench_v1_0/lib/python3.10/site-packages/opencompass/tasks/openicl_infer.py tmp/3049337_params.py
+          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test finished！！！","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.FEISHU_USER_ID }}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}
