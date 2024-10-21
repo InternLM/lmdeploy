@@ -36,7 +36,7 @@ target_compile_options(gemm2 PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:
                 -Xptxas=-v
                 --generate-line-info
-                --threads 8>
+                --threads 16>
 )
 set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

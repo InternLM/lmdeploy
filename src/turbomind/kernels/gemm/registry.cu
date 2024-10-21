@@ -16,8 +16,10 @@ Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
 
     sm70_s884_dynamic();
     sm75_s16816_dynamic();
-    sm80_s16816_dynamic();
-    sm90_s16816_dynamic();
+    sm80_s16816_dynamic<half>();
+    sm90_s16816_dynamic<half>();
+    sm80_s16816_dynamic<nv_bfloat16>();
+    sm90_s16816_dynamic<nv_bfloat16>();
 
     // u4g128_f16_f16_nnn_sm80_s16816();
 }

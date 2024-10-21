@@ -158,6 +158,7 @@ int Convert(const void*         S,  //
         if constexpr (is_AB(operand)) {
             switch (Ddesc.type) {
                 case DataType::F16:
+                case DataType::BF16:
                     return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint16_t>);
                 case DataType::U8:
                     return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint8_t>);
@@ -227,15 +228,30 @@ std::tuple<Order, Pack, Order, Pack>
 get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool force_simt)
 {
     if (is_fused_moe) {
+        if (dtype == DataType::BF16 && sm >= 80) {
+            return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
+        }
+        
         if (dtype == DataType::F16) {
             if (sm >= 80) {
                 return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
-                // return {kRowMajor, {}, {}, {}};
+            }
+            else if (sm == 75) {
+                return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
+            }
+            else if (sm == 70) {
+                return {kColMajor, HMMA_884 | OPERAND_B | 1, {}, {}};
             }
         }
         else if (dtype == DataType::U4) {
             if (sm >= 80) {
                 return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
+            }
+            else if (sm == 75) {
+                return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
+            }
+            else if (sm == 70) {
+                return {kColMajor, HMMA_884 | OPERAND_B | 1, kRowMajor, HMMA_884 | OPERAND_V | 1};
             }
         }
     }

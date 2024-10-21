@@ -19,6 +19,7 @@
 namespace turbomind::gemm::sm80_s16816 {
 
 template<class Arch,
+         class Dtype,
          class A,
          class TransformA,
          class U,
@@ -60,7 +61,7 @@ struct Sm80_s16816 {
         // Raked partition dont support `Pack_M > 1`
         using Partition = Blocked<TG_M, TG_N, kColMajor>;
         using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, SMEM_M, SMEM_N, SMEM_K, Partition, TG_K>;
-        using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
+        using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN<Dtype>, MMA_Map>;
 
         using Mainloop = MainloopSm80_v2<MMA,
                                          A,

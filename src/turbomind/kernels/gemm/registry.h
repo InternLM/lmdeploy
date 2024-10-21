@@ -33,7 +33,9 @@ private:
 
     void sm70_s884_dynamic();
     void sm75_s16816_dynamic();
+    template<class T>
     void sm80_s16816_dynamic();
+    template<class T>
     void sm90_s16816_dynamic();
 
     void u4g128_f16_f16_nnn_sm80_s16816();

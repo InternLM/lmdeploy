@@ -17,6 +17,7 @@ void Registry::f16_u4g128_f16_tnt_sm90_s16816()
     using D = cache_policy::Default;
 
     using C = Sm80_s16816<Sm90,
+                          half,
                           Operand_A<half, kRowMajor>,             // A
                           Transform_Default,                      // tarnsform A
                           VoidOperand,                            // U

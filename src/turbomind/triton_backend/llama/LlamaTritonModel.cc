@@ -260,20 +260,25 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_param_.num_tokens_per_iter = engine_reader["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine_reader["max_prefill_iters"].as<int>(1);
 
-    lora_param_.policy        = ft::getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
-    lora_param_.r             = lora_reader["lora_r"].as<int>(0);
-    lora_param_.scale         = lora_reader["lora_scale"].as<float>(0);
-    lora_param_.max_wo_r      = lora_reader["lora_max_wo_r"].as<int>(0);
-    lora_param_.rank_pattern  = getLoraPattern<int>(lora_reader["lora_rank_pattern"].as<std::string>(""),
+    lora_param_.policy           = ft::getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
+    lora_param_.r                = lora_reader["lora_r"].as<int>(0);
+    lora_param_.scale            = lora_reader["lora_scale"].as<float>(0);
+    lora_param_.max_wo_r         = lora_reader["lora_max_wo_r"].as<int>(0);
+    lora_param_.rank_pattern     = getLoraPattern<int>(lora_reader["lora_rank_pattern"].as<std::string>(""),
                                                    [](const std::string& s) { return std::stoi(s); });
-    lora_param_.scale_pattern = getLoraPattern<float>(lora_reader["lora_scale_pattern"].as<std::string>(""),
+    lora_param_.scale_pattern    = getLoraPattern<float>(lora_reader["lora_scale_pattern"].as<std::string>(""),
                                                       [](const std::string& s) { return std::stof(s); });
-
-    moe_param_.method = turbomind::MoeParam::kFused;
-    // moe_param_.method            = turbomind::MoeParam::kNaive;
     moe_param_.expert_num        = model_reader["expert_num"].as<int>(0);
     moe_param_.experts_per_token = model_reader["experts_per_token"].as<int>(0);
     moe_param_.inter_size        = model_reader["expert_inter_size"].as<int>(0);
+
+    {
+        using namespace turbomind;
+        moe_param_.method = MoeParam::kFused;
+        if (weight_type_ != WeightType::kINT4 && getSMVersion() >= 90) {
+            moe_param_.method = MoeParam::kNaive;
+        }
+    }
 
     handleMissingParams();
 

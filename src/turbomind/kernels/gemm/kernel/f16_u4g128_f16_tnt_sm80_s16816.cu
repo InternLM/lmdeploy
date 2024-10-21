@@ -17,6 +17,7 @@ void Registry::f16_u4g128_f16_tnt_sm80_s16816()
     using D = cache_policy::Default;
 
     using C = Sm80_s16816<Sm80,
+                          half,
                           Operand_A<half, kRowMajor>,             // A
                           Transform_Default,                      // tarnsform A
                           VoidOperand,                            // U
@@ -67,28 +68,6 @@ void Registry::f16_u4g128_f16_tnt_sm80_s16816()
     Add<C::Type<16,  64, 128, 1, 2, 2, D, S, 4, true, 1, 128>>();
     // clang-format on
 #endif
-    if constexpr (0) {
-
-        using namespace sm80_s16816;
-        using namespace cache_policy;
-        using S = cache_policy::Stream;
-        using D = cache_policy::Default;
-        using C = Sm80_s16816<Sm80,
-                              Operand_A<half, kRowMajor>,             // A
-                              Transform_Default,                      // tarnsform A
-                              VoidOperand,                            // U
-                              Operand_B_Pack<uint4_t, kColMajor, 2>,  // B
-                              Transform_HMMA_16816<1, 0>,             // transform B,
-                              Operand_UV_Pack<uint32_t, true>,        // V
-                              kRowMajor,                              // order_C
-                              half,                                   // Tc
-                              Striding::kFlat,                        // indexed input
-                              Striding::kFlat,
-                              Striding::kFlat,
-                              GemmScheduler<kColMajor>>;
-        Add<C::Type<128, 256, 32, 2, 4, 1, D, D, 3, true, 1, 128>>();
-        Add<C::Type<16, 64, 128, 1, 2, 2, D, S, 4, true, 1, 128>>();
-    }
 }
 
 // sm80_f16_u4g128_f16_ttt_128x256x32_4_s16816_1x8x1_c128x128_a1x32x32_00: 46

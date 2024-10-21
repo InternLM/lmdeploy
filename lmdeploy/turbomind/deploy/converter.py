@@ -124,9 +124,6 @@ def get_output_model_registered_name_and_config(model_path: str,
             # Qwen-1 didn't set torch_dtype. It used bf16 as default
             if model_arch == 'QWenLMHeadModel':
                 weight_type = 'bfloat16'
-            # Mixtral + TP + bfloat16 = numerical precision issue
-            if model_arch == 'MixtralForCausalLM':
-                weight_type = 'fp16'
 
     if dtype == 'auto':
         weight_type = weight_type if weight_type in [
