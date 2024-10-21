@@ -92,12 +92,17 @@ def start_restful_api(config, param, model, model_path, backend_type,
         print(content)
     start_time = int(time())
     sleep(5)
-    for i in range(300):
+    start_timeout = 300
+    if not os.getenv('TEST_RUNNER'):
+        start_timeout = 300
+    else:
+        start_timeout = 600
+    for i in range(start_timeout):
         sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
-        if result or total_time >= 300:
+        if result or total_time >= start_timeout:
             break
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
     return pid, startRes

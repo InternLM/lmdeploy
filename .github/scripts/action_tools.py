@@ -129,6 +129,11 @@ def evaluate(models: List[str],
                 f.write(f'\nmodels = [ *{model} ]\n')
             else:
                 f.write(f'\nmodels = [ {model} ]\n')
+                if os.getenv(
+                        'TEST_RUNNER') is not None and 'v100' in os.getenv(
+                            'TEST_RUNNER'):
+                    f.write('\nfor d in models:\n')
+                    f.write("    d['engine_config']['dtype'] = 'float16'\n")
 
         work_dir = os.path.join(workspace, model)
         cmd_eval = [
