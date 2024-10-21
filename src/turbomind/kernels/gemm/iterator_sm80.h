@@ -24,7 +24,7 @@ template<class T,
          Order    kOrder,
          bool     AlignedC,
          bool     AlignedS,
-         Striding striding,
+         Striding mode,
          class Policy_>
 struct GmemIteratorSm80 {
 
@@ -38,9 +38,8 @@ struct GmemIteratorSm80 {
     static constexpr int ITER_S = Map::kIterS;
     static constexpr int ITER_C = Map::kIterC;
 
-    static constexpr Striding kMode = striding;
-
-    static constexpr bool is_indexed = striding == Striding::kIndexed;
+    static constexpr Striding kMode      = mode;
+    static constexpr bool     is_indexed = mode == Striding::kIndexed;
 
     const char* src_data_;
 
@@ -122,12 +121,14 @@ struct GmemIteratorSm80 {
         const int src_offset = is_indexed ? offsets.x : offsets.x + offsets.y * ld;
 
         src_offset_ = src_offset * bitsof<T> / bitsof<char>;
+
         src_step_c_ = bitsof<T> * Map::kDeltaC / bitsof<char>;
         src_step_s_ = bitsof<T> * Map::kDeltaS * ld / bitsof<char>;
+
         src_step_k_ = bitsof<T> * cs2mk<kOrder>(Map::kDimC, Map::kDimS * ld).y / bitsof<char>;
 
         // Initialize for the first tile
-        if (is_indexed) {
+        if constexpr (is_indexed) {
             const int2 cta_cs = to_cs(offset);
             for (int s = 0; s < ITER_S; ++s) {
                 const int  ss    = cta_cs.y + offset_s_ + s * Map::kDeltaS;
@@ -242,10 +243,10 @@ struct GmemIteratorSm80 {
     }
 };
 
-template<Striding striding, class Policy>
+template<Striding mode, class Policy>
 struct IteratorSm80 {
     template<class T, class Map, class SmemLayout, Pack kPack, Order kOrder, bool AlignedC, bool AlignedS>
-    using Type = GmemIteratorSm80<T, Map, SmemLayout, kPack, kOrder, AlignedC, AlignedS, striding, Policy>;
+    using Type = GmemIteratorSm80<T, Map, SmemLayout, kPack, kOrder, AlignedC, AlignedS, mode, Policy>;
 };
 
 }  // namespace turbomind::gemm

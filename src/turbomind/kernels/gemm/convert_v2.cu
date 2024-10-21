@@ -9,6 +9,7 @@
 #include "src/turbomind/kernels/gemm/convert_v2.h"
 #include "src/turbomind/kernels/gemm/format.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
+#include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
@@ -83,8 +84,7 @@ void Convert_v2_Impl(const void* S, const MatrixLayout& Sdesc, void* D, const Ma
         cudaFuncSetAttribute(convert_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
     }
 
-    using PointerD = typename Kernel::PtrD;
-    typename Kernel::Param param{Sdesc.rows, Sdesc.cols, (const Stype*)S, Sdesc.ld, PointerD{(Dtype*)D}, Ddesc.ld};
+    typename Kernel::Param param{Sdesc.rows, Sdesc.cols, to_param((void*)S, Sdesc), to_param((void*)D, Ddesc)};
 
     constexpr int threads = Config::BLOCK_SIZE;
     const int     blocks  = ceil_div(Sdesc.rows, CTA_M);

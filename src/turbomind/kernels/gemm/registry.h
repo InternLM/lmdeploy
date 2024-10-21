@@ -31,9 +31,12 @@ private:
     void f16_u4g128_f16_tnt_sm80_s16816();
     void f16_u4g128_f16_tnt_sm90_s16816();
 
-    void u4g128_f16_f16_nnn_sm80_s16816();
+    void sm70_s884_dynamic();
+    void sm75_s16816_dynamic();
+    void sm80_s16816_dynamic();
+    void sm90_s16816_dynamic();
 
-    void f16_f16_f16_grouped_sm80_s16816();
+    void u4g128_f16_f16_nnn_sm80_s16816();
 
 private:
     std::shared_ptr<cudaDeviceProp>      device_prop_;

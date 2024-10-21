@@ -180,8 +180,8 @@ struct EpilogueParam {
     MatrixParam partials;
     int*        locks;
 
-    MatrixParam scale_S;
-    MatrixParam scale_C;
+    // MatrixParam scale_S;
+    // MatrixParam scale_C;
 
     MatrixCombination_v3 combine_mat;
 
@@ -197,8 +197,8 @@ template<class Tc_,
          class RearrangeC,
          class OperandC,
          Striding mode_C,
-         class scale_SC,
-         class mode_SC,
+        //  class scale_SC,
+        //  class mode_SC,
          bool SplitK_>
 struct Epilogue_ {
 
@@ -421,7 +421,7 @@ struct Epilogue_ {
         constexpr pair<Map::kDeltaC, Map::kDeltaS> delta_cs{};
 
         // opt-in scaling
-        Scale(scale_SC{}, mode_SC{}, delta_cs, tmp_C, param.scale_S, param.scale_C, tile_offset.w, cs0, pred);
+        // Scale(scale_SC{}, mode_SC{}, delta_cs, tmp_C, param.scale_S, param.scale_C, tile_offset.w, cs0, pred);
 
         param.combine_mat((Tc*)0, constant<kMode>{}, tmp_C, cs0, tile_offset.w, delta_cs, pred);
 

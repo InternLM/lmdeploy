@@ -10,6 +10,8 @@
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
 #include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include "src/turbomind/kernels/gemm/mainloop_sm80_v2.h"
+// #include "src/turbomind/kernels/gemm/iterator_sm70.h"
+// #include "src/turbomind/kernels/gemm/mainloop_sm70.h"
 #include "src/turbomind/kernels/gemm/thread_group_map.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -23,13 +25,11 @@ template<class Arch,
          class B,
          class TransformB,
          class V,
-         Order order_c,
+         Order order_C,
          class Tc,
-         Striding StridingA,
-         Striding StridingB,
-         Striding StridingC,
-         class scale_SC,
-         class mode_SC,
+         Striding mode_A,
+         Striding mode_B,
+         Striding mode_C,
          class CtaMap_>
 struct Sm80_s16816 {
 
@@ -64,12 +64,12 @@ struct Sm80_s16816 {
 
         using Mainloop = MainloopSm80_v2<MMA,
                                          A,
-                                         IteratorSm80<StridingA, PolicyA>,
+                                         IteratorSm80<mode_A, PolicyA>,
                                          TransformA,
                                          U,
                                          GroupSizeU,
                                          B,
-                                         IteratorSm80<StridingB, PolicyB>,
+                                         IteratorSm80<mode_B, PolicyB>,
                                          TransformB,
                                          V,
                                          GroupSizeV,
@@ -86,10 +86,8 @@ struct Sm80_s16816 {
                                          TILE_C_N,
                                          MMA::kThreadCount,
                                          Rearrange<MMA>,
-                                         Operand_C<float, order_c>,
-                                         StridingC,
-                                         scale_SC,
-                                         mode_SC,
+                                         Operand_C<float, order_C>,
+                                         mode_C,
                                          SplitK>;
 
         using Kernel = GemmUniversal<Arch, Mainloop, Epilogue, CtaMap_>;
