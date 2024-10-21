@@ -266,6 +266,10 @@ class MllamaVLModel(VisonModel):
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
                 max_memory=self.max_memory,
+                no_split_module_classes=[
+                    'MllamaPrecomputedPositionEmbedding',
+                    'MllamaPrecomputedAspectRatioEmbedding'
+                ],
                 dtype=torch.bfloat16)
 
         self.model = model.eval()
