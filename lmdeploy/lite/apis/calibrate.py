@@ -132,6 +132,24 @@ def _prepare_for_calibrate(model: nn.Module,
             print(f'Move {mod_name} to GPU.')
 
 
+# TODO to be removed
+def make_compatible_internvl_config(model_path):
+    """Patch model.config since after transformers v4.45.0, InternVL models
+    can't use `save_pretrained`"""
+    from lmdeploy.archs import get_model_arch
+    arch, _ = get_model_arch(model_path)
+    if arch == 'InternVLChatModel':
+        import transformers
+        from packaging import version
+        if version.parse(transformers.__version__) >= version.parse('4.45.0'):
+
+            def _get_non_default_generation_parameters(self):
+                return {}
+
+            from transformers import PretrainedConfig
+            PretrainedConfig._get_non_default_generation_parameters = _get_non_default_generation_parameters  # noqa
+
+
 def calibrate(model: str,
               calib_dataset: str = 'ptb',
               calib_samples: int = 128,
@@ -175,6 +193,7 @@ def calibrate(model: str,
         'Support only `c4`, `ptb`, `wikitext2` or `pileval`.'
 
     model_type, _ = get_task(model)
+    make_compatible_internvl_config(model)
     if model_type == 'llm':
         # Load tokenizer and configuration
         tokenizer = AutoTokenizer.from_pretrained(model,

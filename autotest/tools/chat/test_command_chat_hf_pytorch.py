@@ -53,6 +53,54 @@ def test_hf_pytorch_chat_tp2(config, model, cli_case_config, worker_id):
 
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_turbomind_chat
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('model',
+                         get_torch_model_list(tp_num=1,
+                                              model_type='base_model'))
+def test_hf_pytorch_base_tp1(config, model, cli_case_config, worker_id):
+    usercase = 'base_testcase'
+    result, chat_log, msg = hf_command_line_test(
+        config,
+        usercase,
+        cli_case_config.get(usercase),
+        model,
+        'pytorch',
+        cuda_prefix=get_cuda_prefix_by_workerid(worker_id))
+
+    if chat_log is not None:
+        allure.attach.file(chat_log,
+                           attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_turbomind_chat
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('model',
+                         get_torch_model_list(tp_num=2,
+                                              model_type='base_model'))
+def test_hf_pytorch_base_tp2(config, model, cli_case_config, worker_id):
+    usercase = 'base_testcase'
+    result, chat_log, msg = hf_command_line_test(
+        config,
+        usercase,
+        cli_case_config.get(usercase),
+        model,
+        'pytorch',
+        cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2))
+
+    if chat_log is not None:
+        allure.attach.file(chat_log,
+                           attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
