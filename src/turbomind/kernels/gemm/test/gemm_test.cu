@@ -50,7 +50,8 @@ void Run(int batch_size, int output_dims, int input_dims, int expert_num = 0, in
     if (get_test().kBatchDim == 1) {
         std::swap(m, n);
     }
-    std::cerr << "m" << m << "n" << n << "k" << k << "_" << "E" << expert_num << "e" << top_e << "\n";
+    std::cerr << "m" << m << "n" << n << "k" << k << "_"
+              << "E" << expert_num << "e" << top_e << "\n";
     test.Initialize(m, n, k, g, expert_num, top_e, 0);
 
     if (g_check) {

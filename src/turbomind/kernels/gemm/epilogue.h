@@ -197,9 +197,7 @@ template<class Tc_,
          class RearrangeC,
          class OperandC,
          Striding mode_C,
-        //  class scale_SC,
-        //  class mode_SC,
-         bool SplitK_>
+         bool     SplitK_>
 struct Epilogue_ {
 
     using Dtype = typename OperandC::Dtype;

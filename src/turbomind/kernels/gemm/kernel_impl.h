@@ -206,8 +206,6 @@ public:
         EpilogueParam epilogue{to_param((void*)D, Ddesc),
                                to_param((void*)workspace.partials, Pdesc),
                                (int*)workspace.barriers,
-                            //    to_param((void*)U, Udesc),
-                            //    to_param((void*)V, Vdesc),
                                combin_mat,
                                silu_act};
 

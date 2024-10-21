@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <iomanip>
 #include <numeric>
-#include <string>
 #include <sstream>
+#include <string>
 #include <thrust/host_vector.h>
 #include <thrust/universal_vector.h>
 

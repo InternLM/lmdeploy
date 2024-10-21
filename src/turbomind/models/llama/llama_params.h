@@ -26,7 +26,8 @@ struct ModelParam {
 };
 
 struct MoeParam {
-    enum Method {
+    enum Method
+    {
         kNaive,
         kFused
     } method;
