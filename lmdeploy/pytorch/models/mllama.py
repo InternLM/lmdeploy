@@ -637,7 +637,12 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin):
         **kwargs,
     ):
         """model forward, return logits."""
-        if cross_attn_metadata is None or cross_attention_states is None:
+        if cross_attn_metadata is None:
+            full_text_row_masked_out_mask = None
+        # FIXME basically, we want to inference
+        # text requests and image requests separately
+        elif cross_attention_states is None and int(
+                cross_attn_metadata.kv_seqlens.sum()) == 0:
             full_text_row_masked_out_mask = None
         elif cross_attn_metadata.is_decoding:
             cross_attention_states = None

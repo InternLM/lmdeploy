@@ -12,41 +12,6 @@ from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 
-class MllamaVisionEncoderLayerPatch(torch.nn.Module):
-
-    def forward(
-        self,
-        hidden_state: torch.Tensor,
-        attention_mask: torch.Tensor = None,
-        output_attentions: bool = None,
-    ):
-        # Self Attention
-        residual = hidden_state
-        hidden_state = self.input_layernorm(hidden_state)
-        hidden_state, attn_weights = self.self_attn(
-            hidden_state, attention_mask=attention_mask)
-        if self.is_gated:
-            hidden_state = self.gate_attn.tanh() * hidden_state
-        hidden_state = residual + hidden_state
-
-        # Feed forward
-        residual = hidden_state
-        hidden_state = self.post_attention_layernorm(hidden_state)
-        hidden_state = self.mlp(hidden_state)
-        if self.is_gated:
-            hidden_state = self.gate_ffn.tanh() * hidden_state
-        # add device sync for accelrate pipeline parallel
-        residual = residual.to(hidden_state.device)
-        hidden_state = residual + hidden_state
-
-        outputs = (hidden_state, )
-
-        if output_attentions:
-            outputs += (attn_weights, )
-
-        return outputs
-
-
 class MllamaVisionModelPatch(MllamaPreTrainedModel):
 
     def apply_class_embedding(self,
@@ -240,11 +205,10 @@ class MllamaVLModel(VisonModel):
     def build_model(self):
         check_transformers()
 
-        from transformers.models.mllama.modeling_mllama import (
-            MllamaVisionEncoderLayer, MllamaVisionModel)
+        from transformers.models.mllama.modeling_mllama import \
+            MllamaVisionModel
         MllamaVisionModel.forward = MllamaVisionModelPatch.forward
         MllamaVisionModel.apply_class_embedding = MllamaVisionModelPatch.apply_class_embedding  # noqa
-        MllamaVisionEncoderLayer.forward = MllamaVisionEncoderLayerPatch.forward  # noqa
         from accelerate import init_empty_weights
         with init_empty_weights():
             config = self.hf_config
@@ -268,7 +232,8 @@ class MllamaVLModel(VisonModel):
                 max_memory=self.max_memory,
                 no_split_module_classes=[
                     'MllamaPrecomputedPositionEmbedding',
-                    'MllamaPrecomputedAspectRatioEmbedding'
+                    'MllamaPrecomputedAspectRatioEmbedding',
+                    'MllamaVisionEncoderLayer'
                 ],
                 dtype=torch.bfloat16)
 
