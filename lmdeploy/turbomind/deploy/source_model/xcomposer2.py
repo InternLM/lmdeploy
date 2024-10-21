@@ -12,7 +12,8 @@ class Xcomposer2Reader(InternLM2Reader):
 
     def _attn(self, i, kind):
         if 'Plora_A' in kind:
-            qkv = self.params[f'model.layers.{i}.attention.wqkv.Plora_A.weight']
+            qkv = self.params[
+                f'model.layers.{i}.attention.wqkv.Plora_A.weight']
             o = self.params[f'model.layers.{i}.attention.wo.Plora_A.weight']
             return qkv, o
         return super()._attn(i, kind)

@@ -1,17 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-import re
 import os.path as osp
-
+import re
 from abc import ABC, abstractmethod
-from typing import Iterator, Tuple
-from glob import glob
 from collections import defaultdict
-
-from safetensors import safe_open
+from glob import glob
+from typing import Iterator, Tuple
 
 import torch
-
+from safetensors import safe_open
 
 # https://github.com/huggingface/transformers/blob/53fad641cfdb5105e2470bcf3ef17ea8e25cc300/src/transformers/modeling_utils.py#L372
 WEIGHT_INDEX_NAME = 'pytorch_model.bin.index.json'
@@ -21,13 +18,15 @@ SAFE_WEIGHT_PATTERN = 'model*.safetensors'
 
 
 class BaseLoader(ABC):
+
     def __init__(self, model_path: str, pattern):
         self.model_path = model_path
         self.pattern = pattern
         self.item_count = defaultdict(int)
-    
-    def get_index(self, index_path: str, file_pattern: str) -> Tuple[dict, list]:
-        """get shards and weight map (if possible) for the model"""
+
+    def get_index(self, index_path: str,
+                  file_pattern: str) -> Tuple[dict, list]:
+        """get shards and weight map (if possible) for the model."""
         index_path = osp.join(self.model_path, index_path)
         if osp.exists(index_path):
             with open(index_path, 'r') as f:
@@ -45,24 +44,26 @@ class BaseLoader(ABC):
     def items(self) -> Iterator[Tuple[int, dict]]:
         pass
 
+
 class SafetensorsLoader(BaseLoader):
 
     def __init__(self, model_path: str, pattern: str):
         super().__init__(model_path, pattern)
         self.pattern = pattern
         self.model_path = model_path
-        self.shards, index = self.get_index(SAFE_WEIGHT_INDEX_NAME, SAFE_WEIGHT_PATTERN)
+        self.shards, index = self.get_index(SAFE_WEIGHT_INDEX_NAME,
+                                            SAFE_WEIGHT_PATTERN)
         if not index:
             for shard in self.shards:
-                    with safe_open(shard, 'pt') as f:
-                        index.update({k: shard for k in f.keys()})
+                with safe_open(shard, 'pt') as f:
+                    index.update({k: shard for k in f.keys()})
         # count layer-wise parameters
         for k in index.keys():
             match = re.findall(self.pattern, k)
             if match:
                 self.item_count[int(match[0])] += 1
 
-    def items(self): 
+    def items(self):
         params = defaultdict(dict)
         for shard in self.shards:
             with safe_open(shard, 'pt') as f:

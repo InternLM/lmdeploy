@@ -8,8 +8,9 @@ from mmengine import Registry
 INPUT_MODELS = Registry(
     'source model', locations=['lmdeploy.turbomind.deploy.source_model.base'])
 
+
 class BaseReader(ABC):
-    """Mapping between TM modules and source modules"""
+    """Mapping between TM modules and source modules."""
 
     def __init__(self):
         pass
@@ -22,6 +23,7 @@ class BaseReader(ABC):
     def _transform(self, x: torch.Tensor, kind: str):
         """Transform x."""
         pass
+
 
 class BaseInputModel(ABC):
     """Base class for input model."""

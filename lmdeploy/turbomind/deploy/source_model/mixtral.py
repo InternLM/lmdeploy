@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from .base import INPUT_MODELS
-from .llama import LlamaReader, LlamaModel
+from .llama import LlamaModel, LlamaReader
+
 
 class MixtralReader(LlamaReader):
 
@@ -15,11 +16,11 @@ class MixtralReader(LlamaReader):
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-        
+
     def moe_ffn_gate(self, i):
         return self.params.get(
             f'model.layers.{i}.block_sparse_moe.gate.weight')
-    
+
 
 @INPUT_MODELS.register_module(name='mixtral')
 class MixtralModel(LlamaModel):

@@ -1,15 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-import re
 import os.path as osp
+import re
 
 import torch
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.tokenizer import Tokenizer
 
-from .base import INPUT_MODELS, BaseInputModel, BaseReader
 from ..loader import create_loader
+from .base import INPUT_MODELS, BaseInputModel, BaseReader
+
 
 class LlamaReader(BaseReader):
     """LlamaReader."""
@@ -67,7 +68,7 @@ class LlamaReader(BaseReader):
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-    
+
     def attn(self, i: int, kind: str):
         if not kind:
             return self.get_kinds(self.attn_pattern)
@@ -89,7 +90,7 @@ class LlamaReader(BaseReader):
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-    
+
     def ffn(self, i: int, kind: str):
         if not kind:
             return self.get_kinds(self.ffn_pattern)
@@ -116,9 +117,12 @@ class LlamaModel(BaseInputModel):
     def readers(self):
         loader = create_loader(self.model_path, self.Reader.attn_layer_patten)
         for i, param in loader.items():
-            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
+            reader = self.Reader(param, {},
+                                 False,
+                                 self.model_config,
+                                 policy=self.policy)
             yield i, reader
-        
+
     def tokenizer_info(self):
         """Read tokenizer info."""
         assert osp.isdir(self.model_path), self.model_path

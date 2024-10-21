@@ -40,7 +40,7 @@ cudaDataType to_cuda_dtype(DataType dtype)
 Reference::Reference()
 {
     cublasCreate(&handle_);
-    
+
     // cublasSetWorkspace(handle_, nullptr, 0);
     cublasSetMathMode(handle_, CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION);
 }

@@ -20,7 +20,7 @@ void Registry::f16_u4g128_f16_tnt_sm70_s884()
                                  typename GetOperand<HMMA_884, OPERAND_V, uint32_t, kColMajor, true>::Operand,
                                  kRowMajor,
                                  half,
-                                 Striding::kFlat,  
+                                 Striding::kFlat,
                                  Striding::kFlat,
                                  Striding::kFlat,
                                  GemmScheduler<kColMajor>>;

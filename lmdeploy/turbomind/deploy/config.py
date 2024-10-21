@@ -52,7 +52,6 @@ class ModelConfig:
     experts_per_token: int = 0
 
 
-
 @dataclass
 class AttentionConfig:
     rotary_embedding: int = 128

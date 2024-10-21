@@ -212,7 +212,7 @@ public:
             auto b_src_data = [&] {
                 // MSVC does not recognise `is_quant_b` as compile time constant
                 constexpr bool is_quant = !std::is_same_v<Tb, Tc>;
-                if constexpr (is_quant) return b_q_.data().get(); else return b_.data().get(); 
+                if constexpr (is_quant) return b_q_.data().get(); else return b_.data().get();
             }();
             // clang-format on
             get_pointer_type<Tb> b_dst_data{(Tb*)b_pack_.data().get()};

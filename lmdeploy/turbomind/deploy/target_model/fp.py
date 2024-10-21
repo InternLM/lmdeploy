@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from ..config import ModelConfig, config_from_dict, config_to_dict
 from .base import OUTPUT_MODELS, BaseOutputModel
 
 

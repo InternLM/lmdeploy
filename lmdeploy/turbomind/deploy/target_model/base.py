@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os.path as osp
-from abc import ABC, abstractmethod
+from abc import ABC
 
 import torch
 import tqdm
@@ -9,7 +9,7 @@ from mmengine import Registry
 
 from ..config import (AttentionConfig, LoraConfig, ModelConfig,
                       TurbomindModelConfig, config_from_dict, config_to_dict)
-from ..source_model.base import BaseInputModel, BaseReader
+from ..source_model.base import BaseInputModel
 
 OUTPUT_MODELS = Registry(
     'target model', locations=['lmdeploy.turbomind.deploy.target_model.base'])
