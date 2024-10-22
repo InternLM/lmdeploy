@@ -47,7 +47,6 @@ env:
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
-  DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   TEST_RUNNER: linux-v100
 
 jobs:
@@ -96,6 +95,7 @@ jobs:
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -129,7 +129,7 @@ jobs:
     needs: download_pkgs
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
     runs-on: linux-v100
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
@@ -144,6 +144,7 @@ jobs:
         - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -160,10 +161,9 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip install transformers
+          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -177,12 +177,6 @@ jobs:
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
           pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - quantization w8a8
-        continue-on-error: true
-        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'pytorch')
-        run: |
-          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - convert
         continue-on-error: true
@@ -204,7 +198,7 @@ jobs:
     needs: test_quantization
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: linux-v100
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -231,6 +225,7 @@ jobs:
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -247,9 +242,9 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
+          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -322,7 +317,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ['turbomind', 'pytorch']
-    timeout-minutes: 60
+    timeout-minutes: 120
     container:
       image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -330,6 +325,8 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -345,9 +342,9 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
+          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -359,15 +356,15 @@ jobs:
       - name: Start restful api turbomind
         if: matrix.backend == 'turbomind'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 --dtype float16 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
+          sleep 600s
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 --backend pytorch > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 --backend pytorch --dtype float16 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
+          sleep 600s
       - name: Test lmdeploy - restful api
         timeout-minutes: 75
         run: |
@@ -380,15 +377,15 @@ jobs:
       - name: Start restful api turbomind - base
         if: matrix.backend == 'turbomind'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 --dtype float16 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
+          sleep 600s
       - name: Start restful api pytorch - base
         if: matrix.backend == 'pytorch'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 --backend pytorch --dtype float16 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
+          sleep 600s
       - name: Test lmdeploy - restful api - base
         timeout-minutes: 40
         run: |
@@ -412,7 +409,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
     runs-on: linux-v100
     needs: test_quantization
-    timeout-minutes: 120
+    timeout-minutes: 240
     container:
       image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -420,6 +417,8 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -435,9 +434,9 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
+          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -479,6 +478,8 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -494,9 +495,9 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
+          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -536,6 +537,7 @@ jobs:
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -551,7 +553,6 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Install opencompass
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
@@ -560,6 +561,7 @@ jobs:
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
+          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env

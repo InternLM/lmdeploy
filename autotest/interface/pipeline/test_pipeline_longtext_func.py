@@ -53,6 +53,9 @@ def stream_infer_basic(config, model, log_name):
     model_path = '/'.join([config.get('model_path'), model])
 
     backend_config = TurbomindEngineConfig(session_len=SESSION_LEN, tp=tp_num)
+    if os.getenv('TEST_RUNNER') is not None and 'v100' in os.getenv(
+            'TEST_RUNNER'):
+        backend_config.dtype = 'float16'
     pipe = pipeline(model_path, backend_config=backend_config)
     prompt = '今 天 心 ' * int(SESSION_LEN / 6)
 
@@ -156,6 +159,10 @@ def passkey_retrival(config,
         else:
             backend_config = PytorchEngineConfig(session_len=session_len,
                                                  tp=tp_num)
+
+    if os.getenv('TEST_RUNNER') is not None and 'v100' in os.getenv(
+            'TEST_RUNNER'):
+        backend_config.dtype = 'float16'
 
     pipe = pipeline(model_path, backend_config=backend_config)
 

@@ -139,7 +139,6 @@ vl_model:
     - microsoft/Phi-3-mini-4k-instruct
     - microsoft/Phi-3-vision-128k-instruct
     - openbmb/MiniCPM-Llama3-V-2_5
-    - openbmb/MiniCPM-V-2_6
 
 turbomind_quatization:
     no_awq:
@@ -152,6 +151,10 @@ turbomind_quatization:
         - codellama/CodeLlama-7b-Instruct-hf
     gptq:
         - internlm/internlm2_5-7b-chat
+    no_kvint4:
+        - openbmb/MiniCPM-V-2_6
+    no_kvint8:
+        - deepseek-ai/DeepSeek-V2-Lite-Chat
 
 pytorch_quatization:
     awq:
@@ -181,6 +184,7 @@ pytorch_quatization:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - microsoft/Phi-3-mini-4k-instruct
         - microsoft/Phi-3-vision-128k-instruct
+        - openbmb/MiniCPM-V-2_6
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
 

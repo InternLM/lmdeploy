@@ -58,6 +58,7 @@ pytorch_chat_model:
     - THUDM/glm-4v-9b
     - THUDM/glm-4-9b-chat
     - microsoft/Phi-3-mini-4k-instruct
+    - deepseek-ai/DeepSeek-V2-Lite-Chat
 
 turbomind_base_model:
     - internlm/internlm2_5-7b
@@ -76,7 +77,7 @@ vl_model:
     - Qwen/Qwen2-VL-7B-Instruct
     - internlm/internlm-xcomposer2d5-7b
     - THUDM/glm-4v-9b
-    - microsoft/Phi-3-vision-128k-instruct
+    - microsoft/Phi-3-mini-4k-instruct
 
 turbomind_quatization:
     no_awq:
@@ -88,6 +89,8 @@ turbomind_quatization:
         - THUDM/glm-4-9b-chat
     gptq:
         - internlm/internlm2_5-7b-chat
+    no_kvint4:
+        - openbmb/MiniCPM-V-2_6
 
 pytorch_quatization:
     awq:
