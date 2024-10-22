@@ -162,7 +162,7 @@ class Engine:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
-        self.stream = torch.cuda.current_stream()
+        self.stream = self.model_agent.stream
 
         self.req_manager = self._bind_request_manager()
 
