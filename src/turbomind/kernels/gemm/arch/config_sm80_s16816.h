@@ -10,8 +10,6 @@
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
 #include "src/turbomind/kernels/gemm/iterator_sm80.h"
 #include "src/turbomind/kernels/gemm/mainloop_sm80_v2.h"
-// #include "src/turbomind/kernels/gemm/iterator_sm70.h"
-// #include "src/turbomind/kernels/gemm/mainloop_sm70.h"
 #include "src/turbomind/kernels/gemm/thread_group_map.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
 #include "src/turbomind/kernels/gemm/types.h"
