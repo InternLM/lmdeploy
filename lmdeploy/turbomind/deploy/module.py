@@ -76,7 +76,6 @@ class Module(ABC):
         pass
 
 
-
 class LayerNorm(Module):
 
     def apply(self, i: int, r: BaseReader):

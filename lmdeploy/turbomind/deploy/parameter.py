@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import abstractmethod
 from typing import List
+
 import torch
 
 
@@ -51,14 +52,14 @@ class QuantWeightOnly(Parameter):
 
 
 class Weight(Parameter):
-    KEYS = '.weight', 
+    KEYS = '.weight',
 
     def __call__(self, f, g, i):
         f(i, g('weight'), 'weight', identity)
 
 
 class Bias(Parameter):
-    KEYS = '.bias', 
+    KEYS = '.bias',
 
     def __call__(self, f, g, i):
         f(i, g('bias'), 'bias', identity)
