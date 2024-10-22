@@ -2,12 +2,12 @@
 import torch
 from torch import Tensor
 
-from lmdeploy.pytorch.kernels.ascend import apply_rotary_pos_emb
+from lmdeploy.pytorch.kernels.dlinfer import apply_rotary_pos_emb
 
 from ..apply_rotary_emb import ApplyRotaryEmbBuilder, ApplyRotaryEmbImpl
 
 
-class AscendApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
+class DlinferApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
     """Apply rotary embedding implementation."""
 
     def forward(self,
@@ -26,10 +26,10 @@ class AscendApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
         return apply_rotary_pos_emb(query, key, cos, sin, q_embed, k_embed)
 
 
-class AscendApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
+class DlinferApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
     """Apply rotary embedding implementation builder."""
 
     @staticmethod
     def build():
         """build implementation."""
-        return AscendApplyRotaryEmbImpl()
+        return DlinferApplyRotaryEmbImpl()

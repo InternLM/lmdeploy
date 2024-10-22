@@ -96,7 +96,7 @@ class Engine:
         else:
             engine_config = copy.deepcopy(engine_config)
         check_env(engine_config.device_type)
-        check_model(model_path, trust_remote_code)
+        check_model(model_path, trust_remote_code, engine_config.dtype)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(
                 engine_config.device_type)
