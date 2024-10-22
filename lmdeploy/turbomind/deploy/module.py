@@ -72,7 +72,7 @@ class Module(ABC):
         return self.apply(*args, **kwargs)
 
     @abstractmethod
-    def apply(self, r: BaseReader, idx: int):
+    def apply(self, idx: int, r: BaseReader):
         pass
 
 
