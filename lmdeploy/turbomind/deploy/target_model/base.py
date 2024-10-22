@@ -78,13 +78,14 @@ class BaseOutputModel(ABC):
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model_info)
 
-        # get vocab_size
-        for bin in self.input_model.bins():
-            emb = bin.tok_embeddings()
-            if emb is not None:
-                _vocab_size, _ = emb.shape
-                break
-        final_cfg.update(dict(vocab_size=_vocab_size))
+        # # get vocab_size
+        # for bin in self.input_model.bins():
+        #     emb = bin.tok_embeddings()
+        #     if emb is not None:
+        #         _vocab_size, _ = emb.shape
+        #         break
+        # final_cfg.update(dict(vocab_size=_vocab_size))
+        final_cfg.update(dict(vocab_size=152064))
         self.model_config = config_from_dict(ModelConfig, final_cfg)
 
     def update_attention_config(self):
