@@ -731,6 +731,7 @@ class Engine:
         if guided_input_ids is not None:
             guided_input_ids = guided_input_ids.cuda()
         sampling_inputs = sampling_inputs.to_device('cuda')
+        num_appendable_ids = num_appendable_ids.cuda()
         num_ignore_eos = num_ignore_eos.cuda()
 
         for idx in range(loop_count):
