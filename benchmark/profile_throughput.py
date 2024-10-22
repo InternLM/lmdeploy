@@ -287,6 +287,7 @@ def parse_args():
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
     quant_policy_act = ArgumentHelper.quant_policy(pt_group, default=0)
+    dtype_act = ArgumentHelper.dtype(pt_group)
 
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
@@ -296,6 +297,7 @@ def parse_args():
     tb_group._group_actions.append(cache_block_seq_len_act)
     tb_group._group_actions.append(prefix_caching_act)
     tb_group._group_actions.append(quant_policy_act)
+    tb_group._group_actions.append(dtype_act)
     ArgumentHelper.model_format(tb_group, default='hf')
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
@@ -319,6 +321,7 @@ def main():
             num_tokens_per_iter=args.num_tokens_per_iter,
             max_prefill_iters=args.max_prefill_iters,
             enable_prefix_caching=args.enable_prefix_caching,
+            dtype=args.dtype,
         )
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
@@ -330,6 +333,7 @@ def main():
             thread_safe=True,
             enable_prefix_caching=args.enable_prefix_caching,
             quant_policy=args.quant_policy,
+            dtype=args.dtype,
         )
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)

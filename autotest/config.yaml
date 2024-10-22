@@ -48,6 +48,7 @@ turbomind_chat_model:
     - mistralai/Mistral-7B-Instruct-v0.1
     - mistralai/Mistral-7B-Instruct-v0.2
     - mistralai/Mistral-7B-Instruct-v0.3
+    - mistralai/Mixtral-8x7B-Instruct-v0.1
     - lmdeploy/llama2-chat-7b-w4
     - baichuan-inc/Baichuan2-7B-Chat
     - 01-ai/Yi-6B-Chat
