@@ -255,7 +255,13 @@ class MllamaVLModel(VisonModel):
                 params), 'different length of images and params'
         else:
             params = [{}] * len(images)
-
+        # resize images with abnormal shape
+        # TODO try catch image feature extraction in pipeline and
+        # throw error back to users
+        for i, image in enumerate(images):
+            size = image.size
+            if any([s < 3 for s in size]):
+                images[i] = image.resize([s * 3 for s in size])
         image_inputs = self.processor.image_processor(images=images,
                                                       return_tensors='pt')
         pixel_values = image_inputs['pixel_values'].to(
