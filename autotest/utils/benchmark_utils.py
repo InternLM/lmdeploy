@@ -44,6 +44,10 @@ def generation_test(config,
         if '4bit' in model:
             command += ' --model-format awq'
 
+    if os.getenv('TEST_RUNNER') is not None and 'v100' in os.getenv(
+            'TEST_RUNNER'):
+        command += ' --dtype float16'
+
     if is_longtext:
         run_config = run_config + GENERATION_LONGTEXT_CONFIG
         csv_path = f'{benchmark_path}/generation_longtext.csv'
@@ -109,6 +113,9 @@ def throughput_test(config,
         if '4bit' in model:
             command += ' --model-format awq'
         run_config = run_config + f' --quant-policy {quant_policy}'
+    if os.getenv('TEST_RUNNER') is not None and 'v100' in os.getenv(
+            'TEST_RUNNER'):
+        command += ' --dtype float16'
 
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/throughput_batch_{batch}_1th.csv'
