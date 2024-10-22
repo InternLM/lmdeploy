@@ -4,6 +4,7 @@ from functools import partial
 
 import torch
 
+from .parameter import get_params
 from .source_model.base import BaseReader
 from .target_model.base import BaseOutputModel
 
@@ -39,21 +40,8 @@ def merge_qkv_v2(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, tp: int):
     return qkv
 
 
-def identity(x):
-    return x
-
-
 def transpose(x):
     return x.t() if x is not None else x
-
-
-def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
-    assert x.dtype == torch.uint8
-    xs = x.view(*x.shape[:-1], -1, 8).split(1, dim=-1)
-    a = torch.zeros(xs[0].shape, dtype=torch.int32, device=x.device)
-    for t in reversed(xs):
-        a = (a << 4) | t
-    return a.squeeze(dim=-1)
 
 
 def pad_out_dims(x: torch.Tensor, dims: int):
@@ -69,69 +57,40 @@ def pad_in_dims(x: torch.Tensor, dims: int):
     return torch.nn.functional.pad(x, (0, 0, 0, pad), 'constant', 0)
 
 
-class BaseExporter(ABC):
-
-    def __init__(self, model: BaseOutputModel):
-        self.model = model
-
-    @abstractmethod
-    def export(self, r: BaseReader, idx: int):
-        pass
-
-
-class LayerNorm(BaseExporter):
-
-    def export(self, i: int, r: BaseReader):
-        attn_norm = r.attn_norm(i)
-        ffn_norm = r.ffn_norm(i)
-        self.model.save_split(attn_norm, f'layers.{i}.attention_norm.weight')
-        self.model.save_split(ffn_norm, f'layers.{i}.ffn_norm.weight')
-
-
-def to_half(x: torch.Tensor):
-    return x.to(torch.half)
-
-
-def export_quant_weight_only(f, g, i):
-    f(i, g('qweight'), 'qweight', pack_u4_row)
-    f(i, g('scales'), 'scales', to_half, apply_gs=True)
-    f(i, g('qzeros'), 'zeros', to_half, apply_gs=True)
-
-
-def export_weight(f, g, i):
-    f(i, g('weight'), 'weight', identity)
-
-
-def export_bias(f, g, i):
-    f(i, g('bias'), 'bias', identity)
-
-
-def export_plora(f, g, i):
-    f(i, g('Plora_A.weight'), 'lora_a.weight', identity)
-    f(i, g('Plora_B.weight'), 'lora_b.weight', identity)
-
-
-def get_weight_exporters(kinds, bias=0):
-    e = []
-    if 'qweight' in kinds:
-        e.append(export_quant_weight_only)
-    if 'weight' in kinds:
-        e.append(export_weight)
-    if bias and 'bias' in kinds:
-        e.append(export_bias)
-    if 'Plora_A.weight' in kinds:
-        e.append(export_plora)
-    return e
-
-
 # split out dims -> copy A, split-out-dims B (qkv, w1, w3)
 # split  in dims -> split-in-dims A,  copy B (  o, w2)
 def get_lora_flags(kind: str):
     return ('lora_a' in kind, 'lora_b' in kind)
 
 
-class Ffn:
-    """requires r.ffn(i, kind)"""
+class Module(ABC):
+
+    def __init__(self, model: BaseOutputModel):
+        self.model = model
+
+    def __call__(self, *args, **kwargs):
+        return self.apply(*args, **kwargs)
+
+    @abstractmethod
+    def apply(self, r: BaseReader, idx: int):
+        pass
+
+
+
+class LayerNorm(Module):
+
+    def apply(self, i: int, r: BaseReader):
+        attn_norm = r.attn_norm(i)
+        ffn_norm = r.ffn_norm(i)
+        self.model.save_split(attn_norm, f'layers.{i}.attention_norm.weight')
+        self.model.save_split(ffn_norm, f'layers.{i}.ffn_norm.weight')
+
+
+class Ffn(Module):
+    """
+    requires:
+        r.ffn(i, kind)
+    """
 
     _ffn = 'layers.{0}.feed_forward.{1}.{2}'
 
@@ -146,7 +105,7 @@ class Ffn:
                 idx: int,
                 w123,
                 kind: str,
-                pack_fn=identity,
+                pack_fn,
                 apply_gs=False):
         is_lora_a, is_lora_b = get_lora_flags(kind)
         w1, w2, w3 = map(transpose, w123)
@@ -172,35 +131,41 @@ class Ffn:
                               split_dim=0,
                               copy=is_lora_b)
 
-    def export(self, i: int, r: BaseReader):
-        for e in get_weight_exporters(r.ffn(i, None)):
+    def apply(self, i: int, r: BaseReader):
+        for e in get_params(r.ffn(i, None)):
             e(partial(self._export, self._ffn), partial(r.ffn, i), i)
 
 
 class MoeFfn(Ffn):
-    """requires r.moe_ffn_expert(e, i, kind) r.moe_ffn_gate(i)"""
+    """
+    requires:
+        r.moe_ffn_expert(e, i, kind)
+        r.moe_ffn_gate(i)
+    """
 
-    _moe_ffn_expert = 'layers.[0].moe_ffn.experts.{0}.[1].[2]'
+    _moe_ffn_expert = 'layers.{0}.moe_ffn.experts.E.{1}.{2}'
     _moe_ffn_gate = 'layers.{0}.moe_ffn.gate.{1}'
 
     def __init__(self, model: BaseOutputModel):
         super().__init__(model)
         self.expert_num = model.model_config.expert_num
 
-    def export(self, i: int, r: BaseReader):
-        for compose in get_weight_exporters(r.moe_ffn_expert()):
+    def apply(self, i: int, r: BaseReader):
+        for p in get_params(r.moe_ffn_expert()):
             for e in range(self.expert_num):
-                fmt = self._moe_ffn_expert.format(e).replace('[', '{').replace(
-                    ']', '}')
-                compose(partial(self._export, fmt),
-                        partial(r.moe_ffn_expert, e, i), i)
+                fmt = self._moe_ffn_expert.replace('E', str(e))
+                p(partial(self._export, fmt), partial(r.moe_ffn_expert, e, i),
+                  i)
 
         gate = transpose(r.moe_ffn_gate(i))
         self.model.save_split(gate, self._moe_ffn_gate.format(i, 'weight'))
 
 
-class Attn:
-    """requires r.attn(i, kind)"""
+class Attn(Module):
+    """
+    requires:
+        r.attn(i, kind)
+    """
 
     _attn = 'layers.{0}.attention.{1}.{2}'
 
@@ -221,7 +186,7 @@ class Attn:
             o = torch.zeros_like(q)
         return qkv, o
 
-    def _export(self, idx: int, qkvo, kind: str, pack_fn=identity, **kwargs):
+    def _export(self, idx: int, qkvo, kind: str, pack_fn, **kwargs):
         if all(x is None for x in qkvo):
             return
         is_lora_a, is_lora_b = get_lora_flags(kind)
@@ -238,15 +203,20 @@ class Attn:
                               split_dim=0,
                               copy=is_lora_b)
 
-    def export(self, i: int, r: BaseReader):
-        for e in get_weight_exporters(r.attn(i, None), bias=1):
+    def apply(self, i: int, r: BaseReader):
+        for e in get_params(r.attn(i, None), bias=1):
             e(self._export, partial(r.attn, i), i)
 
 
-class Misc(BaseExporter):
-    """requires r.tok_embeddings() r.norm_weight() r.output_weight()"""
+class Misc(Module):
+    """
+    requires:
+        r.tok_embeddings()
+        r.norm_weight()
+        r.output_weight()
+    """
 
-    def export(self, i: int, r: BaseReader):
+    def apply(self, i: int, r: BaseReader):
         """Export embedding, norm, output weight."""
         emb = r.tok_embeddings()
         norm_weight = r.norm_weight()
@@ -286,11 +256,7 @@ class Transformer:
     def __call__(self, i: int, r: BaseReader):
         if i >= 0:
             for m in self.modules:
-                m.export(i, r)
+                m(i, r)
             return 1
         else:
-            self.misc.export(i, r)
-
-
-def get_exporter_factory(*args):
-    return Transformer
+            self.misc(i, r)

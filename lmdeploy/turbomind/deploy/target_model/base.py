@@ -42,7 +42,7 @@ class BaseOutputModel(ABC):
     def __init__(self,
                  input_model: BaseInputModel,
                  cfg: TurbomindModelConfig,
-                 exporter_factory,
+                 model_cls,
                  out_dir: str = ''):
         super().__init__()
         self.input_model = input_model
@@ -66,7 +66,7 @@ class BaseOutputModel(ABC):
         self.update_attention_config()
         self.update_lora_config()
         # ! Dependency on `self`
-        self.exporters = exporter_factory(self)
+        self.model = model_cls(self)
 
     def update_model_config(self):
         """Update `self.model_config` according to the input_model's
@@ -189,7 +189,7 @@ class BaseOutputModel(ABC):
                     leave=self.to_file)
         self.export_config()
         for i, reader in self.input_model.readers():
-            if self.exporters(i, reader):
+            if self.model(i, reader):
                 pbar.update(1)
         pbar.close()
         # manually clean up meta reader

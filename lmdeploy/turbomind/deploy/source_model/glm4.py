@@ -17,7 +17,7 @@ class Glm4Reader(LlamaReader):
     norm_weight_key = 'transformer.encoder.final_layernorm.weight'
     output_weight_key = 'transformer.output_layer.weight'
 
-    attn_pattern = r'self_attention.\w+.(\w+)'
+    attn_pattern = r'self_attention'
 
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""

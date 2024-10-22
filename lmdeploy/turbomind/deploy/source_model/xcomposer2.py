@@ -7,8 +7,8 @@ from .internlm2 import InternLM2Model, InternLM2Reader
 class Xcomposer2Reader(InternLM2Reader):
     """Xcomposer2 model reader."""
 
-    attn_pattern = r'attention.\w+.([\w|.]+)'
-    ffn_pattern = r'feed_forward.\w+.([\w|.]+)'
+    attn_pattern = r'attention'
+    ffn_pattern = r'feed_forward'
 
     def _attn(self, i, kind):
         if 'Plora_A' in kind:

@@ -21,8 +21,8 @@ class LlamaReader(BaseReader):
     norm_weight_key = 'model.norm.weight'
     output_weight_key = 'lm_head.weight'
 
-    attn_pattern = r'self_attn.\w+.(\w+)'
-    ffn_pattern = r'mlp.\w+.(\w+)'
+    attn_pattern = r'self_attn'
+    ffn_pattern = r'mlp'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict, policy):
@@ -34,15 +34,14 @@ class LlamaReader(BaseReader):
         tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
-        self.weight_suffix, self.processor = policy
+        self.processor = policy
 
-    def get_kinds(self, pattern: str):
-        res = set()
+    def filter(self, pattern: str):
+        params = []
         for k in self.params.keys():
-            match = re.findall(pattern, k)
-            if match:
-                res.add(match[-1])
-        return res
+            if re.search(pattern, k):
+                params.append(k)
+        return params
 
     def tok_embeddings(self):
         """Get embeddings."""
@@ -71,7 +70,7 @@ class LlamaReader(BaseReader):
 
     def attn(self, i: int, kind: str):
         if not kind:
-            return self.get_kinds(self.attn_pattern)
+            return self.filter(self.attn_pattern)
         return self._attn(i, kind)
 
     def attn_norm(self, i: int):
@@ -82,7 +81,7 @@ class LlamaReader(BaseReader):
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         if not kind:
-            return self.get_kinds(self.ffn_pattern)
+            return self.filter(self.ffn_pattern)
         result = []
         for key in ['gate', 'down', 'up']:
             tensor = self.params[
@@ -93,7 +92,7 @@ class LlamaReader(BaseReader):
 
     def ffn(self, i: int, kind: str):
         if not kind:
-            return self.get_kinds(self.ffn_pattern)
+            return self.filter(self.ffn_pattern)
         return self._ffn(i, kind)
 
     def ffn_norm(self, i: int):

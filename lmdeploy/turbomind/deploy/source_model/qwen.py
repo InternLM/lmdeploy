@@ -16,8 +16,8 @@ class QwenReader(LlamaReader):
     norm_weight_key = 'transformer.ln_f.weight'
     output_weight_key = 'lm_head.weight'
 
-    attn_pattern = r'attn.\w+.(\w+)'
-    ffn_pattern = r'mlp.\w+.(\w+)'
+    attn_pattern = r'attn'
+    ffn_pattern = r'mlp'
 
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
