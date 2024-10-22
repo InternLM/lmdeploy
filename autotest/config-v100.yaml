@@ -91,6 +91,8 @@ turbomind_quatization:
         - internlm/internlm2_5-7b-chat
     no_kvint4:
         - openbmb/MiniCPM-V-2_6
+    no_kvint8:
+        - deepseek-ai/DeepSeek-V2-Lite-Chat
 
 pytorch_quatization:
     awq:
