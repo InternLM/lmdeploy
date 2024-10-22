@@ -3,7 +3,7 @@ from typing import Optional
 
 import torch
 
-from lmdeploy.pytorch.kernels.ascend import awq_linear
+from lmdeploy.pytorch.kernels.dlinfer import awq_linear
 
 from ..awq_modules import LinearW4A16Builder, LinearW4A16Impl
 
