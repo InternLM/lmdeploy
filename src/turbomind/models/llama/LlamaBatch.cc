@@ -1971,7 +1971,7 @@ void LlamaBatch<T>::tune()
         /// NOTE: No explicit barrier can be used here as internal threads are waiting on it now
         for (auto bs : bss) {
             if (rank_ == 0) {
-                TM_LOG_ERROR("[Gemm2] %d", bs);
+                TM_LOG_INFO("[Gemm2] %d", bs);
             }
             const int input_length = bs;
             model_->forwardUnified(decoder_output_buf_,

@@ -18,19 +18,46 @@
 // Modified from
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
 
-#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
+#include <cctype>
+#include <optional>
+
+#include <cuda_runtime.h>
+#include <yaml-cpp/yaml.h>
+
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include <cuda_runtime.h>
-#include <mutex>
-#include <yaml-cpp/yaml.h>
 
 namespace ft = turbomind;
+
+static std::optional<ft::MoeParam::Method> get_moe_method()
+{
+    static const auto value = []() -> std::optional<ft::MoeParam::Method> {
+        const auto p = std::getenv("TM_MOE_METHOD");
+        if (p) {
+            std::string str(p);
+            for (auto& x : str) {
+                x = std::tolower(x);
+            }
+            if (str == "naive") {
+                return ft::MoeParam::kNaive;
+            }
+            else if (str == "fused") {
+                return ft::MoeParam::kFused;
+            }
+            else {
+                std::cerr << "[WARNING] unrecognised MoE method: " << str << "\n";
+            }
+        }
+        return {};
+    }();
+    return value;
+}
 
 std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaModel(std::string config_file)
 {
@@ -272,14 +299,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     moe_param_.experts_per_token = model_reader["experts_per_token"].as<int>(0);
     moe_param_.inter_size        = model_reader["expert_inter_size"].as<int>(0);
 
-    {
-        using namespace turbomind;
-        moe_param_.method = MoeParam::kFused;
-        if (weight_type_ != WeightType::kINT4 && getSMVersion() >= 90) {
-            moe_param_.method = MoeParam::kNaive;
-        }
-    }
-
     handleMissingParams();
 
     shared_state_          = std::make_shared<ft::SharedState>();
@@ -307,6 +326,19 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     else {
         std::cout << "[ERROR] Unsupported weight type: '" << weight_type_str << "'\n";
         ft::FT_CHECK(0);
+    }
+
+    if (auto method = get_moe_method()) {
+        moe_param_.method = *method;
+    }
+    else {
+        moe_param_.method = ft::MoeParam::kFused;
+        // Note: This will fail when GPUs of different SMs are mixed
+        if (weight_type_ != ft::WeightType::kINT4 && ft::getSMVersion() >= 90) {
+            // On sm90 the cuBLAS method may be faster as our grouped GEMM is not
+            // optimized for GMMA yet
+            moe_param_.method = ft::MoeParam::kNaive;
+        }
     }
 
     TM_LOG_INFO("%s", toString().c_str());
@@ -459,7 +491,8 @@ std::string LlamaTritonModel<T>::toString()
        << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
        << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
        << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << model_param_.quant_policy
-       << "\ngroup_size: " << group_size_ << std::endl;
+       << "\ngroup_size: " << group_size_ << "\nexpert_num: " << moe_param_.expert_num
+       << "\nexpert_per_token: " << moe_param_.experts_per_token << "\nmoe_method: " << moe_param_.method << std::endl;
 
     return ss.str();
 }
