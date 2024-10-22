@@ -236,7 +236,7 @@ class BaseModelAgent(AutoModelAgent):
 
         self.cache_engine = CacheEngine(cache_config, model_config)
 
-        self.stream = torch.cuda.Stream()
+        self.stream = torch.cuda.current_stream()
 
     def _build_model(self,
                      model_path: str,
