@@ -505,6 +505,7 @@ class SchedulerSequence:
         # cross attention
         if cross_attention_states is not None:
             self.history_cross_kv_seqlens += cross_attention_states.shape[-2]
+            self.cross_attention_states = cross_attention_states
         self._num_history_ids += self._num_token_ids
         # update history image nums
         self._num_history_images += self._num_images
