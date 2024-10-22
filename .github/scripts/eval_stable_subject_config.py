@@ -20,12 +20,6 @@ with read_base():
         mtbench101_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.subjective.wildbench.wildbench_pair_judge import \
         wildbench_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import \
-        TheoremQA_datasets  # noqa: F401, E501 # noqa: F401, E501
-    from opencompass.configs.datasets.triviaqa.triviaqa_wiki_1shot_gen_bc5f21 import \
-        triviaqa_datasets  # noqa: F401, E501 # noqa: F401, E501
-    from opencompass.configs.datasets.winogrande.winogrande_5shot_gen_b36770 import \
-        winogrande_datasets  # noqa: F401, E501
 
 datasets = sum((v for k, v in locals().items()
                 if k.endswith('_datasets') and 'wildbench' not in k), [])
