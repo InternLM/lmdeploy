@@ -280,8 +280,8 @@ def generate_csv_from_profile_result(file_path: str, out_path: str):
                 item.get('request_rate'),
                 item.get('completed'),
                 round(item.get('completed') / item.get('duration'), 3),
-                item.get('median_ttft_ms'),
-                item.get('output_throughput')
+                round(item.get('median_ttft_ms'), 3),
+                round(item.get('output_throughput'), 3)
             ]
             data_csv.append(row)
         import csv
