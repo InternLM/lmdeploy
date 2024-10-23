@@ -335,7 +335,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
     }
 
-    if (pf_batch_size) {
+    if (pf_batch_size && !isTuning()) {
         const int offset    = dc_batch_size;
         const int sum_k_len = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
         // We are executing prefill & decoding kernels concurrently, but only have 1 workspace
@@ -354,7 +354,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         }
     }
 
-    if (dc_batch_size) {
+    if (dc_batch_size && !isTuning()) {
         auto params = CreateParams(0, dc_batch_size, kMaxKVSplits, dc_stream);
         if constexpr (sizeof(T) == 2) {
             dispatchDecoding<T>(params);
@@ -372,6 +372,11 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     //     dump(qkv_buf_3_, num_token * weights->output.input_dims, stream_, "qkv_buf_3");
     // }
+
+    if (isTuning()) {
+        rng_.set_stream(stream_);
+        rng_.GenerateUniform(qkv_buf_3_, token_num * weights->output.input_dims, .02f, -.01f);
+    }
 
     count_and_fix(qkv_buf_3_, token_num * weights->output.input_dims, Concat("attn", layer_id), 3);
 

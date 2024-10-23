@@ -38,7 +38,7 @@ class ModelConfig:
     num_layer: int = None
     inter_size: int = None
     norm_eps: float = None
-    attn_bias: int = None
+    attn_bias: int = 0
     start_id: int = None
     end_id: int = None
     size_per_head: int = 128
@@ -47,6 +47,9 @@ class ModelConfig:
     session_len: int = None
     tp: int = 1
     model_format: str = 'hf'
+    expert_num: int = 0
+    expert_inter_size: int = 0
+    experts_per_token: int = 0
 
 
 @dataclass

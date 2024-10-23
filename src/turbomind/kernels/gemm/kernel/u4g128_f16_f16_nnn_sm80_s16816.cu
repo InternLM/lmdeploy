@@ -9,23 +9,23 @@
 
 namespace turbomind::gemm {
 
-using namespace sm80_s16816;
-template<int N>
-using Config_ = Sm80_s16816<Sm80,
-                            Operand_A_Pack<uint4_t, kColMajor>,  // A
-                            Transform_HMMA_16816<0, 1>,          // tarnsform A
-                            Operand_UV_Pack<uint32_t, false>,    // U
-                            Operand_B<half, kRowMajor, N>,       // B
-                            Transform_Default,                   // transform B
-                            VoidOperand,                         // V
-                            kColMajor,                           // order_C
-                            half,                                // Tc
-                            CtaMapN>;
-
 void Registry::u4g128_f16_f16_nnn_sm80_s16816()
 {
     // ! Must be M-major MMA
 #if 0
+    using namespace sm80_s16816;
+    template<int N>
+    using Config_ = Sm80_s16816<Sm80,
+                                Operand_A_Pack<uint4_t, kColMajor>,  // A
+                                Transform_HMMA_16816<0, 1>,          // tarnsform A
+                                Operand_UV_Pack<uint32_t, false>,    // U
+                                Operand_B<half, kRowMajor, N>,       // B
+                                Transform_Default,                   // transform B
+                                VoidOperand,                         // V
+                                kColMajor,                           // order_C
+                                half,                                // Tc
+                                CtaMapN>;
+
     using namespace cache_policy;
 
     using C16 = Config_<16>;

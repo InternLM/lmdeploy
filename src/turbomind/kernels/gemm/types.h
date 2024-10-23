@@ -4,6 +4,8 @@
 
 #include "src/turbomind/kernels/core/data_type.h"
 #include <cuda_fp16.h>
+#include <cuda_runtime.h>
+
 #if ENABLE_BF16
 #include <cuda_bf16.h>
 #endif
@@ -40,6 +42,8 @@ typedef enum Op_Tag
     OPERAND_B = 0x020,
     OPERAND_U = 0x030,
     OPERAND_V = 0x040,
+    OPERAND_C = 0x050,
+    OPERAND_D = 0x060,
 } Op_Tag;
 
 constexpr MMA_Tag get_mma_tag(Pack pack)
@@ -55,6 +59,30 @@ constexpr Op_Tag get_operand_tag(Pack pack)
 constexpr int get_pack_num(Pack pack)
 {
     return pack & 0x00f;
+}
+
+enum class Striding : int
+{
+    kFlat,     // [1111,2222,3333]
+    kRagged,   // [11,2222222,333]  [0 , 2      , 9  ]
+    kIndexed,  // [xx xxxxxxx xxx], [01, 2345678, 9ab]
+    kBlocked,  // [11][22222][333]
+};
+
+inline const char* to_string(Striding striding)
+{
+    switch (striding) {
+        case Striding::kFlat:
+            return "f";
+        case Striding::kRagged:
+            return "r";
+        case Striding::kIndexed:
+            return "i";
+        case Striding::kBlocked:
+            return "b";
+        default:
+            return "unknown";
+    }
 }
 
 enum class QuantType : int
@@ -208,12 +236,28 @@ constexpr bool operator&(const DispatchPolicy& a, const DispatchPolicy& b)
     return ((int)a & (int)b);
 }
 
+class Kernel;
+class Context;
+
+struct Tape {
+    int   ctas;
+    int   max_num;
+    int   max_ctas;
+    char* buffer;
+    int4* gemm_shapes;
+    int4* tiled_shapes;
+    int4* tile_offsets;
+    int2* iter_k_ranges;
+    int*  tile_ids;
+};
+
 struct Operation {
     DispatchPolicy dispatch;
     Epilogue       epilogue;
     QuantDesc      quant_a;
     QuantDesc      quant_b;
     int            batch_dim;
+    Context*       context;
     void*          reserved;
 };
 
@@ -224,11 +268,25 @@ struct MatrixLayout {
     int      cols;
     int      ld;
     Pack     pack;
+    int      num;
+    int*     offsets;
+    int*     idxs;
 };
 
 inline int64_t get_size(const MatrixLayout& m)
 {
     return get_size(m.type, (int64_t)m.rows * m.cols);
+}
+
+inline Striding get_mode(const MatrixLayout& m)
+{
+    if (m.idxs) {
+        return Striding::kIndexed;
+    }
+    else if (m.ld == 0 || m.offsets) {
+        return Striding::kBlocked;
+    }
+    return Striding::kFlat;
 }
 
 struct Workspace {

@@ -17,14 +17,19 @@ void Registry::f16_u4g128_f16_tnt_sm90_s16816()
     using D = cache_policy::Default;
 
     using C = Sm80_s16816<Sm90,
-                          Operand_A<half, kRowMajor>,          // A
-                          Transform_Default,                   // tarnsform A
-                          VoidOperand,                         // U
-                          Operand_B_Pack<uint4_t, kColMajor>,  // B
-                          Transform_HMMA_16816<1, 0>,          // transform B
-                          Operand_UV_Pack<uint32_t, true>,     // V
-                          kRowMajor,                           // order_C
-                          half>;                               // Tc
+                          half,
+                          Operand_A<half, kRowMajor>,             // A
+                          Transform_Default,                      // tarnsform A
+                          VoidOperand,                            // U
+                          Operand_B_Pack<uint4_t, kColMajor, 2>,  // B
+                          Transform_HMMA_16816<1, 0>,             // transform B
+                          Operand_UV_Pack<uint32_t, true>,        // V
+                          kRowMajor,                              // order_C
+                          half,                                   // Tc
+                          Striding::kFlat,
+                          Striding::kFlat,
+                          Striding::kFlat,
+                          GemmScheduler<kColMajor>>;
 
     // clang-format off
     Add<C::Type<128, 256,  64, 1, 8, 1, D, D, 3, true, 1, 128>>();

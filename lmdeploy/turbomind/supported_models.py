@@ -39,7 +39,10 @@ SUPPORTED_ARCHS = dict(
     # chatglm2/3, glm4
     ChatGLMModel='glm4',
     ChatGLMForConditionalGeneration='glm4',
-    MolmoForCausalLM='molmo')
+    # mixtral
+    MixtralForCausalLM='mixtral',
+    MolmoForCausalLM='molmo',
+)
 
 
 def is_supported(model_path: str):
