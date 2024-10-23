@@ -35,6 +35,9 @@ class ModelConfig:
     kv_head_num: int = None
     hidden_units: int = None
     vocab_size: int = None
+    # In molmo, embedding.shape is [vocab_size + 128, hidden_units].
+    # Therefore, we add a new attr "embedding_size" to represent it
+    embedding_size: int = 0
     num_layer: int = None
     inter_size: int = None
     norm_eps: float = None

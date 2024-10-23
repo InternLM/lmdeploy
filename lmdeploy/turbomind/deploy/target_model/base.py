@@ -76,7 +76,9 @@ class BaseOutputModel(ABC):
         final_cfg = config_to_dict(self.model_config)
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model_info)
-
+        if not self.input_model_info['embedding_size']:
+            final_cfg.update(
+                embedding_size=self.input_model_info['vocab_size'])
         self.model_config = config_from_dict(ModelConfig, final_cfg)
 
     def update_attention_config(self):
