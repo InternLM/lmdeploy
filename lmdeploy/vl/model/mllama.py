@@ -221,7 +221,6 @@ class MllamaVLModel(VisonModel):
                 del model.language_model
             else:
                 self.vl_model = model
-            model.half()
 
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
@@ -235,7 +234,7 @@ class MllamaVLModel(VisonModel):
                     'MllamaPrecomputedAspectRatioEmbedding',
                     'MllamaVisionEncoderLayer'
                 ],
-                dtype=torch.bfloat16)
+                dtype=config.torch_dtype)
 
         self.model = model.eval()
 
