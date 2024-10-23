@@ -7,7 +7,7 @@ from ..rotary_embedding import (Llama3Parameters, LongRoPEScalingParameters,
                                 RotaryEmbeddingImpl, YarnParameters)
 
 
-class AscendRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
+class DlinferRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
     """base rotary embedding."""
 
     def __init__(self,
@@ -58,7 +58,7 @@ class AscendRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
-class AscendRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
+class DlinferRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
     """rotary embedding builder."""
 
     @staticmethod
@@ -74,7 +74,7 @@ class AscendRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
     ):
         """build."""
         if emb_type in (RopeType.Default, RopeType.LinearScaling):
-            return AscendRotaryEmbeddingImpl(dim, base, scaling_factor)
+            return DlinferRotaryEmbeddingImpl(dim, base, scaling_factor)
         elif emb_type == RopeType.DynamicNTKScaling:
             return LlamaDynamicNTKScalingRotaryEmbedding(
                 dim, base, scaling_factor, max_position_embeddings)

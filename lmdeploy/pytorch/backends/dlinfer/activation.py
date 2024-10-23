@@ -4,7 +4,7 @@ from lmdeploy.pytorch.kernels.dlinfer.activation import silu_and_mul
 from ..activation import SiluAndMulBuilder, SiluAndMulImpl
 
 
-class AscendSiluAndMulImpl(SiluAndMulImpl):
+class DlinferSiluAndMulImpl(SiluAndMulImpl):
     """silu + multiple fused implementation."""
 
     def forward(self, x):
@@ -12,10 +12,10 @@ class AscendSiluAndMulImpl(SiluAndMulImpl):
         return silu_and_mul(x)
 
 
-class AscendSiluAndMulBuilder(SiluAndMulBuilder):
+class DlinferSiluAndMulBuilder(SiluAndMulBuilder):
     """silu and mul implementation builder."""
 
     @staticmethod
     def build(inplace: bool = False):
         """build."""
-        return AscendSiluAndMulImpl()
+        return DlinferSiluAndMulImpl()
