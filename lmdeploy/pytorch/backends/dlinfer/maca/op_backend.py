@@ -47,7 +47,8 @@ class MacaOpsBackend(DlinferOpsBackend):
         device = step_context.block_offsets.device
 
         is_unpaged_prefill = False
-        q_start_loc = torch.cat((torch.tensor([0], device=device), step_context.q_seqlens.cumsum(0))).int()
+        q_start_loc = torch.cat((torch.tensor([0], device=device),
+                                 step_context.q_seqlens.cumsum(0))).int()
         q_seqlens_cpu = step_context.q_seqlens.cpu()
         kv_seqlens_cpu = step_context.kv_seqlens.cpu()
         max_q_seq_len = torch.max(q_seqlens_cpu).item()

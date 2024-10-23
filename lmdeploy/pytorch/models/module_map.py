@@ -7,7 +7,8 @@ MODULE_MAP = dict()
 ASCEND_MODULE_MAP = dict()
 MACA_MODULE_MAP = dict()
 
-DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP, maca=MACA_MODULE_MAP)
+DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP,
+                                 maca=MACA_MODULE_MAP)
 
 # llama
 MODULE_MAP.update({
