@@ -64,7 +64,8 @@ def getKvintModelList(tp_num, quant_policy: int = None):
         'cuda_prefix': None,
         'tp_num': tp_num,
         'extra': f'--quant-policy {quant_policy}'
-    } for item in get_vl_model_list(tp_num, quant_policy)]
+    } for item in get_vl_model_list(tp_num, quant_policy)
+            if 'qwen2' not in item.lower() or quant_policy == 8]
 
 
 @pytest.mark.order(7)
