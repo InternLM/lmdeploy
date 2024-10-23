@@ -73,17 +73,19 @@ class SafetensorsLoader(BaseLoader):
         params = defaultdict(dict)
         for shard in self.shards:
             with safe_open(shard, 'pt') as f:
+                misc = []
                 for k in f.keys():
-                    tensor = f.get_tensor(k)
                     match = re.findall(self.pattern, k)
                     if not match:
-                        yield (-1, {k: tensor})
+                        misc.append(k)
                     else:
                         idx = int(match[0])
                         param = params[idx]
-                        param[k] = tensor
+                        param[k] = f.get_tensor(k)
                         if len(param) == self.item_count[idx]:
                             yield (idx, params.pop(idx))
+                if misc:
+                    yield (-1, {k: f.get_tensor(k) for k in misc})
         assert not params
 
 
