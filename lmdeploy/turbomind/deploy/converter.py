@@ -138,6 +138,10 @@ def get_output_model_registered_name_and_config(model_path: str,
     else:
         assert 0, f'unsupported specified data type {dtype}'
 
+    if weight_type == 'bfloat16' and not torch.cuda.is_bf16_supported():
+        logger.warn('Change data type to float16 since '
+                    'torch.cuda.is_bf16_supported is False')
+        weight_type = 'float16'
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type
     config.model_config.model_format = model_format
