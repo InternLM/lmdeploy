@@ -96,8 +96,9 @@ class AscendOpsBackend(DlinferOpsBackend):
             kv_seqlens_cpu = step_context.kv_seqlens.cpu()
         elif is_unpaged_prefill:
             # prepare somae params of unpaged_prefill attention stage.
-            q_start_loc_cpu, kv_seqlens_cpu = None, None
+            q_start_loc_cpu = step_context.q_start_loc.cpu()
             q_seqlens_cpu = step_context.q_seqlens.cpu()
+            kv_seqlens_cpu = None
             single_attention_mask = torch.logical_not(
                 torch.tril(
                     torch.ones(max_q_seq_len, max_kv_seq_len,
