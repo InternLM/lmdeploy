@@ -43,60 +43,60 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 
 ## PyTorchEngine CUDA 平台
 
-|     Model      |    Size     | Type | FP16/BF16 | KV INT8 | W8A8 | W4A16 |
-| :------------: | :---------: | :--: | :-------: | :-----: | :--: | :---: |
-|     Llama      |  7B - 65B   | LLM  |    Yes    |   No    | Yes  |  Yes  |
-|     Llama2     |  7B - 70B   | LLM  |    Yes    |   No    | Yes  |  Yes  |
-|     Llama3     |   8B, 70B   | LLM  |    Yes    |   No    | Yes  |  Yes  |
-|    Llama3.1    |   8B, 70B   | LLM  |    Yes    |   No    |  No  |   -   |
-|    InternLM    |  7B - 20B   | LLM  |    Yes    |   No    | Yes  |   -   |
-|   InternLM2    |  7B - 20B   | LLM  |    Yes    |   No    | Yes  |  Yes  |
-|  InternLM2.5   |     7B      | LLM  |    Yes    |   No    | Yes  |  Yes  |
-|   Baichuan2    |     7B      | LLM  |    Yes    |   No    | Yes  |  No   |
-|   Baichuan2    |     13B     | LLM  |    Yes    |   No    |  No  |  No   |
-|    ChatGLM2    |     6B      | LLM  |    Yes    |   No    |  No  |  No   |
-|     Falcon     |  7B - 180B  | LLM  |    Yes    |   No    |  No  |  No   |
-|       YI       |  6B - 34B   | LLM  |    Yes    |   No    |  No  |  Yes  |
-|    Mistral     |     7B      | LLM  |    Yes    |   No    |  No  |  No   |
-|    Mixtral     |    8x7B     | LLM  |    Yes    |   No    |  No  |  No   |
-|      QWen      | 1.8B - 72B  | LLM  |    Yes    |   No    |  No  |  Yes  |
-|    QWen1.5     | 0.5B - 110B | LLM  |    Yes    |   No    |  No  |  Yes  |
-|  QWen1.5-MoE   |    A2.7B    | LLM  |    Yes    |   No    |  No  |  No   |
-|     QWen2      | 0.5B - 72B  | LLM  |    Yes    |   No    |  No  |  Yes  |
-|    QWen2-VL    |   2B, 7B    | MLLM |    Yes    |   No    |  No  |  No   |
-|  DeepSeek-MoE  |     16B     | LLM  |    Yes    |   No    |  No  |  No   |
-|  DeepSeek-V2   |  16B, 236B  | LLM  |    Yes    |   No    |  No  |  No   |
-|    MiniCPM3    |     4B      | LLM  |    Yes    |   No    |  No  |  No   |
-|     Gemma      |    2B-7B    | LLM  |    Yes    |   No    |  No  |  No   |
-|      Dbrx      |    132B     | LLM  |    Yes    |   No    |  No  |  No   |
-|   StarCoder2   |   3B-15B    | LLM  |    Yes    |   No    |  No  |  No   |
-|   Phi-3-mini   |    3.8B     | LLM  |    Yes    |   No    |  No  |  Yes  |
-|  Phi-3-vision  |    4.2B     | MLLM |    Yes    |   No    |  No  |   -   |
-|  CogVLM-Chat   |     17B     | MLLM |    Yes    |   No    |  No  |   -   |
-|  CogVLM2-Chat  |     19B     | MLLM |    Yes    |   No    |  No  |   -   |
-| LLaVA(1.5,1.6) |   7B-34B    | MLLM |    Yes    |   No    |  No  |   -   |
-| InternVL(v1.5) |   2B-26B    | MLLM |    Yes    |   No    |  No  |  Yes  |
-|   InternVL2    |   1B-40B    | MLLM |    Yes    |   No    |  No  |   -   |
-|     Gemma2     |   9B-27B    | LLM  |    Yes    |   No    |  No  |   -   |
-|      GLM4      |     9B      | LLM  |    Yes    |   No    |  No  |  No   |
-|     GLM-4V     |     9B      | MLLM |    Yes    |   No    |  No  |  No   |
-|   CodeGeeX4    |     9B      | LLM  |    Yes    |   No    |  No  |   -   |
-|  Phi-3.5-mini  |    3.8B     | LLM  |    Yes    |   No    |  No  |   -   |
-|  Phi-3.5-MoE   |   16x3.8B   | LLM  |    Yes    |   No    |  No  |   -   |
-| Phi-3.5-vision |    4.2B     | MLLM |    Yes    |   No    |  No  |   -   |
+|     Model      |    Size     | Type | FP16/BF16 | KV INT8 | KV INT4 | W8A8 | W4A16 |
+| :------------: | :---------: | :--: | :-------: | :-----: | :-----: | :--: | :---: |
+|     Llama      |  7B - 65B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
+|     Llama2     |  7B - 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
+|     Llama3     |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
+|    Llama3.1    |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|    InternLM    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |   -   |
+|   InternLM2    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
+|  InternLM2.5   |     7B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
+|   Baichuan2    |     7B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  No   |
+|   Baichuan2    |     13B     | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|    ChatGLM2    |     6B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|     Falcon     |  7B - 180B  | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|       YI       |  6B - 34B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
+|    Mistral     |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|    Mixtral     |    8x7B     | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|      QWen      | 1.8B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
+|    QWen1.5     | 0.5B - 110B | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
+|  QWen1.5-MoE   |    A2.7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|     QWen2      | 0.5B - 72B  | LLM  |    Yes    |   Yes   |   No    |  No  |  Yes  |
+|    QWen2-VL    |   2B, 7B    | MLLM |    Yes    |   Yes   |   No    |  No  |  No   |
+|  DeepSeek-MoE  |     16B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|  DeepSeek-V2   |  16B, 236B  | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|    MiniCPM3    |     4B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|     Gemma      |    2B-7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|      Dbrx      |    132B     | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|   StarCoder2   |   3B-15B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|   Phi-3-mini   |    3.8B     | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
+|  Phi-3-vision  |    4.2B     | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|  CogVLM-Chat   |     17B     | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|  CogVLM2-Chat  |     19B     | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+| LLaVA(1.5,1.6) |   7B-34B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+| InternVL(v1.5) |   2B-26B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
+|   InternVL2    |   1B-40B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|     Gemma2     |   9B-27B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|      GLM4      |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|     GLM-4V     |     9B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|   CodeGeeX4    |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|  Phi-3.5-mini  |    3.8B     | LLM  |    Yes    |   Yes   |   No    |  No  |   -   |
+|  Phi-3.5-MoE   |   16x3.8B   | LLM  |    Yes    |   Yes   |   No    |  No  |   -   |
+| Phi-3.5-vision |    4.2B     | MLLM |    Yes    |   Yes   |   No    |  No  |   -   |
 
 ## PyTorchEngine 华为昇腾平台
 
-|     Model      |   Size   | Type | FP16/BF16 |
-| :------------: | :------: | :--: | :-------: |
-|     Llama2     | 7B - 70B | LLM  |    Yes    |
-|     Llama3     |    8B    | LLM  |    Yes    |
-|    Llama3.1    |    8B    | LLM  |    Yes    |
-|   InternLM2    | 7B - 20B | LLM  |    Yes    |
-|  InternLM2.5   | 7B - 20B | LLM  |    Yes    |
-|    Mixtral     |   8x7B   | LLM  |    Yes    |
-|  QWen1.5-MoE   |  A2.7B   | LLM  |    Yes    |
-|     QWen2      |    7B    | LLM  |    Yes    |
-|   QWen2-MoE    | A14.57B  | LLM  |    Yes    |
-| InternVL(v1.5) |  2B-26B  | MLLM |    Yes    |
-|   InternVL2    |  1B-40B  | MLLM |    Yes    |
+|     Model      |   Size   | Type | FP16/BF16 | W4A16 |
+| :------------: | :------: | :--: | :-------: | :---: |
+|     Llama2     | 7B - 70B | LLM  |    Yes    |  Yes  |
+|     Llama3     |    8B    | LLM  |    Yes    |  Yes  |
+|    Llama3.1    |    8B    | LLM  |    Yes    |  Yes  |
+|   InternLM2    | 7B - 20B | LLM  |    Yes    |  Yes  |
+|  InternLM2.5   | 7B - 20B | LLM  |    Yes    |  Yes  |
+|    Mixtral     |   8x7B   | LLM  |    Yes    |  No   |
+|  QWen1.5-MoE   |  A2.7B   | LLM  |    Yes    |  No   |
+|     QWen2      |    7B    | LLM  |    Yes    |  No   |
+|   QWen2-MoE    | A14.57B  | LLM  |    Yes    |  No   |
+| InternVL(v1.5) |  2B-26B  | MLLM |    Yes    |  Yes  |
+|   InternVL2    |  1B-40B  | MLLM |    Yes    |  Yes  |
