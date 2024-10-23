@@ -37,6 +37,9 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoE:
             from .moe import DlinferFusedMoEBuilder
             return DlinferFusedMoEBuilder
+        elif layer_type == OpType.LinearW4A16:
+            from .awq_modules import AwqLinearW4A16Builder
+            return AwqLinearW4A16Builder
         else:
             logger.debug(
                 f'Op {layer_type} fallback to default implementation.')
