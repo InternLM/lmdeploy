@@ -15,6 +15,7 @@ from lmdeploy.utils import get_logger
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
+from ..distributed import DistContext, get_dist_manager, get_world_rank
 from ..model_inputs import ModelInputs
 from ..models.patch import (add_adapters, build_patched_model,
                             update_custom_module_map)
@@ -81,9 +82,7 @@ def _update_cache_config(model_config: ModelConfig,
         # TODO: support kernel with both large head dim and large block size.
         if model_config.k_head_dim >= 512 and cache_config.block_size > 32:
             cache_config.block_size = 32
-            rank = 0
-            if dist.is_initialized():
-                rank = dist.get_rank()
+            _, rank = get_world_rank()
             if rank == 0:
                 logger.warning(
                     f'Update `block_size={cache_config.block_size}`'
@@ -482,9 +481,11 @@ def _start_tp_process(proc_id: int,
                                 rank=rank,
                                 world_size=world_size,
                                 timeout=timedelta(days=35600))
+        dist_ctx = DistContext(rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
-        with get_device_manager().context(
-                device_context), torch.inference_mode():
+        with (get_dist_manager().context(dist_ctx),
+              get_device_manager().context(device_context),
+              torch.inference_mode()):
             args = args or tuple()
             kwargs = kwargs or dict()
             func(rank, *args, **kwargs)
@@ -565,6 +566,7 @@ class TPModelAgent(AutoModelAgent):
         self.world_size = world_size
         self.backend_config = backend_config
 
+        self._dist_ctx = None
         self.mp_bar = self.mp_ctx.Barrier(world_size)
         self._start_sub_process(model_path,
                                 model_config=model_config,
@@ -645,6 +647,8 @@ class TPModelAgent(AutoModelAgent):
                                     rank=rank,
                                     world_size=world_size,
                                     timeout=timedelta(days=35600))
+            dist_ctx = DistContext(rank=rank, world_size=world_size)
+            self._dist_ctx = dist_ctx
         except Exception as e:
             from traceback import print_exc
             logger.error(f'Rank[{rank}] failed.')
@@ -665,16 +669,17 @@ class TPModelAgent(AutoModelAgent):
         world_size: int,
     ):
         """build model."""
-        rank = 0
-        model, cache_engine, cache_config = _tp_build_model(
-            rank,
-            model_path=model_path,
-            model_config=model_config,
-            cache_config=cache_config,
-            backend_config=backend_config,
-            adapters=adapters,
-            world_size=world_size,
-        )
+        with get_dist_manager().context(self._dist_ctx):
+            rank = 0
+            model, cache_engine, cache_config = _tp_build_model(
+                rank,
+                model_path=model_path,
+                model_config=model_config,
+                cache_config=cache_config,
+                backend_config=backend_config,
+                adapters=adapters,
+                world_size=world_size,
+            )
 
         return model, cache_engine, cache_config
 
@@ -686,20 +691,21 @@ class TPModelAgent(AutoModelAgent):
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
         """forward impl."""
-        self.mp_bar.wait()
-        rank = 0
-        _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
-                          self.stream)
-        cache_swapping(self.cache_engine,
-                       swap_in_map=swap_in_map,
-                       swap_out_map=swap_out_map)
-        output = model_forward(
-            self.patched_model,
-            inputs,
-            self.cache_engine,
-            world_size=1,
-            stream=self.stream,
-        )
+        with get_dist_manager().context(self._dist_ctx):
+            self.mp_bar.wait()
+            rank = 0
+            _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
+                              self.stream)
+            cache_swapping(self.cache_engine,
+                           swap_in_map=swap_in_map,
+                           swap_out_map=swap_out_map)
+            output = model_forward(
+                self.patched_model,
+                inputs,
+                self.cache_engine,
+                world_size=1,
+                stream=self.stream,
+            )
         return output
 
     def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
