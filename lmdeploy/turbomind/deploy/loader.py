@@ -55,8 +55,8 @@ class SafetensorsLoader(BaseLoader):
     def __init__(self,
                  model_path: str,
                  pattern: str,
-                 index_name: str = None,
-                 file_pattern: str = None):
+                 index_name=None,
+                 file_pattern=None):
         super().__init__(model_path, pattern)
         self.shards, index = self.get_index(index_name, file_pattern)
         if not index:
@@ -89,8 +89,11 @@ class SafetensorsLoader(BaseLoader):
 
 class PytorchLoader(BaseLoader):
 
-    def __init__(self, model_path: str, pattern: str, index_name: str,
-                 file_pattern: str):
+    def __init__(self,
+                 model_path: str,
+                 pattern: str,
+                 index_name=None,
+                 file_pattern=None):
         super().__init__(model_path, pattern)
         self.shards, index = self.get_index(index_name, file_pattern)
         for k in index.keys():
