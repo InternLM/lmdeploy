@@ -55,8 +55,8 @@ class SafetensorsLoader(BaseLoader):
     def __init__(self,
                  model_path: str,
                  pattern: str,
-                 index_name: str = None,
-                 file_pattern: str = None):
+                 index_name=None,
+                 file_pattern=None):
         super().__init__(model_path, pattern)
         self.shards, index = self.get_index(index_name, file_pattern)
         if not index:
@@ -73,24 +73,29 @@ class SafetensorsLoader(BaseLoader):
         params = defaultdict(dict)
         for shard in self.shards:
             with safe_open(shard, 'pt') as f:
+                misc = []
                 for k in f.keys():
-                    tensor = f.get_tensor(k)
                     match = re.findall(self.pattern, k)
                     if not match:
-                        yield (-1, {k: tensor})
+                        misc.append(k)
                     else:
                         idx = int(match[0])
                         param = params[idx]
-                        param[k] = tensor
+                        param[k] = f.get_tensor(k)
                         if len(param) == self.item_count[idx]:
                             yield (idx, params.pop(idx))
+                if misc:
+                    yield (-1, {k: f.get_tensor(k) for k in misc})
         assert not params
 
 
 class PytorchLoader(BaseLoader):
 
-    def __init__(self, model_path: str, pattern: str, index_name: str,
-                 file_pattern: str):
+    def __init__(self,
+                 model_path: str,
+                 pattern: str,
+                 index_name=None,
+                 file_pattern=None):
         super().__init__(model_path, pattern)
         self.shards, index = self.get_index(index_name, file_pattern)
         for k in index.keys():
