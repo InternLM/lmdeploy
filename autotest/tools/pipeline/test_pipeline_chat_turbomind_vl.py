@@ -39,6 +39,8 @@ def test_pipeline_chat_tp2(config, model, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', get_vl_model_list(tp_num=1, quant_policy=4))
 def test_pipeline_chat_kvint4_tp1(config, model, worker_id):
+    if 'Qwen2' in model:
+        return  # kvint4 for qwen2 is not support
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     p = Process(target=run_pipeline_vl_chat_test, args=(config, model, 4))
@@ -52,6 +54,8 @@ def test_pipeline_chat_kvint4_tp1(config, model, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('model', get_vl_model_list(tp_num=2, quant_policy=4))
 def test_pipeline_chat_kvint4_tp2(config, model, worker_id):
+    if 'Qwen2' in model:
+        return  # kvint4 for qwen2 is not support
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
