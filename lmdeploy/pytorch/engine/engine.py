@@ -162,7 +162,7 @@ class Engine:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
-        self.stream = torch.cuda.Stream()
+        self.stream = self.model_agent.stream
 
         self.req_manager = self._bind_request_manager()
 
@@ -526,7 +526,7 @@ class Engine:
             last_idx = seq_length.cumsum(-1) - 1
             return logits[last_idx, :]
 
-        split_logits = __get_last_logits().cuda()
+        split_logits = __get_last_logits()
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos,
                                                 self.tokenizer.model.model)
         logits = logits_processor(all_ids, guided_input_ids, split_logits)
