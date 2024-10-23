@@ -7,9 +7,6 @@ import torch
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
-g_embed1 = None
-g_embed2 = None
-
 
 class MolmoReader(LlamaReader):
     attn_layer_prefix = 'model.transformer.blocks'
@@ -22,26 +19,16 @@ class MolmoReader(LlamaReader):
     # of ffn parameters are "ff_norm", "ff_out", "ff_proj", so we
     # make the patterns are r'att' and r'ffn_', respectively.
     attn_pattern = r'att'
-    ffn_pattern = r'ffn_'
+    ffn_pattern = r'ff_'
 
     def tok_embeddings(self):
-        global g_embed1, g_embed2
-        key1 = 'model.transformer.wte.embedding'
-        key2 = 'model.transformer.wte.new_embedding'
-        if g_embed1 is None:
-            g_embed1 = self.params.get(key1, None)
-        if g_embed2 is None:
-            g_embed2 = self.params.get(key2, None)
-        if g_embed1 is not None and g_embed2 is not None:
-            return torch.cat((g_embed1, g_embed2), dim=0)
+        embed1 = self.params.get('model.transformer.wte.embedding', None)
+        embed2 = self.params.get('model.transformer.wte.new_embedding', None)
+        if embed1 is not None and embed2 is not None:
+            return torch.cat((embed1, embed2), dim=0)
         else:
+            assert embed1 is None and embed2 is None
             return None
-        # if embed1 is not None and embed2 is not None:
-        #     return torch.cat((embed1, embed2), dim=0)
-        # else:
-        #     import pdb; pdb.set_trace()
-        #     assert embed1 is None and embed2 is None
-        #     return None
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
