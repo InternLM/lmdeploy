@@ -3,8 +3,8 @@ from typing import Tuple
 
 import torch
 
-from lmdeploy.utils import get_logger
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.utils import get_logger
 
 from ..op_backend import DlinferOpsBackend
 
@@ -13,9 +13,9 @@ logger = get_logger('lmdeploy')
 
 class AscendOpsBackend(DlinferOpsBackend):
     """ascend layer backend."""
-    eager_mode = True
+    enable_graph = False
     half_negative_inf = torch.finfo(torch.float16).min
-    total_slots = None 
+    total_slots = None
 
     @staticmethod
     def get_name() -> str:
@@ -49,42 +49,44 @@ class AscendOpsBackend(DlinferOpsBackend):
     @classmethod
     def update_step_context(cls, step_context):
         """update step context."""
+
         def get_total_slots():
             if cls.total_slots is None:
-                cls.total_slots = torch.arange(block_num * block_size,  
-                               dtype=torch.long,
-                               device=step_context.block_offsets.device)
+                cls.total_slots = torch.arange(
+                    block_num * block_size,
+                    dtype=torch.long,
+                    device=step_context.block_offsets.device)
                 cls.total_slots = cls.total_slots.view(block_num, block_size)
             return cls.total_slots
 
-        kv_start_indices, attention_mask = [], []      
+        kv_start_indices, attention_mask = [], []
         block_num, block_size, _ = step_context.kv_caches[0][0].shape
         is_unpaged_prefill = False
-        if not step_context.is_decoding:                
+        if not step_context.is_decoding:
             is_unpaged_prefill = \
                 all((step_context.q_seqlens ==
-                     step_context.kv_seqlens).tolist())      
+                     step_context.kv_seqlens).tolist())
         q_seqlens_list = step_context.q_seqlens.tolist()
-        kv_seqlens_list = step_context.kv_seqlens.tolist()             
-        max_q_seq_len = max(q_seqlens_list)     
+        kv_seqlens_list = step_context.kv_seqlens.tolist()
+        max_q_seq_len = max(q_seqlens_list)
         max_kv_seq_len = max(kv_seqlens_list)
 
         for i in range(step_context.q_start_loc.size(0)):
             q_seq_len = q_seqlens_list[i]
-            kv_seq_len = kv_seqlens_list[i]                              
-                                       
+            kv_seq_len = kv_seqlens_list[i]
+
             # collect kv start indices.
-            history_length = kv_seq_len - q_seq_len     
+            history_length = kv_seq_len - q_seq_len
             total_slots = get_total_slots()
             slot_tables = total_slots[step_context.block_offsets[i]].view(-1)
-            slots = slot_tables[history_length : kv_seq_len]
+            slots = slot_tables[history_length:kv_seq_len]
             kv_start_indices.append(slots)
-                                       
+
             # collect attention mask of paged_prefill attention stage.
             if not (step_context.is_decoding or is_unpaged_prefill):
                 single_attention_mask = torch.logical_not(
                     torch.tril(
-                        torch.ones(q_seq_len,     
+                        torch.ones(q_seq_len,
                                    step_context.block_offsets.shape[1] *
                                    block_size,
                                    dtype=torch.bool,
@@ -112,18 +114,17 @@ class AscendOpsBackend(DlinferOpsBackend):
         else:
             # prepare some params of paged_prefill attention stage.
             q_start_loc_cpu, q_seqlens_cpu = None, None
-            attention_mask = [
-                torch.cat([mask for mask in attention_mask])
-            ]
+            attention_mask = [torch.cat([mask for mask in attention_mask])]
 
-        if not cls.eager_mode:
+        if cls.enable_graph:
             kv_start_indices = kv_start_indices.view(-1).to(torch.int32)
             import torch._dynamo as dynamo
             if not is_unpaged_prefill:
-                step_context.block_offsets = step_context.block_offsets.to(torch.int32)
+                step_context.block_offsets = step_context.block_offsets.to(
+                    torch.int32)
                 if not step_context.is_decoding:
-                    step_context.block_offsets = step_context.block_offsets.repeat_interleave(
-                        step_context.q_seqlens, 0)
+                    step_context.block_offsets = step_context.block_offsets\
+                        .repeat_interleave(step_context.q_seqlens, 0)
             dynamo.mark_dynamic(step_context.block_offsets, [0, 1])
             kv_seqlens = step_context.kv_seqlens.to(torch.int32)
             if not step_context.is_decoding:
@@ -146,9 +147,10 @@ class AscendOpsBackend(DlinferOpsBackend):
             else:
                 kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(
                     step_context.q_seqlens, 0).cpu()
-                block_offsets_int32 = step_context.block_offsets.to(torch.int32)
-                step_context.block_offsets = block_offsets_int32.repeat_interleave( 
-                    step_context.q_seqlens, 0)
+                block_offsets_int32 = step_context.block_offsets.to(
+                    torch.int32)
+                step_context.block_offsets = block_offsets_int32\
+                    .repeat_interleave(step_context.q_seqlens, 0)
             kv_seqlens = kv_seqlens_cpu
 
         attn_meta_cls = cls.get_attention_metadata_cls()
@@ -176,6 +178,8 @@ class AscendOpsBackend(DlinferOpsBackend):
                            device: torch.device):
         """build graph runner."""
         from .graph_runner import AscendGraphRunner
-        AscendOpsBackend.eager_mode = backend_config.eager_mode
-        return AscendGraphRunner(model, model_config, cache_config,
-                                 backend_config, device)
+        ascend_graph_runner = AscendGraphRunner(model, model_config,
+                                                cache_config, backend_config,
+                                                device)
+        AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
+        return ascend_graph_runner

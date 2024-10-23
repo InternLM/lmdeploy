@@ -18,15 +18,15 @@ class AscendRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
         self.scaling_factor = scaling_factor
         self.dim = dim
         self.base = base
-        inv_freq = 1.0 / (self.base**(torch.arange(
-            0, self.dim, 2, dtype=torch.int64).float() / self.dim)).float().cuda()
+        inv_freq = 1.0 / (self.base**(
+            torch.arange(0, self.dim, 2, dtype=torch.int64).float() /
+            self.dim)).float().cuda()
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
     def dump_tensor(self, name, t):
         import pickle
         with open(f'/tzy/dev_ops/{name}.pkl', 'wb') as f:
             pickle.dump(t.cpu(), f)
-
 
     def forward(self, x, position_ids):
         """forward."""
@@ -51,7 +51,6 @@ class AscendRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
         inv_freq_expanded = inv_freq_expanded
         position_ids_expanded = position_ids_expanded
         tmp = torch.bmm(inv_freq_expanded, position_ids_expanded)
-        # tmp = torch.ops.atb.bmm.default(inv_freq_expanded, position_ids_expanded)
         freqs = tmp.transpose(1, 2)
         emb = torch.cat((freqs, freqs), dim=-1)
         cos = emb.cos()
