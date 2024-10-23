@@ -27,13 +27,13 @@ class BaseLoader(ABC):
         self.pattern = pattern
         self.item_count = defaultdict(int)
 
-    def get_index(self, index_path: str,
+    def get_index(self, index_name: str,
                   file_pattern: str) -> Tuple[dict, list]:
         """get shards and weight map (if possible) for the model."""
         get_path = partial(osp.join, self.model_path)
-        index_path = get_path(index_path)
-        if osp.exists(index_path):
-            with open(index_path, 'r') as f:
+        shards = []
+        if index_name:
+            with open(get_path(index_name), 'r') as f:
                 index = json.load(f)
             index = index['weight_map']
             shards = list(map(get_path, set(index.values())))
