@@ -66,6 +66,10 @@ def check_env_triton(device: str):
     from packaging import version
     logger = get_logger('lmdeploy')
 
+    msg = (
+        'Please ensure that your device is functioning properly with <Triton>.\n'  # noqa: E501
+        'You can verify your environment by running '
+        '`python -m lmdeploy.pytorch.check_env.triton_custom_add`.')
     try:
         logger.debug('Checking <Triton> environment.')
         import torch
@@ -87,11 +91,9 @@ def check_env_triton(device: str):
                 'This Error might caused by mismatching between NVIDIA Driver and nvcc compiler. \n'  # noqa: E501
                 'Try solution https://github.com/triton-lang/triton/issues/1955#issuecomment-1929908209'  # noqa: E501
                 ' or reinstall the driver.')
-        else:
-            msg = None
         _handle_exception(e, 'Triton', logger, msg)
     except Exception as e:
-        _handle_exception(e, 'Triton', logger)
+        _handle_exception(e, 'Triton', logger, msg)
 
     if device == 'cuda':
         device_cap = torch.cuda.get_device_capability()
