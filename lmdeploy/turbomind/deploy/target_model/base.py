@@ -61,6 +61,7 @@ class BaseOutputModel(ABC):
         self.permute_qk = self.input_model_info.get('permute_qk', True)
 
         self.update_model_config()
+        self.model_config.verify()
         assert self.model_config.kv_head_num % self.tensor_para_size == 0
 
         self.update_attention_config()

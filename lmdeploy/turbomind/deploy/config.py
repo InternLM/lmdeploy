@@ -51,6 +51,13 @@ class ModelConfig:
     expert_inter_size: int = 0
     experts_per_token: int = 0
 
+    def verify(self):
+        invalid = {}
+        for k, v in self.__dict__.items():
+            if v is None:
+                invalid[k] = v
+        assert not invalid, f'incomplete model config: {invalid}'
+
 
 @dataclass
 class AttentionConfig:
