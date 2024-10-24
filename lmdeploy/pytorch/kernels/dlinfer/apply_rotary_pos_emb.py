@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Optional, Tuple
+
 import dlinfer.ops as ext_ops
 from torch import Tensor
 
@@ -8,9 +10,9 @@ def apply_rotary_pos_emb(
     key_states: Tensor,
     cos: Tensor,
     sin: Tensor,
-    q_embed: Tensor = None,
-    k_embed: Tensor = None,
-):
+    q_embed: Optional[Tensor],
+    k_embed: Optional[Tensor],
+) -> Tuple[Tensor, Tensor]:
     query_states = query_states.contiguous()
     key_states = key_states.contiguous()
     bs = query_states.shape[0]
