@@ -36,6 +36,13 @@ def _weight_dtype_map(weight_type: str, default=None):
     return _WEIGHT_DTYPE_MAP.get(weight_type, default)
 
 
+def _pad_inter_size(inter_size: int, group_size: int, tp: int):
+    group_size = max(1, group_size)
+    groups_per_rank = (inter_size // group_size + tp - 1) // tp
+    inter_size_padded = groups_per_rank * group_size * tp
+    return inter_size_padded
+
+
 class BaseOutputModel(ABC):
     """Base output model."""
 
@@ -61,6 +68,13 @@ class BaseOutputModel(ABC):
         self.permute_qk = self.input_model_info.get('permute_qk', True)
 
         self.update_model_config()
+        self.model_config.inter_size = _pad_inter_size(
+            self.model_config.inter_size, self.model_config.group_size,
+            self.tensor_para_size)
+        if self.model_config.expert_num:
+            self.model_config.expert_inter_size = _pad_inter_size(
+                self.model_config.expert_inter_size,
+                self.model_config.group_size, self.tensor_para_size)
         self.model_config.verify()
         assert self.model_config.kv_head_num % self.tensor_para_size == 0
 
