@@ -230,7 +230,7 @@ def get_tm_model(model_path,
             f'mismatched quant method: user input ' \
             f'"{engine_config.model_format}" ' \
             f'vs model quant_config "{quant_method}"'
-        assert group_size is None or group_size == _group_size, \
+        assert not group_size or group_size == _group_size, \
             f'mismatched quant group size: user input "{group_size}" ' \
             f'vs model quant_config "{_group_size}"'
 
