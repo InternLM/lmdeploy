@@ -63,6 +63,8 @@ class InternVLModel(LlamaModel):
             norm_eps = model_arg['rms_norm_eps']
             hidden_units = model_arg['hidden_size']
             attn_head_num = model_arg['num_attention_heads']
+            vocab_size = model_arg['vocab_size']
+            inter_size = model_arg['intermediate_size']
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
             else:
@@ -82,6 +84,8 @@ class InternVLModel(LlamaModel):
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
                     hidden_units=hidden_units,
+                    inter_size=inter_size,
+                    vocab_size=vocab_size,
                     head_num=attn_head_num,
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,

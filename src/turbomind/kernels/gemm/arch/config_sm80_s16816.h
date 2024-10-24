@@ -17,15 +17,19 @@
 namespace turbomind::gemm::sm80_s16816 {
 
 template<class Arch,
+         class Dtype,
          class A,
          class TransformA,
          class U,
          class B,
          class TransformB,
          class V,
-         Order order_c,
+         Order order_C,
          class Tc,
-         class CtaMap_ = CtaMap>
+         Striding mode_A,
+         Striding mode_B,
+         Striding mode_C,
+         class CtaMap_>
 struct Sm80_s16816 {
 
     static_assert(A::SmemCopyAtom::K == B::SmemCopyAtom::K);
@@ -55,16 +59,16 @@ struct Sm80_s16816 {
         // Raked partition dont support `Pack_M > 1`
         using Partition = Blocked<TG_M, TG_N, kColMajor>;
         using MMA_Map   = MMA_Map<CTA_M, CTA_N, CTA_K, SMEM_M, SMEM_N, SMEM_K, Partition, TG_K>;
-        using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN, MMA_Map>;
+        using MMA       = Tiled_MMA_v2<SM80_MMA_16x8x16_F32_F16_F16_F32_TN<Dtype>, MMA_Map>;
 
         using Mainloop = MainloopSm80_v2<MMA,
                                          A,
-                                         IteratorSm80<PolicyA>,
+                                         IteratorSm80<mode_A, PolicyA>,
                                          TransformA,
                                          U,
                                          GroupSizeU,
                                          B,
-                                         IteratorSm80<PolicyB>,
+                                         IteratorSm80<mode_B, PolicyB>,
                                          TransformB,
                                          V,
                                          GroupSizeV,
@@ -81,7 +85,8 @@ struct Sm80_s16816 {
                                          TILE_C_N,
                                          MMA::kThreadCount,
                                          Rearrange<MMA>,
-                                         Operand_C<float, order_c>,
+                                         Operand_C<float, order_C>,
+                                         mode_C,
                                          SplitK>;
 
         using Kernel = GemmUniversal<Arch, Mainloop, Epilogue, CtaMap_>;

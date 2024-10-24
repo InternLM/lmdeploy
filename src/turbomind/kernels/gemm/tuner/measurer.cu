@@ -66,6 +66,8 @@ std::pair<float, cudaError_t> Measurer::ColdRun(LaunchSpec spec, const Launcher&
 
     cudaEventRecord(ev_beg_, stream);
 
+    // std::cout << spec.kernel->name() << " " << spec.splits << " " << spec.swizzle << std::endl;
+
     launcher(spec, stream);
 
     cudaEventRecord(ev_end_, stream);
@@ -76,6 +78,9 @@ std::pair<float, cudaError_t> Measurer::ColdRun(LaunchSpec spec, const Launcher&
 
     if (status == cudaSuccess) {
         cudaEventElapsedTime(&ms, ev_beg_, ev_end_);
+    }
+    else {
+        std::cerr << cudaGetErrorString(status) << std::endl;
     }
 
     return {ms, status};

@@ -17,7 +17,18 @@ namespace turbomind::gemm {
 
 namespace simt {
 
-template<class A, class TransformA, class U, class B, class TransformB, class V, Order order_c, class Tc>
+template<class A,
+         class TransformA,
+         class U,
+         class B,
+         class TransformB,
+         class V,
+         Order order_C,
+         class Tc,
+         Striding mode_A,
+         Striding mode_B,
+         Striding mode_C,
+         class CtaMap_>
 struct Sm75_Simt {
 
     static_assert(A::SmemCopyAtom::K == B::SmemCopyAtom::K);
@@ -58,12 +69,12 @@ struct Sm75_Simt {
 
         using Mainloop = MainloopSm70<MMA,
                                       A,
-                                      IteratorSm70<PolicyA>,
+                                      IteratorSm70<mode_A, PolicyA>,
                                       TransformA,
                                       U,
                                       GroupSizeU,
                                       B,
-                                      IteratorSm70<PolicyB>,
+                                      IteratorSm70<mode_B, PolicyB>,
                                       TransformB,
                                       V,
                                       GroupSizeV,
@@ -80,10 +91,11 @@ struct Sm75_Simt {
                                          TILE_C_N,
                                          MMA::kThreadCount,
                                          Rearrange<MMA>,
-                                         Operand_C<float, order_c>,
+                                         Operand_C<float, order_C>,
+                                         mode_C,
                                          SplitK>;
 
-        using Kernel = GemmUniversal<Sm75, Mainloop, Epilogue, CtaMap>;
+        using Kernel = GemmUniversal<Sm75, Mainloop, Epilogue, CtaMap_>;
     };
 };
 

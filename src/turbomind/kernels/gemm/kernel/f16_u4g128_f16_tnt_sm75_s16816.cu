@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/kernels/gemm/arch/config_sm75_s16816.h"
+#include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/transform.h"
@@ -16,11 +17,15 @@ void Registry::f16_u4g128_f16_tnt_sm75_s16816()
         using C = Sm75_s16816<Operand_A<half, kRowMajor>,
                               Transform_Default,
                               VoidOperand,
-                              Operand_B_Pack<uint4_t, kColMajor>,
+                              Operand_B_Pack<uint4_t, kColMajor, 2>,
                               Transform_HMMA_16816<1, 0>,
                               Operand_UV_Pack<uint32_t, true>,
                               kRowMajor,
-                              half>;
+                              half,
+                              Striding::kFlat,
+                              Striding::kFlat,
+                              Striding::kFlat,
+                              GemmScheduler<kColMajor>>;
 
         using S = cache_policy::Stream;
         using D = cache_policy::Default;

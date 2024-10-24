@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/test/models.h"
 #include "src/turbomind/kernels/gemm/test/testbed.h"
+#include <cuda_runtime_api.h>
 #include <map>
 #include <nvbench/nvbench.cuh>
 #include <string>
@@ -14,6 +15,9 @@ void gemm_bench(nvbench::state& state)
 
     const auto bs = state.get_int64("bs");
     const auto tp = state.get_int64("tp");
+
+    const auto expert_num  = state.get_int64("e_num");
+    const auto exp_per_tok = state.get_int64("e_tok");
 
     auto [output_dims, input_dims] = config[idx];
 
@@ -43,35 +47,41 @@ void gemm_bench(nvbench::state& state)
             std::swap(m, n);
         }
         std::cerr << "m" << m << "n" << n << "k" << k << "\n";
-        get_test().Initialize(m, n, k, group_size, state.get_cuda_stream());
+
+        get_test().Initialize(m, n, k, group_size, expert_num, exp_per_tok, state.get_cuda_stream());
     }
 
-    state.add_element_count((size_t)bs * output_dims * input_dims * 2);  // mul + add
+    state.add_element_count(get_test().get_element_count());
 
     // state.collect_dram_throughput();
     // state.collect_l2_hit_rates();
 
     if constexpr (1) {
-        state.add_global_memory_reads(get_test().global_memory_reads());
+        state.add_global_memory_reads(get_test().get_global_memory_reads());
         get_test().Run();
         state.exec(nvbench::exec_tag::sync, [&](nvbench::launch&) {  //
             get_test().Run();
         });
     }
     else {
-        state.add_global_memory_reads(sizeof(half) * (bs * input_dims + output_dims * input_dims));
+        state.add_global_memory_reads(get_test().get_ref_global_memory_reads());
         state.exec(nvbench::exec_tag::sync, [&](nvbench::launch&) {  //
             get_test().RunCublas();
         });
     }
+
+    get_test().ctx_.reset();
 }
 
 NVBENCH_BENCH(gemm_bench)
     .add_int64_axis("idx", nvbench::range(0, (int)config.size() - 1))
-    .add_int64_power_of_two_axis("bs", nvbench::range(0, 10))
-    .add_int64_axis("tp", {1, 2, 4});
+    .add_int64_power_of_two_axis("bs", nvbench::range(0, 14))
+    .add_int64_axis("tp", {1, 2, 4})
+    .add_int64_axis("e_num", {0})
+    .add_int64_axis("e_tok", {1});
 
 int main(int argc, char* argv[])
 {
     NVBENCH_MAIN_BODY(argc, argv);
+    return 0;
 }

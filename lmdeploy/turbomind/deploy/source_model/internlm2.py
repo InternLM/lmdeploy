@@ -15,6 +15,9 @@ class InternLM2Reader(LlamaReader):
     norm_weight_key = 'model.norm.weight'
     output_weight_key = 'output.weight'
 
+    attn_pattern = r'attention'
+    ffn_pattern = r'feed_forward'
+
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
         q, k, v = (None, ) * 3

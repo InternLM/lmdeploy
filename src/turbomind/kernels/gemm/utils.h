@@ -66,6 +66,22 @@ __host__ __device__ constexpr Index cs2idx(int2 cs, Index ld)
     return ld * cs.y + cs.x;
 }
 
+template<class Index>
+__host__ __device__ constexpr Index cs2idx(int2 cs, Index ld, int s0)
+{
+    return ld * (cs.y + s0) + cs.x;
+}
+
+__host__ __device__ constexpr auto dot(int2 a, int2 b)
+{
+    return a.x * b.x + a.y * b.y;
+}
+
+__host__ __device__ constexpr auto dot(int2 a, long2 b)
+{
+    return a.x * b.x + a.y * b.y;
+}
+
 template<MMA_Tag mma, Op_Tag op, int num, Order order>
 struct PackingImpl {
     __host__ __device__ static constexpr int2 apply(int2 mk)

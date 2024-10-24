@@ -34,6 +34,15 @@ public:
                  Type                       type      = kGemm,
                  int*                       lora_mask = nullptr);
 
+    void forward_moe(T*                         output_data,
+                     Pitched                    input_data,
+                     const int*                 indexes,
+                     const int*                 offsets,
+                     int                        batch_size,
+                     const LlamaDenseWeight<T>& weight,
+                     Type                       type,
+                     gemm::Context*             context);
+
     void set_measure(bool measure);
 
     [[maybe_unused]] int Export(std::ostream& os);

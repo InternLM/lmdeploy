@@ -45,13 +45,12 @@ public:
 
     LlamaV2(const ModelParam&               model,
             const AttentionParam&           attn,
+            const MoeParam&                 moe,
             const LoraParam&                lora,
             const NcclParam&                tp,
             const Context<T>&               ctx,
             int                             max_batch_size,
             std::shared_ptr<LlamaWeight<T>> weights);
-
-    void tune();
 
     size_t vocab_size() const noexcept
     {

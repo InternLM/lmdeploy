@@ -7,23 +7,17 @@ from .internlm2 import InternLM2Model, InternLM2Reader
 class Xcomposer2Reader(InternLM2Reader):
     """Xcomposer2 model reader."""
 
-    def attn_lora_a(self, i):
-        """Get attn lora_a."""
-        qkv = self.params[f'model.layers.{i}.attention.wqkv.Plora_A.weight']
-        o = self.params[f'model.layers.{i}.attention.wo.Plora_A.weight']
-        return qkv, o
+    # include only Plora and ignore other lora weights
+    attn_pattern = r'attention.\w+(.Plora_[AB])?.\w+$'
+    ffn_pattern = r'feed_forward.\w+(.Plora_[AB])?.\w+$'
 
-    def attn_lora_b(self, i):
-        """Get attn lora_b."""
-        return self._attn(i, 'Plora_B.weight')
-
-    def ffn_lora_a(self, i: int):
-        """Get ffn lora_a weight for layer i."""
-        return self._ffn(i, 'Plora_A.weight')
-
-    def ffn_lora_b(self, i: int):
-        """Get fnn lora_b weight for layer i."""
-        return self._ffn(i, 'Plora_B.weight')
+    def _attn(self, i, kind):
+        if 'Plora_A' in kind:
+            qkv = self.params[
+                f'model.layers.{i}.attention.wqkv.Plora_A.weight']
+            o = self.params[f'model.layers.{i}.attention.wo.Plora_A.weight']
+            return qkv, o
+        return super()._attn(i, kind)
 
 
 @INPUT_MODELS.register_module(name='xcomposer2')

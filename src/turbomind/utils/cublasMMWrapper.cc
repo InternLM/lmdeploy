@@ -323,7 +323,6 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                                       ldc,
                                       computeType_,
                                       static_cast<cublasGemmAlgo_t>(cublasAlgo)));
-        sync_check_cuda_error();
     }
     mu_->unlock();
 }

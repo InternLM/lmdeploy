@@ -39,18 +39,14 @@ public:
                        int                 swizzle,
                        int                 splits,
                        Workspace&          workspace,
-                       cudaStream_t        stream) = 0;
-
-    // virtual because different implementation may have different workspace requeirements
-    virtual int GetMaxSplits(int m, int n, int k, size_t barrier_size, size_t partials_size) = 0;
+                       cudaStream_t        stream) const = 0;
 
     // true if this kernel can be used to compute the gemm
     bool is_feasible(const GemmDesc& desc) const noexcept;
 
-    std::vector<std::pair<int, KernelMetric>>
-    Estimate_v2(std::array<int, 3> size, int max_splits, int max_waves, int sm_count) const;
+    virtual int GetMaxSplits(const int4& shape, int64_t tiles, size_t bsize, size_t psize) const = 0;
 
-    virtual int GetSwizzle(int m, int n, int k, int splits, int swizzle) = 0;
+    virtual int GetSwizzle(int m, int n, int k, int splits, int swizzle) const = 0;
 
     const KernelDesc& desc() const noexcept
     {

@@ -10,6 +10,7 @@
 #include "src/turbomind/kernels/gemm/test/quantization.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/test/testbed.h"
+#include "src/turbomind/kernels/gemm/tuner/cache_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include <fstream>
 #include <limits>
@@ -40,7 +41,7 @@ void ComputeRefCpu(half* C, const half* A, const half* B, int m, int n, int k)
 
 static int g_check = 0;
 
-void Run(int batch_size, int output_dims, int input_dims, int g = 128)
+void Run(int batch_size, int output_dims, int input_dims, int expert_num = 0, int top_e = 1, int g = 128)
 {
     auto& test = get_test();
     int   m    = batch_size;
@@ -49,15 +50,19 @@ void Run(int batch_size, int output_dims, int input_dims, int g = 128)
     if (get_test().kBatchDim == 1) {
         std::swap(m, n);
     }
-    std::cerr << "m" << m << "n" << n << "k" << k << "\n";
-    test.Initialize(m, n, k, g, 0);
+    std::cerr << "m" << m << "n" << n << "k" << k << "_"
+              << "E" << expert_num << "e" << top_e << "\n";
+    test.Initialize(m, n, k, g, expert_num, top_e, 0);
 
     if (g_check) {
         test.Check();
     }
     else {
-        for (int i = 0; i < 10; ++i) {
+        for (int i = 0; i < 100; ++i) {
+            CacheFlushing::flush();
             test.Run();
+            CacheFlushing::flush();
+            test.RunCublas();
         }
         test.CompareC();
     }
@@ -66,7 +71,16 @@ void Run(int batch_size, int output_dims, int input_dims, int g = 128)
 int main(int argc, char* argv[])
 {
     g_check = 0;
-    Run(16384, 16384, 16384);
+    // Run(8192, 14336 * 2, 4096);
+
+    // Run(16384, 16384, 16384);
+    // Run(18, 14336, 4096, 8, 2);
+
+    // Run(16, 4096, 7168, 8, 2);
+    Run(777, 14336, 4096, 8, 2);
+
+    // Run(256, 14336 * 2, 4096);
+    // Run(16, 4096, 14336);
 
     // g_check = 1;
     // std::vector<int> bsz(1024);

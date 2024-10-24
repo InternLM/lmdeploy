@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
@@ -132,6 +133,8 @@ private:
     cudaEvent_t  aux_event_;
 
     std::array<cudaStream_t, 2> streams_;
+
+    RNG rng_;
 
     T*     qkv_buf_{};
     T*     q_buf_2_{};
