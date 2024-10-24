@@ -96,7 +96,8 @@ class Engine:
         else:
             engine_config = copy.deepcopy(engine_config)
         check_env(engine_config.device_type)
-        check_model(model_path, trust_remote_code)
+        check_model(model_path, trust_remote_code, engine_config.dtype,
+                    engine_config.device_type)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(
                 engine_config.device_type)
@@ -128,6 +129,7 @@ class Engine:
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
             enable_prefix_caching=engine_config.enable_prefix_caching,
+            quant_policy=engine_config.quant_policy,
         )
 
         if not os.path.exists(model_path):
@@ -161,7 +163,7 @@ class Engine:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
-        self.stream = torch.cuda.Stream()
+        self.stream = self.model_agent.stream
 
         self.req_manager = self._bind_request_manager()
 
@@ -340,6 +342,8 @@ class Engine:
                     input_embeddings=req.data.get('input_embeddings'),
                     mrope_position_ids=req.data.get('mrope_position_ids'),
                     mrope_position_delta=req.data.get('mrope_position_delta'),
+                    cross_attention_states=req.data.get(
+                        'cross_attention_states'),
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_bad_words(msg)
@@ -348,7 +352,8 @@ class Engine:
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(req.data['token_ids'],
-                                     req.data.get('input_embeddings'))
+                                     req.data.get('input_embeddings'),
+                                     req.data.get('cross_attention_states'))
                 msg.num_new_tokens = 0
                 msg.sampling_param = req.data['sampling_param']
                 msg.return_logits = req.data.get('return_logits', False)
@@ -482,6 +487,16 @@ class Engine:
                 input_embedding_indexing=input_embedding_indexing,
                 input_embedding_ranges=input_embedding_ranges)
 
+        # only for mllama
+        cross_attention_states = None
+        history_cross_kv_seqlens = None
+        if any([msg.cross_attention_states is not None for msg in messages]):
+            cross_attention_states = [
+                msg.cross_attention_states for msg in messages
+            ]
+        history_cross_kv_seqlens = torch.tensor(
+            [msg.history_cross_kv_seqlens for msg in messages])
+
         return ModelInputs(
             input_ids=input_ids,
             seq_length=seq_length,
@@ -492,6 +507,8 @@ class Engine:
             local_adapter_ids=local_adapter_ids,
             vision_inputs=vision_embedding_inputs,
             mrope_inputs=mrope_inputs,
+            cross_attention_states=cross_attention_states,
+            history_cross_kv_seqlens=history_cross_kv_seqlens,
         )
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,
@@ -525,7 +542,7 @@ class Engine:
             last_idx = seq_length.cumsum(-1) - 1
             return logits[last_idx, :]
 
-        split_logits = __get_last_logits().cuda()
+        split_logits = __get_last_logits()
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos,
                                                 self.tokenizer.model.model)
         logits = logits_processor(all_ids, guided_input_ids, split_logits)

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 import torch
 
@@ -120,6 +120,8 @@ class ModelInputs:
     local_adapter_ids: torch.LongTensor = None
     vision_inputs: VisionModelInputs = None
     mrope_inputs: MRopeModelInputs = None
+    cross_attention_states: torch.Tensor = None
+    history_cross_kv_seqlens: torch.LongTensor = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -164,6 +166,7 @@ class ModelInputs:
                 local_adapter_ids=self.local_adapter_ids,
                 vision_inputs=self.vision_inputs,
                 mrope_inputs=self.mrope_inputs,
+                cross_attention_states=self.cross_attention_states,
             )
             ret.append(inp)
             block_start += num_blocks
@@ -210,6 +213,10 @@ class StepContext:
     vision_inputs: VisionModelInputs = None
     mrope_position_ids: torch.Tensor = None
     attn_metadata: Any = None
+    cross_attn_metadata: Any = None
+    cross_attention_states: torch.Tensor = None
+    cross_kv_seqlens: torch.LongTensor = None
+    kv_quant_policy: Literal[0, 4, 8] = 0
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -219,6 +226,7 @@ class StepContext:
         inputs: ModelInputs,
         world_size: int = 1,
         kv_caches: List = None,
+        kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """build step context.
 
@@ -244,9 +252,11 @@ class StepContext:
                 history_seqlens, q_seqlens)
 
         # kv_seqlens
+        cross_attention_states = inputs.cross_attention_states
         if inputs.is_decoding:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
             position_ids = history_seqlens.unsqueeze(-1)
+            cross_attention_states = None
         else:
             max_q_seqlen = q_seqlens.max().item()
             mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
@@ -277,6 +287,9 @@ class StepContext:
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             mrope_position_ids=mrope_position_ids,
+            cross_attention_states=cross_attention_states,
+            cross_kv_seqlens=inputs.history_cross_kv_seqlens,
+            kv_quant_policy=kv_quant_policy,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -307,12 +320,14 @@ class StepContextManager:
         inputs: ModelInputs,
         world_size: int = 1,
         kv_caches: List = None,
+        kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """build context."""
         return StepContext.new(
             inputs,
             world_size,
             kv_caches,
+            kv_quant_policy,
         )
 
     @contextmanager

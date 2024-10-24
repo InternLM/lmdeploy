@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
                                  SiluAndMul, build_rotary_embedding)
@@ -23,19 +24,6 @@ def yarn_get_mscale(scale=1, mscale=1):
     if scale <= 1:
         return 1.0
     return 0.1 * mscale * math.log(scale) + 1.0
-
-
-def get_world_rank():
-    """get current world size and rank."""
-    import torch.distributed as dist
-    world_size = 1
-    rank = 0
-
-    if dist.is_initialized():
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-
-    return world_size, rank
 
 
 class DeepseekV2BMM(nn.Module):
@@ -240,9 +228,7 @@ class DeepseekV2Attention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
+        world_size, _ = get_world_rank()
         num_heads = self.num_heads // world_size
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
@@ -269,6 +255,10 @@ class DeepseekV2Attention(nn.Module):
             past_key_value[0],
             past_key_value[0][..., :nope_size],
             attn_metadata,
+            k_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_bmm_out = attn_output.new_empty(q_len, num_heads, self.v_head_dim)

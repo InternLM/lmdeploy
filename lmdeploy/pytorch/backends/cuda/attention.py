@@ -1,20 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
-import torch.distributed as dist
+
+from lmdeploy.pytorch.distributed import get_world_rank
 
 from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
-
-
-def get_world_rank():
-    """get current world size and rank."""
-    world_size = 1
-    rank = 0
-
-    if dist.is_initialized():
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-
-    return world_size, rank
 
 
 class TritonAttentionMetadata(AttentionMetadata):
@@ -69,28 +58,42 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
 
         block_offsets = attn_metadata.block_offsets
         q_start_loc = attn_metadata.q_start_loc
+        fill_q_start_loc = q_start_loc
         q_seqlens = attn_metadata.q_seqlens
+        fill_seqlens = q_seqlens
         kv_seqlens = attn_metadata.kv_seqlens
+        quant_policy = attn_metadata.quant_policy
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+        fill_max_q_seqlen = max_q_seqlen
+        if attn_metadata.fill_seqlens is not None:
+            fill_seqlens = attn_metadata.fill_seqlens
+            fill_max_q_seqlen = key.numel() // (key.size(-1) * key.size(-2))
+            fill_q_start_loc = fill_seqlens.cumsum(0) - fill_seqlens
 
         # fill kv cache
-        self.fill_kv_cache(
-            key,
-            value,
-            k_cache,
-            v_cache,
-            q_start_loc,
-            q_seqlens,
-            kv_seq_length=kv_seqlens,
-            max_q_seq_length=max_q_seqlen,
-            block_offsets=block_offsets,
-        )
+        if key is not None and value is not None:
+            self.fill_kv_cache(
+                key,
+                value,
+                k_cache,
+                v_cache,
+                fill_q_start_loc,
+                fill_seqlens,
+                kv_seq_length=kv_seqlens,
+                max_q_seq_length=fill_max_q_seqlen,
+                block_offsets=block_offsets,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                quant_policy=quant_policy,
+            )
 
         if inplace:
             attn_output = query[..., :self.v_head_size]
@@ -110,6 +113,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 q_seqlens=q_seqlens,
                 kv_seqlens=kv_seqlens,
                 max_seqlen=max_q_seqlen,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                quant_policy=quant_policy,
                 window_size=self.sliding_window,
                 sm_scale=self.scale,
                 logit_softcapping=self.logit_softcapping,
@@ -127,6 +133,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 max_input_len=max_q_seqlen,
                 head_offset=self.alibi_head_offset,
                 num_heads=self.alibi_num_heads,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                quant_policy=quant_policy,
             )
 
         return attn_output

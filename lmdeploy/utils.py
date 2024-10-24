@@ -265,7 +265,7 @@ def _get_and_verify_max_len(
         return max_model_len if max_model_len else session_len
 
     # vl configs hide session-len inside llm configs
-    llm_keys = ['language_config', 'llm_config']
+    llm_keys = ['language_config', 'llm_config', 'text_config']
     for key in llm_keys:
         hf_tm_config = getattr(hf_tm_config, key, hf_tm_config)
 
@@ -332,7 +332,7 @@ def get_max_batch_size(device_type: str):
     Args:
         device_type (str): the type of device
     """
-    assert device_type in ['cuda', 'ascend']
+    assert device_type in ['cuda', 'ascend', 'maca']
     if device_type == 'cuda':
         max_batch_size_map = {
             'a100': 256,
@@ -350,3 +350,5 @@ def get_max_batch_size(device_type: str):
         return 128
     elif device_type == 'ascend':
         return 16
+    elif device_type == 'maca':
+        return 128

@@ -256,6 +256,8 @@ class PytorchEngineConfig:
         revision (str): The specific model version to use.
             It can be a branch name, a tag name, or a commit id.
             If unspecified, will use the default version.
+        quant_policy (int): default to 0. When k/v is quantized into 4 or 8
+            bit, set it to 4 or 8, respectively
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -275,6 +277,7 @@ class PytorchEngineConfig:
     custom_module_map: Dict[str, str] = None
     download_dir: str = None
     revision: str = None
+    quant_policy: Literal[0, 4, 8] = 0
 
     def __post_init__(self):
         """Check input validation."""
@@ -286,9 +289,12 @@ class PytorchEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
+        assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.device_type in [
-            'cuda', 'ascend'
+            'cuda', 'ascend', 'maca'
         ], (f'invalid device_type: {self.device_type}')
+        if self.quant_policy > 0 and self.device_type != 'cuda':
+            assert False, 'kv cache quantization only works for CUDA.'
 
 
 class ResponseType(enum.Enum):

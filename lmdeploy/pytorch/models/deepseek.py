@@ -6,6 +6,7 @@ import torch.distributed as dist
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
                                  SiluAndMul, build_rotary_embedding)
@@ -15,19 +16,6 @@ from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
-
-
-def get_world_rank():
-    """get current world size and rank."""
-    import torch.distributed as dist
-    world_size = 1
-    rank = 0
-
-    if dist.is_initialized():
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-
-    return world_size, rank
 
 
 class DeepseekAttention(nn.Module):
@@ -108,6 +96,10 @@ class DeepseekAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
+            k_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)

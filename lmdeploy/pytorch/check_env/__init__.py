@@ -31,6 +31,8 @@ def try_import_deeplink(device_type: str):
     """import dlinfer if specific device_type is set."""
     deeplink_device_type_list = [
         'ascend',
+        'npu',
+        'maca',
     ]
     if device_type in deeplink_device_type_list:
         logger = get_logger('lmdeploy')
@@ -93,15 +95,13 @@ def check_env_triton(device: str):
 
     if device == 'cuda':
         device_cap = torch.cuda.get_device_capability()
-        TRITON_VER_220 = version.parse('2.2.0')
         TRITON_VER_231 = version.parse('2.3.1')
 
         if device_cap[0] <= 7:
-            if (triton_version >= TRITON_VER_220
-                    and triton_version <= TRITON_VER_231):
+            if triton_version <= TRITON_VER_231:
                 err = RuntimeError(
                     'Attention triton kernel does not fully support '
-                    'triton[2.2.0~2.3.1] on device with capability<8. '
+                    'triton<3.0.0 on device with capability<8. '
                     'Please upgrade your triton version.')
                 _handle_exception(err, 'Triton', logger)
 
@@ -120,29 +120,32 @@ MIN_TRANSFORMERS_VERSION = '4.33.0'
 MAX_TRANSFORMERS_VERSION = '4.44.1'
 
 
-def check_awq(hf_config):
+def check_awq(hf_config, device_type):
     """check awq support."""
     logger = get_logger('lmdeploy')
-    quantization_config = getattr(hf_config, 'quantization_config', dict())
-    quant_method = quantization_config.get('quant_method', None)
-    if quant_method != 'awq':
-        return
-    try:
-        import awq  # noqa
-    except Exception as e:
-        _handle_exception(e, 'autoawq', logger)
+    if device_type == 'cuda':
+        quantization_config = getattr(hf_config, 'quantization_config', dict())
+        quant_method = quantization_config.get('quant_method', None)
+        if quant_method != 'awq':
+            return
+        try:
+            import awq  # noqa
+        except Exception as e:
+            _handle_exception(e, 'autoawq', logger)
 
-    try:
-        import awq_ext  # noqa
-    except Exception:
-        logger.debug('Exception:', exc_info=1)
-        logger.warning('Failed to import `awq_ext`. '
-                       'Try reinstall it from source: '
-                       'https://github.com/casper-hansen/AutoAWQ_kernels')
+        try:
+            import awq_ext  # noqa
+        except Exception:
+            logger.debug('Exception:', exc_info=1)
+            logger.warning('Failed to import `awq_ext`. '
+                           'Try reinstall it from source: '
+                           'https://github.com/casper-hansen/AutoAWQ_kernels')
 
 
 def check_transformers_version(model_path: str,
-                               trust_remote_code: bool = True):
+                               trust_remote_code: bool = True,
+                               dtype: str = 'auto',
+                               device_type: str = 'cuda'):
     """check transformers version."""
     from packaging import version
     logger = get_logger('lmdeploy')
@@ -206,7 +209,8 @@ def check_transformers_version(model_path: str,
 
         try:
             model_config = ModelConfig.from_hf_config(config,
-                                                      model_path=model_path)
+                                                      model_path=model_path,
+                                                      dtype=dtype)
             if model_config.dtype == torch.bfloat16:
                 assert torch.cuda.is_bf16_supported(), (
                     'bf16 is not supported on your device')
@@ -226,14 +230,18 @@ def check_transformers_version(model_path: str,
     config = __check_config(trans_version)
     __check_model_transformers_version(config, trans_version)
     __check_model_dtype_support(config)
-    check_awq(config)
+    check_awq(config, device_type)
 
 
-def check_model(model_path: str, trust_remote_code: bool = True):
+def check_model(model_path: str,
+                trust_remote_code: bool = True,
+                dtype: str = 'auto',
+                device_type: str = 'cuda'):
     """check model requirements."""
     logger = get_logger('lmdeploy')
     logger.info('Checking model.')
-    check_transformers_version(model_path, trust_remote_code)
+    check_transformers_version(model_path, trust_remote_code, dtype,
+                               device_type)
 
 
 def check_adapter(path: str):
