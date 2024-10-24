@@ -11,7 +11,7 @@ from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_logger, get_model
 
-from ...utils import _get_and_verify_max_len
+from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS, is_supported
 from .config import TurbomindModelConfig
 from .exporter import get_exporter_factory
@@ -138,6 +138,10 @@ def get_output_model_registered_name_and_config(model_path: str,
     else:
         assert 0, f'unsupported specified data type {dtype}'
 
+    if weight_type == 'bfloat16' and not is_bf16_supported():
+        logger.warn('data type fallback to float16 since '
+                    'torch.cuda.is_bf16_supported is False')
+        weight_type = 'float16'
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type
     config.model_config.model_format = model_format
@@ -226,7 +230,7 @@ def get_tm_model(model_path,
             f'mismatched quant method: user input ' \
             f'"{engine_config.model_format}" ' \
             f'vs model quant_config "{quant_method}"'
-        assert group_size is None or group_size == _group_size, \
+        assert not group_size or group_size == _group_size, \
             f'mismatched quant group size: user input "{group_size}" ' \
             f'vs model quant_config "{_group_size}"'
 
