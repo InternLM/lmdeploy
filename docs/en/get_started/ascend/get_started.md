@@ -114,3 +114,12 @@ Run the following commands to launch lmdeploy chatting after starting container:
 docker exec -it lmdeploy_ascend_demo \
     bash -i -c "lmdeploy chat --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
 ```
+
+## Quantization
+
+### w4a16 AWQ
+
+Run the following commands to quantize weights on Atlas 800T A2.
+```bash
+lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
+```
