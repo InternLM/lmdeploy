@@ -420,6 +420,10 @@ class GLM4VChatTemplateWrapper(VLChatTemplateWrapper):
     pass
 
 
+class MolmoChatTemplateWrapper(VLChatTemplateWrapper):
+    pass
+
+
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
@@ -457,4 +461,6 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return GLM4VChatTemplateWrapper(chat_template)
     elif arch == 'Qwen2VLForConditionalGeneration':
         return Qwen2VLChatTemplateWrapper(chat_template)
+    elif arch == 'MolmoForCausalLM':
+        return MolmoChatTemplateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')

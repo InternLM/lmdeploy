@@ -2,6 +2,7 @@
 
 from typing import Dict, List
 
+import numpy as np
 import torch
 from PIL.Image import Image
 from transformers import AutoModel, AutoProcessor
@@ -42,7 +43,9 @@ class MolmoVisionModel(VisonModel):
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
                 max_memory=self.max_memory,
-                no_split_module_classes=['ResidualAttentionBlock'],
+                no_split_module_classes=[
+                    'ResidualAttentionBlock', 'Embedding'
+                ],
                 dtype=torch.half)
 
         # We need eval mode to freeze the weights in model, thus,
@@ -51,21 +54,44 @@ class MolmoVisionModel(VisonModel):
         self.config = config
         # TODO: get embedding model
 
-        self.image_processor = AutoProcessor.from_pretrained(
-            self.model_path,
-            trust_remote_code=True,
-            torch_dtype='auto',
-            device_map='auto')
+        processor = AutoProcessor.from_pretrained(self.model_path,
+                                                  trust_remote_code=True,
+                                                  torch_dtype='auto',
+                                                  device_map='auto')
+        self.image_processor = processor.image_processor
 
     def preprocess(self, images: List[Image], params: List[Dict] = None):
-        # TODO
-        pass
+        images = [np.array(x.convert('RGB')) for x in images]
+        image_idx = [-1] * len(images)
+
+        DEFAULT_IMAGE_PATCH_TOKEN = '<im_patch>'
+        DEFAULT_IM_START_TOKEN = '<im_start>'
+        DEFAULT_IM_END_TOKEN = '<im_end>'
+        DEFAULT_IM_COL_TOKEN = '<im_col>'
+
+        image_patch_token_id = self.image_processor.special_token_ids[
+            DEFAULT_IMAGE_PATCH_TOKEN]
+        image_col_token_id = self.image_processor.special_token_ids[
+            DEFAULT_IM_COL_TOKEN]
+        image_start_token_id = self.image_processor.special_token_ids[
+            DEFAULT_IM_START_TOKEN]
+        image_end_token_id = self.image_processor.special_token_ids[
+            DEFAULT_IM_END_TOKEN]
+        out = self.image_processor.multimodal_preprocess(
+            images=images,
+            image_idx=image_idx,
+            tokens=np.asarray([]).astype(np.int32),
+            sequence_length=0,  # unused parameter
+            image_patch_token_id=image_patch_token_id,
+            image_col_token_id=image_col_token_id,
+            image_start_token_id=image_start_token_id,
+            image_end_token_id=image_end_token_id,
+        )
+        return out
 
     @torch.no_grad()
     def forward(self,
                 images: List[Image],
                 params: List[Dict] = None) -> List[torch.Tensor]:
-        # TODO
-        images = [x.convert('RGB') for x in images]
         self.preprocess(images)
         # return self._forward_func(images, params)
