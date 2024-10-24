@@ -18,6 +18,8 @@ cd lmdeploy
 
 The Docker version is supposed to be no less than `18.03`. And `Ascend Docker Runtime` should be installed by following [the official guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/.clusterschedulingig/dlug_installation_012.html).
 
+***If error message `libascend_hal.so: cannot open shared object file` shows, that means **Ascend Docker Runtime** is not installed correctly!***
+
 #### Ascend Drivers, Firmware and CANN
 
 The target machine needs to install the Huawei driver and firmware version 23.0.3, refer to
@@ -45,6 +47,9 @@ For more information about running the Docker client on Ascend devices, please r
 
 ## Offline batch inference
 
+***Graph mode has been supported on Atlas 800T A2. Currently, InternLM2-7B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
+Users can set `eager_mode = False` to enable graph mode, or, set `eager_mode = True` to disable graph mode.***
+
 ### LLM inference
 
 Set `device_type="ascend"` in the `PytorchEngineConfig`:
@@ -54,7 +59,7 @@ from lmdeploy import pipeline
 from lmdeploy import PytorchEngineConfig
 if __name__ == "__main__":
     pipe = pipeline("internlm/internlm2_5-7b-chat",
-                    backend_config = PytorchEngineConfig(tp=1, device_type="ascend"))
+                    backend_config = PytorchEngineConfig(tp=1, device_type="ascend", eager_mode = True))
     question = ["Shanghai is", "Please introduce China", "How are you?"]
     response = pipe(question)
     print(response)
@@ -69,7 +74,7 @@ from lmdeploy import pipeline, PytorchEngineConfig
 from lmdeploy.vl import load_image
 if __name__ == "__main__":
     pipe = pipeline('OpenGVLab/InternVL2-2B',
-                    backend_config=PytorchEngineConfig(tp=1, device_type='ascend'))
+                    backend_config=PytorchEngineConfig(tp=1, device_type='ascend', eager_mode = True))
     image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
     response = pipe(('describe this image', image))
     print(response)
@@ -77,12 +82,15 @@ if __name__ == "__main__":
 
 ## Online serving
 
+***Graph mode has been supported on Atlas 800T A2. Currently, InternLM2-7B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
+Graph mode is default enabled in online serving. Users can add `--eager-mode` to disable graph mode.***
+
 ### Serve a LLM model
 
 Add `--device ascend` in the serve command.
 
 ```bash
-lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5-7b-chat
+lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat
 ```
 
 ### Serve a VLM model
@@ -90,7 +98,7 @@ lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5
 Add `--device ascend` in the serve command
 
 ```bash
-lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2-2B
+lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B
 ```
 
 ## Inference with Command line Interface
@@ -98,12 +106,24 @@ lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2
 Add `--device ascend` in the serve command.
 
 ```bash
-lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend
+lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend --eager-mode
 ```
 
 Run the following commands to launch lmdeploy chatting after starting container:
 
 ```bash
 docker exec -it lmdeploy_ascend_demo \
-    bash -i -c "lmdeploy chat --backend pytorch --device ascend internlm/internlm2_5-7b-chat"
+    bash -i -c "lmdeploy chat --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
 ```
+
+## Quantization
+
+### w4a16 AWQ
+
+Run the following commands to quantize weights on Atlas 800T A2.
+
+```bash
+lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
+```
+
+Please check [supported_models](../../supported_models/supported_models.md) before use this feature.

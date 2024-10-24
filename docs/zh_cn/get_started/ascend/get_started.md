@@ -17,6 +17,8 @@ cd lmdeploy
 
 Docker 版本应不低于 18.03。并且需按照[官方指南](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/clusterschedulingig/dlug_installation_012.html)安装 Ascend Docker Runtime。
 
+***如果在后续容器内出现`libascend_hal.so: cannot open shared object file`错误，说明Ascend Docker Runtime没有被正确安装***
+
 #### Drivers，Firmware 和 CANN
 
 目标机器需安装华为驱动程序和固件版本 23.0.3，请参考
@@ -45,6 +47,8 @@ docker run -e ASCEND_VISIBLE_DEVICES=0 --rm --name lmdeploy -t lmdeploy-aarch64-
 
 ## 离线批处理
 
+***图模式已经支持了Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。用户可以设定`eager_mode = False`来开启图模式，或者设定`eager_mode = True`来关闭图模式。***
+
 ### LLM 推理
 
 将`device_type="ascend"`加入`PytorchEngineConfig`的参数中。
@@ -54,7 +58,7 @@ from lmdeploy import pipeline
 from lmdeploy import PytorchEngineConfig
 if __name__ == "__main__":
     pipe = pipeline("internlm/internlm2_5-7b-chat",
-                    backend_config = PytorchEngineConfig(tp=1, device_type="ascend"))
+                    backend_config = PytorchEngineConfig(tp=1, device_type="ascend", eager_mode=True))
     question = ["Shanghai is", "Please introduce China", "How are you?"]
     response = pipe(question)
     print(response)
@@ -69,7 +73,7 @@ from lmdeploy import pipeline, PytorchEngineConfig
 from lmdeploy.vl import load_image
 if __name__ == "__main__":
     pipe = pipeline('OpenGVLab/InternVL2-2B',
-                    backend_config=PytorchEngineConfig(tp=1, device_type='ascend'))
+                    backend_config=PytorchEngineConfig(tp=1, device_type='ascend', eager_mode=True))
     image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
     response = pipe(('describe this image', image))
     print(response)
@@ -77,12 +81,15 @@ if __name__ == "__main__":
 
 ## 在线服务
 
+***图模式已经支持Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。
+在线服务时，图模式默认开启，用户可以添加`--eager-mode`来关闭图模式***
+
 ### LLM 模型服务
 
 将`--device ascend`加入到服务启动命令中。
 
 ```bash
-lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5-7b-chat
+lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat
 ```
 
 ### VLM 模型服务
@@ -90,7 +97,7 @@ lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5
 将`--device ascend`加入到服务启动命令中。
 
 ```bash
-lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2-2B
+lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B
 ```
 
 ## 使用命令行与LLM模型对话
@@ -98,12 +105,24 @@ lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2
 将`--device ascend`加入到服务启动命令中。
 
 ```bash
-lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend
+lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend --eager-mode
 ```
 
 也可以运行以下命令使启动容器后开启lmdeploy聊天
 
 ```bash
 docker exec -it lmdeploy_ascend_demo \
-    bash -i -c "lmdeploy chat --backend pytorch --device ascend internlm/internlm2_5-7b-chat"
+    bash -i -c "lmdeploy chat --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
 ```
+
+## 量化
+
+### w4a16 AWQ
+
+运行下面的代码可以在Atlas 800T A2上对权重进行W4A16量化。
+
+```bash
+lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
+```
+
+支持的模型列表请参考[支持的模型](../../supported_models/supported_models.md)。
