@@ -373,7 +373,15 @@ def is_bf16_supported(device_type: str = 'cuda'):
             return True
         else:
             return False
-    elif device_type in ['ascend', 'maca']:
+    elif device_type == 'ascend':
+        import torch_npu
+        device_name = torch_npu.npu.get_device_name(0)[:10]
+        device_name = device_name.lower()
+        if device_name.startwith('ascend910'):
+            return True
+        else:
+            return False
+    elif device_type == 'maca':
         return True
     else:
         return False
