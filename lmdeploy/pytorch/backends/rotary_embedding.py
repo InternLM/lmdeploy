@@ -22,6 +22,7 @@ class YarnParameters:
     beta_slow: float = 1
     mscale: int = 1
     mscale_all_dim: int = 0
+    attention_factor: int = None
 
 
 @dataclass
@@ -39,6 +40,7 @@ class Llama3Parameters:
     """llama3 rope parameters."""
     low_freq_factor: float = 1.0
     high_freq_factor: float = 4.0
+    original_max_position_embeddings: int = 8192
 
 
 class RotaryEmbeddingImpl(ABC):
