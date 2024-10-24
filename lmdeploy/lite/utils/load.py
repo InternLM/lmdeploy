@@ -4,14 +4,13 @@ import torch
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.pytorch.accel import LoadNoInit
-from lmdeploy.utils import is_bf16_supported
 
 
 def load_hf_from_pretrained(pretrained_model_name_or_path,
                             dtype=torch.float16,
                             **kwargs):
 
-    if dtype == torch.bfloat16 and not is_bf16_supported():
+    if dtype == torch.bfloat16 and not torch.cuda.is_bf16_supported():
         raise RuntimeError('Your device does not supports bf16(bfloat16), '
                            'please change to fp16(float16)')
 
