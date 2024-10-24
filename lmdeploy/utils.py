@@ -350,3 +350,20 @@ def get_max_batch_size(device_type: str):
         return 128
     elif device_type == 'ascend':
         return 16
+
+
+def is_bf16_supported(device_name: str = 'cuda'):
+    """Check if device support bfloat16."""
+
+    if device_name == 'cuda':
+        import torch
+        device = torch.cuda.current_device()
+
+        # Check for CUDA version and device compute capability.
+        # This is a fast way to check for it.
+        cuda_version = torch.version.cuda
+        if (cuda_version is not None and int(cuda_version.split('.')[0]) >= 11
+                and torch.cuda.get_device_properties(device).major >= 8):
+            return True
+        else:
+            return False
