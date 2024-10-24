@@ -49,6 +49,7 @@ class DeepSeekVLModel(LlamaModel):
             num_layer = model_arg['num_hidden_layers']
             hidden_units = model_arg.get('hidden_size', 4096)
             inter_size = model_arg.get('intermediate_size', 11008)
+            vocab_size = model_arg.get('vocab_size', 102400)
             norm_eps = model_arg.get('rms_norm_eps', 1e-06)
             attn_head_num = model_arg.get('num_attention_heads', 32)
             if 'num_key_value_heads' in model_arg:
@@ -73,6 +74,7 @@ class DeepSeekVLModel(LlamaModel):
                     kv_head_num=kv_head_num,
                     hidden_units=hidden_units,
                     inter_size=inter_size,
+                    vocab_size=vocab_size,
                     rope_theta=rope_theta,
                     max_position_embeddings=max_position_embeddings,
                     use_dynamic_ntk=use_dynamic_ntk,
