@@ -501,6 +501,12 @@ class AsyncEngine(LogitsMixin):
         if gen_config.stop_token_ids is None:
             gen_config.stop_token_ids = self.stop_words
         if not gen_config.do_sample:
+            logger.warn(f'GenerationConfig: {gen_config}')
+            logger.warn(
+                'Since v0.6.0, lmdeploy add `do_sample` in '
+                'GenerationConfig. It defaults to False, meaning greedy '
+                'decoding. Please set `do_sample=True` if sampling '
+                ' decoding is needed')
             # greedy decode
             gen_config.top_k = 1
             # avoid unnecessary process
@@ -513,13 +519,6 @@ class AsyncEngine(LogitsMixin):
             logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "
                          f'Fallback to 1')
             gen_config.n = 1
-        if not gen_config.do_sample and gen_config.top_k > 1:
-            logger.warn(f'GenerationConfig: {gen_config}')
-            logger.warn(
-                'Since v0.6.0, lmdeploy add `do_sample` in '
-                'GenerationConfig. It defaults to False, meaning greedy '
-                'decoding. Please set `do_sample=True` if sampling '
-                ' decoding is needed')
         prompt = messages
         self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
         prompt_input = await self._get_prompt_input(prompt,
