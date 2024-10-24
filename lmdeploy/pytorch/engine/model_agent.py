@@ -483,9 +483,8 @@ def _start_tp_process(proc_id: int,
                                 timeout=timedelta(days=35600))
         dist_ctx = DistContext(rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
-        with (get_dist_manager().context(dist_ctx),
-              get_device_manager().context(device_context),
-              torch.inference_mode()):
+        with get_dist_manager().context(dist_ctx), get_device_manager(
+        ).context(device_context), torch.inference_mode():
             args = args or tuple()
             kwargs = kwargs or dict()
             func(rank, *args, **kwargs)
