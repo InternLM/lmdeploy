@@ -1153,9 +1153,9 @@ def paged_attention_fwd(
     if not is_decoding:
         BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lq)
         if _nv_cap[0] < 8:
-            BLOCK_M = max(16, min(BLOCK, 8192 // BLOCK_DMODEL))
+            BLOCK_M = max(16, 8192 // BLOCK_DMODEL)
         else:
-            BLOCK_M = max(16, min(BLOCK, 16384 // BLOCK_DMODEL))
+            BLOCK_M = max(16, 16384 // BLOCK_DMODEL)
         num_warps = 4
         num_stages = 2
         kv_head = k.shape[h_dim]
