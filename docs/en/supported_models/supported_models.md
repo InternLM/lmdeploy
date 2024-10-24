@@ -10,6 +10,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |        Llama2         |  7B - 70B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Llama3         |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Llama3.1        |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Llama3.2        |     3B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternLM        |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternLM2       |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM2.5      |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -20,7 +21,6 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |         Qwen2         | 1.5B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Mistral        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 |        Qwen-VL        |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|       Qwen2-VL        | 2B, 7B, 72B | MLLM |    Yes    |   Yes   |   Yes   |   -   |
 |      DeepSeek-VL      |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan2       |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -49,6 +49,8 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |     Llama2     |  7B - 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |     Llama3     |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |    Llama3.1    |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|    Llama3.2    |   1B, 3B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|  Llama3.2-VL   |   8B, 90B   | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |    InternLM    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |   -   |
 |   InternLM2    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |  InternLM2.5   |     7B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |

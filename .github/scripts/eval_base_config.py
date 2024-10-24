@@ -66,3 +66,9 @@ with read_base():
 turbomind_qwen1_5_7b = deepcopy(*lmdeploy_qwen1_5_7b)
 turbomind_qwen2_7b = deepcopy(*lmdeploy_qwen2_7b)
 turbomind_internlm2_5_7b = deepcopy(*lmdeploy_internlm2_5_7b)
+turbomind_internlm2_5_7b_batch1 = deepcopy(*lmdeploy_internlm2_5_7b)
+
+turbomind_internlm2_5_7b_batch1[
+    'abbr'] = turbomind_internlm2_5_7b_batch1['abbr'] + '_batch1'
+turbomind_internlm2_5_7b_batch1['engine_config']['max_batch_size'] = 1
+turbomind_internlm2_5_7b_batch1['batch_size'] = 1

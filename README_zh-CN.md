@@ -116,6 +116,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Llama2 (7B - 70B)</li>
   <li>Llama3 (8B, 70B)</li>
   <li>Llama3.1 (8B, 70B)</li>
+  <li>Llama3.2 (1B, 3B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM2.5 (7B)</li>

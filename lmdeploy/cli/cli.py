@@ -122,6 +122,7 @@ class CLI(object):
         pt_group = parser.add_argument_group('PyTorch engine arguments')
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
+        ArgumentHelper.eager_mode(pt_group)
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
@@ -265,6 +266,7 @@ class CLI(object):
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
                 device_type=args.device,
+                eager_mode=args.eager_mode,
                 quant_policy=args.quant_policy)
             run_chat(args.model_path,
                      engine_config,
@@ -275,6 +277,7 @@ class CLI(object):
             kwargs.pop('chat_template')
             kwargs.pop('backend')
             kwargs.pop('device')
+            kwargs.pop('eager_mode')
             kwargs['chat_template_config'] = chat_template_config
             run_chat(**kwargs)
 

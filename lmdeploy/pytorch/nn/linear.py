@@ -5,13 +5,14 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.weight_loader.model_weight_loader import \
     default_weight_loader
 from lmdeploy.utils import get_logger
 
 from ..backends import OpType, get_backend
 from ..backends.lora import AdapterInfo
-from .utils import div_up, get_distribute_size, get_world_rank
+from .utils import div_up, get_distribute_size
 
 logger = get_logger('lmdeploy')
 
