@@ -46,6 +46,7 @@ docker run -e ASCEND_VISIBLE_DEVICES=0 --rm --name lmdeploy -t lmdeploy-aarch64-
 For more information about running the Docker client on Ascend devices, please refer to the [guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc1/clusterscheduling/dockerruntimeug/dlruntime_ug_013.html)
 
 ## Offline batch inference
+
 ***Graph mode has been supported on Atlas 800T A2. Currently, InternLM2-7B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
 Users can set `eager_mode = False` to enable graph mode, or, set `eager_mode = True` to disable graph mode.***
 
@@ -80,9 +81,9 @@ if __name__ == "__main__":
 ```
 
 ## Online serving
+
 ***Graph mode has been supported on Atlas 800T A2. Currently, InternLM2-7B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
-Graph mode is default enabled in online serving. 
-Users can add `--eager-mode` to disable graph mode.***
+Graph mode is default enabled in online serving. Users can add `--eager-mode` to disable graph mode.***
 
 ### Serve a LLM model
 
