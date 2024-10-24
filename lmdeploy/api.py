@@ -11,7 +11,7 @@ def pipeline(model_path: str,
              backend_config: Optional[Union[TurbomindEngineConfig,
                                             PytorchEngineConfig]] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
-             log_level: str = 'ERROR',
+             log_level: str = 'WARNING',
              max_log_len: int = None,
              **kwargs):
     """
