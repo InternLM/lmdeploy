@@ -120,6 +120,9 @@ docker exec -it lmdeploy_ascend_demo \
 ### w4a16 AWQ
 
 Run the following commands to quantize weights on Atlas 800T A2.
+
 ```bash
 lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
 ```
+
+Please check [supported_models](../../supported_models/supported_models.md) before use this feature.
