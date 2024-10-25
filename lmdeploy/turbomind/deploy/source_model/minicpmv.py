@@ -18,3 +18,8 @@ class MiniCPMVReader(LlamaReader):
 class MiniCPMVModel(LlamaModel):
     """MiniCPMV model in hf format."""
     Reader = MiniCPMVReader
+
+    def model_info(self):
+        info = super().model_info()
+        info['attn_bias'] = True
+        return info

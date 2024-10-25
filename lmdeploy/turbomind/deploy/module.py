@@ -172,6 +172,7 @@ class Attn(Module):
         self.model = model
         self.tp = model.tensor_para_size
         self.head_dim = model.model_config.size_per_head
+        self.attn_bias = model.model_config.attn_bias
 
     def _reorder_and_merge(self, qkvo):
         q, k, v, o = map(transpose, qkvo)
@@ -203,7 +204,7 @@ class Attn(Module):
                               copy=is_lora_b)
 
     def apply(self, i: int, r: BaseReader):
-        for e in get_params(r.attn(i, None), bias=1):
+        for e in get_params(r.attn(i, None), bias=self.attn_bias):
             e(self._export, partial(r.attn, i), i)
 
 
