@@ -17,7 +17,8 @@ cd lmdeploy
 
 Docker 版本应不低于 18.03。并且需按照[官方指南](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/clusterschedulingig/dlug_installation_012.html)安装 Ascend Docker Runtime。
 
-***如果在后续容器内出现`libascend_hal.so: cannot open shared object file`错误，说明Ascend Docker Runtime没有被正确安装***
+> [!CAUTION]
+> 如果在后续容器内出现`libascend_hal.so: cannot open shared object file`错误，说明Ascend Docker Runtime没有被正确安装。
 
 #### Drivers，Firmware 和 CANN
 
@@ -47,7 +48,8 @@ docker run -e ASCEND_VISIBLE_DEVICES=0 --rm --name lmdeploy -t lmdeploy-aarch64-
 
 ## 离线批处理
 
-***图模式已经支持了Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。用户可以设定`eager_mode = False`来开启图模式，或者设定`eager_mode = True`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)***
+> [!TIP]
+> 图模式已经支持了Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。用户可以设定`eager_mode=False`来开启图模式，或者设定`eager_mode=True`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)
 
 ### LLM 推理
 
@@ -58,7 +60,7 @@ from lmdeploy import pipeline
 from lmdeploy import PytorchEngineConfig
 if __name__ == "__main__":
     pipe = pipeline("internlm/internlm2_5-7b-chat",
-                    backend_config = PytorchEngineConfig(tp=1, device_type="ascend", eager_mode=True))
+                    backend_config=PytorchEngineConfig(tp=1, device_type="ascend", eager_mode=True))
     question = ["Shanghai is", "Please introduce China", "How are you?"]
     response = pipe(question)
     print(response)
@@ -81,8 +83,9 @@ if __name__ == "__main__":
 
 ## 在线服务
 
-***图模式已经支持Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。
-在线服务时，图模式默认开启，用户可以添加`--eager-mode`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)***
+> [!TIP]
+> 图模式已经支持Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。
+> 在线服务时，图模式默认开启，用户可以添加`--eager-mode`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)
 
 ### LLM 模型服务
 
