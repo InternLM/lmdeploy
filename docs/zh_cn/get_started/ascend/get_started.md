@@ -27,7 +27,7 @@ Docker 版本应不低于 18.03。并且需按照[官方指南](https://www.hias
 和[下载资源](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=8.0.RC2.beta1&driver=1.0.25.alpha)。
 
 另外，`docker/Dockerfile_aarch64_ascend`没有提供CANN 安装包，用户需要自己从[昇腾资源下载中心](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC2.beta1&product=4&model=26)下载CANN(version 8.0.RC2.beta1)软件包。
-并将``` Ascend-cann-kernels-910b*.run`` 和  ```Ascend-cann-toolkit\*-aarch64.run\`\` 放在 lmdeploy 源码根目录下。
+并将`Ascend-cann-kernels-910b*.run`，`Ascend-cann-nnal_*.run`和`Ascend-cann-toolkit*.run` 放在 lmdeploy 源码根目录下。
 
 #### 构建镜像
 
