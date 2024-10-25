@@ -23,9 +23,9 @@ Docker 版本应不低于 18.03。并且需按照[官方指南](https://www.hias
 
 目标机器需安装华为驱动程序和固件版本 23.0.3，请参考
 [CANN 驱动程序和固件安装](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/80RC1alpha003/softwareinst/instg/instg_0019.html)
-和[下载资源](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=8.0.RC3.alpha001&driver=1.0.0.2.alpha)。
+和[下载资源](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=8.0.RC2.beta1&driver=1.0.25.alpha)。
 
-另外，`docker/Dockerfile_aarch64_ascend`没有提供CANN 安装包，用户需要自己从[昇腾资源下载中心](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC3.alpha001)下载CANN(8.0.RC3.alpha001)软件包。
+另外，`docker/Dockerfile_aarch64_ascend`没有提供CANN 安装包，用户需要自己从[昇腾资源下载中心](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC2.beta1&product=4&model=26)下载CANN(version 8.0.RC2.beta1)软件包。
 并将``` Ascend-cann-kernels-910b*.run`` 和  ```Ascend-cann-toolkit\*-aarch64.run\`\` 放在 lmdeploy 源码根目录下。
 
 #### 构建镜像
@@ -47,7 +47,7 @@ docker run -e ASCEND_VISIBLE_DEVICES=0 --rm --name lmdeploy -t lmdeploy-aarch64-
 
 ## 离线批处理
 
-***图模式已经支持了Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。用户可以设定`eager_mode = False`来开启图模式，或者设定`eager_mode = True`来关闭图模式。***
+***图模式已经支持了Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。用户可以设定`eager_mode = False`来开启图模式，或者设定`eager_mode = True`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)***
 
 ### LLM 推理
 
@@ -82,7 +82,7 @@ if __name__ == "__main__":
 ## 在线服务
 
 ***图模式已经支持Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。
-在线服务时，图模式默认开启，用户可以添加`--eager-mode`来关闭图模式***
+在线服务时，图模式默认开启，用户可以添加`--eager-mode`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)***
 
 ### LLM 模型服务
 
