@@ -327,8 +327,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             if (low == high) {
                 high += 0.01f;
             }
-            params.yarn_ramp_min = low;
-            params.yarn_ramp_max = high;
+            params.yarn_ramp_inv_factor_div_2   = 1.0 / (high - low) / 2.0;
+            params.yarn_ramp_inv_factor_mul_min = 1.0 / (high - low) * low;
+            params.yarn_inv_scaling_factor      = (1 - 1.0 / param_.rope_scaling_factor);
             if (param_.attention_factor < 0) {
                 params.attention_scaling = 0.1 * std::log(param_.rope_scaling_factor) + 1.0;
             }

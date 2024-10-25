@@ -84,8 +84,9 @@ struct FastRoPE {
                         float llama3_inv_scaling_factor,
                         float llama3_alpha,
                         float llama3_beta,
-                        float yarn_ramp_min,
-                        float yarn_ramp_max,
+                        float yarn_ramp_inv_factor_div_2,
+                        float yarn_ramp_inv_factor_mul_min,
+                        float yarn_inv_scaling_factor,
                         float attention_scaling,
                         std::integral_constant<int, N>)
     {
@@ -116,13 +117,13 @@ struct FastRoPE {
                 inv_freq_[i / 2] = (1 - smooth) * freq * llama3_inv_scaling_factor + smooth * freq;
             }
         }
-        if (yarn_ramp_max) {
+        if (yarn_ramp_inv_factor_div_2) {
             PRAGMA_UNROLL
             for (int i = 0; i < N; i += 2) {
                 auto  freq       = inv_freq_[i / 2];
-                float alpha      = ((idx + i) / 2 - yarn_ramp_min) / (yarn_ramp_max - yarn_ramp_min);
+                float alpha      = (idx + i) * yarn_ramp_inv_factor_div_2 - yarn_ramp_inv_factor_mul_min;
                 alpha            = fmaxf(0.f, fminf(1.f, alpha));
-                inv_freq_[i / 2] = freq * (1 - alpha + alpha / factor);
+                inv_freq_[i / 2] = freq - freq * alpha * yarn_inv_scaling_factor;
             }
         }
     }

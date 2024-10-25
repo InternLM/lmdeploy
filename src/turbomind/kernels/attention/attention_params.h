@@ -68,8 +68,9 @@ struct AttentionParams {
     float llama3_alpha;
     float llama3_beta;
     // the following are use by yarn
-    float yarn_ramp_min;
-    float yarn_ramp_max;
+    float yarn_ramp_inv_factor_div_2;
+    float yarn_ramp_inv_factor_mul_min;
+    float yarn_inv_scaling_factor;
 
     // log(n) attention
     bool use_logn_attn;

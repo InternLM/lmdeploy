@@ -235,8 +235,9 @@ struct AttentionUniversal {
                           params.llama3_inv_scaling_factor,
                           params.llama3_alpha,
                           params.llama3_beta,
-                          params.yarn_ramp_min,
-                          params.yarn_ramp_max,
+                          params.yarn_ramp_inv_factor_div_2,
+                          params.yarn_ramp_inv_factor_mul_min,
+                          params.yarn_inv_scaling_factor,
                           params.attention_scaling,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL

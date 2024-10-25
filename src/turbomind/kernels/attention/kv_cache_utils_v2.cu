@@ -27,8 +27,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                                                     float        llama3_inv_scaling_factor,
                                                     float        llama3_alpha,
                                                     float        llama3_beta,
-                                                    float        yarn_ramp_min,
-                                                    float        yarn_ramp_max,
+                                                    float        yarn_ramp_inv_factor_div_2,
+                                                    float        yarn_ramp_inv_factor_mul_min,
+                                                    float        yarn_inv_scaling_factor,
                                                     float        attention_scaling,
                                                     int64_t      stride_b,
                                                     int64_t      stride_c,
@@ -136,8 +137,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                           llama3_inv_scaling_factor,
                           llama3_alpha,
                           llama3_beta,
-                          yarn_ramp_min,
-                          yarn_ramp_max,
+                          yarn_ramp_inv_factor_div_2,
+                          yarn_ramp_inv_factor_mul_min,
+                          yarn_inv_scaling_factor,
                           attention_scaling,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
@@ -216,8 +218,9 @@ void invokeProcessKV_v2(char**       blocks,
                         float        llama3_inv_scaling_factor,
                         float        llama3_1_alpha,
                         float        llama3_1_beta,
-                        float        yarn_ramp_min,
-                        float        yarn_ramp_max,
+                        float        yarn_ramp_inv_factor_div_2,
+                        float        yarn_ramp_inv_factor_mul_min,
+                        float        yarn_inv_scaling_factor,
                         float        attention_scaling,
                         int64_t      stride_b,
                         int64_t      stride_c,
@@ -261,8 +264,9 @@ void invokeProcessKV_v2(char**       blocks,
                                                                               llama3_inv_scaling_factor,
                                                                               llama3_1_alpha,
                                                                               llama3_1_beta,
-                                                                              yarn_ramp_min,
-                                                                              yarn_ramp_max,
+                                                                              yarn_ramp_inv_factor_div_2,
+                                                                              yarn_ramp_inv_factor_mul_min,
+                                                                              yarn_inv_scaling_factor,
                                                                               attention_scaling,
                                                                               stride_b,
                                                                               stride_c,
@@ -299,8 +303,9 @@ void invokeProcessKV_v2(char**       blocks,
                                      float        llama3_inv_scaling_factor,                                           \
                                      float        llama3_1_alpha,                                                      \
                                      float        llama3_1_beta,                                                       \
-                                     float        yarn_ramp_min,                                                       \
-                                     float        yarn_ramp_max,                                                       \
+                                     float        yarn_ramp_inv_factor_div_2,                                          \
+                                     float        yarn_ramp_inv_factor_mul_min,                                        \
+                                     float        yarn_inv_scaling_factor,                                             \
                                      float        attention_scaling,                                                   \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \
@@ -333,8 +338,9 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                                                     float        llama3_inv_scaling_factor,
                                                     float        llama3_alpha,
                                                     float        llama3_beta,
-                                                    float        yarn_ramp_min,
-                                                    float        yarn_ramp_max,
+                                                    float        yarn_ramp_inv_factor_div_2,
+                                                    float        yarn_ramp_inv_factor_mul_min,
+                                                    float        yarn_inv_scaling_factor,
                                                     float        attention_scaling,
                                                     int64_t      stride_b,
                                                     int64_t      stride_c,
@@ -425,8 +431,9 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                           llama3_inv_scaling_factor,
                           llama3_alpha,
                           llama3_beta,
-                          yarn_ramp_min,
-                          yarn_ramp_max,
+                          yarn_ramp_inv_factor_div_2,
+                          yarn_ramp_inv_factor_mul_min,
+                          yarn_inv_scaling_factor,
                           attention_scaling,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
@@ -466,8 +473,9 @@ void invokeFlattenKV_v2(T*           k,
                         float        llama3_inv_scaling_factor,
                         float        llama3_alpha,
                         float        llama3_beta,
-                        float        yarn_ramp_min,
-                        float        yarn_ramp_max,
+                        float        yarn_ramp_inv_factor_div_2,
+                        float        yarn_ramp_inv_factor_mul_min,
+                        float        yarn_inv_scaling_factor,
                         float        attention_scaling,
                         int64_t      stride_b,
                         int64_t      stride_c,
@@ -508,8 +516,9 @@ void invokeFlattenKV_v2(T*           k,
                                                                             llama3_inv_scaling_factor,
                                                                             llama3_alpha,
                                                                             llama3_beta,
-                                                                            yarn_ramp_min,
-                                                                            yarn_ramp_max,
+                                                                            yarn_ramp_inv_factor_div_2,
+                                                                            yarn_ramp_inv_factor_mul_min,
+                                                                            yarn_inv_scaling_factor,
                                                                             attention_scaling,
                                                                             stride_b,
                                                                             stride_c,
@@ -543,8 +552,9 @@ void invokeFlattenKV_v2(T*           k,
                                      float        llama3_inv_scaling_factor,                                           \
                                      float        llama3_alpha,                                                        \
                                      float        llama3_beta,                                                         \
-                                     float        yarn_ramp_min,                                                       \
-                                     float        yarn_ramp_max,                                                       \
+                                     float        yarn_ramp_inv_factor_div_2,                                          \
+                                     float        yarn_ramp_inv_factor_mul_min,                                        \
+                                     float        yarn_inv_scaling_factor,                                             \
                                      float        attention_scaling,                                                   \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \
