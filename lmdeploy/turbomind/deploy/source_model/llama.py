@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
+import math
 import os
 import os.path as osp
 from glob import glob
@@ -222,27 +223,30 @@ class LlamaModel(BaseInputModel):
             beta_slow = 1.0
             original_max_position_embeddings = 0
             if isinstance(rope_scaling, dict):
-                llama2_scaling_type = model_arg['rope_scaling'].get('type', '')
-                llama3_scaling_type = model_arg['rope_scaling'].get(
-                    'rope_type', '')
-                scaling_factor = model_arg['rope_scaling'].get('factor', '')
-                low_freq_factor = model_arg['rope_scaling'].get(
-                    'low_freq_factor', 1.0)
-                high_freq_factor = model_arg['rope_scaling'].get(
-                    'high_freq_factor', 1.0)
-                original_max_position_embeddings = model_arg[
-                    'rope_scaling'].get('original_max_position_embeddings', 0)
+                llama2_scaling_type = rope_scaling.get('type', '')
+                llama3_scaling_type = rope_scaling.get('rope_type', '')
                 if llama2_scaling_type and llama3_scaling_type:
                     raise ValueError(
                         f'Ambiguous rope_scaling in config: {model_arg}')
                 scaling_type = llama2_scaling_type if llama2_scaling_type \
                     else llama3_scaling_type
+                scaling_factor = rope_scaling.get('factor', 0.0)
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
-                attention_factor = model_arg['rope_scaling'].get(
-                    'attention_factor', None)
-                beta_fast = model_arg['rope_scaling'].get('beta_fast', 32.0)
-                beta_slow = model_arg['rope_scaling'].get('beta_slow', 1.0)
+                elif scaling_type == 'llama3':
+                    low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
+                    high_freq_factor = rope_scaling.get(
+                        'high_freq_factor', 1.0)
+                    original_max_position_embeddings = model_arg[
+                        'rope_scaling'].get('original_max_position_embeddings',
+                                            0)
+                elif scaling_type == 'yarn':
+                    attention_factor = rope_scaling.get(
+                        'attention_factor', None)
+                    if attention_factor is None:
+                        attention_factor = 0.1 * math.log(scaling_factor) + 1.0
+                    beta_fast = rope_scaling.get('beta_fast', 32.0)
+                    beta_slow = rope_scaling.get('beta_slow', 1.0)
 
         return dict(
             num_layer=num_layer,
