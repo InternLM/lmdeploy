@@ -101,6 +101,7 @@ ENV PYTHONPATH=$TBE_IMPL_PATH:$PYTHONPATH
 
 SHELL ["/bin/bash", "-c"]
 RUN echo "source /usr/local/Ascend/ascend-toolkit/set_env.sh" >> ~/.bashrc && \
+    echo "source /usr/local/Ascend/nnal/atb/set_env.sh --cxx_abi=0" >> ~/.bashrc && \
     . ~/.bashrc
 
 # dlinfer
