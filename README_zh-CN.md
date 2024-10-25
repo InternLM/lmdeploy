@@ -26,7 +26,6 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
-- \[2024/10\] TurboMind Engine实现了 grouped Gemm，支持 MoE 结构高效推理
 - \[2024/10\] PyTorch Engine 在 ascend 平台上支持了图模式，推理性能提高了 1 倍
 - \[2024/09\] LMDeploy PyTorchEngine 增加了对 [华为 Ascend](docs/zh_cn/get_started/ascend/get_started.md) 的支持。支持的模型请见[这里](docs/zh_cn/supported_models/supported_models.md)
 - \[2024/09\] 通过引入 CUDA Graph，LMDeploy PyTorchEngine 在 Llama3-8B 推理上实现了 1.3 倍的加速
