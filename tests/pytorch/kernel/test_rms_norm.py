@@ -1,9 +1,11 @@
 import pytest
 import torch
 
+from lmdeploy.utils import is_bf16_supported
+
 
 def _bf16_mark():
-    return pytest.mark.skipif(not torch.cuda.is_bf16_supported(),
+    return pytest.mark.skipif(not is_bf16_supported(),
                               reason='bf16 not supported.')
 
 

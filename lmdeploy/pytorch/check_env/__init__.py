@@ -208,18 +208,21 @@ def check_transformers_version(model_path: str,
         import torch
 
         from lmdeploy.pytorch.config import ModelConfig
+        from lmdeploy.utils import is_bf16_supported
 
         try:
             model_config = ModelConfig.from_hf_config(config,
                                                       model_path=model_path,
                                                       dtype=dtype)
             if model_config.dtype == torch.bfloat16:
-                assert torch.cuda.is_bf16_supported(), (
+                assert is_bf16_supported(), (
                     'bf16 is not supported on your device')
         except AssertionError as e:
-            message = (f'Your device does not support `{model_config.dtype}`. '
-                       'Try edit `torch_dtype` in `config.json`.\n'
-                       'Note that this might have negative effect!')
+            message = (
+                f'Your device does not support `{model_config.dtype}`. '
+                'You can set `dtype` to float16 in PyTorchEngineConfig or '
+                '`--dtype float16` to api_server.\n'
+                'Note that this might have negative effect!')
             _handle_exception(e, 'Model', logger, message=message)
         except Exception as e:
             message = (f'Checking failed with error {e}',
