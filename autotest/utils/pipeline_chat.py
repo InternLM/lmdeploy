@@ -10,6 +10,7 @@ from utils.rule_condition_assert import assert_result
 
 from lmdeploy import pipeline
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.utils import is_bf16_supported
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 
@@ -292,6 +293,9 @@ def run_pipeline_vl_chat_test(config, model_case, quant_policy: int = None):
         backend_config.model_format = 'awq'
     if quant_policy is not None:
         backend_config.quant_policy = quant_policy
+
+    if not is_bf16_supported():
+        backend_config.cache_max_entry_count = 0.5
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     pipeline_chat_log = os.path.join(
