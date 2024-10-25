@@ -17,6 +17,8 @@ class Glm4Reader(LlamaReader):
     norm_weight_key = 'transformer.encoder.final_layernorm.weight'
     output_weight_key = 'transformer.output_layer.weight'
 
+    attn_pattern = r'self_attention'
+
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
         qkv = self.params[f'transformer.encoder.layers.{i}'
@@ -94,6 +96,9 @@ class Glm4Model(LlamaModel):
         rope_theta *= rope_ratio
         attn_head_num = config['num_attention_heads']
         kv_head_num = attn_head_num
+        inter_size = config['ffn_hidden_size']
+        vocab_size = config['padded_vocab_size']
+        attn_bias = config['add_qkv_bias']
         if config['multi_query_attention']:
             kv_head_num = config['multi_query_group_num']
         seq_length = config['seq_length']
@@ -102,6 +107,9 @@ class Glm4Model(LlamaModel):
                     head_num=attn_head_num,
                     kv_head_num=kv_head_num,
                     hidden_units=hidden_units,
+                    attn_bias=int(attn_bias),
+                    inter_size=inter_size,
+                    vocab_size=vocab_size,
                     rope_theta=rope_theta,
                     max_position_embeddings=seq_length,
                     rotary_embedding=64,

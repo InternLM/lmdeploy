@@ -19,7 +19,11 @@ void Registry::f16_u4g128_f16_tnt_sm70_s884()
                                  Transform_HMMA_SIMT_B,
                                  typename GetOperand<HMMA_884, OPERAND_V, uint32_t, kColMajor, true>::Operand,
                                  kRowMajor,
-                                 half>;
+                                 half,
+                                 Striding::kFlat,
+                                 Striding::kFlat,
+                                 Striding::kFlat,
+                                 GemmScheduler<kColMajor>>;
 
         using namespace cache_policy;
 

@@ -114,6 +114,7 @@ struct LlamaLinear<T>::Impl {
                                   {QuantType::kNone},
                                   {QuantType::kDefault, weight.group_size},
                                   0,
+                                  {},
                                   nullptr};
 
         const MatrixLayout a_desc{
@@ -131,6 +132,81 @@ struct LlamaLinear<T>::Impl {
             (int)weight.output_dims,
             type == kFusedSiluFfn ? (int)weight.output_dims / 2 : (int)weight.output_dims,
         };
+
+        auto ec = gemm_.Run(operation,
+                            1.f,
+                            input_data.ptr,
+                            a_desc,
+                            nullptr,
+                            {},
+                            weight.kernel,
+                            weight.k_desc,
+                            weight.scales_zeros,
+                            weight.q_desc,
+                            type == kFusedAdd ? 1.0f : 0.0f,
+                            output_data,
+                            c_desc,
+                            output_data,
+                            c_desc,
+                            workspace_,
+                            stream_);
+
+        if (ec) {
+            TM_LOG_ERROR("%s: %d", __PRETTY_FUNCTION__, ec);
+            // std::abort();
+        }
+    }
+
+    void forward_moe(T*                         output_data,
+                     Pitched                    input_data,
+                     const int*                 indexes,
+                     const int*                 offsets,
+                     int                        batch_size,
+                     const LlamaDenseWeight<T>& weight,
+                     Type                       type,
+                     gemm::Context*             context)
+    {
+        using namespace gemm;
+
+        QuantDesc quant_b{};
+        if (weight.k_desc.type == gemm::DataType::U4) {
+            quant_b.type       = QuantType::kDefault;
+            quant_b.group_size = weight.group_size;
+        }
+
+        const Operation operation{dispatch_policy_,
+                                  type == kFusedSiluFfn ? Epilogue::kGatedSilu : Epilogue::kNone,
+                                  {QuantType::kNone},
+                                  quant_b,
+                                  0,
+                                  context,
+                                  nullptr};
+
+        MatrixLayout a_desc{
+            get_data_type_v<T>,
+            kRowMajor,
+            batch_size,              // m
+            (int)weight.input_dims,  // k
+            input_data.pitch,
+        };
+
+        // std::cout << "m" << batch_size << "n" << weight.output_dims << "k" << weight.input_dims << " "
+        //           << input_data.pitch << "\n";
+
+        a_desc.offsets = (int*)offsets;
+        a_desc.idxs    = (int*)indexes;
+
+        MatrixLayout c_desc{
+            get_data_type_v<T>,
+            kRowMajor,
+            batch_size,
+            (int)weight.output_dims,
+            type == kFusedSiluFfn ? (int)weight.output_dims / 2 : (int)weight.output_dims,
+        };
+
+        c_desc.offsets = (int*)offsets;
+
+        a_desc.num = c_desc.num = weight.k_desc.num;
 
         auto ec = gemm_.Run(operation,
                             1.f,
@@ -175,6 +251,19 @@ void LlamaLinear<T>::forward(
     T* output_data, Pitched input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type, int* lora_mask)
 {
     impl_->forward(output_data, input_data, batch_size, weight, type, lora_mask);
+}
+
+template<class T>
+void LlamaLinear<T>::forward_moe(T*                         output_data,
+                                 Pitched                    input_data,
+                                 const int*                 indexes,
+                                 const int*                 offsets,
+                                 int                        batch_size,
+                                 const LlamaDenseWeight<T>& weight,
+                                 Type                       type,
+                                 gemm::Context*             context)
+{
+    impl_->forward_moe(output_data, input_data, indexes, offsets, batch_size, weight, type, context);
 }
 
 template<class T>

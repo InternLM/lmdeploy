@@ -16,6 +16,9 @@ class QwenReader(LlamaReader):
     norm_weight_key = 'transformer.ln_f.weight'
     output_weight_key = 'lm_head.weight'
 
+    attn_pattern = r'attn'
+    ffn_pattern = r'mlp'
+
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
         q, k, v, o = (None, ) * 4
@@ -77,11 +80,16 @@ class QwenModel(LlamaModel):
             seq_length = config['seq_length']
             use_dynamic_ntk = int(config['use_dynamic_ntk'])
             use_logn_attn = int(config['use_logn_attn'])
+            vocab_size = config['vocab_size']
+            inter_size = config['intermediate_size']
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
                     hidden_units=hidden_units,
                     head_num=attn_head_num,
                     kv_head_num=kv_head_num,
+                    vocab_size=vocab_size,
+                    inter_size=inter_size,
+                    attn_bias=1,
                     rope_theta=rope_theta,
                     max_position_embeddings=seq_length,
                     use_dynamic_ntk=int(use_dynamic_ntk),
@@ -107,3 +115,8 @@ class Qwen2Model(LlamaModel):
         bos_id = 151643
         eos_id = 151645
         return n_words, bos_id, eos_id
+
+    def model_info(self):
+        cfg = super().model_info()
+        cfg['attn_bias'] = 1
+        return cfg

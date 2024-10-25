@@ -41,6 +41,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/utils/monotonic.h"
 #include <algorithm>
 #include <chrono>
 #include <exception>
@@ -60,6 +61,7 @@ inline int pad_vocab_size(int vocab_size, int tp)
 template<typename T>
 LlamaV2<T>::LlamaV2(const ModelParam&               model,
                     const AttentionParam&           attn,
+                    const MoeParam&                 moe,
                     const LoraParam&                lora,
                     const NcclParam&                tp,
                     const Context<T>&               ctx,
@@ -92,7 +94,7 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, lora, tp, ctx);
+    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, moe, lora, tp, ctx);
 
     dynamic_decode_layer_ = std::make_unique<DynamicDecodeLayer<float>>(vocab_size_,
                                                                         vocab_size_padded_,
@@ -145,6 +147,9 @@ void LlamaV2<T>::updateEmbedding(T*               decoder_input,
                                  int*             lora_mask,
                                  bool*            have_embeddings)
 {
+    if (isTuning())
+        return;
+
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     *have_embeddings          = false;
@@ -419,107 +424,6 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
     }
 
     dynamic_decode_layer_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
-}
-
-template<class First, class Last>
-static std::string Join(First first, Last last, const std::string& delim)
-{
-    if (first == last) {
-        return {};
-    }
-    std::ostringstream oss;
-    oss << *first++;
-    while (first != last) {
-        oss << delim << *first++;
-    }
-    return oss.str();
-}
-
-// Only called when `weight_type == INT4` for now
-template<typename T>
-void LlamaV2<T>::tune()
-{
-
-    if (auto str = std::getenv("TM_GEMM_IMPORT")) {
-        std::ifstream ifs(str);
-        const int     n_imported = linear_->Import(ifs);
-        TM_LOG_INFO("[Gemm2] %d records imported", n_imported);
-        return;
-    }
-
-    std::vector<int> bss = linear_->GetTuningSeq();
-    if (bss.empty()) {
-        bss = gemm::GenerateTuningSequence(gemm::GetDefaultTuningGenerators());
-    }
-
-    {
-        auto str = Join(bss.begin(), bss.end(), ", ");
-        TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
-    }
-
-    LlamaAttentionWeight<T>& attn = weights_->decoder_layer_weights[0]->self_attn_weights;
-    LlamaFfnWeight<T>&       ffn  = weights_->decoder_layer_weights[0]->ffn_weights;
-
-    std::vector<LlamaDenseWeight<T>*> weights{&attn.qkv, &attn.output, &ffn.output};
-
-    for (auto& layer : weights_->decoder_layer_weights) {
-        if (layer->ffn_weights.gating.kernel) {
-            weights.push_back(&layer->ffn_weights.gating);
-            break;
-        }
-    }
-    for (auto& layer : weights_->decoder_layer_weights) {
-        if (layer->ffn_weights.fused_gating_intermediate.kernel) {
-            weights.push_back(&layer->ffn_weights.fused_gating_intermediate);
-            break;
-        }
-    }
-
-    const int max_bs  = *std::max_element(bss.begin(), bss.end());
-    int       max_in  = 0;
-    int       max_out = 0;
-    for (auto& w : weights) {
-        max_in  = std::max<int>(max_in, w->input_dims);
-        max_out = std::max<int>(max_out, w->output_dims);
-    }
-
-    T* in_data  = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_in);
-    T* out_data = (T*)allocator_->malloc(sizeof(T) * (size_t)max_bs * max_out);
-
-    cudaRandomUniform(in_data, (size_t)max_bs * max_in);
-    check_cuda_error(cudaDeviceSynchronize());
-
-    linear_->set_measure(true);
-
-    auto tick = std::chrono::steady_clock::now();
-
-    for (auto bs : bss) {
-        TM_LOG_INFO("[Gemm2] %d", bs);
-        for (auto& w : weights) {
-            linear_->forward(out_data, in_data, bs, *w);
-        }
-    }
-
-    auto tock = std::chrono::steady_clock::now();
-
-    TM_LOG_INFO("[Gemm2] Tuning finished in %.2f seconds.",
-                std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
-
-    linear_->set_measure(false);
-
-    check_cuda_error(cudaDeviceSynchronize());
-
-    allocator_->free((void**)&in_data);
-    allocator_->free((void**)&out_data);
-
-    // Only rank-0 exports the dispatch cache
-    if (tensor_para_.rank_ == 0) {
-        if (auto path = std::getenv("TM_GEMM_EXPORT")) {
-            std::ofstream ofs(path);
-            const auto    n_records = linear_->Export(ofs);
-            TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
-        }
-    }
 }
 
 template class LlamaV2<half>;
