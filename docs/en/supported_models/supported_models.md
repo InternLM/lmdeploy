@@ -19,8 +19,8 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |         Qwen          | 1.8B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen1.5        | 1.8B - 110B | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |         Qwen2         | 1.5B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|        Mistral        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |   -   |
-|        Mixtral        | 8x7B, 8x22B | LLM  |    Yes    |   Yes   |   Yes   |   -   |
+|        Mistral        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Mixtral        | 8x7B, 8x22B | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen-VL        |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |      DeepSeek-VL      |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -29,7 +29,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |          YI           |  6B - 34B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |    LLaVA(1.5,1.6)     |  7B - 34B   | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternVL        | v1.1- v1.5  | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|       InternVL2       |   2B-76B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|       InternVL2       | 2B, 8B, 76B | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 | MiniCPM-Llama3-V-2_5  |      -      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |     MiniCPM-V-2_6     |      -      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |    MiniGeminiLlama    |     7B      | MLLM |    Yes    |    -    |    -    |  Yes  |
