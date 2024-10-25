@@ -27,7 +27,7 @@ The target machine needs to install the Huawei driver and firmware version 23.0.
 [CANN Driver and Firmware Installation](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/80RC1alpha003/softwareinst/instg/instg_0019.html)
 and [download resources](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=8.0.RC2.beta1&driver=1.0.25.alpha).
 
-And the CANN (version 8.0.RC2.beta1) software packages should also be downloaded from [Ascend Resource Download Center](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC2.beta1&product=4&model=26) themselves. Make sure to place the `Ascend-cann-kernels-910b*.run` and `Ascend-cann-toolkit*-aarch64.run` under the root directory of lmdeploy source code
+And the CANN (version 8.0.RC2.beta1) software packages should also be downloaded from [Ascend Resource Download Center](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC2.beta1&product=4&model=26) themselves. Make sure to place the `Ascend-cann-kernels-910b*.run`, `Ascend-cann-nnal_*.run` and `Ascend-cann-toolkit*-aarch64.run` under the root directory of lmdeploy source code
 
 #### Build Docker Image
 
