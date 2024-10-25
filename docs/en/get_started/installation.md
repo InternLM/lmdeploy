@@ -10,6 +10,16 @@ It supports LLMs and VLMs deployment on both Linux and Windows platform, with mi
 - Ampere(sm80,sm86): 30 series, A10, A16, A30, A100
 - Ada Lovelace(sm89): 40 series
 
+## Prerequisites
+
+- Your server must have Rust installed, as some dependencies require compiling components with Rust during the package installation.
+
+- Ensure that Rust is properly configured in your system's PATH.
+  You can install Rust using the official installation guide available [here](https://www.rust-lang.org/tools/install). After installing Rust, verify the installation:
+  ```shell
+  rustc --version
+  ```
+
 ## Install with pip (Recommend)
 
 It is recommended installing lmdeploy using pip in a conda environment (python 3.8 - 3.12):
