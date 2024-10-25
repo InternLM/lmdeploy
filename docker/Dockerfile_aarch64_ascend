@@ -87,7 +87,7 @@ RUN --mount=type=cache,target=/tmp,from=build_temp,source=/tmp \
     chmod +x $TOOLKIT_PKG $KERNELS_PKG $NNAL_PKG && \
     ./$TOOLKIT_PKG --quiet --install --install-path=$ASCEND_BASE --install-for-all $CHIPOPTION && \
     ./$KERNELS_PKG --quiet --install --install-path=$ASCEND_BASE --install-for-all && \
-    ./$NNAL_PKG --quiet --install --install-path=$ASCEND_BASE &&
+    ./$NNAL_PKG --quiet --install --install-path=$ASCEND_BASE && \
     rm -f $TOOLKIT_PKG $KERNELS_PKG $NNAL_PKG
 
 ENV GLOG_v=2 \
