@@ -24,9 +24,9 @@ The Docker version is supposed to be no less than `18.03`. And `Ascend Docker Ru
 
 The target machine needs to install the Huawei driver and firmware version 23.0.3, refer to
 [CANN Driver and Firmware Installation](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/80RC1alpha003/softwareinst/instg/instg_0019.html)
-and [download resources](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=8.0.RC3.alpha001&driver=1.0.0.2.alpha).
+and [download resources](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=8.0.RC2.beta1&driver=1.0.25.alpha).
 
-And the CANN (version 8.0.RC3.alpha001) software packages should also be downloaded from [Ascend Resource Download Center](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC3.alpha001) themselves. Make sure to place the `Ascend-cann-kernels-910b*.run` and `Ascend-cann-toolkit*-aarch64.run` under the root directory of lmdeploy source code
+And the CANN (version 8.0.RC2.beta1) software packages should also be downloaded from [Ascend Resource Download Center](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC2.beta1&product=4&model=26) themselves. Make sure to place the `Ascend-cann-kernels-910b*.run` and `Ascend-cann-toolkit*-aarch64.run` under the root directory of lmdeploy source code
 
 #### Build Docker Image
 
@@ -48,7 +48,8 @@ For more information about running the Docker client on Ascend devices, please r
 ## Offline batch inference
 
 ***Graph mode has been supported on Atlas 800T A2. Currently, InternLM2-7B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
-Users can set `eager_mode = False` to enable graph mode, or, set `eager_mode = True` to disable graph mode.***
+Users can set `eager_mode = False` to enable graph mode, or, set `eager_mode = True` to disable graph mode. 
+(Please source `/usr/local/Ascend/nnal/atb/set_env.sh` before enabling graph mode)***
 
 ### LLM inference
 
@@ -83,7 +84,8 @@ if __name__ == "__main__":
 ## Online serving
 
 ***Graph mode has been supported on Atlas 800T A2. Currently, InternLM2-7B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
-Graph mode is default enabled in online serving. Users can add `--eager-mode` to disable graph mode.***
+Graph mode is default enabled in online serving. Users can add `--eager-mode` to disable graph mode. 
+(Please source `/usr/local/Ascend/nnal/atb/set_env.sh` before enabling graph mode)***
 
 ### Serve a LLM model
 
