@@ -374,13 +374,17 @@ def is_bf16_supported(device_type: str = 'cuda'):
         else:
             return False
     elif device_type == 'ascend':
-        import torch_npu
-        device_name = torch_npu.npu.get_device_name(0)[:10]
-        device_name = device_name.lower()
-        if device_name.startwith('ascend910'):
-            return True
-        else:
-            return False
+        # The following API doesn't work somehow in multi-npu devices. Due to
+        # the `ascend910` device's capability to support bfloat16, we are
+        # returning true as a workaround
+        return True
+        # import torch_npu
+        # device_name = torch_npu.npu.get_device_name(0)[:10]
+        # device_name = device_name.lower()
+        # if device_name.startwith('ascend910'):
+        #     return True
+        # else:
+        #     return False
     elif device_type == 'maca':
         return True
     else:
