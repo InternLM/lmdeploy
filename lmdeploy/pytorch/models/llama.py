@@ -384,22 +384,6 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
         """compute logits of the model output."""
         return self.lm_head(hidden_states)
 
-    def support_cuda_graph(
-        self,
-        input_ids: torch.Tensor,
-        **kwargs,
-    ):
-        """support cudagraph."""
-        seq_lens = input_ids.size(1)
-        if seq_lens <= 512:
-            return True
-
-        # prevent oom on llama-3 70b
-        if self.config.num_hidden_layers >= 40:
-            return False
-
-        return False
-
     def get_input_embeddings(self):
         """get input embeddings."""
         return self.model.get_input_embeddings()

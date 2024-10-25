@@ -548,20 +548,6 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin):
         """compute logits of the model output."""
         return self.lm_head(hidden_states)
 
-    def support_cuda_graph(
-        self,
-        input_ids: torch.Tensor,
-        position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
-        attn_metadata: Any = None,
-        inputs_embeds: torch.Tensor = None,
-        lang_ids: torch.LongTensor = None,
-        vision_ids: torch.LongTensor = None,
-        **kwargs,
-    ):
-        """support cudagraph."""
-        return inputs_embeds is None
-
     def get_input_embeddings(self):
         """get input embeddings."""
         return self.model.get_input_embeddings()

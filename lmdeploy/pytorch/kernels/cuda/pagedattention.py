@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/ModelTC/lightllm
+import math
 from typing import Literal
 
 import torch
@@ -22,11 +23,9 @@ assert TRITON_VERSION >= version.parse('2.2.0')
 # TODO: fast op might not work on non-nv device
 if TRITON_VERSION >= VERSION_300:
     tanh = tl.extra.cuda.libdevice.tanh
-    fast_expf = tl.extra.cuda.libdevice.fast_expf
     fast_dividef = tl.extra.cuda.libdevice.fast_dividef
 else:
     tanh = tl.math.tanh
-    fast_expf = tl.math.fast_expf
     fast_dividef = tl.math.fast_dividef
 
 
@@ -200,7 +199,7 @@ def _fwd_grouped_split_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        qk *= sm_scale
+        qk *= sm_scale * tl.log2(math.e)
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
             qk = tanh(qk)
@@ -218,8 +217,8 @@ def _fwd_grouped_split_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = fast_expf(qk - m_i_new[:, None])
-        alpha = fast_expf(m_i - m_i_new)
+        p = tl.exp2(qk - m_i_new[:, None])
+        alpha = tl.exp2(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
 
         # -- update output accumulator --
@@ -484,7 +483,7 @@ def _fwd_grouped_split_quant_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        qk *= sm_scale
+        qk *= sm_scale * tl.log2(math.e)
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
             qk = tanh(qk)
@@ -502,8 +501,8 @@ def _fwd_grouped_split_quant_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = fast_expf(qk - m_i_new[:, None])
-        alpha = fast_expf(m_i - m_i_new)
+        p = tl.exp2(qk - m_i_new[:, None])
+        alpha = tl.exp2(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
 
         # -- update output accumulator --
@@ -586,7 +585,7 @@ def _reduce_split_kernel(
                     other=0.0)
 
     m_max = tl.max(m_k, 0)
-    alpha = fast_expf(m_k - m_max)
+    alpha = tl.exp2(m_k - m_max)
     acc_k = acc_k * alpha[:, None]
     l_k = l_k * alpha
 
@@ -752,7 +751,7 @@ def _fwd_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        qk *= sm_scale
+        qk *= sm_scale * tl.log2(math.e)
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
             qk = tanh(qk)
@@ -768,8 +767,8 @@ def _fwd_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = fast_expf(qk - m_i_new[:, None])
-        alpha = fast_expf(m_i - m_i_new)
+        p = tl.exp2(qk - m_i_new[:, None])
+        alpha = tl.exp2(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
         # -- update output accumulator --
         # scale acc
@@ -799,7 +798,7 @@ def _fwd_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        qk *= sm_scale
+        qk *= sm_scale * tl.log2(math.e)
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
             qk = tanh(qk)
@@ -818,8 +817,8 @@ def _fwd_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = fast_expf(qk - m_i_new[:, None])
-        alpha = fast_expf(m_i - m_i_new)
+        p = tl.exp2(qk - m_i_new[:, None])
+        alpha = tl.exp2(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
         # -- update output accumulator --
         # scale acc
@@ -1024,7 +1023,7 @@ def _fwd_kernel_quant(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        qk *= sm_scale
+        qk *= sm_scale * tl.log2(math.e)
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
             qk = tanh(qk)
@@ -1044,8 +1043,8 @@ def _fwd_kernel_quant(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = fast_expf(qk - m_i_new[:, None])
-        alpha = fast_expf(m_i - m_i_new)
+        p = tl.exp2(qk - m_i_new[:, None])
+        alpha = tl.exp2(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
         # -- update output accumulator --
         # scale acc
