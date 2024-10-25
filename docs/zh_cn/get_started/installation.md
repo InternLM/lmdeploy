@@ -10,6 +10,15 @@ Turing(sm75): 20 系列，T4
 Ampere(sm80,sm86): 30 系列，A10, A16, A30, A100
 Ada Lovelace(sm89): 40 系列
 
+## 前置条件
+- 请确保服务器已经安装了Rust，因为某些依赖项在安装过程中需要使用Rust来编译组件。
+- 确保Rust已正确配置在系统的PATH中。
+  您可以在[此处](https://www.rust-lang.org/tools/install)找到Rust的官方安装指南。安装后，请通过运行以下命令来验证安装是否成功：
+  ```shell
+  rustc --version
+  ```
+
+
 ## 使用 pip 安装（推荐）
 
 我们推荐在一个干净的conda环境下（python3.8 - 3.12），安装 lmdeploy：
