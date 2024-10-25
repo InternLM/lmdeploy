@@ -235,8 +235,8 @@ class LlamaModel(BaseInputModel):
                 if 'partial_rotary_factor' in rope_scaling:
                     partial_rotary_factor = float(
                         rope_scaling.get('partial_rotary_factor'))
-                    rotary_embedding = int(
-                        rotary_embedding * partial_rotary_factor)
+                    rotary_embedding = int(rotary_embedding *
+                                           partial_rotary_factor)
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
                 elif scaling_type == 'llama3':
