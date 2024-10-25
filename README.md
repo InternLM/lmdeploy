@@ -162,6 +162,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Phi-3-vision (4.2B)</li>
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
+  <li>Llama3.2-vision (11B, 90B)</li>
 </ul>
 </td>
 </tr>
