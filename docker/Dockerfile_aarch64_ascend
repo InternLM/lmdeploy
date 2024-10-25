@@ -107,7 +107,7 @@ RUN echo "source /usr/local/Ascend/ascend-toolkit/set_env.sh" >> ~/.bashrc && \
 # dlinfer
 # timm is required for internvl2 model
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install torch==2.3.1 torch-npu==2.3.1 && \
+    pip3 install torch==2.3.1 torchvision==0.18.1 torch-npu==2.3.1 && \
     pip3 install transformers timm && \
     pip3 install dlinfer-ascend==0.1.1
 
