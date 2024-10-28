@@ -120,7 +120,6 @@ def smooth_quant(model: str,
         name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
         fcs.update(name2fc)
 
-    torch.cuda.empty_cache()
     if search_scale:
         awq_ratios = inp_stats['ratios']
         act_scales = inp_stats['absmean']
