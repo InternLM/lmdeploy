@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import itertools
 import math
 
+import torch
 import triton
 import triton.language as tl
 from packaging import version
@@ -123,24 +123,21 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
     return acc, l_i, m_i
 
 
-configs = [
-    triton.Config({
-        'BLOCK_M': BM,
-        'BLOCK_N': BN
-    }, num_stages=s, num_warps=w)
-    for BM, BN, s, w in itertools.product([64, 128], [32, 64], [3, 4], [4])
-]
-
 # # FOR DEBUG, DON'T REMOVE
+# import itertools
 # configs = [
-#     triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32}, num_stages=4, num_warps=4)
+#     triton.Config({
+#         'BLOCK_M': BM,
+#         'BLOCK_N': BN
+#     }, num_stages=s, num_warps=w)
+#     for BM, BN, s, w in itertools.product([64, 128], [32, 64], [3, 4], [4])
 # ]
 
 
-@triton.autotune(list(configs),
-                 key=['head_dim_k', 'head_dim_v'],
-                 warmup=10,
-                 rep=25)
+# @triton.autotune(list(configs),
+#                  key=['head_dim_k', 'head_dim_v'],
+#                  warmup=10,
+#                  rep=25)
 @triton.jit
 def _flash_prefill_fwd_kernel(
     q_ptr,
@@ -313,6 +310,9 @@ def _flash_prefill_fwd_kernel(
              mask=(offs_m[:, None] < q_seqlen) & mask_dv[None, :])
 
 
+_nv_cap = None
+
+
 def flash_attention_fwd(
     q_states: Tensor,
     k_states: Tensor,
@@ -333,6 +333,10 @@ def flash_attention_fwd(
     Support sliding window, softcapping. Note that this kernel will not perform
     bound check for k,v.
     """
+
+    global _nv_cap
+    if _nv_cap is None:
+        _nv_cap = torch.cuda.get_device_capability()
 
     def grid(args):
         return (triton.cdiv(max_seqlen, args['BLOCK_M']), num_heads, batch)
@@ -367,6 +371,19 @@ def flash_attention_fwd(
 
     BLOCK_DK, BLOCK_DK1, BLOCK_DV = _get_block_d(head_dim_k, head_dim_v)
 
+    BLOCK_N = 32
+    if _nv_cap[0] < 8:
+        BLOCK_M = max(16, 8192 // BLOCK_DK)
+    else:
+        BLOCK_M = max(16, 16384 // BLOCK_DK)
+    num_warps = 4
+    num_stages = min(4, max(2, 1024 // BLOCK_DK))
+    if BLOCK_DK >= 512:
+        num_stages = 2
+    elif BLOCK_DK >= 256:
+        num_stages = 3
+    else:
+        num_stages = 4
     _flash_prefill_fwd_kernel[grid](
         q_states,
         k_states,
@@ -397,6 +414,10 @@ def flash_attention_fwd(
         BLOCK_DK=BLOCK_DK,
         BLOCK_DK1=BLOCK_DK1,
         BLOCK_DV=BLOCK_DV,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        num_warps=num_warps,
+        num_stages=num_stages,
     )
 
     return o_states
