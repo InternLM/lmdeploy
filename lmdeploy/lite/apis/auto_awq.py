@@ -106,6 +106,7 @@ def auto_awq(model: str,
         name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
         fcs.update(name2fc)
 
+    torch.cuda.empty_cache()
     if search_scale:
         awq_ratios = input_stats['ratios']
         act_scales = input_stats['absmean']
