@@ -10,6 +10,7 @@
 |        Llama2         |  7B - 70B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Llama3         |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Llama3.1        |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Llama3.2        |     3B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternLM        |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternLM2       |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM2.5      |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -20,7 +21,6 @@
 |         Qwen2         | 1.5B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Mistral        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 |        Qwen-VL        |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|       Qwen2-VL        | 2B, 7B, 72B | MLLM |    Yes    |   Yes   |   Yes   |   -   |
 |      DeepSeek-VL      |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan2       |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -49,6 +49,8 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |     Llama2     |  7B - 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |     Llama3     |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |    Llama3.1    |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|    Llama3.2    |   1B, 3B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|  Llama3.2-VL   |   8B, 90B   | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |    InternLM    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |   -   |
 |   InternLM2    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |  InternLM2.5   |     7B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
@@ -87,16 +89,16 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 
 ## PyTorchEngine 华为昇腾平台
 
-|     Model      |   Size   | Type | FP16/BF16 |
-| :------------: | :------: | :--: | :-------: |
-|     Llama2     | 7B - 70B | LLM  |    Yes    |
-|     Llama3     |    8B    | LLM  |    Yes    |
-|    Llama3.1    |    8B    | LLM  |    Yes    |
-|   InternLM2    | 7B - 20B | LLM  |    Yes    |
-|  InternLM2.5   | 7B - 20B | LLM  |    Yes    |
-|    Mixtral     |   8x7B   | LLM  |    Yes    |
-|  QWen1.5-MoE   |  A2.7B   | LLM  |    Yes    |
-|     QWen2      |    7B    | LLM  |    Yes    |
-|   QWen2-MoE    | A14.57B  | LLM  |    Yes    |
-| InternVL(v1.5) |  2B-26B  | MLLM |    Yes    |
-|   InternVL2    |  1B-40B  | MLLM |    Yes    |
+|     Model      |   Size   | Type | FP16/BF16 | W4A16 |
+| :------------: | :------: | :--: | :-------: | :---: |
+|     Llama2     | 7B - 70B | LLM  |    Yes    |  Yes  |
+|     Llama3     |    8B    | LLM  |    Yes    |  Yes  |
+|    Llama3.1    |    8B    | LLM  |    Yes    |  Yes  |
+|   InternLM2    | 7B - 20B | LLM  |    Yes    |  Yes  |
+|  InternLM2.5   | 7B - 20B | LLM  |    Yes    |  Yes  |
+|    Mixtral     |   8x7B   | LLM  |    Yes    |  No   |
+|  QWen1.5-MoE   |  A2.7B   | LLM  |    Yes    |  No   |
+|     QWen2      |    7B    | LLM  |    Yes    |  No   |
+|   QWen2-MoE    | A14.57B  | LLM  |    Yes    |  No   |
+| InternVL(v1.5) |  2B-26B  | MLLM |    Yes    |  Yes  |
+|   InternVL2    |  1B-40B  | MLLM |    Yes    |  Yes  |

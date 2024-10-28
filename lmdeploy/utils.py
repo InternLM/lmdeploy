@@ -265,7 +265,7 @@ def _get_and_verify_max_len(
         return max_model_len if max_model_len else session_len
 
     # vl configs hide session-len inside llm configs
-    llm_keys = ['language_config', 'llm_config']
+    llm_keys = ['language_config', 'llm_config', 'text_config']
     for key in llm_keys:
         hf_tm_config = getattr(hf_tm_config, key, hf_tm_config)
 
@@ -332,7 +332,7 @@ def get_max_batch_size(device_type: str):
     Args:
         device_type (str): the type of device
     """
-    assert device_type in ['cuda', 'ascend']
+    assert device_type in ['cuda', 'ascend', 'maca']
     if device_type == 'cuda':
         max_batch_size_map = {
             'a100': 256,
@@ -350,3 +350,42 @@ def get_max_batch_size(device_type: str):
         return 128
     elif device_type == 'ascend':
         return 16
+    elif device_type == 'maca':
+        return 128
+
+
+def is_bf16_supported(device_type: str = 'cuda'):
+    """Check if device support bfloat16.
+
+    Args:
+        device_type (str): the type of device
+    """
+
+    if device_type == 'cuda':
+        import torch
+        device = torch.cuda.current_device()
+
+        # Check for CUDA version and device compute capability.
+        # This is a fast way to check for it.
+        cuda_version = torch.version.cuda
+        if (cuda_version is not None and int(cuda_version.split('.')[0]) >= 11
+                and torch.cuda.get_device_properties(device).major >= 8):
+            return True
+        else:
+            return False
+    elif device_type == 'ascend':
+        # The following API doesn't work somehow in multi-npu devices. Due to
+        # the `ascend910` device's capability to support bfloat16, we are
+        # returning true as a workaround
+        return True
+        # import torch_npu
+        # device_name = torch_npu.npu.get_device_name(0)[:10]
+        # device_name = device_name.lower()
+        # if device_name.startwith('ascend910'):
+        #     return True
+        # else:
+        #     return False
+    elif device_type == 'maca':
+        return True
+    else:
+        return False

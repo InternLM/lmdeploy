@@ -63,7 +63,8 @@ class VLAsyncEngine(AsyncEngine):
 
         results = {}
         input_ids = []
-        from lmdeploy.vl.templates import Qwen2VLChatTemplateWrapper
+        from lmdeploy.vl.templates import (MllamaTempateWrapper,
+                                           Qwen2VLChatTemplateWrapper)
         ranges = None
         grid_thws = None
         if len(segs) > 1:
@@ -86,6 +87,17 @@ class VLAsyncEngine(AsyncEngine):
                               Qwen2VLChatTemplateWrapper):
                     grid_thws = [x['grid_thw'] for x in features]
                     features = [x['embeddings'] for x in features]
+
+                if isinstance(self.vl_prompt_template, MllamaTempateWrapper):
+                    # llama3.2 just encode <|image|> and inference
+                    decorated = decorated.replace(IMAGE_TOKEN, '<|image|>')
+                    input_ids = self.tokenizer.encode(decorated,
+                                                      add_bos=sequence_start)
+                    results['input_ids'] = input_ids
+                    results['prompt'] = decorated
+                    assert len(features)
+                    results['cross_attention_states'] = features[0]
+                    return results
 
             features = [x.cpu().numpy() for x in features]
             input_ids = []

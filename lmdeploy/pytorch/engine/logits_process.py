@@ -308,7 +308,6 @@ class FusedLogitsProcessor(LogitsWarper):
 
         """
         sampling_inputs = self.sampling_inputs
-        scores = scores.clone()
 
         custom_logits_processors = self.sampling_inputs.logits_processors
         if any(custom_logits_processors):
@@ -337,6 +336,7 @@ class FusedLogitsProcessor(LogitsWarper):
                                   guided_input_ids, self.tokenizer)
         return scores
 
+    @torch.inference_mode()
     def sampling(self, logits: torch.Tensor):
         """sampling."""
         sampling_inputs = self.sampling_inputs

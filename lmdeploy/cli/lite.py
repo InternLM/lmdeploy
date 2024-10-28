@@ -35,6 +35,11 @@ class SubCliLite(object):
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
+        parser.add_argument(
+            '--device',
+            type=str,
+            default='cuda',
+            help='Device for weight quantization (cuda or npu)')
         parser.add_argument('--w-bits',
                             type=int,
                             default=4,

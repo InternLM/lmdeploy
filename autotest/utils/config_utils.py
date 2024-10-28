@@ -6,10 +6,19 @@ from utils.get_run_config import get_tp_num
 
 
 def get_turbomind_model_list(tp_num: int = None,
-                             model_type: str = 'chat_model'):
+                             model_type: str = 'chat_model',
+                             quant_policy: int = None):
     config = get_config()
 
-    case_list = copy.deepcopy(config.get('turbomind_' + model_type))
+    if quant_policy is None:
+        case_list = copy.deepcopy(config.get('turbomind_' + model_type))
+    else:
+        case_list = [
+            x for x in config.get('turbomind_' + model_type)
+            if x not in config.get('turbomind_quatization').get(
+                'no_kvint' + str(quant_policy))
+        ]
+
     quatization_case_config = config.get('turbomind_quatization')
     for key in config.get('turbomind_' + model_type):
         if key not in quatization_case_config.get(
@@ -76,7 +85,9 @@ def get_torch_model_list(tp_num: int = None,
 def get_all_model_list(tp_num: int = None,
                        quant_policy: int = None,
                        model_type: str = 'chat_model'):
-    case_list = get_turbomind_model_list(tp_num=tp_num, model_type=model_type)
+    case_list = get_turbomind_model_list(tp_num=tp_num,
+                                         model_type=model_type,
+                                         quant_policy=quant_policy)
     for case in get_torch_model_list(tp_num=tp_num,
                                      quant_policy=quant_policy,
                                      model_type=model_type):
@@ -107,22 +118,26 @@ def get_quantization_model_list(type):
 
 def get_vl_model_list(tp_num: int = None, quant_policy: int = None):
     config = get_config()
-
     if quant_policy is None:
         case_list = copy.deepcopy(config.get('vl_model'))
     else:
         case_list = [
             x for x in config.get('vl_model')
-            if x in config.get('turbomind_chat_model') or (
-                x in config.get('pytorch_chat_model') and x not in config.get(
-                    'pytorch_quatization').get('no_kvint' + str(quant_policy)))
+            if (x in config.get('turbomind_chat_model') and x not in
+                config.get('turbomind_quatization').get('no_kvint' +
+                                                        str(quant_policy))) or
+            (x in config.get('pytorch_chat_model') and x not in config.get(
+                'pytorch_quatization').get('no_kvint' + str(quant_policy)))
         ]
 
     for key in config.get('vl_model'):
         if key in config.get('turbomind_chat_model') and key not in config.get(
-                'turbomind_quatization').get(
-                    'no_awq') and not is_quantization_model(
-                        key) and key + '-inner-4bits' not in case_list:
+                'turbomind_quatization'
+        ).get('no_awq') and not is_quantization_model(
+                key) and key + '-inner-4bits' not in case_list and (
+                    quant_policy is not None
+                    and key not in config.get('turbomind_quatization').get(
+                        'no_kvint' + str(quant_policy))):
             case_list.append(key + '-inner-4bits')
         if key in config.get('pytorch_chat_model') and key in config.get(
                 'pytorch_quatization'
@@ -132,7 +147,6 @@ def get_vl_model_list(tp_num: int = None, quant_policy: int = None):
                     and key not in config.get('pytorch_quatization').get(
                         'no_kvint' + str(quant_policy))):
             case_list.append(key + '-inner-4bits')
-
     if tp_num is not None:
         return [
             item for item in case_list if get_tp_num(config, item) == tp_num

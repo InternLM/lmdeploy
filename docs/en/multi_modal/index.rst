@@ -11,3 +11,4 @@ Vision-Language Models
    cogvlm.md
    minicpmv.md
    phi3.md
+   mllama.md

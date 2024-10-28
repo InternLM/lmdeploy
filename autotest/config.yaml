@@ -12,6 +12,7 @@ tp_config:
     Qwen-VL-Chat: 2
     llava-v1.5-13b: 2
     internlm2_5-20b-chat: 2
+    internlm2_5-20b: 2
     Meta-Llama-3-1-70B-Instruct: 4
     internlm2_5-7b-chat-1m: 4
     Qwen2-7B-Instruct-GPTQ-Int4: 2
@@ -89,6 +90,7 @@ pytorch_chat_model:
     - mistralai/Mistral-7B-Instruct-v0.1
     - mistralai/Mistral-7B-Instruct-v0.2
     - mistralai/Mixtral-8x7B-Instruct-v0.1
+    - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-7b-it
     - google/gemma-2-9b-it
     - deepseek-ai/deepseek-moe-16b-chat
@@ -151,6 +153,10 @@ turbomind_quatization:
         - codellama/CodeLlama-7b-Instruct-hf
     gptq:
         - internlm/internlm2_5-7b-chat
+    no_kvint4:
+        - openbmb/MiniCPM-V-2_6
+    no_kvint8:
+        - deepseek-ai/DeepSeek-V2-Lite-Chat
 
 pytorch_quatization:
     awq:
@@ -180,6 +186,7 @@ pytorch_quatization:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - microsoft/Phi-3-mini-4k-instruct
         - microsoft/Phi-3-vision-128k-instruct
+        - openbmb/MiniCPM-V-2_6
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
 

@@ -455,6 +455,10 @@ class AsyncEngine(LogitsMixin):
             prompt = chat_template.messages2prompt(prompt,
                                                    sequence_start,
                                                    tools=tools)
+        if prompt is None:
+            raise ValueError(
+                f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
+            )
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         return {'prompt': prompt, 'input_ids': input_ids}
 
@@ -497,6 +501,12 @@ class AsyncEngine(LogitsMixin):
         if gen_config.stop_token_ids is None:
             gen_config.stop_token_ids = self.stop_words
         if not gen_config.do_sample:
+            logger.warn(f'GenerationConfig: {gen_config}')
+            logger.warn(
+                'Since v0.6.0, lmdeploy add `do_sample` in '
+                'GenerationConfig. It defaults to False, meaning greedy '
+                'decoding. Please set `do_sample=True` if sampling '
+                ' decoding is needed')
             # greedy decode
             gen_config.top_k = 1
             # avoid unnecessary process

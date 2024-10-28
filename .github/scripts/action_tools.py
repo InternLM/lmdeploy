@@ -269,5 +269,30 @@ def generate_benchmark_report(report_path: str):
     _append_summary('## Benchmark Results End')
 
 
+def generate_csv_from_profile_result(file_path: str, out_path: str):
+    with open(file_path, 'r') as f:
+        data = f.readlines()
+        data = [json.loads(line) for line in data]
+
+        data_csv = []
+        for item in data:
+            row = [
+                item.get('request_rate'),
+                item.get('completed'),
+                round(item.get('completed') / item.get('duration'), 3),
+                round(item.get('median_ttft_ms'), 3),
+                round(item.get('output_throughput'), 3)
+            ]
+            data_csv.append(row)
+        import csv
+        with open(out_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'request_rate', 'completed', 'RPM', 'median_ttft_ms',
+                'output_throughput'
+            ])
+            writer.writerows(data_csv)
+
+
 if __name__ == '__main__':
     fire.Fire()
