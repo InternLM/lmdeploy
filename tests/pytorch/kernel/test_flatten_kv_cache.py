@@ -9,6 +9,10 @@ def _div_up(a, b):
 class TestFlattenKVCache:
 
     @pytest.fixture
+    def out_dtype(self):
+        yield torch.float16
+
+    @pytest.fixture
     def num_heads(self):
         yield 4
 
@@ -46,9 +50,9 @@ class TestFlattenKVCache:
 
     @pytest.fixture
     def k_caches(self, batch_size, max_num_blocks, block_size, num_heads,
-                 head_dim):
+                 head_dim, out_dtype):
         shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
-        yield torch.rand(shape).cuda()
+        yield torch.rand(shape, dtype=out_dtype, device='cuda')
 
     @pytest.fixture
     def v_caches(self, k_caches):
@@ -94,6 +98,85 @@ class TestFlattenKVCache:
                                               kv_seqlens,
                                               block_offsets,
                                               out_size=out_size)
-
         torch.testing.assert_close(k_states, gt[0])
         torch.testing.assert_close(v_states, gt[1])
+
+
+def precise_round(x: torch.Tensor):
+    return x.sign() * (x.abs() + 0.5).floor()
+
+
+def quant(kv: torch.Tensor, nbits: int = 8):
+    """Quant kv on the head_dim."""
+    amax = kv.amax(dim=-1, keepdim=True)
+    amin = kv.amin(dim=-1, keepdim=True)
+    scales = (amax - amin) / (2**nbits - 1)
+    zeros = -amin / scales
+    q_kv = precise_round((kv - amin) / scales).to(torch.uint8)
+    if nbits == 4:
+        q_kv1, q_kv2 = q_kv.split(q_kv.shape[-1] // 2, -1)
+        q_kv = q_kv1 + q_kv2 * 16
+    return q_kv, torch.cat([scales, zeros], dim=-1)
+
+
+class TestFlattenKVCacheQuant8(TestFlattenKVCache):
+
+    @pytest.fixture
+    def nbits(self):
+        yield 8
+
+    @pytest.fixture
+    def atol(self):
+        yield 4e-3
+
+    @pytest.fixture
+    def rtol(self):
+        yield 1e-5
+
+    @pytest.fixture
+    def k_quant(self, k_caches, nbits):
+        yield quant(k_caches, nbits)
+
+    @pytest.fixture
+    def v_quant(self, v_caches, nbits):
+        yield quant(v_caches, nbits)
+
+    def test_flatten_kv_cache(self, k_quant, v_quant, kv_seqlens,
+                              block_offsets, out_size, out_dtype, nbits, gt,
+                              atol, rtol):
+        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import \
+            flatten_kv_cache
+
+        k_caches, k_sz = k_quant
+        v_caches, v_sz = v_quant
+
+        k_sz = k_sz.to(out_dtype)
+        v_sz = v_sz.to(out_dtype)
+
+        k_states, v_states = flatten_kv_cache(k_caches,
+                                              v_caches,
+                                              kv_seqlens,
+                                              block_offsets,
+                                              out_size=out_size,
+                                              out_dtype=out_dtype,
+                                              k_scales_zeros=k_sz,
+                                              v_scales_zeros=v_sz,
+                                              quant_policy=nbits)
+
+        torch.testing.assert_close(k_states, gt[0], atol=atol, rtol=rtol)
+        torch.testing.assert_close(v_states, gt[1], atol=atol, rtol=rtol)
+
+
+class TestFlattenKVCacheQuant4(TestFlattenKVCacheQuant8):
+
+    @pytest.fixture
+    def nbits(self):
+        yield 4
+
+    @pytest.fixture
+    def atol(self):
+        yield 0.05
+
+    @pytest.fixture
+    def rtol(self):
+        yield 1e-3

@@ -137,15 +137,7 @@ configs = [
 # ]
 
 
-def keep(conf):
-    BLOCK_M = conf.kwargs['BLOCK_M']
-    BLOCK_N = conf.kwargs['BLOCK_N']
-    if BLOCK_M * BLOCK_N < 128 * 128 and conf.num_warps == 8:
-        return False
-    return True
-
-
-@triton.autotune(list(filter(keep, configs)),
+@triton.autotune(list(configs),
                  key=['head_dim_k', 'head_dim_v'],
                  warmup=10,
                  rep=25)
@@ -190,7 +182,7 @@ def _flash_prefill_fwd_kernel(
 
     q_seqlen = tl.load(q_seqlens_ptr + batch_id)
 
-    if BLOCK_M * start_m >= q_seqlen * kv_group_num:
+    if BLOCK_M * start_m >= q_seqlen:
         return
 
     kv_head_id = head_id // kv_group_num
@@ -199,7 +191,7 @@ def _flash_prefill_fwd_kernel(
     q_start_loc = tl.load(q_start_loc_ptr + batch_id).to(tl.int32)
     kv_start_loc = tl.load(kv_start_loc_ptr + batch_id).to(tl.int32)
 
-    history_len = kv_seqlen - q_seqlen + start_m * BLOCK_M
+    history_len = kv_seqlen - q_seqlen
 
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
 
@@ -211,14 +203,15 @@ def _flash_prefill_fwd_kernel(
         loop_start = start_block_id * BLOCK_N
         kv_start_loc += loop_start
 
-    q_ptrs = tl.make_block_ptr(
-        base=q_ptr + q_start_loc * stride_qs + head_id * stride_qh,
-        shape=(q_seqlen, head_dim_k),
-        strides=(stride_qs, stride_qd),
-        offsets=(start_m * BLOCK_M, 0),
-        block_shape=(BLOCK_M, BLOCK_DK),
-        order=(1, 0),
-    )
+    offs_dk = tl.arange(0, BLOCK_DK)
+    mask_dk = offs_dk < head_dim_k
+    offs_dk = tl.multiple_of(tl.max_contiguous(offs_dk % head_dim_k, BLOCK_DK),
+                             BLOCK_DK)
+    off_q = ((q_start_loc + offs_m[:, None]) * stride_qs +
+             head_id * stride_qh + offs_dk[None, :] * stride_qd)
+    q_ptrs = q_ptr + off_q
+    q = tl.load(q_ptrs, mask=(offs_m[:, None] < q_seqlen and mask_dk[None, :]))
+
     k_ptrs = tl.make_block_ptr(
         base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
         shape=(head_dim_k, kv_seqlen),
@@ -236,17 +229,16 @@ def _flash_prefill_fwd_kernel(
         order=(1, 0),
     )
 
-    q = tl.load(q_ptrs)
-
     if BLOCK_DK1 != 0:
-        q1_ptrs = tl.make_block_ptr(
-            base=q_ptr + q_start_loc * stride_qs + head_id * stride_qh,
-            shape=(q_seqlen, head_dim_k),
-            strides=(stride_qs, stride_qd),
-            offsets=(start_m * BLOCK_M, BLOCK_DK),
-            block_shape=(BLOCK_M, BLOCK_DK1),
-            order=(1, 0),
-        )
+        offs_dk1 = BLOCK_DK + tl.arange(0, BLOCK_DK1)
+        mask_dk1 = offs_dk1 < head_dim_k
+        offs_dk1 = tl.multiple_of(
+            tl.max_contiguous(offs_dk1 % head_dim_k, BLOCK_DK1), BLOCK_DK1)
+        offs_q1 = ((q_start_loc + offs_m[:, None]) * stride_qs +
+                   head_id * stride_qh + offs_dk1[None, :] * stride_qd)
+        q1_ptrs = q_ptr + offs_q1
+        q1 = tl.load(q1_ptrs,
+                     mask=(offs_m[:, None] < q_seqlen and mask_dk1[None, :]))
         k1_ptrs = tl.make_block_ptr(
             base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
             shape=(head_dim_k, kv_seqlen),
@@ -255,7 +247,6 @@ def _flash_prefill_fwd_kernel(
             block_shape=(BLOCK_DK1, BLOCK_N),
             order=(0, 1),
         )
-        q1 = tl.load(q1_ptrs)
     else:
         q1 = q
         k1_ptrs = k_ptrs
@@ -265,9 +256,9 @@ def _flash_prefill_fwd_kernel(
     acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
 
     qk_scale = sm_scale * tl.log2(math.e)
-    history_mask = history_len + tl.arange(0, BLOCK_M)
+    history_mask = history_len + start_m * BLOCK_M + tl.arange(0, BLOCK_M)
 
-    loop_end = history_len // BLOCK_N * BLOCK_N
+    loop_end = (history_len + start_m * BLOCK_M) // BLOCK_N * BLOCK_N
     acc, l_i, m_i = _prefill_fwd_inner(acc,
                                        l_i,
                                        m_i,
@@ -339,7 +330,8 @@ def flash_attention_fwd(
 ):
     """varlen flash Attention forward.
 
-    Support sliding window, softcapping.
+    Support sliding window, softcapping. Note that this kernel will not perform
+    bound check for k,v.
     """
 
     def grid(args):
