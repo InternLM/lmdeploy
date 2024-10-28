@@ -51,7 +51,7 @@ def _get_longrope_parameters(config: PretrainedConfig):
     params.short_factor = rope_scaling.long_factor
     params.original_max_position_embeddings = rope_scaling.get(
         'original_max_position_embeddings', config.max_position_embeddings)
-    return dict(emb_type=RopeType.Yarn,
+    return dict(emb_type=RopeType.LongRoPEScaling,
                 scaling_factor=scaling_factor,
                 longrope_params=params)
 
