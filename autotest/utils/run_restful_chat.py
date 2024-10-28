@@ -61,6 +61,8 @@ def start_restful_api(config, param, model, model_path, backend_type,
             cmd += ' --model-format gptq'
     if backend_type == 'pytorch':
         cmd += ' --backend pytorch'
+        if not is_bf16_supported():
+            cmd += ' --dtype float16'
     if 'llava' in model:
         cmd += ' --model-name vicuna'
     if 'quant_policy' in param.keys() and param['quant_policy'] is not None:

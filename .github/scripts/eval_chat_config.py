@@ -174,7 +174,6 @@ turbomind_llama2_7b_chat = dict(type=TurboMindModel,
                                 max_out_len=MAX_NEW_TOKENS,
                                 max_seq_len=MAX_SESSION_LEN,
                                 batch_size=128,
-                                concurrency=128,
                                 meta_template=llama2_meta_template,
                                 run_cfg=dict(num_gpus=1),
                                 end_str='[INST]')
