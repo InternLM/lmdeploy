@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 import torch
 
@@ -14,6 +14,8 @@ class AttentionMetadata:
     q_start_loc: torch.Tensor = None
     q_seqlens: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
+    fill_seqlens: torch.Tensor = None
+    quant_policy: Literal[0, 4, 8] = 0
 
 
 T = TypeVar('T', bound=AttentionMetadata)

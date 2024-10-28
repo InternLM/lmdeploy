@@ -1,50 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
-
-from .adapter.adapter import SchedulerAdapter
-
-
-@dataclass
-class AdapterInfo:
-    adapter_ids: torch.LongTensor
-    rank_offsets: torch.LongTensor
-
-    @classmethod
-    def from_adapters(cls, adapters: List[SchedulerAdapter]):
-        """from adapters."""
-        if len(adapters) == 0:
-            return None
-        adapter_ids = [ada.adapter_id for ada in adapters]
-        adapter_ids = torch.tensor(adapter_ids)
-        rank_offsets = [torch.from_numpy(ada.rank_offset) for ada in adapters]
-        rank_offsets = torch.stack(rank_offsets)
-
-        return cls(
-            adapter_ids=adapter_ids,
-            rank_offsets=rank_offsets,
-        )
-
-    def update_offsets(self, rank_offsets: torch.LongTensor):
-        """update rank offsets."""
-        rank_offsets[self.adapter_ids] = self.rank_offsets
-
-    def to_device(self, device: str):
-        """to device."""
-        out_dict = dict()
-        for f in fields(self):
-            k = f.name
-            v = getattr(self, k)
-            if isinstance(v, torch.Tensor):
-                v = v.to(device)
-            out_dict[k] = v
-
-        return AdapterInfo(**out_dict)
 
 
 @dataclass
@@ -157,9 +118,10 @@ class ModelInputs:
     is_decoding: bool
     num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
-    adapter_info: AdapterInfo = None
     vision_inputs: VisionModelInputs = None
     mrope_inputs: MRopeModelInputs = None
+    cross_attention_states: torch.Tensor = None
+    history_cross_kv_seqlens: torch.LongTensor = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -202,9 +164,9 @@ class ModelInputs:
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=self.local_adapter_ids,
-                adapter_info=self.adapter_info,
                 vision_inputs=self.vision_inputs,
                 mrope_inputs=self.mrope_inputs,
+                cross_attention_states=self.cross_attention_states,
             )
             ret.append(inp)
             block_start += num_blocks
@@ -220,8 +182,6 @@ class ModelInputs:
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
             elif isinstance(v, VisionModelInputs):
-                v = v.to_device(device)
-            elif isinstance(v, AdapterInfo):
                 v = v.to_device(device)
             elif isinstance(v, MRopeModelInputs):
                 v = v.to_device(device)
@@ -248,12 +208,15 @@ class StepContext:
     is_decoding: bool
     world_size: int = 1
     local_adapter_ids: torch.LongTensor = None
-    adapter_params: Dict[str, AdapterInfo] = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
     vision_inputs: VisionModelInputs = None
     mrope_position_ids: torch.Tensor = None
     attn_metadata: Any = None
+    cross_attn_metadata: Any = None
+    cross_attention_states: torch.Tensor = None
+    cross_kv_seqlens: torch.LongTensor = None
+    kv_quant_policy: Literal[0, 4, 8] = 0
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -263,6 +226,7 @@ class StepContext:
         inputs: ModelInputs,
         world_size: int = 1,
         kv_caches: List = None,
+        kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """build step context.
 
@@ -288,9 +252,11 @@ class StepContext:
                 history_seqlens, q_seqlens)
 
         # kv_seqlens
+        cross_attention_states = inputs.cross_attention_states
         if inputs.is_decoding:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
             position_ids = history_seqlens.unsqueeze(-1)
+            cross_attention_states = None
         else:
             max_q_seqlen = q_seqlens.max().item()
             mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
@@ -321,6 +287,9 @@ class StepContext:
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             mrope_position_ids=mrope_position_ids,
+            cross_attention_states=cross_attention_states,
+            cross_kv_seqlens=inputs.history_cross_kv_seqlens,
+            kv_quant_policy=kv_quant_policy,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -351,12 +320,14 @@ class StepContextManager:
         inputs: ModelInputs,
         world_size: int = 1,
         kv_caches: List = None,
+        kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """build context."""
         return StepContext.new(
             inputs,
             world_size,
             kv_caches,
+            kv_quant_policy,
         )
 
     @contextmanager

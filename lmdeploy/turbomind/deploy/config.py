@@ -38,7 +38,7 @@ class ModelConfig:
     num_layer: int = None
     inter_size: int = None
     norm_eps: float = None
-    attn_bias: int = None
+    attn_bias: int = 0
     start_id: int = None
     end_id: int = None
     size_per_head: int = 128
@@ -47,6 +47,16 @@ class ModelConfig:
     session_len: int = None
     tp: int = 1
     model_format: str = 'hf'
+    expert_num: int = 0
+    expert_inter_size: int = 0
+    experts_per_token: int = 0
+
+    def verify(self):
+        invalid = {}
+        for k, v in self.__dict__.items():
+            if v is None:
+                invalid[k] = v
+        assert not invalid, f'incomplete model config: {invalid}'
 
 
 @dataclass
@@ -137,6 +147,10 @@ class TurbomindModelConfig:
     @property
     def group_size(self):
         return self.model_config.group_size
+
+    @property
+    def vocab_size(self):
+        return self.model_config.vocab_size
 
     def __str__(self):
         return json.dumps(self.to_dict(), indent=2)

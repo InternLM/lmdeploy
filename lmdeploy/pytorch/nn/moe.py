@@ -5,8 +5,9 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch.distributed import get_world_rank
+
 from ..backends import OpType, get_backend
-from .utils import get_world_rank
 
 
 class SoftmaxTopK(nn.Module):

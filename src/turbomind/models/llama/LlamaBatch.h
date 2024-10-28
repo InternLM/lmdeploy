@@ -143,6 +143,8 @@ public:
         return session_len_;
     }
 
+    void tune();
+
 private:
     void InternalThreadEntry();
 

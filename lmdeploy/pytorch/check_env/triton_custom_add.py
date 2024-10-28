@@ -23,3 +23,11 @@ def custom_add(a, b):
     grid = (triton.cdiv(size, BLOCK), )
     _add_kernel[grid](a, b, c, size, BLOCK=BLOCK)
     return c
+
+
+if __name__ == '__main__':
+    a = torch.tensor([1, 2], device='cuda')
+    b = a.new_tensor([3, 4], device='cuda')
+    c = custom_add(a, b)
+    torch.testing.assert_close(c, a + b)
+    print('Done.')

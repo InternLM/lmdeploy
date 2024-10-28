@@ -114,6 +114,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Llama2 (7B - 70B)</li>
   <li>Llama3 (8B, 70B)</li>
   <li>Llama3.1 (8B, 70B)</li>
+  <li>Llama3.2 (1B, 3B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM2.5 (7B)</li>
@@ -197,6 +198,10 @@ print(response)
 > デフォルトでは、LMDeployはHuggingFaceからモデルをダウンロードします。ModelScopeからモデルを使用する場合は、`pip install modelscope`コマンドでModelScopeをインストールし、環境変数を設定してください：
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
+>
+> openMind Hubからモデルを使用する場合は、`pip install openmind_hub`コマンドでopenMind Hubをインストールし、環境変数を設定してください：
+>
+> `export LMDEPLOY_USE_OPENMIND_HUB=True`
 
 推論パイプラインに関する詳細情報は[こちら](./docs/en/llm/pipeline.md)を参照してください。
 

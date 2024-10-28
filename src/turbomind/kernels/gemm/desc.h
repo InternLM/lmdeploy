@@ -4,6 +4,7 @@
 
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include <array>
 
 namespace turbomind::gemm {
 
@@ -16,6 +17,9 @@ struct GemmDesc {
     Order     order_a;
     Order     order_b;
     Order     order_c;
+    Striding  striding_a;
+    Striding  striding_b;
+    Striding  striding_c;
     Pack      pack_a;
     Pack      pack_b;
     Pack      pack_u;
@@ -23,10 +27,12 @@ struct GemmDesc {
     QuantDesc quant_a;
     QuantDesc quant_b;
     Epilogue  epilogue;
+    int       batch_dim;
+    int       sched;
     int       m;
     int       n;
     int       k;
-    int       batch_dim;
+    int       num;
 };
 
 enum class OpClass
@@ -60,6 +66,9 @@ struct KernelDesc {
     Order     order_a;
     Order     order_b;
     Order     order_c;
+    Striding  striding_a;
+    Striding  striding_b;
+    Striding  striding_c;
     Pack      pack_a;
     Pack      pack_b;
     Pack      pack_u;
@@ -74,6 +83,7 @@ struct KernelDesc {
     int2      c_tile;
     int       stages;
     bool      split_k;
+    int       sched;
 
     // set by `KernelImpl`
     int                max_active_ctas;
@@ -85,8 +95,9 @@ struct LaunchSpec {
     Kernel* kernel;
     int     swizzle;
     int     splits;
-    float   estimated;
     float   measured;
+
+    std::array<int64_t, 2> estimated;
 };
 
 }  // namespace turbomind::gemm

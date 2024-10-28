@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.kernels import apply_rotary_pos_emb
+from lmdeploy.utils import is_bf16_supported
 
 
 def _rotate_half(x):
@@ -9,6 +10,11 @@ def _rotate_half(x):
     x1 = x[..., :x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2:]
     return torch.cat((-x2, x1), dim=-1)
+
+
+def _bf16_mark():
+    return pytest.mark.skipif(not is_bf16_supported(),
+                              reason='bf16 not supported.')
 
 
 class TestApplyRotary:
@@ -87,8 +93,10 @@ class TestApplyRotary:
 
         yield q_embed, k_embed
 
-    @pytest.mark.parametrize('dtype',
-                             [torch.bfloat16, torch.float16, torch.float32],
+    @pytest.mark.parametrize('dtype', [
+        pytest.param(torch.bfloat16, marks=_bf16_mark()), torch.float16,
+        torch.float32
+    ],
                              indirect=True)
     @pytest.mark.parametrize(('num_heads_q', 'num_heads_k'), [(8, 8), (8, 4)],
                              indirect=True)

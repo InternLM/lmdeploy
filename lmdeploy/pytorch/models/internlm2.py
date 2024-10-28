@@ -12,6 +12,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class InternLM2Attention(nn.Module):
     """Rewrite module of InternLM2Attention."""
@@ -91,6 +93,10 @@ class InternLM2Attention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
+            k_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -304,7 +310,7 @@ class InternLM2Model(nn.Module):
         return self.tok_embeddings
 
 
-class InternLM2ForCausalLM(nn.Module):
+class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
     """rewrote model of InternLM2ForCausalLM."""
 
     packed_modules_mapping = {
@@ -348,9 +354,11 @@ class InternLM2ForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+        return hidden_states
 
-        logits = self.output(hidden_states)
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.output(hidden_states)
 
     def support_cuda_graph(
         self,

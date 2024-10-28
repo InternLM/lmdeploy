@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
                                  SiluAndMul, build_rotary_embedding)
@@ -15,18 +16,7 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
 from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-
-def get_world_rank():
-    """get current world size and rank."""
-    import torch.distributed as dist
-    world_size = 1
-    rank = 0
-
-    if dist.is_initialized():
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-
-    return world_size, rank
+from .utils.cudagraph import CudaGraphMixin
 
 
 class Qwen2MoeAttention(nn.Module):
@@ -109,6 +99,10 @@ class Qwen2MoeAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
+            k_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -412,10 +406,8 @@ class Qwen2MoeModel(nn.Module):
         return self.embed_tokens
 
 
-class Qwen2MoeForCausalLM(nn.Module):
+class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
     """ModelForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'qkv_proj': [
@@ -463,10 +455,11 @@ class Qwen2MoeForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+        return hidden_states
 
-        logits = self.lm_head(hidden_states)
-        logits = logits.float()
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """get input embeddings."""

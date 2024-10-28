@@ -13,23 +13,21 @@ from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
 from lmdeploy.utils import (get_logger, get_max_batch_size, get_model,
                             logging_timer)
 
-from ..adapter.adapter import AdapterManager, SchedulerAdapter
+from ..adapter.adapter import AdapterManager
 from ..check_env import check_adapters, check_env, check_model
 from ..config import BackendConfig, CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
 from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
-from ..model_inputs import (AdapterInfo, ModelInputs, MRopeModelInputs,
-                            VisionModelInputs)
+from ..model_inputs import ModelInputs, MRopeModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
-from .model_agent import AutoModelAgent, build_model_agent
+from .model_agent import build_model_agent
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
 
 SeqList = List[SchedulerSequence]
-AdapterList = List[SchedulerAdapter]
 
 _EMPTY_TOKEN = np.empty((0, ), dtype=np.int64)
 
@@ -57,33 +55,12 @@ class InferOutput:
     logits: torch.Tensor = None
 
 
-def _paging_adapters(adapters: dict, model_agent: AutoModelAgent,
-                     scheduler: Scheduler):
-    adapters = adapters or dict()
-    weight_maps = []
-    adapter_manager = scheduler.adapter_manager
-    non_adapter = adapter_manager.get_adapter(None)
-    weight_maps.append(non_adapter.build_weight_map())
-    for name in adapters:
-        weight_map = scheduler.add_adapter(name)
-        weight_map.rank_offset = torch.tensor(weight_map.rank_offset)
-        weight_maps.append(weight_map)
-    model_agent.paging_adapters(weight_maps)
-
-
 def _tensorlize_block_offsets(block_offsets):
     """tensorlize block_offsets."""
     from torch.nn.utils.rnn import pad_sequence
     block_offsets = [torch.from_numpy(off) for off in block_offsets]
     block_offsets = pad_sequence(block_offsets, batch_first=True)
     return block_offsets
-
-
-def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
-    """get adapter ids."""
-    adapter_names_map = dict((ada.name, ada.adapter_id) for ada in adapters)
-    adapter_ids = [adapter_names_map[seq.adapter_name] for seq in seqs]
-    return adapter_ids
 
 
 def _check_finish(scheduler: Scheduler, current_iter: int):
@@ -119,14 +96,16 @@ class Engine:
         else:
             engine_config = copy.deepcopy(engine_config)
         check_env(engine_config.device_type)
-        check_model(model_path, trust_remote_code)
+        check_model(model_path, trust_remote_code, engine_config.dtype,
+                    engine_config.device_type)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(
                 engine_config.device_type)
+        adapters = engine_config.adapters
+        if adapters is not None:
+            check_adapters(list(adapters.values()))
         assert engine_config.max_batch_size > 0, 'max_batch_size should be' \
             f' greater than 0, but got {engine_config.max_batch_size}'
-        if engine_config.adapters is not None:
-            check_adapters(list(engine_config.adapters.values()))
         assert engine_config.dtype in ['auto', 'float16', 'bfloat16'], \
             f'unsupported specified data type {engine_config.dtype}'
 
@@ -142,7 +121,6 @@ class Engine:
             prefill_interval=engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
-        adapters = engine_config.adapters
         cache_config = CacheConfig(
             max_batches=engine_config.max_batch_size,
             block_size=engine_config.block_size,
@@ -151,12 +129,16 @@ class Engine:
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
             enable_prefix_caching=engine_config.enable_prefix_caching,
+            quant_policy=engine_config.quant_policy,
         )
 
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,
                                    engine_config.revision)
         self.model_path = model_path
+
+        if adapters is not None and len(adapters) > 0:
+            adapters = self._download_adapters(adapters, engine_config)
 
         backend_config = BackendConfig(
             eager_mode=engine_config.eager_mode,
@@ -176,18 +158,12 @@ class Engine:
 
         cache_config = self.model_agent.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
-        self.scheduler = Scheduler(scheduler_config, cache_config,
-                                   self.adapter_manager)
-
-        if adapters:
-            _paging_adapters(adapters,
-                             model_agent=self.model_agent,
-                             scheduler=self.scheduler)
+        self.scheduler = Scheduler(scheduler_config, cache_config)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
-        self.stream = torch.cuda.Stream()
+        self.stream = self.model_agent.stream
 
         self.req_manager = self._bind_request_manager()
 
@@ -232,6 +208,23 @@ class Engine:
             self._tokenizer = Tokenizer(self.model_path)
         return self._tokenizer
 
+    def _download_adapters(self, adapters: Dict[str, str],
+                           engine_config: PytorchEngineConfig):
+        """download adapters."""
+        download_dir = engine_config.download_dir
+        revision = engine_config.revision
+        new_adapters = dict()
+        for name, path in adapters.items():
+            if os.path.exists(path):
+                new_adapters[name] = path
+                continue
+            new_path = get_model(path,
+                                 download_dir=download_dir,
+                                 revision=revision)
+            new_adapters[name] = new_path
+
+        return new_adapters
+
     def _create_buffers(self):
         max_batches = self.scheduler_config.max_batches
 
@@ -239,12 +232,7 @@ class Engine:
         self._seq_length_buf = torch.ones(max_batches, dtype=torch.long)
 
     def _build_adapter_manager(self, adapters):
-        if adapters is not None and len(adapters) > 0:
-            linear_infos = self.model_agent.get_lora_target_info()
-        else:
-            linear_infos = dict()
-        block_numel = self.model_agent.get_block_numel()
-        return AdapterManager(adapters, linear_infos, block_numel)
+        return AdapterManager(adapters)
 
     def _bind_request_manager(self):
         """bind request manager."""
@@ -354,6 +342,8 @@ class Engine:
                     input_embeddings=req.data.get('input_embeddings'),
                     mrope_position_ids=req.data.get('mrope_position_ids'),
                     mrope_position_delta=req.data.get('mrope_position_delta'),
+                    cross_attention_states=req.data.get(
+                        'cross_attention_states'),
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_bad_words(msg)
@@ -362,7 +352,8 @@ class Engine:
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(req.data['token_ids'],
-                                     req.data.get('input_embeddings'))
+                                     req.data.get('input_embeddings'),
+                                     req.data.get('cross_attention_states'))
                 msg.num_new_tokens = 0
                 msg.sampling_param = req.data['sampling_param']
                 msg.return_logits = req.data.get('return_logits', False)
@@ -383,13 +374,11 @@ class Engine:
         return self.tp
 
     @logging_timer('CreateModelInputs', logger)
-    def create_model_inputs(self, messages: SeqList, adapters: AdapterList,
-                            is_prefill: bool):
+    def create_model_inputs(self, messages: SeqList, is_prefill: bool):
         """create model inputs from messages.
 
         Args:
             messages (SeqList): The input messages.
-            adapters (AdapterList): Adapters.
         """
         history_lengths = [msg.history_len for msg in messages]
         history_lengths = torch.tensor(history_lengths)
@@ -415,11 +404,11 @@ class Engine:
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
         local_adapter_ids = None
-        adapter_info = None
         if self.adapter_manager.num_adapters() > 1:
-            local_adapter_ids = _get_adapter_ids(messages, adapters)
+            adapter_names = [msg.adapter_name for msg in messages]
+            local_adapter_ids = self.adapter_manager.get_adapter_ids(
+                adapter_names)
             local_adapter_ids = seq_length.new_tensor(local_adapter_ids)
-            adapter_info = AdapterInfo.from_adapters(adapters)
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
@@ -498,6 +487,16 @@ class Engine:
                 input_embedding_indexing=input_embedding_indexing,
                 input_embedding_ranges=input_embedding_ranges)
 
+        # only for mllama
+        cross_attention_states = None
+        history_cross_kv_seqlens = None
+        if any([msg.cross_attention_states is not None for msg in messages]):
+            cross_attention_states = [
+                msg.cross_attention_states for msg in messages
+            ]
+        history_cross_kv_seqlens = torch.tensor(
+            [msg.history_cross_kv_seqlens for msg in messages])
+
         return ModelInputs(
             input_ids=input_ids,
             seq_length=seq_length,
@@ -506,9 +505,10 @@ class Engine:
             is_decoding=is_decoding,
             num_ignored_history=num_ignored_history,
             local_adapter_ids=local_adapter_ids,
-            adapter_info=adapter_info,
             vision_inputs=vision_embedding_inputs,
             mrope_inputs=mrope_inputs,
+            cross_attention_states=cross_attention_states,
+            history_cross_kv_seqlens=history_cross_kv_seqlens,
         )
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,
@@ -542,7 +542,7 @@ class Engine:
             last_idx = seq_length.cumsum(-1) - 1
             return logits[last_idx, :]
 
-        split_logits = __get_last_logits().cuda()
+        split_logits = __get_last_logits()
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos,
                                                 self.tokenizer.model.model)
         logits = logits_processor(all_ids, guided_input_ids, split_logits)
@@ -577,41 +577,41 @@ class Engine:
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
 
-        class _LogitsGather:
-            """logits gather."""
+        class _OutputGather:
+            """output gather."""
 
             def __init__(self, max_seq_len):
                 self._max_seq_len = max_seq_len
                 self._start = 0
-                self._out_logits = None
+                self._output = None
 
             def gather(self, output):
                 """gather."""
-                logits = output['logits']
+                tmp_output = output['hidden_states']
 
                 if not return_logits:
-                    self._out_logits = logits
+                    self._output = tmp_output
                     return
 
-                out_logits = self._out_logits
+                out_logits = self._output
                 start = self._start
-                seq_len = logits.size(-2)
+                seq_len = tmp_output.size(-2)
                 if out_logits is None:
-                    out_logits = logits.new_empty(1,
-                                                  self._max_seq_len,
-                                                  logits.size(-1),
-                                                  device='cpu')
-                out_logits[:, start:start + seq_len].copy_(logits,
+                    out_logits = tmp_output.new_empty(1,
+                                                      self._max_seq_len,
+                                                      tmp_output.size(-1),
+                                                      device='cpu')
+                out_logits[:, start:start + seq_len].copy_(tmp_output,
                                                            non_blocking=True)
                 self._start = start + seq_len
-                self._out_logits = out_logits
+                self._output = out_logits
 
-            def get_logits(self):
-                """get logits."""
+            def get_output(self):
+                """get tmp_output."""
                 if not return_logits:
-                    return self._out_logits[:, -1:]
+                    return self._output[:, -1:]
                 torch.cuda.synchronize()
-                return self._out_logits
+                return self._output
 
         async def __forward(inputs):
             """forward."""
@@ -634,26 +634,29 @@ class Engine:
             new_inputs = inputs.split(max_prefill_token_num,
                                       self.cache_config.block_size)
 
-            logits_gather = _LogitsGather(max_seq_len)
+            output_gather = _OutputGather(max_seq_len)
             for inp in new_inputs:
                 tmp_out = await __forward(inp)
-                logits_gather.gather(tmp_out)
-                tmp_out.pop('logits', None)
-            tmp_out['logits'] = logits_gather.get_logits()
+                output_gather.gather(tmp_out)
+                tmp_out.pop('hidden_states', None)
+            tmp_out['hidden_states'] = output_gather.get_output()
             return tmp_out
 
         if inputs.input_ids.numel() <= max_prefill_token_num:
             ret = await __forward(inputs)
             if not return_logits and not inputs.is_decoding:
                 last_token_loc = inputs.seq_length.cumsum(0) - 1
-                ret['logits'] = ret['logits'][:, last_token_loc]
-            return ret
+                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
         else:
             ret = await __long_context_single_forward(inputs)
             if not return_logits and not inputs.is_decoding:
                 last_token_loc = [-1]
-                ret['logits'] = ret['logits'][:, last_token_loc]
-            return ret
+                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
+
+        hidden_states = ret.pop('hidden_states')
+        logits = self.model_agent.get_logits(hidden_states)
+        ret['logits'] = logits
+        return ret
 
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor,
                             logits: torch.Tensor, stopped: torch.Tensor):
@@ -848,7 +851,6 @@ class Engine:
             is_prefill, scheduler_output = await in_que.get()
             try:
                 running = scheduler_output.running
-                adapters = scheduler_output.adapters
                 swap_in_map = scheduler_output.swap_in_map
                 swap_out_map = scheduler_output.swap_out_map
                 prefill_interval = self.scheduler_config.prefill_interval
@@ -856,8 +858,7 @@ class Engine:
                 assert len(running) > 0
 
                 # create inputs
-                inputs = self.create_model_inputs(running, adapters,
-                                                  is_prefill)
+                inputs = self.create_model_inputs(running, is_prefill)
                 sampling_inputs = SamplingInputs.from_sampling_params(running)
                 all_ids = __gather_all_ids(running, sampling_inputs)
                 guided_input_ids = __gather_guided_input_ids(
@@ -1046,34 +1047,3 @@ class Engine:
     def end(self, session_id: int):
         """Add new session."""
         return self.engine_instance.end(session_id)
-
-    def decode(self,
-               input_ids,
-               input_embeddings: List[InputEmbeddingType] = None,
-               input_embedding_ranges: List[InputEmbeddingRangeType] = None,
-               steps: List[int] = None,
-               sequence_start: bool = True,
-               sequence_end: bool = True,
-               adapter_names: List[str] = None):
-        """Perform context decode on input tokens.
-
-        Args:
-            input_ids (List[List[int]] | List[np.ndaray]): the batch of input
-                 token ids
-            steps (List[int]): the offset of the k/v cache
-            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
-                embeddings features
-            input_embedding_ranges: (List[List[Tuple[int, int]]]):
-                the begin/end offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-            adapter_names (List[str]): The name of the adapters.
-        """
-        return self.engine_instance.decode(
-            input_ids,
-            input_embeddings=input_embeddings,
-            input_embedding_ranges=input_embedding_ranges,
-            steps=steps,
-            sequence_start=sequence_start,
-            sequence_end=sequence_end,
-            adapter_names=adapter_names)

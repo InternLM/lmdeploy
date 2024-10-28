@@ -772,7 +772,7 @@ class Llama3(BaseChatTemplate):
             return 'llama3'
 
 
-@MODELS.register_module(name='llama3_1')
+@MODELS.register_module(name=['llama3_1', 'llama3_2'])
 class Llama3_1(Llama3):
     """Chat template of LLaMA3.1 model."""
 
@@ -838,10 +838,12 @@ Reminder:
             return self.get_prompt(messages, sequence_start)
         box_map = dict(user=self.user,
                        ipython=self.ipython,
+                       tool=self.ipython,
                        assistant=self.assistant,
                        system=self.system)
         eox_map = dict(user=self.eoh,
                        ipython=self.eoi,
+                       tool=self.eoi,
                        assistant=self.eoa + self.separator,
                        system=self.eosys)
         ret = ''
@@ -883,6 +885,9 @@ Reminder:
         """
         if 'llama-3.1-' in model_path.lower(
         ) or 'llama3.1-' in model_path.lower():
+            return 'llama3_1'
+        if 'llama-3.2-' in model_path.lower(
+        ) or 'llama3.2-' in model_path.lower():
             return 'llama3_1'
 
 

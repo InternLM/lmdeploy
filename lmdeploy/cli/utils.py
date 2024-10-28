@@ -367,7 +367,7 @@ class ArgumentHelper:
     @staticmethod
     def device(parser,
                default: str = 'cuda',
-               choices: List[str] = ['cuda', 'ascend']):
+               choices: List[str] = ['cuda', 'ascend', 'maca']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',
@@ -487,3 +487,21 @@ class ArgumentHelper:
             default=None,
             help='Max number of prompt characters or prompt tokens being'
             'printed in log. Default: Unlimited')
+
+    @staticmethod
+    def disable_fastapi_docs(parser):
+        return parser.add_argument('--disable-fastapi-docs',
+                                   action='store_true',
+                                   default=False,
+                                   help="Disable FastAPI's OpenAPI schema,"
+                                   ' Swagger UI, and ReDoc endpoint')
+
+    @staticmethod
+    def eager_mode(parser):
+        """Add argument eager_mode to parser."""
+
+        return parser.add_argument('--eager-mode',
+                                   action='store_true',
+                                   default=False,
+                                   help='Whether to enable eager mode. '
+                                   'If True, cuda graph would be disabled')

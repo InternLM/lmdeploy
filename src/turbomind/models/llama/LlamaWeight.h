@@ -40,6 +40,7 @@ struct LlamaWeight {
                 WeightType weight_type,
                 int        group_size,
                 LoraParam  lora_param,
+                MoeParam   moe_param,
                 size_t     tensor_para_size,
                 size_t     tensor_para_rank);
 

@@ -32,9 +32,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.RMSNorm:
             from .norm import TritonRMSNormBuilder
             return TritonRMSNormBuilder
-        elif layer_type == OpType.SLoRA:
-            from .slora import TritonSLoRABuilder
-            return TritonSLoRABuilder
+        elif layer_type == OpType.LoRA:
+            from .lora import TritonLoRABuilder
+            return TritonLoRABuilder
         elif layer_type == OpType.LinearW8A8:
             from .qmodules import TritonLinearW8A8Builder
             return TritonLinearW8A8Builder
@@ -110,9 +110,28 @@ class CudaOpsBackend(DefaultOpsBackend):
             q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
             kv_seqlens=step_context.kv_seqlens,
+            quant_policy=step_context.kv_quant_policy,
+        )
+
+        cross_attn_metadata = None
+        fill_seqlens = None
+        if step_context.cross_attention_states is not None:
+            fill_seqlens = torch.zeros_like(q_seqlens)
+            for idx, state in enumerate(step_context.cross_attention_states):
+                if state is not None:
+                    fill_seqlens[idx] = state.shape[-2]
+        cross_attn_metadata = attn_meta_cls(
+            step_context.is_decoding,
+            step_context.block_offsets,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seqlens,
+            kv_seqlens=step_context.cross_kv_seqlens,
+            fill_seqlens=fill_seqlens,
+            quant_policy=step_context.kv_quant_policy,
         )
 
         step_context.attn_metadata = attn_metadata
+        step_context.cross_attn_metadata = cross_attn_metadata
         return step_context
 
     @staticmethod

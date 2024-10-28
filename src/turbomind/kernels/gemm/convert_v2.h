@@ -2,9 +2,11 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/cp_async.h"
 #include "src/turbomind/kernels/gemm/iterator_sm70.h"
+#include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -27,7 +29,7 @@ struct ConvertOperand {
     static constexpr int M = M_;
     static constexpr int K = K_;
 
-    using Operand = MakeOperand<Operand_, IteratorSm70<cache_policy::Default>, M_, K_, 1>;
+    using Operand = MakeOperand<Operand_, IteratorSm70<Striding::kFlat, cache_policy::Default>, M_, K_, 1>;
 
     using Ts         = typename Operand::Dtype;
     using SmemLayout = typename Operand::SmemLayout;
@@ -49,12 +51,10 @@ struct ConvertOperand {
     using PtrD = get_pointer_type<Td>;
 
     struct Param {
-        int       m;
-        int       k;
-        const Ts* src;
-        int       lds;
-        PtrD      dst;
-        int       ldd;
+        int         m;
+        int         k;
+        MatrixParam src;
+        MatrixParam dst;
     };
 
     using SharedStorage = Array<Ts, SmemLayout::kSize>;
@@ -114,24 +114,33 @@ struct ConvertOperand {
         const int cta_offset_k = (cta_cnt_k - 1) * K;
         const int residue_k    = min(K, param.k - cta_offset_k);
 
+        const auto mat_S = resolve<Ts, Striding::kFlat>(param.src, 0);
+        const auto mat_D = resolve<Td, Striding::kFlat>(param.dst, 0);
+
         // Handle residue k first
-        GmemIter gmem{(Ts*)param.src, param.lds, {cta_offset_m, cta_offset_k}, {residue_m, residue_k}};
+        GmemIter gmem{mat_S, {cta_offset_m, cta_offset_k}, {residue_m, residue_k}};
 
         gmem.smem_data_ = smem;
         gmem.ClearSmem();
 
         __syncthreads();
 
-        gmem.Prefetch(true);
+        // gmem.Prefetch(true);
+
+        typename GmemIter::Fragments fragments{};
+        gmem.Fetch(fragments, true);
+        gmem.Store(fragments);
 
         // Rest full k tiles
-        gmem            = GmemIter{(Ts*)param.src, param.lds, {cta_offset_m, 0}, {residue_m, K}};
+        gmem            = GmemIter{mat_S, {cta_offset_m, 0}, {residue_m, K}};
         gmem.smem_data_ = smem;
 
         SmemCopy smem_copy({warp_offset_m, 0});
 
         // last, 0, 1, 2, 3, ..., last - 1
         int cta_idx_k = cta_cnt_k - 1;
+
+        get_pointer_type<Td> mat_D_ptr{(Td*)mat_D.ptr.ptr};
 
         for (int k_stage = 0; k_stage < cta_cnt_k; ++k_stage) {
             __syncthreads();
@@ -159,7 +168,7 @@ struct ConvertOperand {
                     auto [unique_id, repeat_id] = Atom::unique(threadIdx.x, pack_index);
 
                     // Store in [pack_id, lane_id], static cast is needed to decay SubBytePtr<T> to T*
-                    auto dst_ptr = static_cast<Td*>(param.dst + unique_id * kPackSize);
+                    auto dst_ptr = static_cast<Td*>(mat_D_ptr + unique_id * kPackSize);
 
                     if (pack_idx_m < pack_cnt_m && pack_idx_k < pack_cnt_k && repeat_id == 0) {
                         Store(dst_ptr, packed);
@@ -173,7 +182,9 @@ struct ConvertOperand {
                 break;
             }
 
-            gmem.Prefetch(true);
+            // gmem.Prefetch(true);
+            gmem.Fetch(fragments, true);
+            gmem.Store(fragments);
             gmem.Advance();
 
             cta_idx_k = k_stage;

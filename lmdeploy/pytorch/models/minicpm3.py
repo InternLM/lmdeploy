@@ -3,10 +3,10 @@ import math
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
-import torch.distributed as dist
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (Attention, RMSNorm, RopeType, SiluAndMul,
                                  build_rotary_embedding)
@@ -16,6 +16,8 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
 from lmdeploy.pytorch.nn.rotary_embedding import (ApplyRotaryEmb,
                                                   LongRoPEScalingParameters)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+
+from .utils.cudagraph import CudaGraphMixin
 
 
 # TODO use MLA of pytorch engine
@@ -116,9 +118,7 @@ class MiniCPMAttention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        world_size = 1
-        if dist.is_initialized():
-            world_size = dist.get_world_size()
+        world_size, _ = get_world_rank()
         num_heads = self.num_heads // world_size
         bsz, q_len, _ = hidden_states.size()
 
@@ -392,10 +392,8 @@ class MiniCPM3Model(nn.Module):
         return self.embed_tokens
 
 
-class MiniCPM3ForCausalLM(nn.Module):
+class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
     """rewrote model of MiniCPM3ForCausalLM."""
-
-    support_cuda_graph = True
 
     packed_modules_mapping = {
         'gate_up_proj': [

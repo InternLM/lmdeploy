@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response,
-                               TurbomindEngineConfig)
+                               ResponseType, TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.utils import LogitsMixin, _get_event_loop
 from lmdeploy.tokenizer import DetokenizeState
@@ -46,7 +46,7 @@ class GenOut:
     history_token_len: int
     input_token_len: int
     generate_token_len: int
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'error']] = None
     token_ids: List[int] = None
     logprobs: List[Dict[int, float]] = None
 
@@ -455,6 +455,10 @@ class AsyncEngine(LogitsMixin):
             prompt = chat_template.messages2prompt(prompt,
                                                    sequence_start,
                                                    tools=tools)
+        if prompt is None:
+            raise ValueError(
+                f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
+            )
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         return {'prompt': prompt, 'input_ids': input_ids}
 
@@ -497,13 +501,19 @@ class AsyncEngine(LogitsMixin):
         if gen_config.stop_token_ids is None:
             gen_config.stop_token_ids = self.stop_words
         if not gen_config.do_sample:
+            logger.warn(f'GenerationConfig: {gen_config}')
+            logger.warn(
+                'Since v0.6.0, lmdeploy add `do_sample` in '
+                'GenerationConfig. It defaults to False, meaning greedy '
+                'decoding. Please set `do_sample=True` if sampling '
+                ' decoding is needed')
             # greedy decode
             gen_config.top_k = 1
             # avoid unnecessary process
             gen_config.temperature = 1.0
             gen_config.repetition_penalty = 1.0
         # set random if it is not set and sequence_start is True
-        if gen_config.random_seed is None and sequence_start:
+        elif gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
             logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "
@@ -551,6 +561,12 @@ class AsyncEngine(LogitsMixin):
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
         else:
+
+            def is_error(status):
+                return status not in [
+                    ResponseType.SUCCESS, ResponseType.FINISH
+                ]
+
             generator = await self.get_generator(False, session_id)
             async with self.safe_run(session_id):
                 state = DetokenizeState(len(input_ids))
@@ -566,6 +582,9 @@ class AsyncEngine(LogitsMixin):
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
                     # decode res
+                    if is_error(outputs.status):
+                        tokens = 0
+                        break
                     res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
                     if len(res) <= state.ids_offset:
                         continue
@@ -587,15 +606,24 @@ class AsyncEngine(LogitsMixin):
                     yield GenOut(response, self.id2step[str(session_id)],
                                  len(input_ids), tokens, finish_reason, res,
                                  logprobs)
-
-                finish_reason = 'length' \
-                    if tokens >= gen_config.max_new_tokens else 'stop'
-                # utf-8 char at the end means it's a potential unfinished
-                # byte sequence
-                if not response.endswith('�'):
-                    response = ''  # avaid returning the last response twice
-                yield GenOut(response, self.id2step[str(session_id)],
-                             len(input_ids), tokens, finish_reason)
+                if not is_error(outputs.status):
+                    finish_reason = 'length' \
+                        if tokens >= gen_config.max_new_tokens else 'stop'
+                    # utf-8 char at the end means it's a potential unfinished
+                    # byte sequence
+                    if not response.endswith('�'):
+                        # avaid returning the last response twice
+                        response = ''
+                    yield GenOut(response, self.id2step[str(session_id)],
+                                 len(input_ids), tokens, finish_reason)
+                else:
+                    yield GenOut(
+                        response='internal error happened',
+                        history_token_len=self.id2step[str(session_id)],
+                        input_token_len=len(input_ids),
+                        generate_token_len=0,
+                        finish_reason='error',
+                        token_ids=[])
                 # update step
                 self.id2step[str(session_id)] += len(input_ids) + tokens
                 if sequence_end:

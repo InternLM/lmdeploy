@@ -4,6 +4,7 @@
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -32,6 +33,7 @@ private:
 
     std::unique_ptr<UnifiedAttentionLayer<T>> attn_layer_;
     std::unique_ptr<LlamaFfnLayer<T>>         ffn_layer_;
+    std::unique_ptr<MoeFfnLayer<T>>           moe_ffn_layer_;
 
     cudaEvent_t ev_h_cu_x_{};
 
@@ -48,6 +50,7 @@ private:
 public:
     UnifiedDecoder(const ModelParam&     model,
                    const AttentionParam& attn,
+                   const MoeParam&       moe,
                    const LoraParam&      lora,
                    const NcclParam&      tp,
                    const Context<T>&     ctx);

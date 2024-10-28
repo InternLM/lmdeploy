@@ -116,6 +116,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Llama2 (7B - 70B)</li>
   <li>Llama3 (8B, 70B)</li>
   <li>Llama3.1 (8B, 70B)</li>
+  <li>Llama3.2 (1B, 3B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM2.5 (7B)</li>
@@ -150,7 +151,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>InternLM-XComposer2.5 (7B)</li>
   <li>Qwen-VL (7B)</li>
-  <li>Qwen2-VL (2B, 7B)</li>
+  <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
@@ -199,6 +200,10 @@ print(response)
 > LMDeploy 默认从 HuggingFace 上面下载模型，如果要从 ModelScope 上面下载模型，请通过命令 `pip install modelscope` 安装ModelScope，并设置环境变量：
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
+>
+> 如果要从 openMind Hub 上面下载模型，请通过命令 `pip install openmind_hub` 安装openMind Hub，并设置环境变量：
+>
+> `export LMDEPLOY_USE_OPENMIND_HUB=True`
 
 关于 pipeline 的更多推理参数说明，请参考[这里](docs/zh_cn/llm/pipeline.md)
 

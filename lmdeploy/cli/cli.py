@@ -122,12 +122,14 @@ class CLI(object):
         pt_group = parser.add_argument_group('PyTorch engine arguments')
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
+        ArgumentHelper.eager_mode(pt_group)
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+        quant_policy = ArgumentHelper.quant_policy(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -137,8 +139,8 @@ class CLI(object):
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(prefix_caching_act)
+        tb_group._group_actions.append(quant_policy)
         ArgumentHelper.model_format(tb_group)
-        ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
 
     @staticmethod
@@ -263,7 +265,9 @@ class CLI(object):
                 cache_max_entry_count=args.cache_max_entry_count,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
-                device_type=args.device)
+                device_type=args.device,
+                eager_mode=args.eager_mode,
+                quant_policy=args.quant_policy)
             run_chat(args.model_path,
                      engine_config,
                      chat_template_config=chat_template_config)
@@ -273,6 +277,7 @@ class CLI(object):
             kwargs.pop('chat_template')
             kwargs.pop('backend')
             kwargs.pop('device')
+            kwargs.pop('eager_mode')
             kwargs['chat_template_config'] = chat_template_config
             run_chat(**kwargs)
 

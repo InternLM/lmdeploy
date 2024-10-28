@@ -13,6 +13,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
 from lmdeploy.pytorch.nn.rotary_embedding import Llama3Parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .utils.cudagraph import CudaGraphMixin
+
 
 class LlamaAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
@@ -93,6 +95,10 @@ class LlamaAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
+            k_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None
+            if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -112,10 +118,11 @@ class LlamaMLP(nn.Module):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
+        mlp_bias = getattr(config, 'mlp_bias', False)
         self.gate_up_proj = build_merged_colwise_linear(
             config.hidden_size,
             [config.intermediate_size, config.intermediate_size],
-            bias=config.mlp_bias,
+            bias=mlp_bias,
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
@@ -128,7 +135,7 @@ class LlamaMLP(nn.Module):
         # down
         self.down_proj = build_rowwise_linear(config.intermediate_size,
                                               config.hidden_size,
-                                              bias=config.mlp_bias,
+                                              bias=mlp_bias,
                                               quant_config=quantization_config,
                                               dtype=dtype,
                                               device=device,
@@ -317,7 +324,7 @@ class LlamaModel(nn.Module):
         return self.embed_tokens
 
 
-class LlamaForCausalLM(nn.Module):
+class LlamaForCausalLM(nn.Module, CudaGraphMixin):
     """rewrote model of LlamaForCausalLM."""
 
     packed_modules_mapping = {
@@ -366,9 +373,16 @@ class LlamaForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+        return hidden_states
 
-        logits = self.lm_head(hidden_states)
-        return logits
+    def update_weights(self):
+        """update weights."""
+        if self.config.tie_word_embeddings:
+            self.lm_head.weight = self.model.embed_tokens.weight
+
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def support_cuda_graph(
         self,

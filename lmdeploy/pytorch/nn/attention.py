@@ -2,9 +2,11 @@
 import torch
 from torch import nn
 
+from lmdeploy.pytorch.distributed import get_world_rank
+
 from ..backends import OpType, get_backend
 from ..backends.attention import AttentionMetadata
-from .utils import get_distribute_size, get_world_rank
+from .utils import get_distribute_size
 
 
 class Attention(nn.Module):
@@ -59,6 +61,8 @@ class Attention(nn.Module):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
@@ -69,5 +73,7 @@ class Attention(nn.Module):
             k_cache,
             v_cache,
             attn_metadata=attn_metadata,
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
             inplace=inplace,
         )
