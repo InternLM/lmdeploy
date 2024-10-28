@@ -50,8 +50,6 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
                        window_size: tl.constexpr,
                        logit_softcapping: tl.constexpr, BLOCK_N: tl.constexpr,
                        BLOCK_DK1: tl.constexpr):
-
-    # start_n = loop_start.to(tl.int32)
     k_ptrs = tl.advance(k_ptrs, (0, loop_start))
     v_ptrs = tl.advance(v_ptrs, (loop_start, 0))
     if BLOCK_DK1:
@@ -177,8 +175,6 @@ def _flash_prefill_fwd_kernel(
     kv_group_num,
     head_dim_k,
     head_dim_v,
-    N_CTX,
-    N_SEQ,
     window_size: tl.constexpr,
     logit_softcapping: tl.constexpr,
     BLOCK_M: tl.constexpr,
@@ -203,7 +199,7 @@ def _flash_prefill_fwd_kernel(
     q_start_loc = tl.load(q_start_loc_ptr + batch_id).to(tl.int32)
     kv_start_loc = tl.load(kv_start_loc_ptr + batch_id).to(tl.int32)
 
-    history_len = kv_seqlen - q_seqlen
+    history_len = kv_seqlen - q_seqlen + start_m * BLOCK_M
 
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
 
@@ -216,26 +212,26 @@ def _flash_prefill_fwd_kernel(
         kv_start_loc += loop_start
 
     q_ptrs = tl.make_block_ptr(
-        base=q_ptr + head_id * stride_qh,
-        shape=(N_SEQ, head_dim_k),
+        base=q_ptr + q_start_loc * stride_qs + head_id * stride_qh,
+        shape=(q_seqlen, head_dim_k),
         strides=(stride_qs, stride_qd),
-        offsets=(q_start_loc + start_m * BLOCK_M, 0),
+        offsets=(start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, BLOCK_DK),
         order=(1, 0),
     )
     k_ptrs = tl.make_block_ptr(
-        base=k_ptr + kv_head_id * stride_kh,
-        shape=(head_dim_k, N_CTX),
+        base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
+        shape=(head_dim_k, kv_seqlen),
         strides=(stride_kd, stride_ks),
-        offsets=(0, kv_start_loc),
+        offsets=(0, 0),
         block_shape=(BLOCK_DK, BLOCK_N),
         order=(0, 1),
     )
     v_ptrs = tl.make_block_ptr(
-        base=v_ptr + kv_head_id * stride_vh,
-        shape=(N_CTX, head_dim_v),
+        base=v_ptr + kv_start_loc * stride_vs + kv_head_id * stride_vh,
+        shape=(kv_seqlen, head_dim_v),
         strides=(stride_vs, stride_vd),
-        offsets=(kv_start_loc, 0),
+        offsets=(0, 0),
         block_shape=(BLOCK_N, BLOCK_DV),
         order=(1, 0),
     )
@@ -244,18 +240,18 @@ def _flash_prefill_fwd_kernel(
 
     if BLOCK_DK1 != 0:
         q1_ptrs = tl.make_block_ptr(
-            base=q_ptr + head_id * stride_qh,
-            shape=(N_SEQ, head_dim_k),
+            base=q_ptr + q_start_loc * stride_qs + head_id * stride_qh,
+            shape=(q_seqlen, head_dim_k),
             strides=(stride_qs, stride_qd),
-            offsets=(q_start_loc + start_m * BLOCK_M, BLOCK_DK),
+            offsets=(start_m * BLOCK_M, BLOCK_DK),
             block_shape=(BLOCK_M, BLOCK_DK1),
             order=(1, 0),
         )
         k1_ptrs = tl.make_block_ptr(
-            base=k_ptr + kv_head_id * stride_kh,
-            shape=(head_dim_k, N_CTX),
+            base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
+            shape=(head_dim_k, kv_seqlen),
             strides=(stride_kd, stride_ks),
-            offsets=(BLOCK_DK, kv_start_loc),
+            offsets=(BLOCK_DK, 0),
             block_shape=(BLOCK_DK1, BLOCK_N),
             order=(0, 1),
         )
@@ -269,9 +265,9 @@ def _flash_prefill_fwd_kernel(
     acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
 
     qk_scale = sm_scale * tl.log2(math.e)
-    history_mask = history_len + offs_m
+    history_mask = history_len + tl.arange(0, BLOCK_M)
 
-    loop_end = (history_len + start_m * BLOCK_M) // BLOCK_N * BLOCK_N
+    loop_end = history_len // BLOCK_N * BLOCK_N
     acc, l_i, m_i = _prefill_fwd_inner(acc,
                                        l_i,
                                        m_i,
@@ -368,8 +364,6 @@ def flash_attention_fwd(
     head_dim_q = q_states.size(-1)
     head_dim_k = k_states.size(d_dim)
     head_dim_v = v_states.size(d_dim)
-    N_CTX = k_states.size(s_dim)
-    N_SEQ = q_states.size(0)
     assert head_dim_q == head_dim_k and head_dim_v == o_states.size(-1)
 
     if sm_scale is None:
@@ -406,8 +400,6 @@ def flash_attention_fwd(
         kv_group_num=kv_group_num,
         head_dim_k=head_dim_k,
         head_dim_v=head_dim_v,
-        N_CTX=N_CTX,
-        N_SEQ=N_SEQ,
         window_size=window_size,
         logit_softcapping=logit_softcapping,
         BLOCK_DK=BLOCK_DK,
