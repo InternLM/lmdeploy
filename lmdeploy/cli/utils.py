@@ -495,3 +495,13 @@ class ArgumentHelper:
                                    default=False,
                                    help="Disable FastAPI's OpenAPI schema,"
                                    ' Swagger UI, and ReDoc endpoint')
+
+    @staticmethod
+    def eager_mode(parser):
+        """Add argument eager_mode to parser."""
+
+        return parser.add_argument('--eager-mode',
+                                   action='store_true',
+                                   default=False,
+                                   help='Whether to enable eager mode. '
+                                   'If True, cuda graph would be disabled')

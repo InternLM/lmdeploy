@@ -40,6 +40,7 @@ public:
                             int        group_size,
                             LoraParam  lora_param,
                             bool       attn_bias,
+                            MoeParam   moe_param,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank);
     ~LlamaDecoderLayerWeight();
@@ -54,10 +55,13 @@ public:
 
     size_t workspace_size() const noexcept;
 
+    void mallocWeights(LlamaDenseWeight<T>& weights, bool bias);
+
     T*                      self_attn_norm_weights{};
     T*                      ffn_norm_weights{};
     LlamaAttentionWeight<T> self_attn_weights{};
     LlamaFfnWeight<T>       ffn_weights{};
+    MoeFfnWeight<T>         moe_weights{};
 
 private:
     size_t     head_num_;

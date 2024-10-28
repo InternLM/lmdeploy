@@ -194,6 +194,8 @@ def parse_args():
 
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
+    ArgumentHelper.eager_mode(pt_group)
+
     tp_act = ArgumentHelper.tp(pt_group)
     session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -241,6 +243,7 @@ def main():
             max_batch_size=args.concurrency,
             tp=args.tp,
             thread_safe=False,
+            eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
         )
 

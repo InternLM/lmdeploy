@@ -82,4 +82,6 @@ struct NvtxScope {
 
 int64_t& gSequenceIds(int batch_idx);
 
+bool& isTuning();
+
 }  // namespace turbomind

@@ -352,3 +352,40 @@ def get_max_batch_size(device_type: str):
         return 16
     elif device_type == 'maca':
         return 128
+
+
+def is_bf16_supported(device_type: str = 'cuda'):
+    """Check if device support bfloat16.
+
+    Args:
+        device_type (str): the type of device
+    """
+
+    if device_type == 'cuda':
+        import torch
+        device = torch.cuda.current_device()
+
+        # Check for CUDA version and device compute capability.
+        # This is a fast way to check for it.
+        cuda_version = torch.version.cuda
+        if (cuda_version is not None and int(cuda_version.split('.')[0]) >= 11
+                and torch.cuda.get_device_properties(device).major >= 8):
+            return True
+        else:
+            return False
+    elif device_type == 'ascend':
+        # The following API doesn't work somehow in multi-npu devices. Due to
+        # the `ascend910` device's capability to support bfloat16, we are
+        # returning true as a workaround
+        return True
+        # import torch_npu
+        # device_name = torch_npu.npu.get_device_name(0)[:10]
+        # device_name = device_name.lower()
+        # if device_name.startwith('ascend910'):
+        #     return True
+        # else:
+        #     return False
+    elif device_type == 'maca':
+        return True
+    else:
+        return False

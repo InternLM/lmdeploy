@@ -772,7 +772,7 @@ class Llama3(BaseChatTemplate):
             return 'llama3'
 
 
-@MODELS.register_module(name='llama3_1')
+@MODELS.register_module(name=['llama3_1', 'llama3_2'])
 class Llama3_1(Llama3):
     """Chat template of LLaMA3.1 model."""
 
