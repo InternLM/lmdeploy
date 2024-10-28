@@ -73,7 +73,7 @@ $LD_LIBRARY_PATH
 ARG CHIP=all
 ARG TOOLKIT_PKG=Ascend-cann-toolkit_*.run
 ARG KERNELS_PKG=Ascend-cann-kernels-*.run
-ARG NNAL_PKG=Ascend-nnal_*.run
+ARG NNAL_PKG=Ascend-cann-nnal_*.run
 
 RUN --mount=type=cache,target=/tmp,from=build_temp,source=/tmp \
     umask 0022 && \
@@ -87,6 +87,7 @@ RUN --mount=type=cache,target=/tmp,from=build_temp,source=/tmp \
     chmod +x $TOOLKIT_PKG $KERNELS_PKG $NNAL_PKG && \
     ./$TOOLKIT_PKG --quiet --install --install-path=$ASCEND_BASE --install-for-all $CHIPOPTION && \
     ./$KERNELS_PKG --quiet --install --install-path=$ASCEND_BASE --install-for-all && \
+    . /usr/local/Ascend/ascend-toolkit/set_env.sh && \
     ./$NNAL_PKG --quiet --install --install-path=$ASCEND_BASE && \
     rm -f $TOOLKIT_PKG $KERNELS_PKG $NNAL_PKG
 
