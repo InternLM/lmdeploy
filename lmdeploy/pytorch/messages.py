@@ -385,7 +385,7 @@ class SchedulerSequence:
     mrope_position_ids: Optional[Tensor] = None
     mrope_position_delta: Optional[int] = None
     cross_attention_states: Optional[Tensor] = None
-    history_cross_kv_seqlens: Optional[int] = None
+    history_cross_kv_seqlens: int = 0
 
     def __post_init__(self):
         """post init."""
@@ -489,12 +489,11 @@ class SchedulerSequence:
 
     def num_all_cross_tokens(self):
         """num of all cross tokens."""
-        if self.history_cross_kv_seqlens is None:
-            if self.cross_attention_states is None:
-                self.history_cross_kv_seqlens = 0
-            else:
-                self.history_cross_kv_seqlens = self.cross_attention_states.shape[  # noqa
-                    -2]
+        if self.cross_attention_states is None:
+            self.history_cross_kv_seqlens = 0
+        else:
+            self.history_cross_kv_seqlens = self.cross_attention_states.shape[
+                -2]
         return self.history_cross_kv_seqlens
 
     def update_token_ids(self,
