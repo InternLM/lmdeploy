@@ -110,7 +110,7 @@ RUN echo "source /usr/local/Ascend/ascend-toolkit/set_env.sh" >> ~/.bashrc && \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install torch==2.3.1 torchvision==0.18.1 torch-npu==2.3.1 && \
     pip3 install transformers timm && \
-    pip3 install dlinfer-ascend==0.1.1
+    pip3 install dlinfer-ascend
 
 # lmdeploy
 FROM build_temp as copy_temp
