@@ -361,7 +361,7 @@ jobs:
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 --backend pytorch > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 --backend pytorch --dtype float16 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 600s
       - name: Test lmdeploy - restful api
@@ -382,7 +382,7 @@ jobs:
       - name: Start restful api pytorch - base
         if: matrix.backend == 'pytorch'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 --backend pytorch --dtype float16 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 600s
       - name: Test lmdeploy - restful api - base
