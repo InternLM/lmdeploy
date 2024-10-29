@@ -137,10 +137,7 @@ class ChatCompletionRequest(BaseModel):
     skip_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40
     seed: Optional[int] = None
-    # use alias to make compatible with vllm
-    min_tokens: Optional[int] = Field(default=None,
-                                      alias='min_new_tokens',
-                                      examples=[None])
+    min_new_tokens: Optional[int] = Field(default=None, examples=[None])
 
 
 class FunctionResponse(BaseModel):
@@ -343,10 +340,7 @@ class GenerateRequest(BaseModel):
     cancel: Optional[bool] = False  # cancel a responding request
     adapter_name: Optional[str] = Field(default=None, examples=[None])
     seed: Optional[int] = None
-    # use alias to make compatible with vllm
-    min_tokens: Optional[int] = Field(default=None,
-                                      alias='min_new_tokens',
-                                      examples=[None])
+    min_new_tokens: Optional[int] = Field(default=None, examples=[None])
 
 
 class GenerateResponse(BaseModel):
