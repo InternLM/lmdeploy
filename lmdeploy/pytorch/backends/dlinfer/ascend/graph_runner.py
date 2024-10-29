@@ -22,6 +22,7 @@ class AscendGraphRunner(GraphRunner):
         super().__init__(model, model_config, cache_config, backend_config,
                          device)
 
+        self.supported_model = ['Llama3-8B', 'Llama2-7B', 'Qwen2-7B']
         self.enable_graph = self.check_enable_graph()
         if self.enable_graph:
             import dlinfer.graph
@@ -44,21 +45,20 @@ class AscendGraphRunner(GraphRunner):
                 "Graph mode of device_type 'ascend' only supports tp=1 "
                 'for now, fallback to eager mode', RuntimeWarning)
             return False
-        # model support
-        self.supported_model = {
-            'Llama2': 'LlamaConfig',
-            'InternLM2': 'InternLM2Config',
-            'Qwen2': 'Qwen2Config',
-        }
-        is_model_support = True
-        model_config_name = str(type(self.model_config.hf_config).__name__)
-        if model_config_name not in self.supported_model.values():
-            is_model_support = False
-        if not is_model_support:
-            warnings.warn(
-                "Graph mode of device_type 'ascend' only supports models: "
-                f"{', '.join(self.supported_model.keys())} when tp=1 for now",
-                RuntimeWarning)
+
+        warnings.warn(
+            '\n\n'
+            '**********************************************************\n'
+            '  The following models were tested in graph mode of\n'
+            "  device_type 'ascend' when tp=1:\n"
+            f"  {', '.join(self.supported_model)}\n"
+            '  Other LLaMa-like models may work in graph mode, please\n'
+            '  check the result yourself!\n'
+            '  If graph mode does not work correctly with your model,\n'
+            '  please use eager mode instead.\n'
+            '**********************************************************\n\n',
+            RuntimeWarning)
+
         return True
 
     def patch_kernels_custom_op(self):
