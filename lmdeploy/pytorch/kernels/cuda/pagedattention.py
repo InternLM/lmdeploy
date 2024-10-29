@@ -24,9 +24,13 @@ assert TRITON_VERSION >= version.parse('2.2.0')
 if TRITON_VERSION >= VERSION_300:
     tanh = tl.extra.cuda.libdevice.tanh
     fast_dividef = tl.extra.cuda.libdevice.fast_dividef
+    tl_log2 = tl.log2
+    tl_exp2 = tl.exp2
 else:
     tanh = tl.math.tanh
     fast_dividef = tl.math.fast_dividef
+    tl_log2 = tl.math.log2
+    tl_exp2 = tl.math.exp2
 
 
 @triton.autotune(configs=[
@@ -199,7 +203,7 @@ def _fwd_grouped_split_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        qk *= sm_scale * tl.log2(math.e)
+        qk *= sm_scale * tl_log2(math.e)
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
             qk = tanh(qk)
@@ -217,8 +221,8 @@ def _fwd_grouped_split_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl.exp2(qk - m_i_new[:, None])
-        alpha = tl.exp2(m_i - m_i_new)
+        p = tl_exp2(qk - m_i_new[:, None])
+        alpha = tl_exp2(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
 
         # -- update output accumulator --
@@ -483,7 +487,7 @@ def _fwd_grouped_split_quant_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        qk *= sm_scale * tl.log2(math.e)
+        qk *= sm_scale * tl_log2(math.e)
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
             qk = tanh(qk)
@@ -501,8 +505,8 @@ def _fwd_grouped_split_quant_kernel(
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl.exp2(qk - m_i_new[:, None])
-        alpha = tl.exp2(m_i - m_i_new)
+        p = tl_exp2(qk - m_i_new[:, None])
+        alpha = tl_exp2(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 1)
 
         # -- update output accumulator --
@@ -585,7 +589,7 @@ def _reduce_split_kernel(
                     other=0.0)
 
     m_max = tl.max(m_k, 0)
-    alpha = tl.exp2(m_k - m_max)
+    alpha = tl_exp2(m_k - m_max)
     acc_k = acc_k * alpha[:, None]
     l_k = l_k * alpha
 

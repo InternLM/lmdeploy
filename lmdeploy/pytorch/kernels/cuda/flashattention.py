@@ -18,8 +18,12 @@ assert TRITON_VERSION >= version.parse('2.2.0')
 # TODO: fast op might not work on non-nv device
 if TRITON_VERSION >= VERSION_300:
     tanh = tl.extra.cuda.libdevice.tanh
+    tl_log2 = tl.log2
+    tl_exp2 = tl.exp2
 else:
     tanh = tl.math.tanh
+    tl_log2 = tl.math.log2
+    tl_exp2 = tl.math.exp2
 
 
 def _get_block_d(head_dim_k, head_dim_v):
@@ -101,8 +105,8 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
             qk = qk * qk_scale - m_i_new[:, None]
 
         # -- compute p, m_i and l_i
-        p = tl.exp2(qk)
-        alpha = tl.exp2(m_i - m_i_new)
+        p = tl_exp2(qk)
+        alpha = tl_exp2(m_i - m_i_new)
         l_i = alpha * l_i + tl.sum(p, 1)
         # -- update output accumulator --
         # scale acc
@@ -252,7 +256,7 @@ def _flash_prefill_fwd_kernel(
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
     acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
 
-    qk_scale = sm_scale * tl.log2(math.e)
+    qk_scale = sm_scale * tl_log2(math.e)
     history_mask = history_len + start_m * BLOCK_M + tl.arange(0, BLOCK_M)
 
     loop_end = (history_len + start_m * BLOCK_M) // BLOCK_N * BLOCK_N
