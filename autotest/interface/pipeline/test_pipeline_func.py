@@ -19,7 +19,8 @@ from lmdeploy.utils import is_bf16_supported
 
 
 def init_pipeline(model_path, backend_config):
-    if is_bf16_supported() and isinstance(backend_config, PytorchEngineConfig):
+    if not is_bf16_supported() and isinstance(backend_config,
+                                              PytorchEngineConfig):
         backend_config.dtype = 'float16'
     return pipeline(model_path, backend_config=backend_config)
 
