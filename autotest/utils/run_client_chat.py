@@ -4,6 +4,8 @@ from subprocess import PIPE, Popen
 from utils.get_run_config import get_command_with_extra, get_model_name
 from utils.rule_condition_assert import assert_result
 
+from lmdeploy.utils import is_bf16_supported
+
 TEMPLATE = 'autotest/template.json'
 
 
@@ -63,6 +65,9 @@ def hf_command_line_test(config,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
+    if type == 'pytorch':
+        if not is_bf16_supported():
+            cmd += ' --dtype float16'
     if type == 'turbomind':
         if ('w4' in model_case
                 or ('4bits' in model_case or 'awq' in model_case.lower())):
