@@ -64,6 +64,7 @@ class VLAsyncEngine(AsyncEngine):
         results = {}
         input_ids = []
         from lmdeploy.vl.templates import (MllamaTempateWrapper,
+                                           MolmoChatTemplateWrapper,
                                            Qwen2VLChatTemplateWrapper)
         ranges = None
         grid_thws = None
@@ -97,6 +98,13 @@ class VLAsyncEngine(AsyncEngine):
                     results['prompt'] = decorated
                     assert len(features)
                     results['cross_attention_states'] = features[0]
+                    return results
+
+                if isinstance(self.vl_prompt_template,
+                              MolmoChatTemplateWrapper):
+                    results['input_ids'] = features[0]
+                    results['input_embeddings'] = features[1]
+                    results['input_embedding_range'] = features[2]
                     return results
 
             features = [x.cpu().numpy() for x in features]

@@ -429,7 +429,71 @@ class GLM4VChatTemplateWrapper(VLChatTemplateWrapper):
 
 
 class MolmoChatTemplateWrapper(VLChatTemplateWrapper):
-    pass
+
+    async def async_collect_pil_images(
+            self, messages: Dict) -> List[Tuple[PIL.Image.Image, Dict]]:
+        """collect images from messages.
+
+        Args:
+            messages (Dict): a user request of GPT4V message format
+        """
+        images_with_kwargs = []
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            if role != 'user' or isinstance(content, str):
+                # means message is user's prompt input or assistant's prompt
+                images_with_kwargs.append([None, message])
+
+            # If the role is a user and the content is not a string, it
+            # indicates the message is composed of ONE user prompt and a list
+            # of images
+            image_prompt = [
+                item['content'] for item in content if item['type'] == 'text'
+            ]
+            if len(image_prompt) != 0:
+                raise RuntimeError(f'invalid format {message}')
+            images_with_kwargs.append('image_prompt', image_prompt)
+            for item in content:
+                # 'image_url': means url or local path to image.
+                # 'image_data': means PIL.Image.Image object.
+                if item['type'] == 'image_url':
+                    item_copy = item['image_url'].copy()
+                    try:
+                        url = item_copy.pop('url')
+                        images_with_kwargs.append([url, item_copy])
+                    except KeyError:
+                        logger.error(f'invalid format {message}')
+                elif item['type'] == 'image_data':
+                    item_copy = item['image_data'].copy()
+                    try:
+                        data = item_copy.pop('data')
+                        images_with_kwargs.append([data, item_copy])
+                    except KeyError:
+                        logger.error(f'invalid format {message}')
+
+        def _inner_call(i, images):
+            url_or_data = images[i][0]
+            images[i][0] = load_image(url_or_data)
+
+        await asyncio.gather(*[
+            asyncio.get_event_loop().run_in_executor(None, _inner_call, i,
+                                                     images_with_kwargs)
+            for i in range(len(images_with_kwargs))
+        ])
+
+        return images_with_kwargs
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs) -> str:
+        """Return a placeholder "IMAGE_TOKEN" so that
+        `vl_asyn_engine._get_prompt_input` can know that it."""
+        if isinstance(messages, str):
+            return self.chat_template.messages2prompt(messages, sequence_start)
+        else:
+            # Return the image placeholder so that
+            # `vl_asyn_engine._get_prompt_input` can know that the request
+            # contains images
+            return IMAGE_TOKEN
 
 
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
