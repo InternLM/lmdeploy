@@ -2,6 +2,7 @@
 import inspect
 import json
 from dataclasses import asdict, fields
+from typing import List
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
@@ -73,6 +74,7 @@ class AttentionConfig:
     high_freq_factor: float = 1.0
     beta_fast: float = 32.0
     beta_slow: float = 1.0
+    mrope_section: List[int] = None
     use_logn_attn: int = 0
     cache_block_seq_len: int = 64
 

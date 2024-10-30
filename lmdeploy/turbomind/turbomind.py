@@ -515,6 +515,8 @@ class TurboMindInstance:
                        gen_config: GenerationConfig,
                        input_embeddings=None,
                        input_embedding_ranges=None,
+                       mrope_position_ids=None,
+                       mrope_position_delta=None,
                        sequence_start: bool = True,
                        sequence_end: bool = False,
                        step=0,
@@ -572,6 +574,18 @@ class TurboMindInstance:
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
 
+        if mrope_position_ids is not None:
+            assert isinstance(mrope_position_ids, torch.Tensor)
+            assert isinstance(mrope_position_delta, torch.Tensor)
+            assert input_lengths.size(0) == 1
+            assert mrope_position_ids.size(-1) == input_ids.size(-1)
+            mrope_position_ids = pad_sequence([mrope_position_ids],
+                                              batch_first=True,
+                                              padding_value=-1).transpose(
+                                                  1, 2).int().reshape(1, -1)
+            inputs['mrope_position_ids'] = mrope_position_ids
+            inputs['mrope_position_delta'] = mrope_position_delta
+
         if gen_config.min_new_tokens is not None:
             inputs['min_length'] = _broadcast_np(gen_config.min_new_tokens,
                                                  np.int32)
@@ -611,6 +625,8 @@ class TurboMindInstance:
                                  input_ids,
                                  input_embeddings=None,
                                  input_embedding_ranges=None,
+                                 mrope_position_ids=None,
+                                 mrope_position_delta=None,
                                  sequence_start: bool = True,
                                  sequence_end: bool = False,
                                  step=0,
@@ -648,6 +664,8 @@ class TurboMindInstance:
             input_ids=input_ids,
             input_embeddings=input_embeddings,
             input_embedding_ranges=input_embedding_ranges,
+            mrope_position_ids=mrope_position_ids,
+            mrope_position_delta=mrope_position_delta,
             sequence_start=sequence_start,
             sequence_end=sequence_end,
             step=step,
@@ -734,6 +752,8 @@ class TurboMindInstance:
                      input_ids,
                      input_embeddings=None,
                      input_embedding_ranges=None,
+                     mrope_position_ids=None,
+                     mrope_position_delta=None,
                      sequence_start: bool = True,
                      sequence_end: bool = False,
                      step=0,
@@ -766,6 +786,8 @@ class TurboMindInstance:
             input_ids=input_ids,
             input_embeddings=input_embeddings,
             input_embedding_ranges=input_embedding_ranges,
+            mrope_position_ids=mrope_position_ids,
+            mrope_position_delta=mrope_position_delta,
             sequence_start=sequence_start,
             sequence_end=sequence_end,
             step=step,

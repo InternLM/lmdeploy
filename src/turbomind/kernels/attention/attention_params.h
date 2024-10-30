@@ -67,10 +67,16 @@ struct AttentionParams {
     float llama3_inv_scaling_factor;
     float llama3_alpha;
     float llama3_beta;
-    // the following are use by yarn
+    // the following are used by yarn
     float yarn_ramp_inv_factor_div_2;
     float yarn_ramp_inv_factor_mul_min;
     float yarn_inv_scaling_factor;
+    // the following are used by qwen2-vl
+    int3 mrope_section;
+    int* mrope_position_ids;  // 3 x session_len_
+    int  mrope_offset;        // session_len_
+    int* mrope_position_delta;
+    int* mrope_position_length;
 
     // log(n) attention
     bool use_logn_attn;

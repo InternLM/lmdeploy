@@ -223,6 +223,14 @@ struct AttentionUniversal {
 
         ApplyBias(vec_Q, vec_K, vec_V, params, head_idx, kv_head_idx, offset);
 
+        int* mrope_ids    = nullptr;
+        int  mrope_length = 0;
+        int  mrope_delta  = 0;
+        if (params.mrope_position_ids != nullptr) {
+            mrope_ids    = params.mrope_position_ids + batch_idx * 3 * params.mrope_offset;
+            mrope_length = params.mrope_position_length[batch_idx];
+            mrope_delta  = params.mrope_position_delta[batch_idx];
+        }
         const float rope_base = params.rope_theta ? params.rope_theta[batch_idx] : params.rotary_embedding_base;
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
@@ -239,6 +247,10 @@ struct AttentionUniversal {
                           params.yarn_ramp_inv_factor_mul_min,
                           params.yarn_inv_scaling_factor,
                           params.attention_scaling,
+                          params.mrope_section,
+                          mrope_ids,
+                          mrope_length,
+                          mrope_delta,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {

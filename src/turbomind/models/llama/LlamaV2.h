@@ -82,6 +82,7 @@ private:
                         int              dc_batch_size,
                         int              pf_batch_size,
                         int*             lora_mask,
+                        MropeInput*      mrope,
                         const Sequence** sequences);
 
     void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);

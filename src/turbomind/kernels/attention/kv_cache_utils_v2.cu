@@ -31,6 +31,11 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                                                     float        yarn_ramp_inv_factor_mul_min,
                                                     float        yarn_inv_scaling_factor,
                                                     float        attention_scaling,
+                                                    int3         mrope_section,
+                                                    int*         mrope_position_ids,
+                                                    int          mrope_offset,
+                                                    int*         mrope_position_delta,
+                                                    int*         mrope_position_length,
                                                     int64_t      stride_b,
                                                     int64_t      stride_c,
                                                     int64_t      stride_h,
@@ -125,6 +130,14 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
     }
 
     if (rope_base) {
+        int* mrope_ids    = nullptr;
+        int  mrope_length = 0;
+        int  mrope_delta  = 0;
+        if (mrope_position_ids != nullptr) {
+            mrope_ids    = mrope_position_ids + batch_idx * 3 * mrope_offset;
+            mrope_length = mrope_position_length[batch_idx];
+            mrope_delta  = mrope_position_delta[batch_idx];
+        }
         float base = rope_base[batch_idx];
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
@@ -141,6 +154,10 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                           yarn_ramp_inv_factor_mul_min,
                           yarn_inv_scaling_factor,
                           attention_scaling,
+                          mrope_section,
+                          mrope_ids,
+                          mrope_length,
+                          mrope_delta,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
@@ -222,6 +239,11 @@ void invokeProcessKV_v2(char**       blocks,
                         float        yarn_ramp_inv_factor_mul_min,
                         float        yarn_inv_scaling_factor,
                         float        attention_scaling,
+                        int3         mrope_section,
+                        int*         mrope_position_ids,
+                        int          mrope_offset,
+                        int*         mrope_position_delta,
+                        int*         mrope_position_length,
                         int64_t      stride_b,
                         int64_t      stride_c,
                         int64_t      stride_h,
@@ -268,6 +290,11 @@ void invokeProcessKV_v2(char**       blocks,
                                                                               yarn_ramp_inv_factor_mul_min,
                                                                               yarn_inv_scaling_factor,
                                                                               attention_scaling,
+                                                                              mrope_section,
+                                                                              mrope_position_ids,
+                                                                              mrope_offset,
+                                                                              mrope_position_delta,
+                                                                              mrope_position_length,
                                                                               stride_b,
                                                                               stride_c,
                                                                               stride_h,
@@ -307,6 +334,11 @@ void invokeProcessKV_v2(char**       blocks,
                                      float        yarn_ramp_inv_factor_mul_min,                                        \
                                      float        yarn_inv_scaling_factor,                                             \
                                      float        attention_scaling,                                                   \
+                                     int3         mrope_section,                                                       \
+                                     int*         mrope_position_ids,                                                  \
+                                     int          mrope_offset,                                                        \
+                                     int*         mrope_position_delta,                                                \
+                                     int*         mrope_position_length,                                               \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \
                                      int64_t      stride_h,                                                            \
@@ -342,6 +374,11 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                                                     float        yarn_ramp_inv_factor_mul_min,
                                                     float        yarn_inv_scaling_factor,
                                                     float        attention_scaling,
+                                                    int3         mrope_section,
+                                                    int*         mrope_position_ids,
+                                                    int          mrope_offset,
+                                                    int*         mrope_position_delta,
+                                                    int*         mrope_position_length,
                                                     int64_t      stride_b,
                                                     int64_t      stride_c,
                                                     int64_t      stride_h,
@@ -419,6 +456,14 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
     }
 
     if (rope_base) {
+        int* mrope_ids    = nullptr;
+        int  mrope_length = 0;
+        int  mrope_delta  = 0;
+        if (mrope_position_ids != nullptr) {
+            mrope_ids    = mrope_position_ids + batch_idx * 3 * mrope_offset;
+            mrope_length = mrope_position_length[batch_idx];
+            mrope_delta  = mrope_position_delta[batch_idx];
+        }
         float base = rope_base[batch_idx];
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
@@ -435,6 +480,10 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                           yarn_ramp_inv_factor_mul_min,
                           yarn_inv_scaling_factor,
                           attention_scaling,
+                          mrope_section,
+                          mrope_ids,
+                          mrope_length,
+                          mrope_delta,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
@@ -477,6 +526,11 @@ void invokeFlattenKV_v2(T*           k,
                         float        yarn_ramp_inv_factor_mul_min,
                         float        yarn_inv_scaling_factor,
                         float        attention_scaling,
+                        int3         mrope_section,
+                        int*         mrope_position_ids,
+                        int          mrope_offset,
+                        int*         mrope_position_delta,
+                        int*         mrope_position_length,
                         int64_t      stride_b,
                         int64_t      stride_c,
                         int64_t      stride_h,
@@ -520,6 +574,11 @@ void invokeFlattenKV_v2(T*           k,
                                                                             yarn_ramp_inv_factor_mul_min,
                                                                             yarn_inv_scaling_factor,
                                                                             attention_scaling,
+                                                                            mrope_section,
+                                                                            mrope_position_ids,
+                                                                            mrope_offset,
+                                                                            mrope_position_delta,
+                                                                            mrope_position_length,
                                                                             stride_b,
                                                                             stride_c,
                                                                             stride_h,
@@ -556,6 +615,11 @@ void invokeFlattenKV_v2(T*           k,
                                      float        yarn_ramp_inv_factor_mul_min,                                        \
                                      float        yarn_inv_scaling_factor,                                             \
                                      float        attention_scaling,                                                   \
+                                     int3         mrope_section,                                                       \
+                                     int*         mrope_position_ids,                                                  \
+                                     int          mrope_offset,                                                        \
+                                     int*         mrope_position_delta,                                                \
+                                     int*         mrope_position_length,                                               \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \
                                      int64_t      stride_h,                                                            \

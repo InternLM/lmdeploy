@@ -48,6 +48,7 @@ struct AttentionParam {
     float       attention_factor;
     float       beta_fast;
     float       beta_slow;
+    int3        mrope_section;
     bool        use_dynamic_ntk;
     bool        use_logn_attn;
     int         cache_block_seq_len;

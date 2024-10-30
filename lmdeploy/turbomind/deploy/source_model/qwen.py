@@ -119,4 +119,13 @@ class Qwen2Model(LlamaModel):
     def model_info(self):
         cfg = super().model_info()
         cfg['attn_bias'] = 1
+        params_path = osp.join(self.model_path, 'config.json')
+        with open(params_path) as f:
+            config = json.load(f)
+            rope_scaling = config['rope_scaling']
+            if rope_scaling is not None:
+                if rope_scaling.get('type', '') == 'mrope':
+                    selection = rope_scaling['mrope_section']
+                    cfg['rope_scaling_type'] = 'mrope'
+                    cfg['mrope_section'] = selection
         return cfg

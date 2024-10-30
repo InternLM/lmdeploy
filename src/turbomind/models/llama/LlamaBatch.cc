@@ -347,6 +347,18 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             }
         }
 
+        if (attn_param_.rope_scaling_type == "mrope") {
+            if (!r->start_flag) {
+                TM_LOG_ERROR("M-ROPE doesn't support interactive chat.");
+            }
+            const int* position_ids_ptr   = r->inputs.getPtr<int>("mrope_position_ids");
+            const int* position_delta_ptr = r->inputs.getPtr<int>("mrope_position_delta");
+            const int* length_ptr         = r->inputs.getPtr<int>("input_lengths");
+            Copy(position_ids_ptr, input_length * 3, state.mrope.position_ids + session_len_ * idx * 3);
+            Copy(position_delta_ptr, 1, state.mrope.position_delta + idx);
+            Copy(length_ptr, 1, state.mrope.length + idx);
+        }
+
         const int request_output_len = state.requests[idx]->inputs.getVal<int>("request_output_len");
         state.seq_len_limit[idx]     = state.h_context_length[idx] + request_output_len;
         // `length_criterion` sets finish flag when step >= seq_limit_len, however when step == seq_limit_len
@@ -687,6 +699,14 @@ void LlamaBatch<T>::CopyState(const std::vector<std::tuple<BatchState*, BatchSta
                     d_idx,
                     std::tuple{s->output_ids, d->output_ids, session_len_},
                     std::tuple{s->curand_state, d->curand_state, 1});
+
+        if (attn_param_.rope_scaling_type == "mrope") {
+            IndexedCopy(s_idx,
+                        d_idx,
+                        std::tuple{s->mrope.position_ids, d->mrope.position_ids, session_len_ * 3},
+                        std::tuple{s->mrope.position_delta, d->mrope.position_delta, 1},
+                        std::tuple{s->mrope.length, d->mrope.length, 1});
+        }
     }
 
     for (const auto& [s, d, si, di] : desc) {
@@ -810,6 +830,14 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
         s.output_ids = (int*)allocator_->reMalloc(s.output_ids, sizeof(int) * max_batch_size * session_len_, true);
         s.curand_state =
             (curandState_t*)allocator_->reMalloc(s.curand_state, sizeof(curandState_t) * max_batch_size, true);
+
+        if (attn_param_.rope_scaling_type == "mrope") {
+            s.mrope.position_ids =
+                (int*)allocator_->reMalloc(s.mrope.position_ids, sizeof(int) * 3 * max_batch_size * session_len_);
+            s.mrope.position_delta = (int*)allocator_->reMalloc(s.mrope.position_delta, sizeof(int) * max_batch_size);
+            s.mrope.length         = (int*)allocator_->reMalloc(s.mrope.length, sizeof(int) * max_batch_size);
+            s.mrope.session_len    = session_len_;
+        }
     }
 
     const size_t max_batch_block_count =
@@ -919,6 +947,12 @@ void LlamaBatch<T>::FreeBuffer()
             allocator_->free((void**)&s.h_rope_theta, true);
             allocator_->free((void**)&s.output_ids);
             allocator_->free((void**)&s.curand_state);
+
+            if (attn_param_.rope_scaling_type == "mrope") {
+                allocator_->free((void**)&s.mrope.position_ids);
+                allocator_->free((void**)&s.mrope.position_delta);
+                allocator_->free((void**)&s.mrope.length);
+            }
         }
         allocator_->free((void**)&h_cu_block_counts_, true);
         allocator_->free((void**)&h_block_ptrs_, true);
@@ -966,11 +1000,13 @@ LlamaBatch<T>::~LlamaBatch()
 
 template<typename T>
 LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
+                          const AttentionParam&        attn_param,
                           std::unique_ptr<LlamaV2<T>>  model,  // ! This is moved
                           std::unique_ptr<Context<T>>  ctx,    // ! This is moved
                           std::shared_ptr<SharedState> state,
                           int                          device_id):
     param_(param),
+    attn_param_(attn_param),
     shared_state_(state),
     max_batch_size_(param.max_batch_size),
     max_forward_token_num_(param.max_prefill_token_num + param.max_batch_size),
@@ -1699,6 +1735,15 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
             }
         }
 
+        std::shared_ptr<MropeInput> mrope_sp;
+        if (attn_param_.rope_scaling_type == "mrope") {
+            auto& mrope = state_->mrope;
+            mrope_sp.reset(new MropeInput{session_len_,
+                                          mrope.position_ids + first * 3 * session_len_,
+                                          mrope.position_delta + first,
+                                          mrope.length + first});
+        }
+
         model_->forwardUnified(decoder_output_buf_ + first * model_->hidden_units_,
                                context_decoder_output_buf_,  // temp
                                context_decoder_input_buf_,   // temp
@@ -1713,6 +1758,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
                                dc_batch_size,
                                pf_batch_size,
                                lora_mask_buf_,
+                               mrope_sp.get(),
                                sequences.data());
 
         // compute logits of inputs if requested
@@ -1987,6 +2033,7 @@ void LlamaBatch<T>::tune()
                                    bs,
                                    0,
                                    1,
+                                   nullptr,
                                    nullptr,
                                    nullptr);
             // implicit barrier for TP

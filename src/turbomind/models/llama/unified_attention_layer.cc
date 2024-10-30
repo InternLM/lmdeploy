@@ -302,14 +302,14 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         if (param_.rope_scaling_type == "linear") {
             params.rope_ti_scale /= param_.rope_scaling_factor;
         }
-        if (param_.rope_scaling_type == "llama3") {
+        else if (param_.rope_scaling_type == "llama3") {
             const double PI                   = 3.14159265358979323846;
             float        inv_diff_freq_factor = 1.0 / (param_.high_freq_factor - param_.low_freq_factor);
             params.llama3_inv_scaling_factor  = 1.0 / param_.rope_scaling_factor;
             params.llama3_alpha = param_.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
             params.llama3_beta  = param_.low_freq_factor * inv_diff_freq_factor;
         }
-        if (param_.rope_scaling_type == "yarn") {
+        else if (param_.rope_scaling_type == "yarn") {
             const double PI                  = 3.14159265358979323846;
             auto         find_correction_dim = [&](float num_rotations) {
                 return (param_.rotary_embedding_dim
@@ -336,6 +336,13 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             else {
                 params.attention_scaling = param_.attention_factor;
             }
+        }
+        else if (param_.rope_scaling_type == "mrope") {
+            params.mrope_section         = param_.mrope_section;
+            params.mrope_position_ids    = inputs->getPtr<int>("mrope_position_ids");
+            params.mrope_offset          = inputs->at("mrope_position_ids").shape[1];
+            params.mrope_position_delta  = inputs->getPtr<int>("mrope_position_delta");
+            params.mrope_position_length = inputs->getPtr<int>("mrope_position_length");
         }
 
         params.use_logn_attn = param_.use_logn_attn;
