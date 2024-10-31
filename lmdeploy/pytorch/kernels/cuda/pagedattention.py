@@ -121,6 +121,8 @@ def _fwd_grouped_split_kernel(
     cur_head = cur_kv_head * HEAD_PER_CTA + tl.arange(0, BLOCK_H)
     mask_h = cur_head < cur_kv_head * HEAD_PER_CTA + HEAD_PER_CTA
     mask_h = mask_h & (cur_head < num_heads_q)
+    if BLOCK_H < kv_group_num:
+        cur_kv_head = (cur_kv_head * HEAD_PER_CTA) // kv_group_num
 
     q_seqlen = 1
     kv_seqlen = tl.load(KV_seqlens + cur_batch)
@@ -366,6 +368,8 @@ def _fwd_grouped_split_quant_kernel(
     cur_head = cur_kv_head * HEAD_PER_CTA + tl.arange(0, BLOCK_H)
     mask_h = cur_head < cur_kv_head * HEAD_PER_CTA + HEAD_PER_CTA
     mask_h = mask_h & (cur_head < num_heads_q)
+    if BLOCK_H < kv_group_num:
+        cur_kv_head = (cur_kv_head * HEAD_PER_CTA) // kv_group_num
 
     q_seqlen = 1
     kv_seqlen = tl.load(KV_seqlens + cur_batch)
