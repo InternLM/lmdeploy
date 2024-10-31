@@ -49,7 +49,7 @@ For more information about running the Docker client on Ascend devices, please r
 ## Offline batch inference
 
 > \[!TIP\]
-> Graph mode has been supported on Atlas 800T A2. Currently, InternLM2-7B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
+> Graph mode has been supported on Atlas 800T A2. Currently, LLaMa3-8B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
 > Users can set `eager_mode=False` to enable graph mode, or, set `eager_mode=True` to disable graph mode.
 > (Please source `/usr/local/Ascend/nnal/atb/set_env.sh` before enabling graph mode)
 
