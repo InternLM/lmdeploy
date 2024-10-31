@@ -154,7 +154,6 @@ class LlamaModel(BaseInputModel):
                 model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
             scaling_factor = 0.0
-            rotary_embedding = hidden_units // attn_head_num
             use_dynamic_ntk = 0
             scaling_type = ''
             low_freq_factor = 1.0
@@ -172,11 +171,6 @@ class LlamaModel(BaseInputModel):
                 scaling_type = llama2_scaling_type if llama2_scaling_type \
                     else llama3_scaling_type
                 scaling_factor = rope_scaling.get('factor', 0.0)
-                if 'partial_rotary_factor' in rope_scaling:
-                    partial_rotary_factor = float(
-                        rope_scaling.get('partial_rotary_factor'))
-                    rotary_embedding = int(rotary_embedding *
-                                           partial_rotary_factor)
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
                 elif scaling_type == 'llama3':
@@ -208,7 +202,6 @@ class LlamaModel(BaseInputModel):
             use_dynamic_ntk=use_dynamic_ntk,
             rope_scaling_type=scaling_type,
             rope_scaling_factor=scaling_factor,
-            rotary_embedding=rotary_embedding,
             low_freq_factor=low_freq_factor,
             high_freq_factor=high_freq_factor,
             attention_factor=attention_factor,
