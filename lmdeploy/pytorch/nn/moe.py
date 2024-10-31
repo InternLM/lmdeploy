@@ -9,8 +9,6 @@ from lmdeploy.pytorch.distributed import get_world_rank
 
 from ..backends import OpType, get_backend
 
-ENABLE_EP = False
-
 
 class SoftmaxTopK(nn.Module):
     """softmax topk."""
@@ -37,7 +35,8 @@ class FusedMoE(nn.Module):
                  renormalize: bool = False,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 enable_ep: bool = False):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -49,7 +48,8 @@ class FusedMoE(nn.Module):
 
         self.expert_list = None
         self.expert_map = None
-        if self.impl.support_ep() and ENABLE_EP:
+        enable_ep = enable_ep and self.impl.support_ep()
+        if enable_ep:
             world_size, rank = get_world_rank()
             expert_list = self.impl.ep_expert_list(world_size, rank)
             self.expert_list = expert_list
@@ -69,7 +69,7 @@ class FusedMoE(nn.Module):
         self.register_parameter('gate_up_weights', gate_up_weights)
         self.register_parameter('down_weights', down_weights)
 
-        if self.impl.support_ep():
+        if enable_ep:
             gate_up_weights.weight_loader = self.weight_loader_ep
             down_weights.weight_loader = self.weight_loader_ep
         else:
