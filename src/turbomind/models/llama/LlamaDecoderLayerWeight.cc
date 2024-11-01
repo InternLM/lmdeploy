@@ -340,7 +340,6 @@ void loadWeights(LlamaDenseWeight<T>& w, std::string prefix, FtCudaDataType mode
     }
 }
 
-
 template<typename T>
 void LlamaDecoderLayerWeight<T>::mallocWeights()
 {
