@@ -336,12 +336,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     }
     else {
         moe_param_.method = ft::MoeParam::kFused;
-        // Note: This will fail when GPUs of different SMs are mixed
-        if (weight_type_ != ft::WeightType::kINT4 && ft::getSMVersion() >= 90) {
-            // On sm90 the cuBLAS method may be faster as our grouped GEMM is not
-            // optimized for GMMA yet
-            moe_param_.method = ft::MoeParam::kNaive;
-        }
     }
 
     TM_LOG_INFO("%s", toString().c_str());
