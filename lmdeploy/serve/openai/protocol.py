@@ -137,6 +137,8 @@ class ChatCompletionRequest(BaseModel):
     skip_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40
     seed: Optional[int] = None
+    min_new_tokens: Optional[int] = Field(default=None, examples=[None])
+    min_p: float = 0.0
 
 
 class FunctionResponse(BaseModel):
@@ -339,6 +341,8 @@ class GenerateRequest(BaseModel):
     cancel: Optional[bool] = False  # cancel a responding request
     adapter_name: Optional[str] = Field(default=None, examples=[None])
     seed: Optional[int] = None
+    min_new_tokens: Optional[int] = Field(default=None, examples=[None])
+    min_p: float = 0.0
 
 
 class GenerateResponse(BaseModel):

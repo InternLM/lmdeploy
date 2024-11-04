@@ -323,6 +323,12 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - min_new_tokens (int): To generate at least numbers of tokens.
+    - min_p (float): Minimum token probability, which will be scaled by the
+        probability of the most likely token. It must be a value between
+        0 and 1. Typical values are in the 0.01-0.2 range, comparably
+        selective as setting `top_p` in the 0.99-0.8 range (use the
+        opposite of normal `top_p` values)
 
     Currently we do not support the following features:
     - presence_penalty (replaced with repetition_penalty)
@@ -386,6 +392,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         skip_special_tokens=request.skip_special_tokens,
         response_format=response_format,
         logits_processors=logits_processors,
+        min_new_tokens=request.min_new_tokens,
+        min_p=request.min_p,
         random_seed=random_seed)
 
     tools = None
@@ -826,6 +834,12 @@ async def chat_interactive_v1(request: GenerateRequest,
         in the decoding. Default to be True.
     - adapter_name (str): For slora inference. Choose which lora to do the
         inference.
+    - min_new_tokens (int): To generate at least numbers of tokens.
+    - min_p (float): Minimum token probability, which will be scaled by the
+        probability of the most likely token. It must be a value between
+        0 and 1. Typical values are in the 0.01-0.2 range, comparably
+        selective as setting `top_p` in the 0.99-0.8 range (use the
+        opposite of normal `top_p` values)
     """
     if request.cancel:
         if request.session_id != -1:
@@ -867,6 +881,8 @@ async def chat_interactive_v1(request: GenerateRequest,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens,
+        min_new_tokens=request.min_new_tokens,
+        min_p=request.min_p,
         random_seed=random_seed)
     if request.image_url:
         from lmdeploy.vl import load_image

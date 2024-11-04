@@ -22,8 +22,8 @@ Docker 版本应不低于 18.03。并且需按照[官方指南](https://www.hias
 
 #### Drivers，Firmware 和 CANN
 
-目标机器需安装华为驱动程序和固件版本 23.0.3，请参考
-[CANN 驱动程序和固件安装](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/80RC1alpha003/softwareinst/instg/instg_0019.html)
+目标机器需安装华为驱动程序和固件版本至少为 23.0.3，请参考
+[CANN 驱动程序和固件安装](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/800alpha001/softwareinst/instg/instg_0005.html)
 和[下载资源](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=8.0.RC2.beta1&driver=1.0.25.alpha)。
 
 另外，`docker/Dockerfile_aarch64_ascend`没有提供CANN 安装包，用户需要自己从[昇腾资源下载中心](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC2.beta1&product=4&model=26)下载CANN(version 8.0.RC2.beta1)软件包。
