@@ -360,6 +360,12 @@ class AsyncEngine(LogitsMixin):
 
         loop = _get_event_loop()
         if loop.is_running():
+            # when there is another event loop running in the same thread
+            # it will raise error. Putting it in another thread might case
+            # slightly performance drop, about 10%
+            logger.warn(
+                'Another event loop running detected. Run this event loop '
+                'in a separate thread. This might cause performance drop.')
             thread = Thread(target=lambda: loop.run_until_complete(gather()))
             thread.start()
             thread.join()
