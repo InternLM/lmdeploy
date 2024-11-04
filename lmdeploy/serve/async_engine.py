@@ -358,7 +358,10 @@ class AsyncEngine(LogitsMixin):
             await asyncio.gather(
                 *[_inner_call(i, generators[i]) for i in range(len(prompts))])
 
-        _get_event_loop().run_until_complete(gather())
+        loop = _get_event_loop()
+        thread = Thread(target=lambda: loop.run_until_complete(gather()))
+        thread.start()
+        thread.join()
         outputs = outputs[0] if need_list_wrap else outputs
         return outputs
 
