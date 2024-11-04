@@ -10,3 +10,4 @@ from .minicpmv import MiniCPMVModel  # noqa: F401
 from .mixtral import MixtralModel  # noqa: F401
 from .qwen import QwenModel  # noqa: F401
 from .xcomposer2 import Xcomposer2Model  # noqa: F401
+from .llava_qwen2 import LlavaQwen2Model  # noqa: F401
