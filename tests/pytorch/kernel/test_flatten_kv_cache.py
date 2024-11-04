@@ -112,7 +112,7 @@ def quant(kv: torch.Tensor, nbits: int = 8):
     amin = kv.amin(dim=-1, keepdim=True)
     scales = (amax - amin) / (2**nbits - 1)
     zeros = -amin / scales
-    q_kv = precise_round((kv - amin) / scales).to(torch.uint8)
+    q_kv = (kv / scales + zeros + 0.5).to(torch.uint8)
     if nbits == 4:
         q_kv1, q_kv2 = q_kv.split(q_kv.shape[-1] // 2, -1)
         q_kv = q_kv1 + q_kv2 * 16
