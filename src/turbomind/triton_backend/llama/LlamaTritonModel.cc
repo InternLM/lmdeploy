@@ -380,6 +380,10 @@ std::unique_ptr<ft::Engine<T>> LlamaTritonModel<T>::createSharedModelInstance(
                                                   shared_state_,
                                                   device_id);
 
+    // Wait for pinned buffers to be allocated for all ranks, otherwise tuning will hang
+    // due to concurrent kernel launch & cudaMallocHost
+    shared_state_->barrier->wait();
+
     engine->Start();
 
     return engine;
