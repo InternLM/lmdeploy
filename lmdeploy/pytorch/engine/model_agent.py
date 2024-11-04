@@ -500,15 +500,22 @@ def _start_tp_process(proc_id: int,
 def _check_context_alive(mp_context: mp.ProcessContext):
     """check context alive."""
     procs: List[mp.Process] = mp_context.processes
-    failed_ranks = list(idx for idx, p in enumerate(procs) if not p.is_alive())
-    if len(failed_ranks) == 0:
+    failed_procs = list(idx for idx, p in enumerate(procs) if not p.is_alive())
+    if len(failed_procs) == 0:
         return
-    for p in procs:
+
+    log_procs = []
+    for idx, p in enumerate(procs):
         if p.is_alive():
             p.terminate()
         else:
+            exitcode = p.exitcode
+            if exitcode > 0:
+                # terminated exitcode < 0
+                log_procs.append((idx, exitcode))
             p.close()
-    logger.error(f'TP process {failed_ranks} failed.')
+    for idx, exitcode in log_procs:
+        logger.error(f'TP process {idx} failed with exitcode {exitcode}.')
     # TODO: not safe exit.
     os._exit(1)
 
