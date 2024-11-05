@@ -21,17 +21,15 @@ class MolmoVisionModel(VisonModel):
 
     def build_model(self):
         """Load model."""
-        # import pdb; pdb.set_trace()
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         with init_empty_weights():
             config = self.hf_config
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)
             if not self.with_llm:
+                # Remove nn modules other than embedding from the LLM model
                 for key in ['emb_drop', 'ln_f', 'blocks', 'ff_out']:
                     del model.model.transformer[key]
-                # get `wte.new_embedding` parameters, which will be
-                # used to perform image token embbeding later on
                 self.token_embedding = model.model.transformer.wte
             else:
                 self.vl_model = model
@@ -59,13 +57,20 @@ class MolmoVisionModel(VisonModel):
     @torch.no_grad()
     def forward(self,
                 images: List[Image],
-                params: List[Dict] = None) -> List[torch.Tensor]:
+                params: List[Dict] = None) -> List[Dict]:
         """forward the model with given input.
 
         Args:
-            images (List): [None]
-            messages (List):
-        """
+            images (List): [None] it is not used
+            params (List): the inputs after precessing GPT4V messages in
+                `MolmoChatTemplateWrapper`. Its format is like the following:
+                [[
+                    {'role': 'user', 'content': 'user prompt'},
+                    {'role': 'asssistant', 'content': 'assistant prompt'},
+                    {'role': 'user', 'content': 'user prompt', 'images': [PIL image list]},
+                    ...
+                ]]
+        """  # noqa
 
         messages = params[0]
         assert isinstance(messages, List)
@@ -113,10 +118,6 @@ class MolmoVisionModel(VisonModel):
                 batch_idx = torch.tile(batch_idx[:, None],
                                        [1, image_features.shape[1]])
                 image_features = image_features.to(embeddings.device)
-                # print(f'>> molmo forward image ...')
-                # print(f'image_features.shape: {image_features.shape}')
-                # print(f'image_input_idx.shape: {image_input_idx.shape}')
-                # print(f'batch_idx[valid]: {batch_idx[valid]}')
                 embeddings[batch_idx[valid],
                            image_input_idx[valid]] += image_features[valid]
                 assert embeddings.shape[:2] == (batch_size, seq_len)

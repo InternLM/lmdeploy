@@ -62,7 +62,6 @@ class InternVLModel(LlamaModel):
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
             hidden_units = model_arg['hidden_size']
-            inter_size = model_arg['intermediate_size']
             attn_head_num = model_arg['num_attention_heads']
             vocab_size = model_arg['vocab_size']
             inter_size = model_arg['intermediate_size']
