@@ -8,8 +8,8 @@ from lmdeploy.pytorch.kernels.dlinfer import linear
 from ..linear import LinearBuilder, LinearImpl
 
 
-class AscendLinearImpl(LinearImpl):
-    """Ascend linear implementation api."""
+class DlinferLinearImpl(LinearImpl):
+    """Dlinfer linear implementation api."""
 
     def forward(self,
                 x,
@@ -20,8 +20,8 @@ class AscendLinearImpl(LinearImpl):
         return linear(x, weight, bias, all_reduce)
 
 
-class AscendLinearBuilder(LinearBuilder):
-    """Ascend linear implementation builder."""
+class DlinferLinearBuilder(LinearBuilder):
+    """Dlinfer linear implementation builder."""
 
     @staticmethod
     def build(in_features: int,
@@ -29,4 +29,4 @@ class AscendLinearBuilder(LinearBuilder):
               bias: bool = True,
               dtype: torch.dtype = None):
         """build."""
-        return AscendLinearImpl()
+        return DlinferLinearImpl()

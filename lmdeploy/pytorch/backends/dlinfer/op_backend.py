@@ -41,8 +41,8 @@ class DlinferOpsBackend(DefaultOpsBackend):
             from .moe import DlinferFusedMoEBuilder
             return DlinferFusedMoEBuilder
         elif layer_type == OpType.Linear:
-            from .linear import AscendLinearBuilder
-            return AscendLinearBuilder
+            from .linear import DlinferLinearBuilder
+            return DlinferLinearBuilder
         elif layer_type == OpType.LinearW4A16:
             from .awq_modules import AwqLinearW4A16Builder
             return AwqLinearW4A16Builder
