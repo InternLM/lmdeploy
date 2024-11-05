@@ -543,7 +543,7 @@ void invokeFlattenKV_v2(T*           k,
             return invoke(tkv, std::integral_constant<int, 64>{});
         }
         else if (head_dim == 128) {
-            return invoke(tkv, std::integral_constant<int, 64>{});
+            return invoke(tkv, std::integral_constant<int, 128>{});
         }
         FT_CHECK(0);
     };
