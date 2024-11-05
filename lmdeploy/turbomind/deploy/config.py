@@ -66,6 +66,7 @@ class ModelConfig:
 class AttentionConfig:
     rotary_embedding: int = 128
     rope_theta: float = 10000.0
+    attention_factor: float = None
     max_position_embeddings: int = 0
     original_max_position_embeddings: int = 0
     rope_scaling_type: str = ''
@@ -73,6 +74,8 @@ class AttentionConfig:
     use_dynamic_ntk: int = 0
     low_freq_factor: float = 1.0
     high_freq_factor: float = 1.0
+    beta_fast: float = 32.0
+    beta_slow: float = 1.0
     use_logn_attn: int = 0
     cache_block_seq_len: int = 64
 

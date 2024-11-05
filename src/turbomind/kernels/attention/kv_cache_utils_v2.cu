@@ -23,9 +23,14 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                                                     const float* rope_base,
                                                     int          rope_dim,
                                                     float        rope_ti_scale,
+                                                    float        rope_scaling_factor,
                                                     float        llama3_inv_scaling_factor,
                                                     float        llama3_alpha,
                                                     float        llama3_beta,
+                                                    float        yarn_ramp_inv_factor_div_2,
+                                                    float        yarn_ramp_inv_factor_mul_min,
+                                                    float        yarn_inv_scaling_factor,
+                                                    float        attention_scaling,
                                                     int64_t      stride_b,
                                                     int64_t      stride_c,
                                                     int64_t      stride_h,
@@ -128,9 +133,14 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                           rope_dim,
                           base,
                           rope_ti_scale,
+                          rope_scaling_factor,
                           llama3_inv_scaling_factor,
                           llama3_alpha,
                           llama3_beta,
+                          yarn_ramp_inv_factor_div_2,
+                          yarn_ramp_inv_factor_mul_min,
+                          yarn_inv_scaling_factor,
+                          attention_scaling,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
@@ -204,9 +214,14 @@ void invokeProcessKV_v2(char**       blocks,
                         const float* rope_base,
                         int          rope_dim,
                         float        rope_ti_scale,
+                        float        rope_scaling_factor,
                         float        llama3_inv_scaling_factor,
                         float        llama3_1_alpha,
                         float        llama3_1_beta,
+                        float        yarn_ramp_inv_factor_div_2,
+                        float        yarn_ramp_inv_factor_mul_min,
+                        float        yarn_inv_scaling_factor,
+                        float        attention_scaling,
                         int64_t      stride_b,
                         int64_t      stride_c,
                         int64_t      stride_h,
@@ -245,9 +260,14 @@ void invokeProcessKV_v2(char**       blocks,
                                                                               rope_base,
                                                                               rope_dim,
                                                                               rope_ti_scale,
+                                                                              rope_scaling_factor,
                                                                               llama3_inv_scaling_factor,
                                                                               llama3_1_alpha,
                                                                               llama3_1_beta,
+                                                                              yarn_ramp_inv_factor_div_2,
+                                                                              yarn_ramp_inv_factor_mul_min,
+                                                                              yarn_inv_scaling_factor,
+                                                                              attention_scaling,
                                                                               stride_b,
                                                                               stride_c,
                                                                               stride_h,
@@ -279,9 +299,14 @@ void invokeProcessKV_v2(char**       blocks,
                                      const float* rope_base,                                                           \
                                      int          rope_dim,                                                            \
                                      float        rope_ti_scale,                                                       \
+                                     float        rope_scaling_factor,                                                 \
                                      float        llama3_inv_scaling_factor,                                           \
                                      float        llama3_1_alpha,                                                      \
                                      float        llama3_1_beta,                                                       \
+                                     float        yarn_ramp_inv_factor_div_2,                                          \
+                                     float        yarn_ramp_inv_factor_mul_min,                                        \
+                                     float        yarn_inv_scaling_factor,                                             \
+                                     float        attention_scaling,                                                   \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \
                                      int64_t      stride_h,                                                            \
@@ -309,9 +334,14 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                                                     const float* rope_base,
                                                     int          rope_dim,
                                                     float        rope_ti_scale,
+                                                    float        rope_scaling_factor,
                                                     float        llama3_inv_scaling_factor,
                                                     float        llama3_alpha,
                                                     float        llama3_beta,
+                                                    float        yarn_ramp_inv_factor_div_2,
+                                                    float        yarn_ramp_inv_factor_mul_min,
+                                                    float        yarn_inv_scaling_factor,
+                                                    float        attention_scaling,
                                                     int64_t      stride_b,
                                                     int64_t      stride_c,
                                                     int64_t      stride_h,
@@ -397,9 +427,14 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                           rope_dim,
                           base,
                           rope_ti_scale,
+                          rope_scaling_factor,
                           llama3_inv_scaling_factor,
                           llama3_alpha,
                           llama3_beta,
+                          yarn_ramp_inv_factor_div_2,
+                          yarn_ramp_inv_factor_mul_min,
+                          yarn_inv_scaling_factor,
+                          attention_scaling,
                           std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
@@ -434,9 +469,14 @@ void invokeFlattenKV_v2(T*           k,
                         const float* rope_base,
                         int          rope_dim,
                         float        rope_ti_scale,
+                        float        rope_scaling_factor,
                         float        llama3_inv_scaling_factor,
                         float        llama3_alpha,
                         float        llama3_beta,
+                        float        yarn_ramp_inv_factor_div_2,
+                        float        yarn_ramp_inv_factor_mul_min,
+                        float        yarn_inv_scaling_factor,
+                        float        attention_scaling,
                         int64_t      stride_b,
                         int64_t      stride_c,
                         int64_t      stride_h,
@@ -472,9 +512,14 @@ void invokeFlattenKV_v2(T*           k,
                                                                             rope_base,
                                                                             rope_dim,
                                                                             rope_ti_scale,
+                                                                            rope_scaling_factor,
                                                                             llama3_inv_scaling_factor,
                                                                             llama3_alpha,
                                                                             llama3_beta,
+                                                                            yarn_ramp_inv_factor_div_2,
+                                                                            yarn_ramp_inv_factor_mul_min,
+                                                                            yarn_inv_scaling_factor,
+                                                                            attention_scaling,
                                                                             stride_b,
                                                                             stride_c,
                                                                             stride_h,
@@ -503,9 +548,14 @@ void invokeFlattenKV_v2(T*           k,
                                      const float* rope_base,                                                           \
                                      int          rope_dim,                                                            \
                                      float        rope_ti_scale,                                                       \
+                                     float        rope_scaling_factor,                                                 \
                                      float        llama3_inv_scaling_factor,                                           \
                                      float        llama3_alpha,                                                        \
                                      float        llama3_beta,                                                         \
+                                     float        yarn_ramp_inv_factor_div_2,                                          \
+                                     float        yarn_ramp_inv_factor_mul_min,                                        \
+                                     float        yarn_inv_scaling_factor,                                             \
+                                     float        attention_scaling,                                                   \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \
                                      int64_t      stride_h,                                                            \

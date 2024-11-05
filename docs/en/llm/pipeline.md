@@ -136,6 +136,10 @@ logits = pipe.get_logits(input_ids)
 ppl = pipe.get_ppl(input_ids)
 ```
 
+```{note}
+get_ppl returns the cross entropy loss without applying the exponential operation afterwards
+```
+
 - **Below is an example for pytorch backend. Please install triton first.**
 
 ```shell

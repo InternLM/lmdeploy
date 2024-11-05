@@ -296,6 +296,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.rotary_embedding_dim    = param_.rotary_embedding_dim;
         params.rotary_embedding_base   = param_.rotary_embedding_base;
         params.max_position_embeddings = param_.max_position_embeddings;
+        params.rope_scaling_factor     = param_.rope_scaling_factor;
+        params.attention_scaling       = 1.0;
         params.rope_ti_scale           = 1.f;
         if (param_.rope_scaling_type == "linear") {
             params.rope_ti_scale /= param_.rope_scaling_factor;
@@ -306,6 +308,34 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             params.llama3_inv_scaling_factor  = 1.0 / param_.rope_scaling_factor;
             params.llama3_alpha = param_.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
             params.llama3_beta  = param_.low_freq_factor * inv_diff_freq_factor;
+        }
+        if (param_.rope_scaling_type == "yarn") {
+            const double PI                  = 3.14159265358979323846;
+            auto         find_correction_dim = [&](float num_rotations) {
+                return (param_.rotary_embedding_dim
+                        * std::log(param_.max_position_embeddings / (num_rotations * 2 * PI)))
+                       / (2 * std::log(param_.rotary_embedding_base));
+            };
+            auto find_correction_range = [&](float low_rot, float high_rot, float& low, float& high) {
+                low  = std::floor(find_correction_dim(low_rot));
+                high = std::ceil(find_correction_dim(high_rot));
+                low  = std::max(low, 0.f);
+                high = std::min(high, param_.rotary_embedding_dim - 1.f);
+            };
+            float low, high;
+            find_correction_range(param_.beta_fast, param_.beta_slow, low, high);
+            if (low == high) {
+                high += 0.01f;
+            }
+            params.yarn_ramp_inv_factor_div_2   = 1.0 / (high - low) / 2.0;
+            params.yarn_ramp_inv_factor_mul_min = 1.0 / (high - low) * low;
+            params.yarn_inv_scaling_factor      = (1 - 1.0 / param_.rope_scaling_factor);
+            if (param_.attention_factor < 0) {
+                params.attention_scaling = 0.1 * std::log(param_.rope_scaling_factor) + 1.0;
+            }
+            else {
+                params.attention_scaling = param_.attention_factor;
+            }
         }
 
         params.use_logn_attn = param_.use_logn_attn;

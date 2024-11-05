@@ -272,6 +272,9 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     // rotary embedding parameters
     attn_param_.rotary_embedding_dim    = attention_reader["rotary_embedding"].as<int>();
     attn_param_.rotary_embedding_base   = attention_reader["rope_theta"].as<float>(10000.0f);
+    attn_param_.attention_factor        = attention_reader["attention_factor"].as<float>(-1.f);
+    attn_param_.beta_fast               = attention_reader["beta_fast"].as<float>(32.f);
+    attn_param_.beta_slow               = attention_reader["beta_slow"].as<float>(1.f);
     attn_param_.rope_scaling_type       = attention_reader["rope_scaling_type"].as<std::string>("");
     attn_param_.rope_scaling_factor     = attention_reader["rope_scaling_factor"].as<float>(0.f);
     attn_param_.low_freq_factor         = attention_reader["low_freq_factor"].as<float>(1.0);
@@ -340,12 +343,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     }
     else {
         moe_param_.method = ft::MoeParam::kFused;
-        // Note: This will fail when GPUs of different SMs are mixed
-        if (weight_type_ != ft::WeightType::kINT4 && ft::getSMVersion() >= 90) {
-            // On sm90 the cuBLAS method may be faster as our grouped GEMM is not
-            // optimized for GMMA yet
-            moe_param_.method = ft::MoeParam::kNaive;
-        }
     }
 
     TM_LOG_INFO("%s", toString().c_str());
@@ -383,6 +380,10 @@ std::unique_ptr<ft::Engine<T>> LlamaTritonModel<T>::createSharedModelInstance(
                                                   std::move(ctx),
                                                   shared_state_,
                                                   device_id);
+
+    // Wait for pinned buffers to be allocated for all ranks, otherwise tuning will hang
+    // due to concurrent kernel launch & cudaMallocHost
+    shared_state_->barrier->wait();
 
     engine->Start();
 
