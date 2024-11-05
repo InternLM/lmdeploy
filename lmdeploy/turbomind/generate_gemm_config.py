@@ -54,10 +54,22 @@ def main(head_num: int = 32,
             from transformers import AutoConfig
             config = AutoConfig.from_pretrained(model_path,
                                                 trust_remote_code=True)
-            head_num = config.num_attention_heads
-            size_per_head = config.hidden_size // head_num
-            inter_size = config.intermediate_size
-            vocab_size = config.vocab_size
+            try:
+                head_num = config.num_attention_heads
+                size_per_head = config.hidden_size // head_num
+                inter_size = config.intermediate_size
+                vocab_size = config.vocab_size
+            except AttributeError as e:
+                if hasattr(config, "text_config"):
+                    config = config.text_config
+                elif hasattr(config, "llm_config"):
+                    config = config.llm_config
+                else:
+                    raise AttributeError(f"not found attribute in {config}, please check your model config file. {e}")
+                head_num = config.num_attention_heads
+                size_per_head = config.hidden_size // head_num
+                inter_size = config.intermediate_size
+                vocab_size = config.vocab_size
     for bsz in range(1, max_batch_size + 1):
         subprocess.call(
             f'{get_llama_gemm()} {bsz} 1 1 {head_num} {size_per_head}'
