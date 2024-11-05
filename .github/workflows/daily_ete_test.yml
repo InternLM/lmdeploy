@@ -17,12 +17,12 @@ on:
         required: true
         description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
         type: string
-        default: "['turbomind', 'pytorch', 'turbomind_vl']"
+        default: '["turbomind", "pytorch", "turbomind_vl"]'
       model:
         required: true
         description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
         type: string
-        default: "['pipeline','restful','chat']"
+        default: '["pipeline", "restful", "chat"]'
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -206,8 +206,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend) || fromJSON('["turbomind", "pytorch", "turbomind_vl"]')}}
-        model: ${{ fromJSON(inputs.model) || fromJSON('["pipeline","restful","chat"]')}}
+        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch", "turbomind_vl"]')}}
+        model: ${{ fromJSON(inputs.model || '["pipeline", "restful", "chat"]')}}
         exclude:
           - backend: turbomind_vl
             model: chat
