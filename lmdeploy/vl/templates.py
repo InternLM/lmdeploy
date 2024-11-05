@@ -431,58 +431,57 @@ class GLM4VChatTemplateWrapper(VLChatTemplateWrapper):
 class MolmoChatTemplateWrapper(VLChatTemplateWrapper):
 
     async def async_collect_pil_images(
-            self, messages: Dict) -> List[Tuple[PIL.Image.Image, Dict]]:
+            self, messages: List[Dict]) -> List[Tuple[PIL.Image.Image, Dict]]:
         """collect images from messages.
 
         Args:
-            messages (Dict): a user request of GPT4V message format
+            messages (List[Dict]): a user request of GPT4V message format
         """
-        images_with_kwargs = []
-        for message in messages:
-            role = message['role']
-            content = message['content']
-            if role != 'user' or isinstance(content, str):
-                # means message is user's prompt input or assistant's prompt
-                images_with_kwargs.append([None, message])
+        if isinstance(messages, Dict):
+            messages = [messages]
+        assert isinstance(messages, List)
 
-            # If the role is a user and the content is not a string, it
-            # indicates the message is composed of ONE user prompt and a list
-            # of images
-            image_prompt = [
-                item['content'] for item in content if item['type'] == 'text'
-            ]
-            if len(image_prompt) != 0:
-                raise RuntimeError(f'invalid format {message}')
-            images_with_kwargs.append('image_prompt', image_prompt)
+        out_messages = []
+
+        def _inner_call(i, in_messages, out_messages):
+            role = in_messages[i]['role']
+            content = in_messages[i]['content']
+            if role != 'user' or isinstance(content, str):
+                # means message is user's prompt input or assistant's prompt,
+                # returning it directory
+                out_messages.append(in_messages[i])
+                return
+            # the role is a user and the content is a list
+            assert isinstance(content, List)
+            message = dict(role=role, content='', images=[])
             for item in content:
                 # 'image_url': means url or local path to image.
                 # 'image_data': means PIL.Image.Image object.
                 if item['type'] == 'image_url':
-                    item_copy = item['image_url'].copy()
                     try:
-                        url = item_copy.pop('url')
-                        images_with_kwargs.append([url, item_copy])
+                        image = load_image(item['image_url']['url'])
+                        message['images'].append(image)
                     except KeyError:
                         logger.error(f'invalid format {message}')
                 elif item['type'] == 'image_data':
-                    item_copy = item['image_data'].copy()
                     try:
-                        data = item_copy.pop('data')
-                        images_with_kwargs.append([data, item_copy])
+                        image = load_image(item['image_data']['data'])
+                        message['images'].append(image)
                     except KeyError:
                         logger.error(f'invalid format {message}')
-
-        def _inner_call(i, images):
-            url_or_data = images[i][0]
-            images[i][0] = load_image(url_or_data)
+                elif item['type'] == 'text':
+                    message['content'] = item['text']
+                else:
+                    logger.error(f'unexpected content type {message}')
+            out_messages.append(message)
 
         await asyncio.gather(*[
             asyncio.get_event_loop().run_in_executor(None, _inner_call, i,
-                                                     images_with_kwargs)
-            for i in range(len(images_with_kwargs))
+                                                     messages, out_messages)
+            for i in range(len(messages))
         ])
-
-        return images_with_kwargs
+        #
+        return [(None, out_messages)]
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs) -> str:
         """Return a placeholder "IMAGE_TOKEN" so that

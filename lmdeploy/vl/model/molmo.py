@@ -2,10 +2,9 @@
 
 from typing import Dict, List
 
-import numpy as np
 import torch
 from PIL.Image import Image
-from transformers import AutoModel, AutoProcessor
+from transformers import AutoModelForCausalLM, AutoProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
@@ -22,21 +21,21 @@ class MolmoVisionModel(VisonModel):
 
     def build_model(self):
         """Load model."""
-        from accelerate import init_empty_weights
+        # import pdb; pdb.set_trace()
+        from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         with init_empty_weights():
             config = self.hf_config
-            model = AutoModel.from_config(config, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(config,
+                                                     trust_remote_code=True)
             if not self.with_llm:
-                for key in ['emb_drop', 'ln_f', 'blocks']:
+                for key in ['emb_drop', 'ln_f', 'blocks', 'ff_out']:
                     del model.model.transformer[key]
                 # get `wte.new_embedding` parameters, which will be
                 # used to perform image token embbeding later on
                 self.token_embedding = model.model.transformer.wte
             else:
                 self.vl_model = model
-            model.half()
 
-        from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
@@ -45,53 +44,108 @@ class MolmoVisionModel(VisonModel):
                 max_memory=self.max_memory,
                 no_split_module_classes=[
                     'ResidualAttentionBlock', 'Embedding'
-                ],
-                dtype=torch.half)
+                ])
 
         # We need eval mode to freeze the weights in model, thus,
         # avoid randomness in inference.
         self.model = model.eval()
         self.config = config
-        # TODO: get embedding model
 
-        processor = AutoProcessor.from_pretrained(self.model_path,
-                                                  trust_remote_code=True,
-                                                  torch_dtype='auto',
-                                                  device_map='auto')
-        self.image_processor = processor.image_processor
-
-    def preprocess(self, images: List[Image], params: List[Dict] = None):
-        images = [np.array(x.convert('RGB')) for x in images]
-        image_idx = [-1] * len(images)
-
-        DEFAULT_IMAGE_PATCH_TOKEN = '<im_patch>'
-        DEFAULT_IM_START_TOKEN = '<im_start>'
-        DEFAULT_IM_END_TOKEN = '<im_end>'
-        DEFAULT_IM_COL_TOKEN = '<im_col>'
-
-        image_patch_token_id = self.image_processor.special_token_ids[
-            DEFAULT_IMAGE_PATCH_TOKEN]
-        image_col_token_id = self.image_processor.special_token_ids[
-            DEFAULT_IM_COL_TOKEN]
-        image_start_token_id = self.image_processor.special_token_ids[
-            DEFAULT_IM_START_TOKEN]
-        image_end_token_id = self.image_processor.special_token_ids[
-            DEFAULT_IM_END_TOKEN]
-        out = self.image_processor.multimodal_preprocess(
-            images=images,
-            image_idx=image_idx,
-            tokens=np.asarray([]).astype(np.int32),
-            sequence_length=0,  # unused parameter
-            image_patch_token_id=image_patch_token_id,
-            image_col_token_id=image_col_token_id,
-            image_start_token_id=image_start_token_id,
-            image_end_token_id=image_end_token_id,
-        )
-        return out
+        self.processor = AutoProcessor.from_pretrained(self.model_path,
+                                                       trust_remote_code=True,
+                                                       torch_dtype='auto',
+                                                       device_map='auto')
 
     @torch.no_grad()
     def forward(self,
                 images: List[Image],
                 params: List[Dict] = None) -> List[torch.Tensor]:
-        self.preprocess(images)
-        # return self._forward_func(images, params)
+        """forward the model with given input.
+
+        Args:
+            images (List): [None]
+            messages (List):
+        """
+
+        messages = params[0]
+        assert isinstance(messages, List)
+
+        results = []
+        prompts = ''
+        for message in messages:
+            if 'images' in message.keys():
+                # preprocess images. The output is a dict
+                inputs = self.processor.process(images=message['images'],
+                                                text=message['content'])
+                inputs = {
+                    k: v.to(self.model.device).unsqueeze(0)
+                    for k, v in inputs.items()
+                }
+                input_ids = inputs['input_ids']
+                images = inputs[
+                    'images']  # (batch_size, num_image, num_patch, d_model)
+                image_input_idx = inputs[
+                    'image_input_idx']  # (batch_size, num_image, num_patch)
+                image_masks = inputs['image_masks']
+                batch_size, seq_len = input_ids.size()
+                assert batch_size == 1
+
+                # Get embeddings of input.
+                if input_ids is not None:
+                    input_ids = input_ids * (input_ids != -1).to(
+                        input_ids.dtype)
+                embeddings = self.model.model.transformer.wte(input_ids)
+                image_features, _ = self.model.model.vision_backbone(
+                    images, image_masks)
+                num_image, num_patch = image_features.shape[1:3]
+                assert image_input_idx.shape == (batch_size, num_image,
+                                                 num_patch)
+
+                # insert the image feature into the embedding.
+                image_features = image_features.view(batch_size,
+                                                     num_image * num_patch, -1)
+                image_input_idx = image_input_idx.view(batch_size,
+                                                       num_image * num_patch)
+
+                valid = image_input_idx >= 0
+                batch_idx = torch.arange(batch_size, device=embeddings.device)
+                batch_idx = torch.tile(batch_idx[:, None],
+                                       [1, image_features.shape[1]])
+                image_features = image_features.to(embeddings.device)
+                # print(f'>> molmo forward image ...')
+                # print(f'image_features.shape: {image_features.shape}')
+                # print(f'image_input_idx.shape: {image_input_idx.shape}')
+                # print(f'batch_idx[valid]: {batch_idx[valid]}')
+                embeddings[batch_idx[valid],
+                           image_input_idx[valid]] += image_features[valid]
+                results.append(input_ids.flatten().tolist(),
+                               embeddings.flatten())
+            else:
+                role = message['role']
+                content = message['content']
+                assert isinstance(content, str)
+                prompt = ''
+                if role == 'user':
+                    prompt = f'User: {content} '
+                elif role == 'assistant':
+                    prompt = f'Assistant:{content}'
+                else:
+                    assert 0, f'molmo does not support role {role}, message is {message}'  # noqa
+                input_ids = self.processor.tokenizer.encode(
+                    prompt, add_special_tokens=False)
+                results.append((input_ids, None))
+                prompts += prompt
+        # concat input_ids from results, calculate the range in the input_ids
+        # where embeddings will be copied to
+        # import pdb; pdb.set_trace()
+        input_ids = []
+        input_embeddings = []
+        input_embedding_ranges = []
+        for result in results:
+            input_ids += result[0]
+            if results[1] is not None:
+                input_embeddings.append(results[1])
+                start = len(input_ids)
+                end = start + result[1].shape[0]
+                input_embedding_ranges.append((start, end))
+        return (prompts, input_ids, input_embeddings, input_embedding_ranges)
