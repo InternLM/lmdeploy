@@ -102,10 +102,7 @@ class VLAsyncEngine(AsyncEngine):
 
                 if isinstance(self.vl_prompt_template,
                               MolmoChatTemplateWrapper):
-                    results['input_ids'] = features[0]
-                    results['input_embeddings'] = features[1]
-                    results['input_embedding_range'] = features[2]
-                    return results
+                    return features[0]
 
             features = [x.cpu().numpy() for x in features]
             input_ids = []
