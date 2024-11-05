@@ -80,8 +80,14 @@ class InternVLModel(LlamaModel):
                 scaling_factor = model_arg['rope_scaling'].get('factor', '')
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
+            addition_kwargs = {}
+            if model_arg['architectures'][0] == 'Qwen2ForCausalLM':
+                addition_kwargs['attn_bias'] = 1
 
         return dict(num_layer=num_layer,
+                    size_per_head=hidden_units // attn_head_num,
+                    rotary_embedding=hidden_units // attn_head_num,
+                    **addition_kwargs,
                     norm_eps=norm_eps,
                     hidden_units=hidden_units,
                     inter_size=inter_size,
