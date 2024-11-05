@@ -1,8 +1,9 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import json
 import os.path as osp
 
 from .base import INPUT_MODELS
-from .llama import LlamaReader, LlamaModel
+from .llama import LlamaModel, LlamaReader
 
 
 class LlavaQwen2Reader(LlamaReader):
@@ -17,7 +18,8 @@ class LlavaQwen2Reader(LlamaReader):
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict, policy):
         model_cfg = model_cfg.get('text_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg, policy)
+        super().__init__(new_params, unused_params, last_bin, model_cfg,
+                         policy)
 
 
 @INPUT_MODELS.register_module(name='llava_qwen2')
@@ -26,9 +28,6 @@ class LlavaQwen2Model(LlamaModel):
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
         super().__init__(model_path, tokenizer_path, **kwargs)
-        from transformers import AutoConfig
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        arch = config.text_config.architectures[0]
         self.Reader = LlavaQwen2Reader
 
     def model_info(self):
@@ -53,7 +52,7 @@ class LlavaQwen2Model(LlamaModel):
             # special for the model: llava-hf/llava-interleave-qwen-7b-hf
             hidden_units = model_arg.get('hidden_size', 4096)
             vocab_size = model_arg.get('vocab_size', 152000)
-            intermediate_size = model_arg.get("intermediate_size", 11008)
+            intermediate_size = model_arg.get('intermediate_size', 11008)
             attn_bias = int(model_arg.get('attn_bias', 1))
             use_logn_attn = int(model_arg.get('use_logn_attn', 0))
 
@@ -73,6 +72,6 @@ class LlavaQwen2Model(LlamaModel):
                     use_dynamic_ntk=use_dynamic_ntk,
                     rope_scaling_factor=scaling_factor,
                     inter_size=intermediate_size,
-                    use_logn_attn = use_logn_attn,
+                    use_logn_attn=use_logn_attn,
                     attn_bias=attn_bias,
                     vocab_size=vocab_size)

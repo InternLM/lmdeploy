@@ -26,7 +26,7 @@ SUPPORTED_ARCHS = dict(
     LlavaLlamaForCausalLM='llama',
     LlavaMistralForCausalLM='llama',
     # Llava_interleave
-    LlavaForConditionalGeneration="llava_qwen2",
+    LlavaForConditionalGeneration='llava_qwen2',
     # xcomposer2
     InternLMXComposer2ForCausalLM='xcomposer2',
     # internvl
