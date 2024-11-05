@@ -199,10 +199,10 @@ def _flash_prefill_fwd_kernel(
     loop_start = 0
     kv_min_loc = tl.zeros([BLOCK_M], dtype=tl.int32)
     if window_size > 0:
-        start_block_id = tl.maximum(history_len - window_size, 0) // BLOCK_N
+        start_block_id = tl.maximum(
+            history_len + start_m * BLOCK_M - window_size, 0) // BLOCK_N
         kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
         loop_start = start_block_id * BLOCK_N
-        kv_start_loc += loop_start
 
     offs_dk = tl.arange(0, BLOCK_DK)
     mask_dk = offs_dk < head_dim_k

@@ -224,7 +224,7 @@ class TestFlashAttention:
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(4, 2)],
                              indirect=True)
     @pytest.mark.parametrize(['q_seqlens', 'history_lens'], [
-        ([30, 50, 70, 90], [50, 40, 30, 20]),
+        ([30, 50, 70, 90], [50, 40, 30, 90]),
     ],
                              indirect=True)
     @pytest.mark.parametrize('win_size', (32, ), indirect=True)
