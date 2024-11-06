@@ -627,7 +627,7 @@ class Tokenizer:
         encoded = self.model.encode(s, add_bos, add_special_tokens, **kwargs)
         if encoded[:2] == [self.bos_token_id] * 2:
             get_logger('lmdeploy').warn(
-                f'Detected duplicate leading {self.bos_token_id} in prompt, '
+                f'Detected duplicate bos token {self.bos_token_id} in prompt, '
                 'this will likely reduce response quality, one of them will be'
                 'removed')
             encoded = encoded[1:]
