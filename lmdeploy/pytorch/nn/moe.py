@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Optional
+from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -55,12 +55,19 @@ class FusedMoE(nn.Module):
             self.expert_list = expert_list
             self.expert_map = dict(
                 (eid, idx) for idx, eid in enumerate(expert_list))
-            gate_up_weights, down_weights = self.create_weights_ep(
-                hidden_dim, ffn_dim, expert_list, dtype=dtype, device=device)
+            num_experts = len(expert_list)
+            gate_up_weights, down_weights = self.create_weights(hidden_dim,
+                                                                ffn_dim,
+                                                                num_experts,
+                                                                dtype=dtype,
+                                                                device=device)
         else:
             hidden_dim, ffn_dim = self._update_args(hidden_dim, ffn_dim)
-            gate_up_weights, down_weights = self.create_weights_tp(
-                hidden_dim, ffn_dim, num_experts, dtype=dtype, device=device)
+            gate_up_weights, down_weights = self.create_weights(hidden_dim,
+                                                                ffn_dim,
+                                                                num_experts,
+                                                                dtype=dtype,
+                                                                device=device)
         gate_up_weights = torch.nn.Parameter(gate_up_weights,
                                              requires_grad=False)
         down_weights = torch.nn.Parameter(down_weights, requires_grad=False)
@@ -93,9 +100,8 @@ class FusedMoE(nn.Module):
         ffn_dim = ffn_dim // world_size
         return hidden_dim, ffn_dim
 
-    def create_weights_tp(self, hidden_dim: int, ffn_dim: int,
-                          num_experts: int, dtype: torch.dtype,
-                          device: torch.device):
+    def create_weights(self, hidden_dim: int, ffn_dim: int, num_experts: int,
+                       dtype: torch.dtype, device: torch.device):
         """create weights."""
         gate_up_weights = torch.empty((num_experts, ffn_dim * 2, hidden_dim),
                                       dtype=dtype,
@@ -104,14 +110,6 @@ class FusedMoE(nn.Module):
                                    dtype=dtype,
                                    device=device)
         return gate_up_weights, down_weights
-
-    def create_weights_ep(self, hidden_dim: int, ffn_dim: int,
-                          expert_list: List[int], dtype: torch.dtype,
-                          device: torch.device):
-        """create weights tp."""
-        num_experts = len(expert_list)
-        return self.create_weights_tp(hidden_dim, ffn_dim, num_experts, dtype,
-                                      device)
 
     def update_weights(self):
         """update weights."""
