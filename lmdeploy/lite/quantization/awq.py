@@ -39,6 +39,12 @@ NORM_FCS_MAP = {
     'GLMBlock': {
         'input_layernorm': ['self_attention.query_key_value'],
         'post_attention_layernorm': ['mlp.dense_h_to_4h']
+    },
+    'MixtralDecoderLayer': {
+        'input_layernorm':
+        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm':
+        ['block_sparse_moe.experts.{i}.w1', 'block_sparse_moe.experts.{i}.w3']
     }
 }
 
@@ -73,6 +79,10 @@ FC_FCS_MAP = {
     'GLMBlock': {
         # 'self_attention.query_key_value': ['self_attention.dense']
         # 'mlp.dense_h_to_4h': ['mlp.dense_4h_to_h']
+    },
+    'MixtralDecoderLayer': {
+        'self_attn.v_proj': ['self_attn.o_proj'],
+        'block_sparse_moe.experts.{i}.w3': ['block_sparse_moe.experts.{i}.w2']
     }
 }
 
