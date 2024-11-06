@@ -28,8 +28,7 @@ def getModelList(tp_num):
     return [{
         'model': item,
         'cuda_prefix': None,
-        'tp_num': tp_num,
-        'extra': ' --cache-max-entry-count 0.5'
+        'tp_num': tp_num
     } for item in get_vl_model_list(tp_num)]
 
 
@@ -61,14 +60,10 @@ def test_restful_chat_tp2(config, worker_id):
 
 def getKvintModelList(tp_num, quant_policy: int = None):
     return [{
-        'model':
-        item,
-        'cuda_prefix':
-        None,
-        'tp_num':
-        tp_num,
-        'extra':
-        f'--quant-policy {quant_policy} --cache-max-entry-count 0.5'
+        'model': item,
+        'cuda_prefix': None,
+        'tp_num': tp_num,
+        'extra': f'--quant-policy {quant_policy}'
     } for item in get_vl_model_list(tp_num, quant_policy)
             if 'qwen2' not in item.lower() or quant_policy == 8]
 
