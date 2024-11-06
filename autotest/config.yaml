@@ -149,6 +149,7 @@ turbomind_quatization:
         - mistralai/Mistral-7B-Instruct-v0.1
         - mistralai/Mistral-7B-Instruct-v0.2
         - mistralai/Mistral-7B-Instruct-v0.3
+        - mistralai/Mixtral-8x7B-Instruct-v0.1
         - deepseek-ai/deepseek-coder-1.3b-instruct
         - codellama/CodeLlama-7b-Instruct-hf
     gptq:

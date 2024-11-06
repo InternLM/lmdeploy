@@ -91,7 +91,7 @@ with read_base():
         models as lmdeploy_qwen2_7b  # noqa: F401, E501
 
     # read models
-
+race_datasets = [race_datasets[1]]
 summarizer = dict(
     dataset_abbrs=[
         ['race-high', 'accuracy'],

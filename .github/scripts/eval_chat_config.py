@@ -256,6 +256,8 @@ pytorch_gemma_2_9b_it = deepcopy(basic_pytorch_chat_tp1)
 pytorch_gemma_2_9b_it['abbr'] = 'pytorch_gemma_2_9b_it'
 pytorch_gemma_2_9b_it['path'] = 'google/gemma-2-9b-it'
 
+race_datasets = [race_datasets[1]]
+
 # Summarizer
 summarizer = dict(
     dataset_abbrs=[

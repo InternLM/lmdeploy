@@ -29,7 +29,7 @@ def getModelList(tp_num):
         'model': item,
         'cuda_prefix': None,
         'tp_num': tp_num,
-        'extra': ' --cache_max_entry_count 0.5'
+        'extra': ' --cache-max-entry-count 0.5'
     } for item in get_vl_model_list(tp_num)]
 
 
@@ -68,7 +68,7 @@ def getKvintModelList(tp_num, quant_policy: int = None):
         'tp_num':
         tp_num,
         'extra':
-        f'--quant-policy {quant_policy} --cache_max_entry_count 0.5'
+        f'--quant-policy {quant_policy} --cache-max-entry-count 0.5'
     } for item in get_vl_model_list(tp_num, quant_policy)
             if 'qwen2' not in item.lower() or quant_policy == 8]
 
