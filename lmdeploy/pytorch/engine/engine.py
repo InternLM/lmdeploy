@@ -561,7 +561,7 @@ class Engine:
 
     def extract_tokens(self, token_ids, eos_token_ids):
         """Token list containing eos."""
-        if not isinstance(token_ids, list):
+        if not isinstance(token_ids, np.ndarray):
             return [token_ids], token_ids in eos_token_ids
         for i, token_id in enumerate(token_ids):
             if token_id in eos_token_ids:
