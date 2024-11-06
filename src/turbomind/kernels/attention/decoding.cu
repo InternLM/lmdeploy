@@ -86,7 +86,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
         return false;
     };
 
-    auto dispatch_d = [&](auto arch) {
+    auto dispatch_head_num = [&](auto arch) {
         if (params.size_per_head == 128) {
             return dispatch_kv(arch, std::integral_constant<int, 128>{});
         }
@@ -98,15 +98,15 @@ void dispatchDecoding(const AttentionParams<T>& params)
 
     auto dispatch = [&]() {
         if (params.arch >= 80) {
-            return dispatch_d(arch::Sm80{});
+            return dispatch_head_num(arch::Sm80{});
         }
 
         if constexpr (!std::is_same_v<T, nv_bfloat16>) {
             if (params.arch == 75) {
-                return dispatch_d(arch::Sm75{});
+                return dispatch_head_num(arch::Sm75{});
             }
             else if (params.arch >= 70) {
-                return dispatch_d(arch::Sm70{});
+                return dispatch_head_num(arch::Sm70{});
             }
         }
 
