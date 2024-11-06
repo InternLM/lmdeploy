@@ -14,20 +14,19 @@ template<class T>
 void dispatchAttention(const AttentionParams<T>& params)
 {
     using namespace attention;
-    if (params.size_per_head == 128) {
-
+    auto dispatch = [&](const auto dim) {
+        constexpr int kHeadDim = dim;
         if (params.arch >= 80) {
-            using Config = AttentionConfig<arch::Sm80, T, 128, CacheType::kLinear>;
+            using Config = AttentionConfig<arch::Sm80, T, kHeadDim, CacheType::kLinear>;
             return invokeAttention<typename Config::Kernel>(params);
         }
-
         if constexpr (!std::is_same_v<T, nv_bfloat16>) {
             if (params.arch == 75) {
-                return invokeAttention<typename AttentionConfig<arch::Sm75, T, 128, CacheType::kLinear>::Kernel>(
+                return invokeAttention<typename AttentionConfig<arch::Sm75, T, kHeadDim, CacheType::kLinear>::Kernel>(
                     params);
             }
             else if (params.arch >= 70) {
-                return invokeAttention<typename AttentionConfig<arch::Sm70, T, 128, CacheType::kLinear>::Kernel>(
+                return invokeAttention<typename AttentionConfig<arch::Sm70, T, kHeadDim, CacheType::kLinear>::Kernel>(
                     params);
             }
         }
@@ -38,6 +37,14 @@ void dispatchAttention(const AttentionParams<T>& params)
                     params.arch);
             }
         }
+        FT_CHECK(0);
+    };
+
+    if (params.size_per_head == 64) {
+        return dispatch(std::integral_constant<int, 64>{});
+    }
+    else if (params.size_per_head == 128) {
+        return dispatch(std::integral_constant<int, 128>{});
     }
     FT_CHECK(0);
 }

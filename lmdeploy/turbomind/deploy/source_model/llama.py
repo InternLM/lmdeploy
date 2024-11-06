@@ -189,6 +189,8 @@ class LlamaModel(BaseInputModel):
                     beta_slow = rope_scaling.get('beta_slow', 1.0)
 
         return dict(
+            size_per_head=hidden_units // attn_head_num,
+            rotary_embedding=hidden_units // attn_head_num,
             num_layer=num_layer,
             norm_eps=norm_eps,
             head_num=attn_head_num,
