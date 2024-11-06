@@ -12,6 +12,8 @@ from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
+MEDUSA_WEIGHT_NAME = 'medusa_lm_head.pt'
+
 
 def load_weight(param: torch.nn.Parameter, loaded_weight: torch.Tensor,
                 **kwargs):
@@ -55,6 +57,9 @@ def _get_weight_type(model_path: str, use_safetensors: bool = None):
         # Load from a sharded PyTorch checkpoint
         weight_type = 'pytorch'
         is_sharded = True
+    elif osp.isfile(osp.join(model_path, MEDUSA_WEIGHT_NAME)):
+        # Load from a medusa head
+        weight_type = 'medusa'
     else:
         raise RuntimeError('Unknown weight type.')
 
@@ -83,6 +88,8 @@ def _get_weight_path(model_path: str, weight_type: str):
         weight_name = SAFE_WEIGHTS_NAME
     elif weight_type == 'pytorch':
         weight_name = WEIGHTS_NAME
+    elif weight_type == 'medusa':
+        weight_name = MEDUSA_WEIGHT_NAME
     else:
         raise RuntimeError('Unknown weight type.')
 

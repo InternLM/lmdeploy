@@ -11,6 +11,7 @@ def pipeline(model_path: str,
              backend_config: Optional[Union[TurbomindEngineConfig,
                                             PytorchEngineConfig]] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
+             speculative_model: str = None,
              log_level: str = 'ERROR',
              max_log_len: int = None,
              **kwargs):
@@ -33,6 +34,7 @@ def pipeline(model_path: str,
             config instance. Default to None.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
+        speculative_model (str): the path of the draft model.
         log_level(str): set log level whose value among [CRITICAL, ERROR,
             WARNING, INFO, DEBUG]
         max_log_len(int): Max number of prompt characters or prompt tokens
@@ -82,6 +84,7 @@ def pipeline(model_path: str,
                           backend=backend,
                           backend_config=backend_config,
                           chat_template_config=chat_template_config,
+                          speculative_model=speculative_model,
                           max_log_len=max_log_len,
                           **kwargs)
 

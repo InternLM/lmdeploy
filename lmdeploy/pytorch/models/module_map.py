@@ -173,4 +173,9 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mllama.MllamaForConditionalGeneration',
 })
 
+# medusa
+MODULE_MAP.update({
+    'MedusaModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.medusa.MedusaModel',
+})
 CUSTOM_MODULE_MAP = dict()

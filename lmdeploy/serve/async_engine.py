@@ -126,6 +126,8 @@ class AsyncEngine(LogitsMixin):
             config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
+        speculative_model (str): The path of the draft model. Only can be used
+            with pytorch backend for speculative decoding.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
     """
@@ -137,6 +139,7 @@ class AsyncEngine(LogitsMixin):
                  backend_config: Optional[Union[TurbomindEngineConfig,
                                                 PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
+                 speculative_model: Optional[str] = None,
                  max_log_len: int = None,
                  **kwargs) -> None:
         logger.info(
@@ -155,12 +158,15 @@ class AsyncEngine(LogitsMixin):
 
         # build backend engine
         if backend == 'turbomind':
+            assert speculative_model is None, 'plese use '\
+                '--backend pytorch to use speculative decoding'
             self._build_turbomind(model_path=model_path,
                                   backend_config=backend_config,
                                   **kwargs)
         elif backend == 'pytorch':
             self._build_pytorch(model_path=model_path,
                                 backend_config=backend_config,
+                                speculative_model=speculative_model,
                                 **kwargs)
         else:
             raise ValueError(f'unsupported backend {backend}')
@@ -204,11 +210,13 @@ class AsyncEngine(LogitsMixin):
             model_path: str,
             backend_config: Optional[Union[TurbomindEngineConfig,
                                            PytorchEngineConfig]] = None,
+            speculative_model: Optional[str] = None,
             **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
         self.engine = Engine(model_path=model_path,
-                             engine_config=backend_config)
+                             engine_config=backend_config,
+                             speculative_model=speculative_model)
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 

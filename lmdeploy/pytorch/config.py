@@ -108,6 +108,9 @@ class ModelConfig:
     hf_config: Any = None
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
+    # medusa config
+    medusa_num_heads: int = None
+    medusa_num_layers: int = None
 
     def get_head_size(self):
         """get head size."""
@@ -129,12 +132,22 @@ class ModelConfig:
                 activations. Refer to `PyTorchEngineConfig` for details
         """
         from transformers import AutoConfig
-        hf_config = AutoConfig.from_pretrained(
-            pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
-        if getattr(hf_config, 'model_type', None) in ['phi3']:
-            # phi3 + trust_remote_code leads to error when tp.
+        try:
             hf_config = AutoConfig.from_pretrained(
-                pretrained_model_name_or_path)
+                pretrained_model_name_or_path,
+                trust_remote_code=trust_remote_code)
+            if getattr(hf_config, 'model_type', None) in ['phi3']:
+                # phi3 + trust_remote_code leads to error when tp.
+                hf_config = AutoConfig.from_pretrained(
+                    pretrained_model_name_or_path)
+        except Exception as e:  # noqa
+            from transformers import PretrainedConfig
+            hf_config = PretrainedConfig.from_pretrained(
+                pretrained_model_name_or_path,
+                trust_remote_code=trust_remote_code)
+            # medusa model config
+            if getattr(hf_config, 'medusa_num_heads', None) is not None:
+                setattr(hf_config, 'architectures', ['MedusaModel'])
         return cls.from_hf_config(hf_config,
                                   pretrained_model_name_or_path,
                                   dtype=dtype)
