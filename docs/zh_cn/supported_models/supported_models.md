@@ -51,7 +51,7 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 |     Llama3     |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |    Llama3.1    |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |    Llama3.2    |   1B, 3B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
-|  Llama3.2-VL   |   8B, 90B   | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|  Llama3.2-VL   |  11B, 90B   | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |    InternLM    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |   -   |
 |   InternLM2    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |  InternLM2.5   |     7B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |

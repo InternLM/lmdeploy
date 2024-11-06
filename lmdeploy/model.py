@@ -515,7 +515,7 @@ class InternLM2Chat7B(InternLMChat7B):
                 for tool_call in message['tool_calls']:
                     function = tool_call.get('function', {})
                     function['arguments'] = function.pop('parameters', {})
-                    content += f'<|action_start|><|plugin|>\n{json.dumps(function)}<|action_end|>'
+                    content += f'<|action_start|><|plugin|>\n{json.dumps(function, ensure_ascii=False)}<|action_end|>'
             if 'name' in message and message['name'] in name_map:
                 begin = box_map[role].strip(
                 ) + f" name={name_map[message['name']]}\n"
