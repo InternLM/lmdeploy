@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import ValidationError
 
 from lmdeploy.archs import get_task
 from lmdeploy.messages import (GenerationConfig, LogitsProcessor,
@@ -19,15 +20,15 @@ from lmdeploy.messages import (GenerationConfig, LogitsProcessor,
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
-    ChatCompletionRequest, ChatCompletionResponse,
-    ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse, ChatCompletionTokenLogprob, ChatMessage,
-    ChoiceLogprobs, CompletionRequest, CompletionResponse,
-    CompletionResponseChoice, CompletionResponseStreamChoice,
-    CompletionStreamResponse, DeltaMessage, EmbeddingsRequest, EncodeRequest,
-    EncodeResponse, ErrorResponse, FunctionResponse, GenerateRequest,
-    GenerateResponse, LogProbs, ModelCard, ModelList, ModelPermission,
-    ToolCall, TopLogprob, UsageInfo)
+    ChatCompletionRequest, ChatCompletionRequestMessage,
+    ChatCompletionResponse, ChatCompletionResponseChoice,
+    ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse,
+    ChatCompletionTokenLogprob, ChatMessage, ChoiceLogprobs, CompletionRequest,
+    CompletionResponse, CompletionResponseChoice,
+    CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
+    EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
+    FunctionResponse, GenerateRequest, GenerateResponse, LogProbs, ModelCard,
+    ModelList, ModelPermission, ToolCall, TopLogprob, UsageInfo)
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -334,6 +335,13 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    try:
+        _ = ChatCompletionRequestMessage(messages=request.messages)
+    except ValidationError as error:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            f'Invalid input, input={request.messages}, error={error}')
+
     if VariableInterface.async_engine.id2step.get(str(request.session_id),
                                                   0) != 0:
         return create_error_response(
