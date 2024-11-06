@@ -3,7 +3,7 @@ import dataclasses
 import json
 import uuid
 from abc import abstractmethod
-from typing import Iterable, List, Literal, Optional, Union
+from typing import List, Literal, Optional, Union
 
 from mmengine import Registry
 
