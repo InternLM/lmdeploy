@@ -6,14 +6,9 @@
 #include <numeric>
 #include <random>
 
-#include <cub/block/block_exchange.cuh>
-#include <cub/block/block_load.cuh>
 #include <cub/block/block_reduce.cuh>
 #include <cub/block/block_scan.cuh>
-#include <cub/warp/warp_exchange.cuh>
-#include <cub/warp/warp_merge_sort.cuh>
 #include <cub/warp/warp_scan.cuh>
-#include <cuda_pipeline_primitives.h>
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
