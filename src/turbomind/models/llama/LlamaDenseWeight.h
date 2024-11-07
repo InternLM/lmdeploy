@@ -145,24 +145,28 @@ struct LlamaFfnWeight {
     LlamaFfnWeight(
         size_t hidden_dim, size_t inter_size, size_t tp, WeightType weight_type, int group_size, bool fuse_silu_act)
     {
+        inter_size /= tp;
+
+        this->inter_size = inter_size;
+
         gating.input_dims  = hidden_dim;
-        gating.output_dims = inter_size / tp;
+        gating.output_dims = inter_size;
         gating.type        = weight_type;
         gating.group_size  = group_size;
 
         intermediate.input_dims  = hidden_dim;
-        intermediate.output_dims = inter_size / tp;
+        intermediate.output_dims = inter_size;
         intermediate.type        = weight_type;
         intermediate.group_size  = group_size;
 
         fused_gating_intermediate.input_dims  = hidden_dim;
-        fused_gating_intermediate.output_dims = inter_size / tp * 2;
+        fused_gating_intermediate.output_dims = inter_size * 2;
         fused_gating_intermediate.type        = weight_type;
         fused_gating_intermediate.group_size  = group_size;
 
         is_fused_silu = fuse_silu_act;
 
-        output.input_dims  = inter_size / tp;
+        output.input_dims  = inter_size;
         output.output_dims = hidden_dim;
         output.type        = weight_type;
         output.group_size  = group_size;
@@ -173,6 +177,7 @@ struct LlamaFfnWeight {
     LlamaDenseWeight<T> output;
     LlamaDenseWeight<T> fused_gating_intermediate;
 
+    int  inter_size{};
     bool is_fused_silu{};
 };
 
