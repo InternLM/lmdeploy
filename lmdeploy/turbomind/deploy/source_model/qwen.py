@@ -120,7 +120,6 @@ class Qwen2Model(LlamaModel):
         cfg = super().model_info()
         cfg['attn_bias'] = 1
         return cfg
-    
 
 
 class Qwen2MoeReader(LlamaReader):
@@ -137,11 +136,10 @@ class Qwen2MoeReader(LlamaReader):
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-    
+
     def moe_ffn_gate(self, i):
-        return self.params.get(
-            f'model.layers.{i}.mlp.gate.weight')
-    
+        return self.params.get(f'model.layers.{i}.mlp.gate.weight')
+
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         if not kind:
@@ -153,11 +151,11 @@ class Qwen2MoeReader(LlamaReader):
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-    
+
     def moe_ffn_shared_gate(self, i):
         return self.params.get(
-            f'model.layers.{i}.mlp.shared_expert_gate.weight'
-        )
+            f'model.layers.{i}.mlp.shared_expert_gate.weight')
+
 
 @INPUT_MODELS.register_module(name='qwen2-moe')
 class Qwen2MoeModel(LlamaModel):
@@ -165,9 +163,8 @@ class Qwen2MoeModel(LlamaModel):
     Reader = Qwen2MoeReader
 
     def tokenizer_info(self):
-        """
-        https://huggingface.co/Qwen/Qwen1.5-7B-Chat/blob/main/generation_config.json
-        """  # noqa: E501
+        """https://huggingface.co/Qwen/Qwen1.5-7B-Chat/blob/main/generation_con
+        fig.json."""  # noqa: E501
         n_words = 152064
         bos_id = 151643
         eos_id = 151645
