@@ -6,8 +6,8 @@ from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
 
-class LlavaQwen2Reader(LlamaReader):
-    """LlavaQwen2Reader for llama model."""
+class LlavaReader(LlamaReader):
+    """LlavaReader for llama model."""
 
     attn_layer_prefix = 'language_model.model.layers'
     attn_layer_patten = r'language_model.model.layers.([0-9]+).'
@@ -22,16 +22,26 @@ class LlavaQwen2Reader(LlamaReader):
                          policy)
 
 
-@INPUT_MODELS.register_module(name='llava_qwen2')
-class LlavaQwen2Model(LlamaModel):
-    """LlavaQwen2Model model in hf format."""
+@INPUT_MODELS.register_module(name='llava')
+class LlavaModel(LlamaModel):
+    """LlavaModel model in hf format."""
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
         super().__init__(model_path, tokenizer_path, **kwargs)
-        self.Reader = LlavaQwen2Reader
+        from transformers import AutoConfig
+        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        arch = config.architectures[0]
+        _readers = dict(LlavaForConditionalGeneration=LlavaReader,
+                        LlavaMistralForCausalLM=LlamaReader,
+                        LlavaLlamaForCausalLM=LlamaReader)
+        self.Reader = _readers[arch]
+        self.arch = arch
 
     def model_info(self):
-        """Read model info."""
+        if self.arch in ['LlavaMistralForCausalLM', 'LlavaLlamaForCausalLM']:
+            return super().model_info()
+        """Read model info for LlavaForConditionalGeneration.
+        https://huggingface.co/llava-hf/llava-interleave-qwen-7b-hf"""
         params_path = osp.join(self.model_path, 'config.json')
         with open(params_path) as f:
             model_arg = json.load(f)['text_config']

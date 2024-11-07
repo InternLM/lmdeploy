@@ -23,10 +23,9 @@ SUPPORTED_ARCHS = dict(
     # mistral
     MistralForCausalLM='llama',
     # llava
-    LlavaLlamaForCausalLM='llama',
-    LlavaMistralForCausalLM='llama',
-    # Llava_interleave
-    LlavaForConditionalGeneration='llava_qwen2',
+    LlavaLlamaForCausalLM='llava',
+    LlavaMistralForCausalLM='llava',
+    LlavaForConditionalGeneration='llava',
     # xcomposer2
     InternLMXComposer2ForCausalLM='xcomposer2',
     # internvl
