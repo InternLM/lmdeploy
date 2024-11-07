@@ -254,6 +254,9 @@ def quant_weights(model,
         if skip_if_contains and skip_if_contains in child_name:
             q_linear = fc
             pack_or_skip = 'skipped'
+        elif 'block_sparse_moe.gate' in name:  # moe
+            q_linear = fc
+            pack_or_skip = 'skipped'
         else:
             quantizer = WeightQuantizer(bits, symmetry, 'per_group',
                                         group_size)
