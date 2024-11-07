@@ -31,6 +31,7 @@ def _flatten_kv_cache(
     stride_vos: tl.constexpr,
     stride_vod: tl.constexpr,
     stride_boff,
+    OUT_SIZE: tl.constexpr,
     HEAD_DIM_K: tl.constexpr,
     HEAD_DIM_V: tl.constexpr,
     BLOCK_BS: tl.constexpr,
@@ -42,7 +43,13 @@ def _flatten_kv_cache(
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
 
+    num_batches = tl.num_programs(1)
+
     seqlen = tl.load(seqlens_ptr + batch_id)
+    start_loc = tl.load(start_loc_ptr + batch_id)
+    # fill last block to prevent attention nan
+    if batch_id == num_batches - 1:
+        seqlen = OUT_SIZE - start_loc
     if page_id * BLOCK_BS >= seqlen:
         return
 
@@ -117,6 +124,7 @@ def _flatten_kv_cache_quant(
     stride_vod: tl.constexpr,
     stride_boff,
     quant_policy: tl.constexpr,
+    OUT_SIZE: tl.constexpr,
     HEAD_DIM_K: tl.constexpr,
     HEAD_DIM_V: tl.constexpr,
     BLOCK_BS: tl.constexpr,
@@ -128,11 +136,15 @@ def _flatten_kv_cache_quant(
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
 
+    num_batches = tl.num_programs(1)
+
     seqlen = tl.load(seqlens_ptr + batch_id)
+    start_loc = tl.load(start_loc_ptr + batch_id)
+    if batch_id == num_batches - 1:
+        seqlen = OUT_SIZE - start_loc
     if page_id * BLOCK_BS >= seqlen:
         return
 
-    start_loc = tl.load(start_loc_ptr + batch_id)
     b_off = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
 
     offs_bs = tl.arange(0, BLOCK_BS)
@@ -258,6 +270,7 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_vos=v_states.stride(1),
             stride_vod=v_states.stride(2),
             stride_boff=block_offsets.stride(0),
+            OUT_SIZE=out_size,
             HEAD_DIM_K=k_head_dim,
             HEAD_DIM_V=v_head_dim,
             BLOCK_BS=BLOCK_BS,
@@ -299,6 +312,7 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_vod=v_states.stride(2),
             stride_boff=block_offsets.stride(0),
             quant_policy=quant_policy,
+            OUT_SIZE=out_size,
             HEAD_DIM_K=k_head_dim,
             HEAD_DIM_V=v_head_dim,
             BLOCK_BS=BLOCK_BS,
