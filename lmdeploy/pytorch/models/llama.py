@@ -163,7 +163,7 @@ class LlamaDecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = LlamaAttention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = LlamaMLP(config, dtype=dtype, device=device)
 
         # build input layer norm

@@ -163,7 +163,7 @@ class Qwen2DecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = Qwen2Attention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = Qwen2MLP(config, dtype=dtype, device=device)
 
         # build input layer norm

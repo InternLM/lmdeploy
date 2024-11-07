@@ -80,6 +80,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 | LLaVA(1.5,1.6) |   7B-34B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
 | InternVL(v1.5) |   2B-26B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |   InternVL2    |   1B-40B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+| Mono-InternVL  |     2B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |     Gemma2     |   9B-27B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |      GLM4      |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |     GLM-4V     |     9B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  No   |

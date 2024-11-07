@@ -301,7 +301,7 @@ class DbrxBlock(nn.Module):
                                                     dtype=dtype,
                                                     device=device)
 
-        # builf MLP
+        # build MLP
         self.ffn = DbrxFFN(config, dtype=dtype, device=device)
 
     def forward(

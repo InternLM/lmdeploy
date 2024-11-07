@@ -578,7 +578,8 @@ class InternVL2InternLM2(InternLM2Chat7B):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'internvl2' in path and 'internvl2-4b' not in path:
+        if ('internvl2' in path
+                and 'internvl2-4b' not in path) or 'mono-internvl' in path:
             return 'internvl2-internlm2'
 
 

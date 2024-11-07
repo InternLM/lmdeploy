@@ -9,6 +9,7 @@ LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单�
 - [Yi-VL](https://huggingface.co/01-ai/Yi-VL-6B)
 - [DeepSeek-VL](https://huggingface.co/deepseek-ai/deepseek-vl-7b-chat)
 - [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
+- [Mono-InternVL](https://huggingface.co/OpenGVLab/Mono-InternVL-2B)
 - [MGM](https://huggingface.co/YanweiLi/MGM-7B)
 - [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
 - [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/zh_cn/multi_modal/cogvlm.md)

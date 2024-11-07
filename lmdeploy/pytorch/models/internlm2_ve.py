@@ -6,147 +6,16 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
-                                 SiluAndMul, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
-                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.models.internlm2 import InternLM2Attention, InternLM2MLP
+from lmdeploy.pytorch.nn import RMSNorm, RopeType, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
 
 
-class InternLM2Attention(nn.Module):
-    """Rewrite module of InternLM2Attention."""
-
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
-        super().__init__()
-        quantization_config = getattr(config, 'quantization_config', None)
-        num_heads = config.num_attention_heads
-        num_key_value_heads = config.num_key_value_heads
-        hidden_size = config.hidden_size
-        head_dim = hidden_size // num_heads
-
-        # packed qkv
-        self.wqkv = build_qkv_proj(
-            hidden_size,
-            num_q_heads=num_heads,
-            num_kv_heads=num_key_value_heads,
-            head_size=head_dim,
-            bias=config.bias,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-        )
-
-        # rotary embedding
-        self.apply_rotary_pos_emb = ApplyRotaryEmb()
-
-        # attention
-        self.attn_fwd = Attention(
-            num_heads,
-            head_dim,
-            num_kv_heads=num_key_value_heads,
-        )
-
-        # o_proj
-        self.wo = build_rowwise_linear(num_heads * head_dim,
-                                       hidden_size,
-                                       bias=config.bias,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device,
-                                       is_tp=True)
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        attn_metadata: Any = None,
-    ):
-        """Rewrite of InternLM2Attention.forward."""
-        # qkv proj
-        qkv_states = self.wqkv(hidden_states)
-        # (-1, heads, head_dim)
-        qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.wqkv.split_qkv(
-            qkv_states)
-
-        # apply rotary embedding
-        cos, sin = rotary_pos_emb
-        query_states, key_states = self.apply_rotary_pos_emb(
-            query_states,
-            key_states,
-            cos,
-            sin,
-            inplace=True,
-        )
-
-        # attention
-        attn_output = self.attn_fwd(
-            query_states,
-            key_states,
-            value_states,
-            past_key_value[0],
-            past_key_value[1],
-            attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
-            inplace=True,
-        )
-        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
-
-        # o proj
-        attn_output = self.wo(attn_output)
-        return attn_output
-
-
-class InternLM2MLP(nn.Module):
-    """mlp."""
-
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
-        super().__init__()
-        quantization_config = getattr(config, 'quantization_config', None)
-        # gate up
-        self.gate_up_proj = build_merged_colwise_linear(
-            config.hidden_size,
-            [config.intermediate_size, config.intermediate_size],
-            bias=False,
-            dtype=dtype,
-            device=device,
-            quant_config=quantization_config,
-            is_tp=True,
-        )
-
-        # silu and mul
-        self.act_fn = SiluAndMul(inplace=True)
-
-        # down
-        self.w2 = build_rowwise_linear(config.intermediate_size,
-                                       config.hidden_size,
-                                       bias=False,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device,
-                                       is_tp=True)
-
-    def forward(self, x):
-        """forward."""
-        gate_up = self.gate_up_proj(x)
-        act = self.act_fn(gate_up)
-        return self.w2(act)
-
-
-class InternLM2DecoderLayer(nn.Module):
-    """decoder layer."""
+class InternLM2VEDecoderLayer(nn.Module):
+    """decoder layer with visual expert."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -155,6 +24,7 @@ class InternLM2DecoderLayer(nn.Module):
                  device: torch.device = None):
         super().__init__()
         self.layer_idx = layer_idx
+        self.hidden_size = config.hidden_size
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
@@ -162,6 +32,9 @@ class InternLM2DecoderLayer(nn.Module):
 
         # build MLP
         self.feed_forward = InternLM2MLP(config, dtype=dtype, device=device)
+
+        # build visual expert
+        self.feed_forward_ve = InternLM2MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
         self.attention_norm = RMSNorm(config.hidden_size,
@@ -184,6 +57,8 @@ class InternLM2DecoderLayer(nn.Module):
         past_key_value: Optional[List[torch.FloatTensor]],
         residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
+        vision_embedding_indexing: Optional[torch.Tensor] = None,
+        text_embedding_indexing: Optional[torch.Tensor] = None,
     ):
 
         if residual is None:
@@ -203,14 +78,25 @@ class InternLM2DecoderLayer(nn.Module):
 
         # Fully Connected
         hidden_states, residual = self.ffn_norm(hidden_states, residual)
-        hidden_states = self.feed_forward(hidden_states)
+        if vision_embedding_indexing is not None:
+            hidden_states[:,
+                          vision_embedding_indexing, :] = self.feed_forward_ve(
+                              hidden_states[:, vision_embedding_indexing, :].
+                              reshape(-1, self.hidden_size)).unsqueeze(0)
+            if text_embedding_indexing is not None:
+                hidden_states[:,
+                              text_embedding_indexing, :] = self.feed_forward(
+                                  hidden_states[:, text_embedding_indexing, :].
+                                  reshape(-1, self.hidden_size)).unsqueeze(0)
+        else:
+            hidden_states = self.feed_forward(hidden_states)
 
         outputs = (hidden_states, residual)
         return outputs
 
 
-class InternLM2Model(nn.Module):
-    """internlm2 model."""
+class InternLM2VEModel(nn.Module):
+    """internlm2 model with visual expert."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -229,10 +115,10 @@ class InternLM2Model(nn.Module):
 
         # build all decode layers
         self.layers = nn.ModuleList([
-            InternLM2DecoderLayer(config,
-                                  layer_idx,
-                                  dtype=dtype,
-                                  device=device)
+            InternLM2VEDecoderLayer(config,
+                                    layer_idx,
+                                    dtype=dtype,
+                                    device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
@@ -274,6 +160,8 @@ class InternLM2Model(nn.Module):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        vision_embedding_indexing: Optional[torch.Tensor] = None,
+        text_embedding_indexing: Optional[torch.Tensor] = None,
     ):
         """Rewrite of forward."""
 
@@ -298,6 +186,8 @@ class InternLM2Model(nn.Module):
                 past_key_value=past_key_value,
                 residual=residual,
                 attn_metadata=attn_metadata,
+                vision_embedding_indexing=vision_embedding_indexing,
+                text_embedding_indexing=text_embedding_indexing,
             )
 
         # norm
@@ -310,8 +200,8 @@ class InternLM2Model(nn.Module):
         return self.tok_embeddings
 
 
-class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
-    """rewrote model of InternLM2ForCausalLM."""
+class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
+    """rewrote model of InternLM2ForCausalLM with visual expert."""
 
     packed_modules_mapping = {
         'gate_up_proj': [
@@ -329,7 +219,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         self.config = config
         self.ctx_mgr = ctx_mgr
         # build Model
-        self.model = InternLM2Model(config, dtype=dtype, device=device)
+        self.model = InternLM2VEModel(config, dtype=dtype, device=device)
         # build lm_head
         self.output = build_rowwise_linear(config.hidden_size,
                                            config.vocab_size,
@@ -344,6 +234,8 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
+        vision_embedding_indexing: Optional[torch.Tensor] = None,
+        text_embedding_indexing: Optional[torch.Tensor] = None,
         **kwargs,
     ):
         """model forward, return logits."""
@@ -353,6 +245,8 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            vision_embedding_indexing=vision_embedding_indexing,
+            text_embedding_indexing=text_embedding_indexing,
         )
         return hidden_states
 
@@ -363,9 +257,12 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
     def support_cuda_graph(
         self,
         input_ids: torch.Tensor,
+        attn_metadata: Any = None,
         **kwargs,
     ):
         """support cudagraph."""
+        if not attn_metadata.is_decoding:
+            return False
         seq_lens = input_ids.size(1)
         if seq_lens <= 512:
             return True
