@@ -33,8 +33,6 @@ class ResBlock(nn.Module):
                                            bias=True,
                                            dtype=dtype,
                                            device=device)
-        # Initialize as an identity mapping
-        torch.nn.init.zeros_(self.linear.weight)
         # Use SiLU activation to keep consistent with the Llama model
         self.act = nn.SiLU()
 
@@ -97,8 +95,8 @@ class MedusaModel(nn.Module, CudaGraphMixin):
     def get_logits(self, hidden_states: List[torch.Tensor]):
         """compute logits of the model output."""
         outputs = []
-        for lm_head, hidden_state in zip(self.medusa_head, hidden_states):
-            outputs.append(lm_head(hidden_state))
+        for medusa_head, hidden_state in zip(self.medusa_head, hidden_states):
+            outputs.append(medusa_head[-1](hidden_state))
         outputs = torch.stack(outputs, 1)
         return outputs
 
