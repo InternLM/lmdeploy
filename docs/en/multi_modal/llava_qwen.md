@@ -12,18 +12,10 @@ The next chapter demonstrates how to deploy an LlavaQwen2 model using LMDeploy, 
 
 Please install LMDeploy by following the [installation guide](../get_started/installation.md).
 
-Or, you can build a docker image to set up the inference environment. If the CUDA version on your host machine is `>=12.4`, you can run:
-
-```
-git clone https://github.com/InternLM/lmdeploy.git
-cd lmdeploy
-docker build --build-arg CUDA_VERSION=cu12 -t openmmlab/lmdeploy:llava_qwen2 . -f ./docker/Dockerfile
-```
-
-Otherwise, you can go with:
+Or, you can go with office docker image:
 
 ```shell
-docker build --build-arg CUDA_VERSION=cu11 -t openmmlab/lmdeploy:llava_qwen2 . -f ./docker/Dockerfile
+docker pull openmmlab/lmdeploy:latest
 ```
 
 ## Offline inference
@@ -62,34 +54,6 @@ messages = [
         dict(type='text', text='Describe the two images in detail.'),
         dict(type='image_url', image_url=dict(url='https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/mm_tutorial/Beijing_Small.jpeg')),
         dict(type='image_url', image_url=dict(url='https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/mm_tutorial/Chongqing_Small.jpeg'))
-    ])
-]
-out = pipe(messages, gen_config=GenerationConfig(top_k=1))
-
-messages.append(dict(role='assistant', content=out.text))
-messages.append(dict(role='user', content='What are the similarities and differences between these two images.'))
-out = pipe(messages, gen_config=GenerationConfig(top_k=1))
-```
-
-</details>
-
-<details>
-  <summary>
-    <b>image resolution for performance boost</b>
-  </summary>
-
-```python
-from lmdeploy import pipeline, GenerationConfig
-
-pipe = pipeline('llava-hf/llava-interleave-qwen-7b-hf', log_level='INFO')
-
-min_pixels = 64 * 28 * 28
-max_pixels = 64 * 28 * 28
-messages = [
-    dict(role='user', content=[
-        dict(type='text', text='Describe the two images in detail.'),
-        dict(type='image_url', image_url=dict(min_pixels=min_pixels, max_pixels=max_pixels, url='https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/mm_tutorial/Beijing_Small.jpeg')),
-        dict(type='image_url', image_url=dict(min_pixels=min_pixels, max_pixels=max_pixels, url='https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/mm_tutorial/Chongqing_Small.jpeg'))
     ])
 ]
 out = pipe(messages, gen_config=GenerationConfig(top_k=1))

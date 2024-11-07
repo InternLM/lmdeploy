@@ -104,7 +104,9 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     }
     static constexpr auto _SmemLayoutKV(std::integral_constant<int, 4>)
     {
-        return SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<2, 5, 3>>{};
+        return std::conditional_t<HeadDim == 128,
+                                  SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<2, 5, 3>>,
+                                  SmemLayoutV2<CTA_S, HeadDim, 32, 64, Swizzle<3, 4, 3>>>{};
     }
 
     using SmemLayoutQ = SmemLayoutV2<CTA_H1, HeadDim, CTA_H1, HeadDim, Swizzle<3, 3, 4>>;

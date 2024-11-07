@@ -67,11 +67,10 @@ def is_supported(model_path: str):
     """  # noqa: E501
     import os
 
-    def _is_head_dim_128(cfg):
+    def _is_head_dim_supported(cfg):
         num_attn_head = cfg.num_attention_heads
         hidden_size = cfg.hidden_size
-        # turbomind support head_dim=128
-        return (hidden_size // num_attn_head) == 128
+        return (hidden_size // num_attn_head) in [128, 64]
 
     support_by_turbomind = False
     triton_model_path = os.path.join(model_path, 'triton_models')
@@ -89,9 +88,7 @@ def is_supported(model_path: str):
                     # baichuan-13B, baichuan2-13B not supported by turbomind
                     support_by_turbomind = False
             elif arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
-                # the head_dim of qwen2 0.5b and llama3.2-1b is 64, which
-                # hasn't been supported by turbomind yet
-                support_by_turbomind = _is_head_dim_128(cfg)
+                support_by_turbomind = _is_head_dim_supported(cfg)
             elif arch in ('ChatGLMModel', 'ChatGLMForConditionalGeneration'):
                 # chatglm1/2/3 is not working yet
                 support_by_turbomind = cfg.num_layers == 40
@@ -100,8 +97,8 @@ def is_supported(model_path: str):
                     support_by_turbomind = False
             elif arch == 'InternVLChatModel':
                 # internvl2-4b,internlm2-1b are not working yet
-                support_by_turbomind = _is_head_dim_128(cfg.llm_config)
+                support_by_turbomind = _is_head_dim_supported(cfg.llm_config)
             elif arch == 'LlavaForConditionalGeneration':
-                support_by_turbomind = _is_head_dim_128(cfg.text_config)
+                support_by_turbomind = _is_head_dim_supported(cfg.text_config)
 
     return support_by_turbomind

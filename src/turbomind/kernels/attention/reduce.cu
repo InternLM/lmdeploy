@@ -53,30 +53,25 @@ void invokeReduce(T*           out,
     invoke(std::true_type{}, stride_k);
 }
 
-template void invokeReduce<128>(half*        out,
-                                float*       partial_M,
-                                float*       partial_L,
-                                float*       partial_O,
-                                const int*   split_cnt,
-                                int          partial_len,
-                                int          max_split_cnt,
-                                int          query_num,
-                                int          head_num,
-                                float        exp_scale,
-                                cudaStream_t stream);
+#define INSTANTIATE_invokeReduce(dim, type)                                                                            \
+    template void invokeReduce<dim>(type * out,                                                                        \
+                                    float*       partial_M,                                                            \
+                                    float*       partial_L,                                                            \
+                                    float*       partial_O,                                                            \
+                                    const int*   split_cnt,                                                            \
+                                    int          partial_len,                                                          \
+                                    int          max_split_cnt,                                                        \
+                                    int          query_num,                                                            \
+                                    int          head_num,                                                             \
+                                    float        exp_scale,                                                            \
+                                    cudaStream_t stream);
+
+INSTANTIATE_invokeReduce(128, half);
+INSTANTIATE_invokeReduce(64, half);
 
 #if ENABLE_BF16
-template void invokeReduce<128>(nv_bfloat16* out,
-                                float*       partial_M,
-                                float*       partial_L,
-                                float*       partial_O,
-                                const int*   split_cnt,
-                                int          partial_len,
-                                int          max_split_cnt,
-                                int          query_num,
-                                int          head_num,
-                                float        exp_scale,
-                                cudaStream_t stream);
+INSTANTIATE_invokeReduce(128, nv_bfloat16);
+INSTANTIATE_invokeReduce(64, nv_bfloat16)
 #endif
 
 }  // namespace turbomind::attention
