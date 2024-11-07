@@ -165,7 +165,7 @@ class MoeFfn(Ffn):
 
         if self.shared_gate:
             shared_gate = transpose(r.moe_ffn_shared_gate(i))
-            print(shared_gate)
+            # print(shared_gate)
             self.model.save_split(shared_gate, self._moe_ffn_shared_gate.format(i))
 
 

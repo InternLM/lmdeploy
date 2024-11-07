@@ -197,7 +197,7 @@ struct MoeFfnWeight {
                  bool       fuse_silu_act)
     {
 
-        printf("%d %d %d\n", (int)hidden_dim, (int)inter_size, (int)expert_num);
+        // printf("%d %d %d\n", (int)hidden_dim, (int)inter_size, (int)expert_num);
 
         if (expert_num == 0) {
             return;
