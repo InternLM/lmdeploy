@@ -137,6 +137,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
                                   moe_param.inter_size,
                                   moe_param.expert_num,
                                   moe_param.method,
+                                  moe_param.shared_gate,
                                   tensor_para_size_,
                                   weight_type,
                                   group_size,
@@ -349,17 +350,21 @@ void LlamaDecoderLayerWeight<T>::mallocWeights()
     mallocWeights(self_attn_weights.qkv, attn_bias_);
     mallocWeights(self_attn_weights.output, attn_bias_);
 
-    if (moe_weights.experts.empty()) {
+    if (inter_size_) {
         mallocWeights(ffn_weights.gating, false);
         mallocWeights(ffn_weights.intermediate, false);
         mallocWeights(ffn_weights.output, false);
     }
-    else {
+
+    if (!moe_weights.experts.empty()) {
         mallocWeights(moe_weights.gate, false);
         for (auto& e : moe_weights.experts) {
             mallocWeights(e.gating, false);
             mallocWeights(e.intermediate, false);
             mallocWeights(e.output, false);
+        }
+        if (moe_weights.shared_gate.output_dims) {
+            mallocWeights(moe_weights.shared_gate, false);
         }
     }
 }
@@ -375,10 +380,25 @@ LlamaDecoderLayerWeight<T>::~LlamaDecoderLayerWeight()
     freeWeights(self_attn_weights.qkv);
     freeWeights(self_attn_weights.output);
 
-    freeWeights(ffn_weights.fused_gating_intermediate);
-    freeWeights(ffn_weights.gating);
-    freeWeights(ffn_weights.intermediate);
-    freeWeights(ffn_weights.output);
+    if (inter_size_) {
+        freeWeights(ffn_weights.fused_gating_intermediate);
+        freeWeights(ffn_weights.gating);
+        freeWeights(ffn_weights.intermediate);
+        freeWeights(ffn_weights.output);
+    }
+
+    if (!moe_weights.experts.empty()) {
+        freeWeights(moe_weights.gate);
+        for (auto& e : moe_weights.experts) {
+            freeWeights(e.fused_gating_intermediate);
+            freeWeights(e.gating);
+            freeWeights(e.intermediate);
+            freeWeights(e.output);
+        }
+        if (moe_weights.shared_gate.kernel) {
+            freeWeights(moe_weights.shared_gate);
+        }
+    }
 }
 
 template<typename T>
@@ -428,22 +448,29 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
     getWeightTensor(self_attn_weights.qkv, attn_bias_, get_prefix("attention.w_qkv"), output);
     getWeightTensor(self_attn_weights.output, attn_bias_, get_prefix("attention.wo"), output);
 
-    if (moe_weights.experts.empty()) {
+    if (inter_size_) {
         getWeightTensor(ffn_weights.gating, false, get_prefix("feed_forward.w1"), output);
         getWeightTensor(ffn_weights.intermediate, false, get_prefix("feed_forward.w3"), output);
         getWeightTensor(ffn_weights.output, false, get_prefix("feed_forward.w2"), output);
     }
-    else {
+
+    if (!moe_weights.experts.empty()) {
         output.insert(
             concat(prefix, "moe_ffn.gate.weight"),
             Tensor{MEMORY_GPU, getTensorType<T>(), {moe_weights.gate.kernel_size()}, moe_weights.gate.kernel});
         auto& experts = moe_weights.experts;
         for (size_t i = 0; i < experts.size(); ++i) {
             const std::string name = "moe_ffn.experts." + std::to_string(i);
-            // std::cerr << "FUCK " << get_prefix(concat(name, "w1")) << "\n";
             getWeightTensor(experts[i].gating, false, get_prefix(concat(name, "w1")), output);
             getWeightTensor(experts[i].intermediate, false, get_prefix(concat(name, "w3")), output);
             getWeightTensor(experts[i].output, false, get_prefix(concat(name, "w2")), output);
+        }
+        if (moe_weights.shared_gate.kernel) {
+            output.insert(concat(prefix, "moe_ffn.shared_gate.weight"),
+                          Tensor{MEMORY_GPU,
+                                 getTensorType<T>(),
+                                 {moe_weights.shared_gate.kernel_size()},
+                                 moe_weights.shared_gate.kernel});
         }
     }
 
@@ -681,10 +708,13 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
         convert(ffn.output, is_fused_moe, workspace, size, is_16xx);
     };
 
-    if (moe_weights.experts.empty()) {
+    if (inter_size_) {
+        std::cerr << "process FFN\n";
         process_ffn(ffn_weights, false);
     }
-    else {
+
+    if (!moe_weights.experts.empty()) {
+        std::cerr << "process MoE\n";
         std::vector<std::pair<void*, int>> fused_ptrs;
         std::vector<std::pair<void*, int>> output_ptrs;
         std::vector<std::pair<void*, int>> fused_param_ptrs;

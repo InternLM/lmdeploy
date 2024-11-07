@@ -185,11 +185,15 @@ struct MoeFfnWeight {
                  int        inter_size,
                  int        expert_num,
                  int        method,
+                 bool       has_shared_gate,
                  size_t     tp,
                  WeightType weight_type,
                  int        group_size,
                  bool       fuse_silu_act)
     {
+
+        printf("%d %d %d\n", (int)hidden_dim, (int)inter_size, (int)expert_num);
+
         if (expert_num == 0) {
             return;
         }
@@ -208,10 +212,22 @@ struct MoeFfnWeight {
             // inter size is divided by tp in `FfnWeight`
             e = LlamaFfnWeight<T>{hidden_dim, (size_t)inter_size, tp, weight_type, group_size, fuse_silu_act};
         }
+
+        if (has_shared_gate) {
+            shared_gate.input_dims  = hidden_dim;
+            shared_gate.output_dims = 1;
+            shared_gate.type        = get_default_weight_type<T>();
+            gate.group_size         = group_size;
+        }
+        else {
+            shared_gate = {};
+        }
     }
 
     LlamaDenseWeight<T>            gate;
     std::vector<LlamaFfnWeight<T>> experts;
+
+    LlamaDenseWeight<T> shared_gate;
 
     LlamaFfnWeight<T> block;
 

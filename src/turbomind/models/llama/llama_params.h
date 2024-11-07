@@ -31,9 +31,11 @@ struct MoeParam {
         kNaive,
         kFused
     } method;
-    int expert_num;
-    int experts_per_token;
-    int inter_size;
+    int  expert_num;
+    int  experts_per_token;
+    int  inter_size;
+    bool norm_topk;
+    bool shared_gate;
 };
 
 struct AttentionParam {

@@ -140,14 +140,18 @@ class MoeFfn(Ffn):
     requires:
         r.moe_ffn_expert(e, i, kind)
         r.moe_ffn_gate(i)
+        r.moe_ffn_shared_gate(i)
     """
 
     _moe_ffn_expert = 'layers.{0}.moe_ffn.experts.E.{1}.{2}'
-    _moe_ffn_gate = 'layers.{0}.moe_ffn.gate.{1}'
+    _moe_ffn_gate = 'layers.{0}.moe_ffn.gate.weight'
+    _moe_ffn_shared_gate = 'layers.{0}.moe_ffn.shared_gate.weight'
 
     def __init__(self, model: BaseOutputModel):
         super().__init__(model)
         self.expert_num = model.model_config.expert_num
+        self.inter_size = model.model_config.expert_inter_size
+        self.shared_gate = model.model_config.moe_shared_gate
 
     def apply(self, i: int, r: BaseReader):
         for p in get_params(r.moe_ffn_expert()):
@@ -157,7 +161,12 @@ class MoeFfn(Ffn):
                   i)
 
         gate = transpose(r.moe_ffn_gate(i))
-        self.model.save_split(gate, self._moe_ffn_gate.format(i, 'weight'))
+        self.model.save_split(gate, self._moe_ffn_gate.format(i))
+
+        if self.shared_gate:
+            shared_gate = transpose(r.moe_ffn_shared_gate(i))
+            print(shared_gate)
+            self.model.save_split(shared_gate, self._moe_ffn_shared_gate.format(i))
 
 
 class Attn(Module):
@@ -248,8 +257,11 @@ class Transformer:
 
     def __init__(self, model: BaseOutputModel):
         self.model = model
-        ffn = MoeFfn if model.model_config.expert_num else Ffn
-        modules = [Attn, LayerNorm, ffn]
+        modules = [Attn, LayerNorm]
+        if model.model_config.inter_size:
+            modules.append(Ffn)
+        if model.model_config.expert_num:
+            modules.append(MoeFfn)
         self.modules = [c(model) for c in modules]
         self.misc = Misc(model)
 

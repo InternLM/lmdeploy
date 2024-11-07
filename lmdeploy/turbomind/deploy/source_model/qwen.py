@@ -120,3 +120,67 @@ class Qwen2Model(LlamaModel):
         cfg = super().model_info()
         cfg['attn_bias'] = 1
         return cfg
+    
+
+
+class Qwen2MoeReader(LlamaReader):
+
+    ffn_pattern = r'shared_expert\.'
+
+    def moe_ffn_expert(self, e=None, i=None, kind=None):
+        if not kind:
+            return self.filter(r'experts')
+        result = []
+        for key in ['gate', 'down', 'up']:
+            name = f'model.layers.{i}.mlp.experts.{e}.{key}_proj.{kind}'
+            tensor = self.params.get(name)
+            tensor = self.transform(tensor, kind)
+            result.append(tensor)
+        return (*result, )
+    
+    def moe_ffn_gate(self, i):
+        return self.params.get(
+            f'model.layers.{i}.mlp.gate.weight')
+    
+    def _ffn(self, i: int, kind: str):
+        """Get ffn kind for layer i."""
+        if not kind:
+            return self.filter(self.ffn_pattern)
+        result = []
+        for key in ['gate', 'down', 'up']:
+            tensor = self.params[
+                f'model.layers.{i}.mlp.shared_expert.{key}_proj.{kind}']
+            tensor = self.transform(tensor, kind)
+            result.append(tensor)
+        return (*result, )
+    
+    def moe_ffn_shared_gate(self, i):
+        return self.params.get(
+            f'model.layers.{i}.mlp.shared_expert_gate.weight'
+        )
+
+@INPUT_MODELS.register_module(name='qwen2-moe')
+class Qwen2MoeModel(LlamaModel):
+
+    Reader = Qwen2MoeReader
+
+    def tokenizer_info(self):
+        """
+        https://huggingface.co/Qwen/Qwen1.5-7B-Chat/blob/main/generation_config.json
+        """  # noqa: E501
+        n_words = 152064
+        bos_id = 151643
+        eos_id = 151645
+        return n_words, bos_id, eos_id
+
+    def model_info(self):
+        cfg = self.model_config
+        info = super().model_info()
+        info['expert_num'] = cfg['num_experts']
+        info['expert_inter_size'] = cfg['moe_intermediate_size']
+        info['experts_per_token'] = cfg['num_experts_per_tok']
+        info['inter_size'] = cfg['shared_expert_intermediate_size']
+        info['moe_shared_gate'] = True
+        info['moe_norm_topk_prob'] = cfg['norm_topk_prob']
+        info['attn_bias'] = 1
+        return info

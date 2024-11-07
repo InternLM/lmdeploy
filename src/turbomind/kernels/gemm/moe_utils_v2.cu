@@ -6,8 +6,13 @@
 #include <numeric>
 #include <random>
 
+#include <cub/block/block_exchange.cuh>
+#include <cub/block/block_load.cuh>
 #include <cub/block/block_reduce.cuh>
 #include <cub/block/block_scan.cuh>
+#include <cub/warp/warp_exchange.cuh>
+#include <cub/warp/warp_merge_sort.cuh>
+#include <cub/warp/warp_scan.cuh>
 #include <cuda_pipeline_primitives.h>
 
 #include "src/turbomind/kernels/core/array_ops.h"
@@ -19,7 +24,7 @@ namespace turbomind {
 
 template<int top_k, int block_dim>
 __global__ void MoeGateKernel_V2(float*       scales,  // [e,n]
-                                 int*         masks,   // [E,n], padded
+                                 int8_t*      masks,   // [E,n], padded
                                  int*         accum,   // [E,tiles]
                                  const float* logits,  // [E,n]
                                  int          log_tile,
@@ -88,6 +93,8 @@ __global__ void MoeGateKernel_V2(float*       scales,  // [e,n]
             const int lowbit = (mask & -mask);
             const int e      = 31 - __clz(lowbit);
 
+            // printf("e = %d, ti = %d, idx = %d\n", e, ti, i);
+
             masks[e * tokens_padded + ti] = i;
             atomicAdd(&shared_accum[e][ti >> log_tile], 1);
             top_val[i] = logits[ti * experts + e];
@@ -120,11 +127,11 @@ __global__ void MoeGateKernel_V2(float*       scales,  // [e,n]
     }
 }
 
-template<int block_dim>
-__global__ void MoeScanKernel_V2(int*       f2n,      // [e*n]
+template<int block_dim, class Mask>
+__global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
                                  int*       en2f,     // [e,n]
                                  int*       offsets,  // [E+1]
-                                 int*       masks,    // [E,n], padded
+                                 Mask*      masks,    // [E,n], padded
                                  const int* accum,    // [E,tiles]
                                  int        log_tile,
                                  int        tiles,
@@ -142,13 +149,15 @@ __global__ void MoeScanKernel_V2(int*       f2n,      // [e*n]
 
     constexpr int vec_size = kMoeGateVecSize;
 
-    using Vec = Array<int, vec_size>;
+    using Vec = Array<Mask, vec_size>;
 
     const int tile_id = blockIdx.x;
     const int ei      = blockIdx.y;
 
-    const int global_tile_id = ei * tiles + tile_id;
+    const int  global_tile_id = ei * tiles + tile_id;
+    const bool is_valid       = global_tile_id <= experts * tiles;
 
+#if 0
     int vacc[4]{};
     {
         int idx = threadIdx.x;
@@ -162,6 +171,18 @@ __global__ void MoeScanKernel_V2(int*       f2n,      // [e*n]
     }
 
     int offset = BlockReduce{temp_storage.reduce}.Sum(vacc);
+#else
+
+    int vacc = 0;
+    for (int i = threadIdx.x; i < global_tile_id; i += block_dim) {
+        if (is_valid && i < global_tile_id) {
+            vacc += accum[i];
+        }
+    }
+
+    int offset = BlockReduce{temp_storage.reduce}.Sum(vacc);
+
+#endif
 
     __shared__ int shared_offset;
 
@@ -200,7 +221,7 @@ __global__ void MoeScanKernel_V2(int*       f2n,      // [e*n]
         const bool pred = vi < tile_vec_end;
 
         Vec data;
-        fill(data, -1);
+        fill(data, Mask{-1});
         if (pred) {
             Ldg(data, mask_ptr[vi].data());
         }
@@ -231,17 +252,1360 @@ __global__ void MoeScanKernel_V2(int*       f2n,      // [e*n]
     }
 }
 
+template<int max_expert_num, int max_top_k, bool norm_top_k, int items_per_thread, int block_dim>
+__global__ void MoeGateKernel_v3(float*       scales,  // [e,n]
+                                 int*         masks,   // [E,n], padded
+                                 int*         accum,   // [E,tiles]
+                                 const float* logits,  // [n,E]
+                                 int          log_tile,
+                                 int          tiles,
+                                 int          token_num,
+                                 int          token_num_padded,
+                                 int          expert_num,
+                                 int          top_k)
+{
+    constexpr int max_tiles         = kMoeGateMaxTiles;
+    constexpr int threads_per_token = max_expert_num / items_per_thread;  // 8
+
+    // We use bits in a uint32_t to represent selected experts
+    static_assert(items_per_thread <= 32);
+    // We use warp-level primitives for reduction
+    static_assert(threads_per_token <= 32);
+
+    static_assert((threads_per_token & (threads_per_token - 1)) == 0);
+
+    const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    const int ti = thread_idx / threads_per_token;
+    const int ei = thread_idx % threads_per_token;
+
+    const int warp_ti        = threadIdx.x % WARP_SIZE / threads_per_token;
+    const int warp_ti_offset = warp_ti * threads_per_token;
+
+    __shared__ int shared_accum[max_expert_num][max_tiles];
+
+    for (int i = threadIdx.x; i < expert_num * max_tiles; i += block_dim) {
+        int e = i / max_tiles;
+        int t = i % max_tiles;
+        if (e < expert_num && t < tiles) {
+            shared_accum[e][t] = 0;
+        }
+    }
+
+    __syncthreads();
+
+    float data[items_per_thread];
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i]     = -std::numeric_limits<float>::infinity();
+        const int e = threads_per_token * i + ei;
+        if (e < expert_num && ti < token_num) {
+            data[i] = __ldg(logits + ti * expert_num + e);
+
+            if (ti == 39505) {
+                printf("%f %d\n", data[i], e);
+            }
+        }
+    }
+
+    unsigned mask = (unsigned)-1;
+    float    max_logit;
+
+    auto run = [&](int k) {
+        unsigned bit     = 1;
+        unsigned max_bit = 0;
+        float    max_val = -std::numeric_limits<float>::infinity();
+        // local maximum
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            if ((mask & bit) && data[i] > max_val) {
+                max_bit = bit;
+                max_val = data[i];
+            }
+            asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+        }
+        int   g_max_ei  = ei;
+        float g_max_val = max_val;
+        if constexpr (threads_per_token > 1) {
+            // global maximum
+            PRAGMA_UNROLL
+            for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+                g_max_val = fmaxf(g_max_val, __shfl_xor_sync((uint32_t)-1, g_max_val, m));
+            }
+            // tie breaking
+            const auto active = __ballot_sync((uint32_t)-1, max_val == g_max_val);
+            g_max_ei          = __ffs(active >> (unsigned)warp_ti_offset) - 1;
+        }
+        if (k == 0) {
+            max_logit = g_max_val;
+        }
+        if (ei == g_max_ei) {
+            mask -= max_bit;
+        }
+    };
+
+    run(0);
+    for (int k = 1; k < max_top_k; ++k) {
+        run(k);
+    }
+
+    mask = ~mask;
+
+    float    sum_prob{};
+    unsigned bit = 1;
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        if (norm_top_k == false || (mask & bit)) {
+            data[i] = expf(data[i] - max_logit);
+            sum_prob += data[i];
+        }
+        asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+    }
+
+    PRAGMA_UNROLL
+    for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+        sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
+    }
+
+    sum_prob = fdividef(1.f, sum_prob);
+
+    const unsigned group_mask = ((1U << (unsigned)threads_per_token) - 1U) << (unsigned)warp_ti_offset;
+
+    // 1111 1111 << 24
+
+    const unsigned lanemask_lt = ((1U << (unsigned)ei) - 1U) << (unsigned)warp_ti_offset;
+
+    // 1000 0000
+    // 0111 1111 0000 0000 0000 0000 0000 0000
+
+    int offset = 0;
+    bit        = 1;
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        const int      valid  = mask & bit;
+        const unsigned active = __ballot_sync((uint32_t)-1, valid);
+        if (valid) {
+            const int e   = threads_per_token * i + ei;
+            const int idx = offset + __popc(active & lanemask_lt);
+            if (ti == 39505) {
+                printf("%d %d %f\n", e, idx, data[i] * sum_prob);
+            }
+            masks[e * token_num_padded + ti] = idx;
+            scales[idx * token_num + ti]     = data[i] * sum_prob;
+            // atomic add in Smem
+            atomicAdd(&shared_accum[e][ti >> log_tile], 1);
+        }
+        offset += __popc(active & group_mask);
+        asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+    }
+
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < expert_num * max_tiles; i += block_dim) {
+        int e = i / max_tiles;
+        int t = i % max_tiles;
+        if (e < expert_num && t < tiles) {
+            // atomic add in Gmem
+            atomicAdd(accum + e * tiles + t, shared_accum[e][t]);
+        }
+    }
+}
+
+template<int max_expert_num, int max_top_k, bool norm_top_k, int items_per_thread, int block_dim, int alignment>
+__global__ void MoeGateKernel_v4(float*       scales,  // [e,n]
+                                 int*         masks,   // [E,n], padded
+                                 int*         accum,   // [E,tiles]
+                                 const float* logits,  // [n,E]
+                                 int          log_tile,
+                                 int          tiles,
+                                 int          token_num,
+                                 int          token_num_padded,
+                                 int          expert_num,
+                                 int          top_k)
+{
+    constexpr int max_tiles         = kMoeGateMaxTiles;
+    constexpr int threads_per_token = max_expert_num / items_per_thread;  // 8
+
+    // We use bits in a uint32_t to represent selected experts
+    static_assert(items_per_thread <= 32);
+    // We use warp-level primitives for reduction
+    static_assert(threads_per_token <= 32);
+
+    static_assert((threads_per_token & (threads_per_token - 1)) == 0);
+
+    const int warp_id = threadIdx.x / WARP_SIZE;
+    const int lane_id = threadIdx.x % WARP_SIZE;
+
+    const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    const int ti = thread_idx / threads_per_token;
+    const int ei = thread_idx % threads_per_token;
+
+    const int warp_ti        = threadIdx.x % WARP_SIZE / threads_per_token;
+    const int warp_ti_offset = warp_ti * threads_per_token;
+
+    __shared__ int shared_accum[max_expert_num][max_tiles];
+
+    for (int i = threadIdx.x; i < max_expert_num * max_tiles; i += block_dim) {
+        int e              = i / max_tiles;
+        int t              = i % max_tiles;
+        shared_accum[e][t] = 0;
+    }
+
+#if 0
+    logits += blockIdx.x * block_dim / threads_per_token * expert_num;
+    logits += threadIdx.x / WARP_SIZE * (WARP_SIZE / threads_per_token) * expert_num;
+    constexpr int tokens_per_warp = WARP_SIZE / threads_per_token;
+    __shared__ float smem_data[block_dim / WARP_SIZE][tokens_per_warp][max_expert_num + 1];
+    PRAGMA_UNROLL
+    for (int i = 0; i < tokens_per_warp * max_expert_num; i += WARP_SIZE) {
+        smem_data[warp_id][(lane_id + i) / max_expert_num][(lane_id + i) % max_expert_num] = logits[lane_id + i];
+    }
+    __syncthreads();
+    float data[items_per_thread];
+    for (int i = 0; i < items_per_thread; ++i) {
+        const int e = items_per_thread * ei + i;
+        data[i]     = smem_data[warp_id][lane_id / threads_per_token][e];
+    }
+#else
+    __syncthreads();
+    float data[items_per_thread];
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i] = -std::numeric_limits<float>::infinity();
+    }
+    if (ti < token_num) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; i += alignment) {
+            const int e = items_per_thread * ei + i;
+            if (e < expert_num) {
+                Load((Array<float, alignment>&)data[i], &logits[ti * expert_num + e]);
+            }
+        }
+    }
+#endif
+
+    unsigned mask = (unsigned)-1;
+    float    max_logit;
+
+    auto run = [&](int k) {
+        unsigned bit     = 1;
+        unsigned max_bit = 0;
+        float    max_val = -std::numeric_limits<float>::infinity();
+        // local maximum
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            if ((mask & bit) && data[i] > max_val) {
+                max_bit = bit;
+                max_val = data[i];
+            }
+            asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+        }
+        int   g_max_ei  = ei;
+        float g_max_val = max_val;
+        if constexpr (threads_per_token > 1) {
+            // global maximum
+            PRAGMA_UNROLL
+            for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+                g_max_val = fmaxf(g_max_val, __shfl_xor_sync((uint32_t)-1, g_max_val, m));
+            }
+            // tie breaking
+            const auto active = __ballot_sync((uint32_t)-1, max_val == g_max_val);
+            g_max_ei          = __ffs(active >> (unsigned)warp_ti_offset) - 1;
+        }
+        if (k == 0) {
+            max_logit = g_max_val;
+        }
+        if (ei == g_max_ei) {
+            mask -= max_bit;
+        }
+    };
+
+    run(0);
+    for (int k = 1; k < max_top_k; ++k) {
+        run(k);
+    }
+
+    mask = ~mask;
+
+    float    sum_prob{};
+    unsigned bit = 1;
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        if (norm_top_k == false || (mask & bit)) {
+            data[i] = expf(data[i] - max_logit);
+            sum_prob += data[i];
+        }
+        asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+    }
+
+    PRAGMA_UNROLL
+    for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+        sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
+    }
+
+    sum_prob = fdividef(1.f, sum_prob);
+
+    const int count = __popc(mask);
+
+    using WarpScan = cub::WarpScan<int, threads_per_token>;
+    __shared__ typename WarpScan::TempStorage temp_storage[block_dim / threads_per_token];
+
+    int idx{};
+    WarpScan{temp_storage[threadIdx.x / threads_per_token]}.ExclusiveSum(count, idx);
+
+    bit = 1;
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        const int valid = mask & bit;
+        const int e     = items_per_thread * ei + i;
+        if (valid) {
+            masks[e * token_num_padded + ti] = idx;
+            scales[idx * token_num + ti]     = data[i] * sum_prob;
+            // atomic add in Smem
+            atomicAdd(&shared_accum[e][ti >> log_tile], 1);
+            ++idx;
+        }
+        asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+    }
+
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < expert_num * max_tiles; i += block_dim) {
+        int e = i / max_tiles;
+        int t = i % max_tiles;
+        if (e < expert_num && t < tiles) {
+            // atomic add in Gmem
+            atomicAdd(accum + e * tiles + t, shared_accum[e][t]);
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+template<int max_expert_num, int max_top_k, bool norm_top_k, int items_per_thread, int block_dim, int alignment>
+__global__ void MoeGateKernel_v5(float*       scales,  // [e,n]
+                                 int*         masks,   // [E,n], padded
+                                 int*         accum,   // [E,tiles]
+                                 const float* logits,  // [n,E]
+                                 int          log_tile,
+                                 int          tiles,
+                                 int          token_num,
+                                 int          token_num_padded,
+                                 int          expert_num,
+                                 int          top_k)
+{
+    constexpr int max_tiles         = kMoeGateMaxTiles;
+    constexpr int threads_per_token = max_expert_num / items_per_thread;  // 8
+
+    // We use bits in a uint32_t to represent selected experts
+    static_assert(items_per_thread <= 32);
+    // We use warp-level primitives for reduction
+    static_assert(threads_per_token <= 32);
+
+    static_assert((threads_per_token & (threads_per_token - 1)) == 0);
+
+    const int warp_id = threadIdx.x / WARP_SIZE;
+    const int lane_id = threadIdx.x % WARP_SIZE;
+
+    const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    const int ti = thread_idx / threads_per_token;
+    const int ei = thread_idx % threads_per_token;
+
+    const int warp_ti        = threadIdx.x % WARP_SIZE / threads_per_token;
+    const int warp_ti_offset = warp_ti * threads_per_token;
+
+    __shared__ int shared_accum[max_expert_num][max_tiles];
+
+    for (int i = threadIdx.x; i < max_expert_num * max_tiles; i += block_dim) {
+        int e              = i / max_tiles;
+        int t              = i % max_tiles;
+        shared_accum[e][t] = 0;
+    }
+
+    __syncthreads();
+
+    constexpr int sort_k = std::min(items_per_thread, max_top_k);
+
+    float data[items_per_thread];
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i] = -std::numeric_limits<float>::infinity();
+    }
+    if (ti < token_num) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; i += alignment) {
+            const int e = items_per_thread * ei + i;
+            if (e < expert_num) {
+                Load((Array<float, alignment>&)data[i], &logits[ti * expert_num + e]);
+            }
+        }
+    }
+
+    float value[items_per_thread];
+    int   index[items_per_thread];
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        value[i] = data[i];
+        index[i] = items_per_thread * ei + i;
+    }
+
+    // PRAGMA_UNROLL
+    // for (int i = 0; i < sort_k; ++i) {
+    //     for (int j = items_per_thread - 1; j > i; --j) {
+    //         if (value[j] > value[j - 1]) {
+    //             auto tmp0    = value[j];
+    //             value[j]     = value[j - 1];
+    //             value[j - 1] = tmp0;
+    //             auto tmp1    = index[j];
+    //             index[j]     = index[j - 1];
+    //             index[j - 1] = tmp1;
+    //         }
+    //     }
+    // }
+
+    PRAGMA_UNROLL
+    for (int j = items_per_thread - 1; j > 0; --j) {
+        if (value[j] > value[j - 1]) {
+            auto tmp0    = value[j];
+            value[j]     = value[j - 1];
+            value[j - 1] = tmp0;
+            auto tmp1    = index[j];
+            index[j]     = index[j - 1];
+            index[j - 1] = tmp1;
+        }
+    }
+
+    float max_logit;
+
+    int count = 0;
+
+    auto run = [&](int k) {
+        float max_val = -std::numeric_limits<float>::infinity();
+
+        PRAGMA_UNROLL
+        for (int i = 0; i <= k; ++i) {
+            if (i == count) {
+                max_val = value[i];
+            }
+        }
+
+        if (k + 1 < sort_k) {
+            PRAGMA_UNROLL
+            for (int j = items_per_thread - 1; j > k + 1; --j) {
+                if (value[j] > value[j - 1]) {
+                    auto tmp0    = value[j];
+                    value[j]     = value[j - 1];
+                    value[j - 1] = tmp0;
+                    auto tmp1    = index[j];
+                    index[j]     = index[j - 1];
+                    index[j - 1] = tmp1;
+                }
+            }
+        }
+
+        int   g_max_ei  = ei;
+        float g_max_val = max_val;
+        if constexpr (threads_per_token > 1) {
+            // global maximum
+            PRAGMA_UNROLL
+            for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+                g_max_val = fmaxf(g_max_val, __shfl_xor_sync((uint32_t)-1, g_max_val, m));
+            }
+            // tie breaking
+            const auto active = __ballot_sync((uint32_t)-1, max_val == g_max_val);
+            g_max_ei          = __ffs(active >> (unsigned)warp_ti_offset) - 1;
+        }
+
+        if (k == 0) {
+            max_logit = g_max_val;
+        }
+
+        if (ei == g_max_ei) {
+            count += 1;
+        }
+    };
+
+    PRAGMA_UNROLL
+    for (int k = 0; k < max_top_k; ++k) {
+        run(k);
+    }
+
+    float sum_prob{};
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < sort_k; ++i) {
+        if (i < count) {
+            value[i] = expf(value[i] - max_logit);
+            sum_prob += value[i];
+        }
+    }
+
+    PRAGMA_UNROLL
+    for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+        sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
+    }
+    sum_prob = fdividef(1.f, sum_prob);
+
+    using WarpScan = cub::WarpScan<int, threads_per_token>;
+    __shared__ typename WarpScan::TempStorage temp_storage[block_dim / threads_per_token];
+
+    int idx{};
+    WarpScan{temp_storage[threadIdx.x / threads_per_token]}.ExclusiveSum(count, idx);
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < sort_k; ++i) {
+        if (ti < token_num && i < count) {
+            const int e                      = index[i];
+            masks[e * token_num_padded + ti] = idx;
+            scales[idx * token_num + ti]     = value[i] * sum_prob;
+            atomicAdd(&shared_accum[e][ti >> log_tile], 1);
+            ++idx;
+        }
+    }
+
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < expert_num * max_tiles; i += block_dim) {
+        int e = i / max_tiles;
+        int t = i % max_tiles;
+        if (e < expert_num && t < tiles) {
+            // atomic add in Gmem
+            atomicAdd(accum + e * tiles + t, shared_accum[e][t]);
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////
+
+template<int max_expert_num, int max_top_k, bool norm_top_k, int items_per_thread, int block_dim, int alignment>
+__global__ void MoeGateKernel_v6(float*       scales,  // [e,n]
+                                 int*         masks,   // [E,n], padded
+                                 int*         accum,   // [E,tiles]
+                                 const float* logits,  // [n,E]
+                                 int          log_tile,
+                                 int          tiles,
+                                 int          token_num,
+                                 int          token_num_padded,
+                                 int          expert_num,
+                                 int          top_k)
+{
+    constexpr int max_tiles         = kMoeGateMaxTiles;
+    constexpr int threads_per_token = max_expert_num / items_per_thread;  // 8
+
+    // We use bits in a uint32_t to represent selected experts
+    static_assert(items_per_thread <= 32);
+    // We use warp-level primitives for reduction
+    static_assert(threads_per_token <= 32);
+
+    static_assert((threads_per_token & (threads_per_token - 1)) == 0);
+
+    const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    const int ti = thread_idx / threads_per_token;
+    const int ei = thread_idx % threads_per_token;
+
+    const int warp_ti        = threadIdx.x % WARP_SIZE / threads_per_token;
+    const int warp_ti_offset = warp_ti * threads_per_token;
+
+    __shared__ int shared_accum[max_expert_num][max_tiles];
+
+    for (int i = threadIdx.x; i < max_expert_num * max_tiles; i += block_dim) {
+        int e              = i / max_tiles;
+        int t              = i % max_tiles;
+        shared_accum[e][t] = 0;
+    }
+
+    __syncthreads();
+
+    float data[items_per_thread];
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i] = -std::numeric_limits<float>::infinity();
+    }
+    if (ti < token_num) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; i += alignment) {
+            const int e = items_per_thread * ei + i;
+            if (e < expert_num) {
+                Load((Array<float, alignment>&)data[i], &logits[ti * expert_num + e]);
+            }
+        }
+    }
+
+    float max_logit;
+
+    unsigned mask    = (unsigned)-1;
+    unsigned max_bit = 0;
+    float    max_val = -std::numeric_limits<float>::infinity();
+    {
+        unsigned bit = 1;
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            if ((mask & bit) && data[i] > max_val) {
+                max_bit = bit;
+                max_val = data[i];
+            }
+            asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+        }
+    }
+
+    auto run = [&](int k) {
+        unsigned next_mask    = mask - max_bit;
+        unsigned next_max_bit = 0;
+        float    next_max_val = -std::numeric_limits<float>::infinity();
+        unsigned bit          = 1;
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            if ((next_mask & bit) && data[i] > next_max_val) {
+                next_max_bit = bit;
+                next_max_val = data[i];
+            }
+            asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+        }
+
+        int   g_max_ei  = ei;
+        float g_max_val = max_val;
+
+        if constexpr (threads_per_token > 1) {
+            // global maximum
+            PRAGMA_UNROLL
+            for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+                g_max_val = fmaxf(g_max_val, __shfl_xor_sync((uint32_t)-1, g_max_val, m));
+            }
+            // tie breaking
+            const auto active = __ballot_sync((uint32_t)-1, max_val == g_max_val);
+            g_max_ei          = __ffs(active >> (unsigned)warp_ti_offset) - 1;
+        }
+
+        if (k == 0) {
+            max_logit = g_max_val;
+        }
+
+        if (ei == g_max_ei) {
+            mask    = next_mask;
+            max_bit = next_max_bit;
+            max_val = next_max_val;
+        }
+    };
+
+    run(0);
+    for (int k = 1; k < max_top_k; ++k) {
+        run(k);
+    }
+
+    mask = ~mask;
+
+    float    sum_prob{};
+    unsigned bit = 1;
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        if (norm_top_k == false || (mask & bit)) {
+            data[i] = expf(data[i] - max_logit);
+            sum_prob += data[i];
+        }
+        asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+    }
+
+    PRAGMA_UNROLL
+    for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+        sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
+    }
+
+    sum_prob = fdividef(1.f, sum_prob);
+
+    const int count = __popc(mask);
+
+    using WarpScan = cub::WarpScan<int, threads_per_token>;
+    __shared__ typename WarpScan::TempStorage temp_storage[block_dim / threads_per_token];
+
+    int idx{};
+    WarpScan{temp_storage[threadIdx.x / threads_per_token]}.ExclusiveSum(count, idx);
+
+    bit = 1;
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        const int valid = mask & bit;
+        const int e     = items_per_thread * ei + i;
+        if (valid) {
+            masks[e * token_num_padded + ti] = idx;
+            scales[idx * token_num + ti]     = data[i] * sum_prob;
+            // atomic add in Smem
+            atomicAdd(&shared_accum[e][ti >> log_tile], 1);
+            ++idx;
+        }
+        asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+    }
+
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < expert_num * max_tiles; i += block_dim) {
+        int e = i / max_tiles;
+        int t = i % max_tiles;
+        if (e < expert_num && t < tiles) {
+            // atomic add in Gmem
+            atomicAdd(accum + e * tiles + t, shared_accum[e][t]);
+        }
+    }
+}
+
+template<int max_expert_num, int max_top_k, bool norm_top_k, int items_per_thread, int block_dim, int alignment>
+__global__ void MoeGateKernel_v7(float*       scales,  // [e,n]
+                                 int*         masks,   // [E,n], padded
+                                 int*         accum,   // [E,tiles]
+                                 const float* logits,  // [n,E]
+                                 int          log_tile,
+                                 int          tiles,
+                                 int          token_num,
+                                 int          token_num_padded,
+                                 int          expert_num,
+                                 int          top_k)
+{
+    constexpr int max_tiles         = kMoeGateMaxTiles;
+    constexpr int threads_per_token = max_expert_num / items_per_thread;  // 8
+
+    // We use bits in a uint32_t to represent selected experts
+    static_assert(items_per_thread <= 32);
+    // We use warp-level primitives for reduction
+    static_assert(threads_per_token <= 32);
+
+    static_assert((threads_per_token & (threads_per_token - 1)) == 0);
+
+    const int warp_id = threadIdx.x / WARP_SIZE;
+    const int lane_id = threadIdx.x % WARP_SIZE;
+
+    const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    const int ti = thread_idx / threads_per_token;
+    const int ei = thread_idx % threads_per_token;
+
+    const int warp_ti        = threadIdx.x % WARP_SIZE / threads_per_token;
+    const int warp_ti_offset = warp_ti * threads_per_token;
+
+    // +1 padding greatly reduced (-80%) bank conflicts
+    __shared__ int shared_accum[max_tiles][max_expert_num + 1];
+
+    for (int i = threadIdx.x; i < max_tiles * max_expert_num; i += block_dim) {
+        int e              = i % max_expert_num;
+        int t              = i / max_expert_num;
+        shared_accum[t][e] = 0;
+    }
+
+#if 0
+    logits += blockIdx.x * block_dim / threads_per_token * expert_num;
+    logits += threadIdx.x / WARP_SIZE * (WARP_SIZE / threads_per_token) * expert_num;
+    constexpr int tokens_per_warp = WARP_SIZE / threads_per_token;
+    __shared__ float smem_data[block_dim / WARP_SIZE][tokens_per_warp][max_expert_num];
+    PRAGMA_UNROLL
+    for (int i = 0; i < tokens_per_warp * max_expert_num; i += WARP_SIZE) {
+        smem_data[warp_id][(lane_id + i) / max_expert_num][(lane_id + i) % max_expert_num] = logits[lane_id + i];
+    }
+    __syncthreads();
+    float data[items_per_thread];
+    for (int i = 0; i < items_per_thread; ++i) {
+        const int e = items_per_thread * ei + i;
+        data[i]     = smem_data[warp_id][lane_id / threads_per_token][e];
+    }
+#else
+    __syncthreads();
+    float data[items_per_thread];
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i] = -std::numeric_limits<float>::infinity();
+    }
+    if (ti < token_num) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; i += alignment) {
+            const int e = items_per_thread * ei + i;
+            if (e < expert_num) {
+                Load((Array<float, alignment>&)data[i], &logits[ti * expert_num + e]);
+            }
+        }
+    }
+#endif
+
+    unsigned mask = (unsigned)-1;
+    float    max_logit;
+
+    auto run = [&](int k) {
+        unsigned bit     = 1;
+        unsigned max_bit = 0;
+        float    max_val = -std::numeric_limits<float>::infinity();
+        // local maximum
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            if ((mask & bit) && data[i] > max_val) {
+                max_bit = bit;
+                max_val = data[i];
+            }
+            asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+        }
+        int   g_max_ei  = ei;
+        float g_max_val = max_val;
+        if constexpr (threads_per_token > 1) {
+            // global maximum
+            PRAGMA_UNROLL
+            for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+                g_max_val = fmaxf(g_max_val, __shfl_xor_sync((uint32_t)-1, g_max_val, m));
+            }
+            // tie breaking
+            const auto active = __ballot_sync((uint32_t)-1, max_val == g_max_val);
+            g_max_ei          = __ffs(active >> (unsigned)warp_ti_offset) - 1;
+        }
+        if (k == 0) {
+            max_logit = g_max_val;
+        }
+        if (ei == g_max_ei) {
+            mask -= max_bit;
+        }
+    };
+
+    run(0);
+    for (int k = 1; k < max_top_k; ++k) {
+        run(k);
+    }
+
+    mask = ~mask;
+
+    float    sum_prob{};
+    unsigned bit = 1;
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        if (norm_top_k == false || (mask & bit)) {
+            data[i] = expf(data[i] - max_logit);
+            sum_prob += data[i];
+        }
+        asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+    }
+
+    PRAGMA_UNROLL
+    for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+        sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
+    }
+
+    sum_prob = fdividef(1.f, sum_prob);
+
+    const int count = __popc(mask);
+
+    using WarpScan = cub::WarpScan<int, threads_per_token>;
+    __shared__ typename WarpScan::TempStorage temp_storage[block_dim / threads_per_token];
+
+    int idx{};
+    WarpScan{temp_storage[threadIdx.x / threads_per_token]}.ExclusiveSum(count, idx);
+
+    bit = 1;
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        const int valid = mask & bit;
+        const int e     = items_per_thread * ei + i;
+        if (valid) {
+            masks[e * token_num_padded + ti] = idx;
+            // scales[idx * token_num + ti]     = data[i] * sum_prob;
+            scales[ti * top_k + idx] = data[i] * sum_prob;
+            // atomic add in Smem
+            atomicAdd(&shared_accum[ti >> log_tile][e], 1);
+            ++idx;
+        }
+        asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+    }
+
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < max_expert_num * max_tiles; i += block_dim) {
+        int t = i % max_tiles;
+        int e = i / max_tiles;
+        if (e < expert_num && t < tiles) {
+            // atomic add in Gmem
+            atomicAdd(accum + e * tiles + t, shared_accum[t][e]);
+        }
+    }
+}
+
+template<int max_expert_num,
+         int max_top_k,
+         //  bool norm_top_k,
+         int items_per_thread,
+         int block_dim,
+         int access_size,
+         class Mask>
+__global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
+                                 Mask*        masks,   // [E,n], padded
+                                 int*         accum,   // [E,tiles]
+                                 const float* logits,  // [n,E]
+                                 int          log_tile,
+                                 int          tiles,
+                                 int          token_num,
+                                 int          token_num_padded,
+                                 int          expert_num,
+                                 int          top_k,
+                                 bool         norm_topk)
+{
+    constexpr int max_tiles         = kMoeGateMaxTiles;
+    constexpr int threads_per_token = max_expert_num / items_per_thread;  // 8
+    constexpr int tokens_per_cta    = block_dim / threads_per_token;
+
+    // We use bits in a uint32_t to represent selected experts
+    static_assert(items_per_thread <= 32);
+    // We use warp-level primitives for reduction
+    static_assert(threads_per_token <= 32);
+
+    static_assert((threads_per_token & (threads_per_token - 1)) == 0);
+
+    const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    const int ti = thread_idx / threads_per_token;
+    const int ei = thread_idx % threads_per_token;
+
+    const int bti = threadIdx.x / threads_per_token;
+
+    const int warp_ti = threadIdx.x % WARP_SIZE / threads_per_token;
+
+    const int warp_offset  = thread_idx / WARP_SIZE * WARP_SIZE / threads_per_token;
+    const int block_offset = thread_idx / block_dim * block_dim / threads_per_token;
+
+    float data[items_per_thread];
+    int   idxs[items_per_thread];
+
+#if 0
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i] = -std::numeric_limits<float>::infinity();
+        idxs[i] = threads_per_token * (i / access_size * access_size) + i % access_size + ei * access_size;
+    }
+    if (ti < token_num) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; i += access_size) {
+            const int e = threads_per_token * i + ei * access_size;
+            if (e < expert_num) {
+                Ldg((Array<float, access_size>&)data[i], &logits[ti * expert_num + e]);
+            }
+        }
+    }
+
+    __shared__ union {
+        struct {
+            // +1 padding greatly reduced (-80%) bank conflicts
+            int   shared_accum[max_tiles][max_expert_num + 1];
+            float shared_scales[max_top_k][tokens_per_cta];
+            int   shared_exp_id[max_top_k][tokens_per_cta];
+        };
+    } smem;
+#elif 1
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i] = -std::numeric_limits<float>::infinity();
+        // idxs[i] = threads_per_token * (i / access_size * access_size) + i % access_size + ei * access_size;
+        idxs[i] = ei * items_per_thread + i;
+    }
+    if (ti < token_num) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; i += access_size) {
+            // const int e = threads_per_token * i + ei * access_size;
+            const int e = ei * items_per_thread + i;
+            if (e < expert_num) {
+                Ldg((Array<float, access_size>&)data[i], &logits[ti * expert_num + e]);
+            }
+        }
+    }
+
+    __shared__ union {
+        struct {
+            // +1 padding greatly reduced (-80%) bank conflicts
+            int   shared_accum[max_tiles][max_expert_num + 1];
+            float shared_scales[max_top_k][tokens_per_cta];
+            int   shared_exp_id[max_top_k][tokens_per_cta];
+        };
+    } smem;
+#else
+
+    const int warp_id = threadIdx.x / WARP_SIZE;
+    const int lane_id = threadIdx.x % WARP_SIZE;
+
+    constexpr int vecs_per_thread = items_per_thread / access_size;
+
+    using Vec            = Array<float, access_size>;
+    constexpr int banks  = 128 / sizeof(Vec);
+    constexpr int chunks = 4;  // block_dim / WARP_SIZE;
+
+    __shared__ union {
+        Vec shared_data[chunks][vecs_per_thread * WARP_SIZE / banks][banks + 1];
+        struct {
+            // +1 padding greatly reduced (-80%) bank conflicts
+            int   shared_accum[max_tiles][max_expert_num + 1];
+            float shared_scales[max_top_k][tokens_per_cta];
+            int   shared_exp_id[max_top_k][tokens_per_cta];
+        };
+    } smem;
+
+    __align__(16) Vec vecs[vecs_per_thread];
+
+    {
+        const int warp_end = min(warp_offset + WARP_SIZE / threads_per_token, token_num) * expert_num;
+        int       p        = warp_offset * expert_num + access_size * lane_id;
+        PRAGMA_UNROLL
+        for (int i = 0; i < vecs_per_thread; ++i) {
+            fill(vecs[i], -std::numeric_limits<float>::infinity());
+            // const int p = warp_offset * expert_num + access_size * (lane_id + i * WARP_SIZE);
+            if (p < warp_end) {
+                Ldg(vecs[i], &logits[p]);
+            }
+            p += access_size * WARP_SIZE;
+        }
+    }
+
+    PRAGMA_UNROLL
+    for (int c = 0; c < block_dim / WARP_SIZE; c += chunks) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < vecs_per_thread; ++i) {
+            int p = i * WARP_SIZE + lane_id;
+            if (c <= warp_id && warp_id < c + chunks) {
+                Store(smem.shared_data[warp_id - c][p / banks][p % banks].data(), vecs[i]);
+            }
+        }
+
+        __syncwarp();
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < vecs_per_thread; ++i) {
+            int p = lane_id * vecs_per_thread + i;
+            if (c <= warp_id && warp_id < c + chunks) {
+                Load(vecs[i], smem.shared_data[warp_id - c][p / banks][p % banks].data());
+            }
+        }
+
+        __syncthreads();
+    }
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        idxs[i] = ei * items_per_thread + i;
+    }
+    PRAGMA_UNROLL
+    for (int i = 0; i < vecs_per_thread; ++i) {
+        (Array<float, access_size>&)data[i * access_size] = vecs[i];
+    }
+
+#endif
+
+    constexpr float kLog2e = 1.4426950408889634074;
+
+    unsigned mask = (unsigned)-1;
+    float    max_logit;
+
+    int   count{};
+    float sum_prob{};
+
+    const int warp_ti_offset = warp_ti * threads_per_token;
+
+    auto run = [&](int k) {
+        unsigned bit     = 1;
+        unsigned max_bit = 0;
+        float    max_val = -std::numeric_limits<float>::infinity();
+        // local maximum
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            if ((mask & bit) && data[i] > max_val) {
+                max_bit = bit;
+                max_val = data[i];
+            }
+            asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+        }
+
+        if (k == 0) {
+            PRAGMA_UNROLL
+            for (int i = 0; i < items_per_thread; ++i) {
+                data[i] *= kLog2e;
+            }
+        }
+
+        int   g_max_ei  = ei;
+        float g_max_val = max_val;
+        if constexpr (threads_per_token > 1) {
+            // global maximum
+            PRAGMA_UNROLL
+            for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+                g_max_val = fmaxf(g_max_val, __shfl_xor_sync((uint32_t)-1, g_max_val, m));
+            }
+            // tie breaking
+            const auto active = __ballot_sync((uint32_t)-1, max_val == g_max_val);
+            g_max_ei          = __ffs(active >> (unsigned)warp_ti_offset) - 1;
+        }
+        if (k == 0) {
+            max_logit = g_max_val;
+        }
+        if (ei == g_max_ei) {
+            mask -= max_bit;
+            ++count;
+        }
+    };
+
+    run(0);
+
+    for (int k = 1; k < top_k; ++k) {
+        run(k);
+    }
+
+    mask = ~mask;
+
+    int used[items_per_thread];
+    {
+        unsigned bit = 1;
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            used[i] = (mask & bit) > 0;
+            asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
+        }
+    }
+
+    // unsigned bit = 1;
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        if (!norm_topk || used[i]) {
+            data[i] = exp2f(data[i] - max_logit);
+            sum_prob += data[i];
+        }
+    }
+
+    PRAGMA_UNROLL
+    for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+        sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
+    }
+
+    sum_prob = fdividef(1.f, sum_prob);
+
+    // float sum_v = 0;
+    // PRAGMA_UNROLL
+    // for (int i = 0; i < items_per_thread; ++i) {
+    //     // data[i] = exp2f(data[i] - max_logit);
+    //     // sum_prob += data[i];
+    //     float v = data[i] * sum_prob;
+    //     sum_v += v;
+    //     if (ti == 0) {
+    //         printf("%f\n", v);
+    //     }
+    // }
+    // PRAGMA_UNROLL
+    // for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+    //     sum_v += __shfl_xor_sync((uint32_t)-1, sum_v, m);
+    // }
+    // if (ti == 0) {
+    //     printf("sum=%f\n", sum_v);
+    // }
+
+    using WarpScan = cub::WarpScan<int, threads_per_token>;
+    __shared__ typename WarpScan::TempStorage temp_storage[tokens_per_cta];
+
+    int idx{};
+    WarpScan{temp_storage[bti]}.ExclusiveSum(count, idx);
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        if (used[i]) {
+            smem.shared_exp_id[idx][bti] = idxs[i];
+            smem.shared_scales[idx][bti] = data[i] * sum_prob;
+            ++idx;
+        }
+    }
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < max_tiles * max_expert_num; i += block_dim) {
+        int e                   = (i + threadIdx.x) % max_expert_num;
+        int t                   = (i + threadIdx.x) / max_expert_num;
+        smem.shared_accum[t][e] = 0;
+    }
+
+    __syncthreads();
+
+    constexpr int k_per_thread = cdiv(max_top_k, threads_per_token);
+
+    const int bti2 = threadIdx.x % tokens_per_cta;
+    const int ei2  = threadIdx.x / tokens_per_cta;
+    const int ti2  = blockIdx.x * tokens_per_cta + bti2;
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < k_per_thread; ++i) {
+        const int   idx       = ei2 * k_per_thread + i;
+        const int   expert_id = smem.shared_exp_id[idx][bti2];
+        const float scale     = smem.shared_scales[idx][bti2];
+
+        if (ti2 < token_num && idx < top_k) {
+            masks[expert_id * token_num_padded + ti2] = idx;
+            scales[idx * token_num + ti2]             = scale;
+            atomicAdd(&smem.shared_accum[ti2 >> log_tile][expert_id], 1);
+
+            // printf("%d %d %f\n", idx, expert_id, scale);
+        }
+    }
+
+    __syncthreads();
+
+    for (int i = 0; i < max_expert_num * max_tiles; i += block_dim) {
+        int t = (threadIdx.x + i) % max_tiles;
+        int e = (threadIdx.x + i) / max_tiles;
+        if (e < expert_num && t < tiles) {
+            atomicAdd(accum + e * tiles + t, smem.shared_accum[t][e]);
+        }
+    }
+}
+
+#ifdef USE_WARPSORT
+
+struct Greater {
+    template<class T>
+    __device__ bool operator()(T a, T b) const noexcept
+    {
+        return a > b;
+    }
+};
+
+template<int max_expert_num, int max_top_k, bool norm_top_k, int items_per_thread, int block_dim, int alignment>
+__global__ void MoeGateKernel_v9(float*       scales,  // [e,n]
+                                 int*         masks,   // [E,n], padded
+                                 int*         accum,   // [E,tiles]
+                                 const float* logits,  // [n,E]
+                                 int          log_tile,
+                                 int          tiles,
+                                 int          token_num,
+                                 int          token_num_padded,
+                                 int          expert_num,
+                                 int          top_k)
+{
+    constexpr int max_tiles         = kMoeGateMaxTiles;
+    constexpr int threads_per_token = max_expert_num / items_per_thread;  // 8
+
+    // We use bits in a uint32_t to represent selected experts
+    static_assert(items_per_thread <= 32);
+    // We use warp-level primitives for reduction
+    static_assert(threads_per_token <= 32);
+
+    static_assert((threads_per_token & (threads_per_token - 1)) == 0);
+
+    const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    const int ti = thread_idx / threads_per_token;
+    const int ei = thread_idx % threads_per_token;
+
+    const int warp_ti        = threadIdx.x % WARP_SIZE / threads_per_token;
+    const int warp_ti_offset = warp_ti * threads_per_token;
+
+    // +1 padding greatly reduced (-80%) bank conflicts
+    __shared__ int shared_accum[max_tiles][max_expert_num + 1];
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < max_tiles * max_expert_num; i += block_dim) {
+        int e              = (i + threadIdx.x) % max_expert_num;
+        int t              = (i + threadIdx.x) / max_expert_num;
+        shared_accum[t][e] = 0;
+    }
+
+    __syncthreads();
+
+    float data[items_per_thread];
+    int   idxs[items_per_thread];
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i] = -std::numeric_limits<float>::infinity();
+        idxs[i] = threads_per_token * (i / alignment * alignment) + i % alignment + ei * alignment;
+    }
+
+    if (ti < token_num) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; i += alignment) {
+            const int e = threads_per_token * i + ei * alignment;
+            if (e < expert_num) {
+                Load((Array<float, alignment>&)data[i], &logits[ti * expert_num + e]);
+            }
+        }
+    }
+
+    constexpr float kLog2e = 1.4426950408889634074;
+
+    using MergeSort = cub::WarpMergeSort<float, items_per_thread, threads_per_token, int>;
+
+    union Smem {
+        typename MergeSort::TempStorage temp[block_dim / threads_per_token];
+        // int2                            sorted[max_top_k][block_dim / threads_per_token + 1];
+        int2 sorted[block_dim / threads_per_token][max_top_k + 1];
+    };
+
+    __shared__ Smem smem;
+
+    MergeSort{smem.temp[threadIdx.x / threads_per_token]}.Sort(data, idxs, Greater{});
+
+    __syncthreads();
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        const int k = threads_per_token * ei + i;  // blocked
+        if (k < max_top_k) {
+            // smem.sorted[k][threadIdx.x / threads_per_token] = int2{float_as_int(data[i]), idxs[i]};
+            smem.sorted[threadIdx.x / threads_per_token][k] = int2{float_as_int(data[i]), idxs[i]};
+        }
+    }
+
+    __syncthreads();
+
+    constexpr int top_k_per_thread = cdiv(max_top_k, threads_per_token);
+
+    int es[top_k_per_thread];
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < top_k_per_thread; ++i) {
+        const int k = ei * top_k_per_thread + i;
+        if (k < max_top_k) {
+            // const int2 tmp                   = smem.sorted[k][threadIdx.x / threads_per_token];
+            const int2 tmp                   = smem.sorted[threadIdx.x / threads_per_token][k];
+            const int  e                     = tmp.y;
+            masks[e * token_num_padded + ti] = k;
+            scales[ti * top_k + k]           = int_as_float(tmp.x);
+            es[i]                            = e;
+            // atomicAdd(&shared_accum[ti >> log_tile][e], 1);
+        }
+    }
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < top_k_per_thread; ++i) {
+        const int k = ei * top_k_per_thread + i;
+        if (k < max_top_k) {
+            atomicAdd(&shared_accum[ti >> log_tile][es[i]], 1);
+        }
+    }
+
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < max_expert_num * max_tiles; i += block_dim) {
+        int t = i % max_tiles;
+        int e = i / max_tiles;
+        if (e < expert_num && t < tiles) {
+            // atomic add in Gmem
+            atomicAdd(accum + e * tiles + t, shared_accum[t][e]);
+        }
+    }
+}
+
+#endif
+
+template<int N>
+inline constexpr std::integral_constant<int, N> _Int{};
+
 void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
                       int*         en2f,           // [e,n] -> n*e
                       int*         offsets,        // [E+1]
                       float*       scales,         // [e,n]
-                      int*         masks,          // [E,n]
+                      void*        masks,          // [E,n]
                       int*         accum,          // [E]
                       const float* logits,         // [e,n]
                       int          tokens,         //  n
                       int          tokens_padded,  //  round_up(n, 4)
                       int          experts,        //  E
                       int          experts_per_token,
+                      bool         norm_topk,
                       cudaStream_t st)
 {
     constexpr int base_log_tile = 9;
@@ -255,14 +1619,14 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
     // std::cout << log_tile << " " << tiles << "\n";
 
     {
-        constexpr int threads = 128;
-        const int     blocks  = ceil_div(tokens, threads);
 
         auto invoke = [&](auto e) {
-            static constexpr int top_k = decltype(e)::value;
+            constexpr int        threads = 128;
+            const int            blocks  = ceil_div(tokens * 2, threads);
+            static constexpr int top_k   = decltype(e)::value;
             MoeGateKernel_V2<top_k, threads><<<blocks, threads, 0, st>>>(  //
                 scales,
-                masks,
+                (int8_t*)masks,
                 accum,
                 logits,
                 log_tile,
@@ -272,30 +1636,41 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
                 experts);
         };
 
-        switch (experts_per_token) {
-            case 2:
-                invoke(std::integral_constant<int, 2>{});
-                break;
-            // case 4:
-            //     invoke(std::integral_constant<int, 4>{});
-            //     break;
-            default:
-                std::cerr << __FILE__ << ":" << __LINE__ << " Not implemented. " << std::endl;
-                std::abort();
-        }
+        auto invoke2 = [&](auto max_expert_num, auto top_k, auto items_per_thread) {
+            constexpr int thrs_per_tok = max_expert_num.value / items_per_thread.value;
+            constexpr int threads      = 128;
+            const int     blocks       = ceil_div(tokens, threads / thrs_per_tok);
+
+            cudaMemsetAsync(masks, -1, sizeof(int8_t) * experts * tokens_padded, st);
+
+            MoeGateKernel_v8<max_expert_num.value, top_k.value, items_per_thread.value, threads, 4>
+                <<<blocks, threads, 0, st>>>(  //
+                    scales,
+                    (int8_t*)masks,
+                    accum,
+                    logits,
+                    log_tile,
+                    tiles,
+                    tokens,
+                    tokens_padded,
+                    experts,
+                    experts_per_token,
+                    norm_topk);
+        };
+
+        invoke2(_Int<64>, _Int<8>, _Int<16>);
+
+        // invoke(_Int<2>);
     }
 
-    // return;
-
     {
-        // Check: tiles * experts <= threads
-
         constexpr int threads = (1 << base_log_tile) / kMoeGateVecSize;
         const dim3    blocks(tiles, experts + 1);
-        MoeScanKernel_V2<threads><<<blocks, threads, 0, st>>>(f2n,  //
+
+        MoeScanKernel_v2<threads><<<blocks, threads, 0, st>>>(f2n,  //
                                                               en2f,
                                                               offsets,
-                                                              masks,
+                                                              (int8_t*)masks,
                                                               accum,
                                                               log_tile,
                                                               tiles,
@@ -338,10 +1713,11 @@ void invokeMoeGather(T* dst, const T* src, const int* f2n, int tokens, int exper
 template void invokeMoeGather(uint16_t*, const uint16_t*, const int*, int, int, int, cudaStream_t);
 
 template<int vec_size, int exp_k, int block_dim, class T>
-__global__ void MoeReduceKernel(T*           dst,     // [  n, d]
-                                const T*     src,     // [e*n, d]
-                                const float* scales,  // [  e, n]
-                                const int*   en2f,    // [  e, n] :: (e,n) -> e*n
+__global__ void MoeReduceKernel(T*           dst,         // [  n, d]
+                                const T*     src,         // [e*n, d]
+                                const float* scales,      // [  e, n]
+                                const int*   en2f,        // [  e, n] :: (e,n) -> e*n
+                                const float* dst_scales,  // [n]
                                 int          dims,
                                 int          tokens)
 {
@@ -350,6 +1726,12 @@ __global__ void MoeReduceKernel(T*           dst,     // [  n, d]
     const int64_t ti = blockIdx.x;
 
     auto dst_ptr = (Vec*)dst + dims * ti;
+
+    float dst_scale = 0;
+    if (dst_scales) {
+        dst_scale = dst_scales[ti];
+        dst_scale = fdividef(1.f, 1.f + expf(-dst_scale));
+    }
 
     // Should be warp uniforms
     const Vec* src_ptr[exp_k];
@@ -362,6 +1744,12 @@ __global__ void MoeReduceKernel(T*           dst,     // [  n, d]
 
     for (int i = threadIdx.x; i < dims; i += block_dim) {
         Array<float, vec_size> accum{};
+        if (dst_scales) {
+            Vec v;
+            Ldg(v, dst_ptr[i].data());
+            using namespace ops;
+            accum = cast<float>(v) * dst_scale;
+        }
         PRAGMA_UNROLL
         for (int e = 0; e < exp_k; ++e) {
             Vec v;
@@ -379,6 +1767,7 @@ void invokeMoeReduce(T*           dst,
                      const T*     src,
                      const float* scales,
                      const int*   en2f,
+                     const float* dst_scales,
                      int          tokens,
                      int          experts_per_token,
                      int          dims,
@@ -395,6 +1784,7 @@ void invokeMoeReduce(T*           dst,
             src,
             scales,
             en2f,
+            dst_scales,
             dims / vec_size,
             tokens);
     };
@@ -404,19 +1794,22 @@ void invokeMoeReduce(T*           dst,
             return invoke(std::integral_constant<int, 1>{});
         case 2:
             return invoke(std::integral_constant<int, 2>{});
-        // case 4:
-        //     return invoke(std::integral_constant<int, 4>{});
-        // case 6:
-        //     return invoke(std::integral_constant<int, 6>{});
+        case 4:
+            return invoke(std::integral_constant<int, 4>{});
+        case 6:
+            return invoke(std::integral_constant<int, 6>{});
+        case 8:
+            return invoke(std::integral_constant<int, 8>{});
         default:
             fprintf(stderr, "Unsupported experts_per_token %d\n", experts_per_token);
             std::abort();
     }
 }
 
-template void invokeMoeReduce(half*, const half*, const float*, const int*, int, int, int, cudaStream_t);
+template void invokeMoeReduce(half*, const half*, const float*, const int*, const float*, int, int, int, cudaStream_t);
 #ifdef ENABLE_BF16
-template void invokeMoeReduce(nv_bfloat16*, const nv_bfloat16*, const float*, const int*, int, int, int, cudaStream_t);
+template void
+invokeMoeReduce(nv_bfloat16*, const nv_bfloat16*, const float*, const int*, const float*, int, int, int, cudaStream_t);
 #endif
 
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g)

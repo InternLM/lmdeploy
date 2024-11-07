@@ -26,9 +26,15 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
     dtype_(getTensorType<T>())
 {
 
-    attn_layer_    = std::make_unique<UnifiedAttentionLayer<T>>(model, attn, lora, tp, ctx);
-    ffn_layer_     = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx, true);
-    moe_ffn_layer_ = std::make_unique<MoeFfnLayer<T>>(model, moe, tp, ctx);
+    attn_layer_ = std::make_unique<UnifiedAttentionLayer<T>>(model, attn, lora, tp, ctx);
+
+    if (moe.expert_num) {
+        moe_ffn_layer_ = std::make_unique<MoeFfnLayer<T>>(model, moe, tp, ctx);
+    }
+
+    if (model.inter_size) {
+        ffn_layer_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx, !moe_ffn_layer_);
+    }
 
     check_cuda_error(cudaEventCreateWithFlags(&ev_h_cu_x_, cudaEventDisableTiming));
 }
@@ -190,9 +196,10 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
         /// feed-forward network
 
         if (!weights->at(layer)->moe_weights.experts.empty()) {
-            moe_ffn_layer_->forward(decoder_output, token_num, layer, weights->at(layer)->moe_weights);
+            moe_ffn_layer_->forward(nullptr, decoder_output, token_num, layer, weights->at(layer)->moe_weights);
         }
-        else {
+
+        if (ffn_layer_) {
             int       layer_id = layer;  // int is needed
             TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}},
                                  {"layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id}}};
@@ -201,6 +208,10 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                 ffn_inputs.insert({"lora_mask", inputs->at("lora_mask")});
             }
             ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &weights->at(layer)->ffn_weights);
+        }
+
+        if (!weights->at(layer)->moe_weights.experts.empty()) {
+            moe_ffn_layer_->reduce(decoder_output, token_num, weights->at(layer)->moe_weights);
         }
 
         count_and_fix(decoder_output, token_num * hidden_units_, Concat("ffn_block", layer), 2);
