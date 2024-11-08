@@ -24,7 +24,8 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
     else:
         position_ids = position_ids.float()
 
-    inv_freq_expanded = inv_freq.view(1, -1, 1)
+    inv_freq_expanded = inv_freq.view(1, -1, 1).expand(position_ids.size(0),
+                                                       -1, 1)
     position_ids_expanded = position_ids.unsqueeze(1)
 
     tmp = torch.bmm(inv_freq_expanded, position_ids_expanded)
