@@ -115,7 +115,7 @@ class Scheduler:
         self._set_message_status(seq, MessageStatus.WAITING)
 
     @logging_timer('SchedulePrefilling', logger)
-    def _schedule_prefill(self):
+    def _schedule_prefill(self, prealloc_size: int = 0):
         """Schedule for prefilling."""
 
         current_running = self.running
@@ -140,7 +140,7 @@ class Scheduler:
             hanging = reversed(self.hanging)
             waiting = reversed(waiting)
             evictable = list(chain(hanging, waiting))
-            return eviction_helper.evict_for_seq(seq, evictable, 0)
+            return eviction_helper.evict_for_seq(seq, evictable, prealloc_size)
 
         def _reorder_waiting():
             """reorder waiting."""
@@ -164,7 +164,7 @@ class Scheduler:
                 break
 
             # allocate session memory
-            self.block_manager.allocate(seq)
+            self.block_manager.allocate(seq, prealloc_size)
             _to_running(seq)
 
         return running, swap_in_map, swap_out_map, copy_map
@@ -215,7 +215,7 @@ class Scheduler:
     def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
         if is_prefill:
-            output = self._schedule_prefill()
+            output = self._schedule_prefill(prealloc_size)
         else:
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output
