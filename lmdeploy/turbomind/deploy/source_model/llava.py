@@ -33,7 +33,7 @@ class LlavaModel(LlamaModel):
         config = getattr(config, 'text_config', config)
         arch = config.architectures[0]
         _readers = dict(Qwen2ForCausalLM=LlavaReader,
-                        LlamaForCausalL=LlavaReader)
+                        LlamaForCausalLM=LlavaReader)
         self.Reader = _readers[arch]
         self.arch = arch
 
@@ -63,7 +63,9 @@ class LlavaModel(LlamaModel):
             hidden_units = model_arg.get('hidden_size', 4096)
             vocab_size = model_arg.get('vocab_size', 152000)
             intermediate_size = model_arg.get('intermediate_size', 11008)
-            attn_bias = int(model_arg.get('attn_bias', 1))
+            attn_bias = 1 if model_arg['architectures'][0] \
+                == 'Qwen2ForCausalLM' else 0
+            attn_bias = int(model_arg.get('attn_bias', attn_bias))
             use_logn_attn = int(model_arg.get('use_logn_attn', 0))
 
             if isinstance(rope_scaling, dict):
