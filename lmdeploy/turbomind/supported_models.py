@@ -98,6 +98,9 @@ def is_supported(model_path: str):
                 # internvl2-4b,internlm2-1b are not working yet
                 support_by_turbomind = _is_head_dim_supported(cfg.llm_config)
             elif arch == 'LlavaForConditionalGeneration':
-                support_by_turbomind = _is_head_dim_supported(cfg.text_config)
+                sub_arch = cfg.text_config.architectures[0]
+                if sub_arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
+                    support_by_turbomind = _is_head_dim_supported(
+                        cfg.text_config)
 
     return support_by_turbomind
