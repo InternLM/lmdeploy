@@ -30,6 +30,10 @@ class InternVLChatModel(nn.Module, CudaGraphMixin):
 
         # for Mono-InternVL
         self.is_mono = self.llm_arch_name == 'InternLM2VEForCausalLM'
+        if self.is_mono:
+            assert dtype != torch.float16, (
+                'Currently Mono-InternVL does not support FP16 due to'
+                'numerical instability. Please use BF16 instead.')
 
     def forward(
         self,
