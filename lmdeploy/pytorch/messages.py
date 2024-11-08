@@ -8,6 +8,7 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import GenerationConfig, LogitsProcessor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
 from .block import LogicalTokenBlocks
@@ -205,9 +206,8 @@ class SchedulerSession:
             sampling_param: SamplingParam = None,
             adapter_name: str = None,
             return_logits: bool = False,
+            multimodals: MultiModalInputs = None,
             input_embeddings: List[InputEmbeddings] = None,
-            mrope_position_ids: Tensor = None,
-            mrope_position_delta: Tensor = None,
             cross_attention_states: Tensor = None) -> 'SchedulerSequence':
         """Add a new message."""
         if isinstance(token_ids, Tensor):
@@ -228,9 +228,8 @@ class SchedulerSession:
             adapter_name=adapter_name,
             arrive_time=time.time(),
             history_embeddings=HistoryEmbeddings(input_embeddings),
+            history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,
-            mrope_position_ids=mrope_position_ids,
-            mrope_position_delta=mrope_position_delta,
             cross_attention_states=cross_attention_states,
         )
         self.sequences[seq.seq_id] = seq
@@ -361,6 +360,35 @@ class HistoryTokenIds:
         return self.clone()
 
 
+class HistoryMultiModals:
+
+    def __init__(self, multimodals: MultiModalInputs):
+        if multimodals is None:
+            multimodals = dict()
+        self.multimodals = multimodals
+
+    def get_datas(self, start=0, end=-1):
+        """get multimodals from prompts position [start, end)."""
+        outs = dict()
+        test_range = range(start, end)
+        for modal_type, modal_datas in self.multimodals.items():
+            data = []
+            for modal_data in modal_datas:
+                if (modal_data.start not in test_range
+                        and modal_data.end not in test_range):
+                    continue
+                data.append(modal_data)
+            if len(data) > 0:
+                outs[modal_type] = data
+        return outs
+
+    def empty(self):
+        if len(self.multimodals) == 0:
+            return 0
+
+        return all(len(vals) == 0 for vals in self.multimodals)
+
+
 @dataclass
 class SchedulerSequence:
     """Scheduler message."""
@@ -369,6 +397,8 @@ class SchedulerSequence:
     history_cache: HistoryTokenIds = field(default_factory=HistoryTokenIds)
     history_embeddings: HistoryEmbeddings = field(
         default_factory=HistoryEmbeddings)
+    history_multimodals: HistoryMultiModals = field(
+        default_factory=HistoryMultiModals)
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(
@@ -382,8 +412,6 @@ class SchedulerSequence:
     random_offsets: int = 0
     _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
     num_ignored_history: int = 0
-    mrope_position_ids: Optional[Tensor] = None
-    mrope_position_delta: Optional[int] = None
     cross_attention_states: Optional[Tensor] = None
     history_cross_kv_seqlens: int = 0
 
@@ -496,8 +524,15 @@ class SchedulerSequence:
                 -2]
         return self.history_cross_kv_seqlens
 
+    def get_input_multimodals(self):
+        """get input multimodals."""
+        start = self.num_history_ids
+        end = self.num_all_ids
+        return self.history_multimodals.get_datas(start, end)
+
     def update_token_ids(self,
                          token_ids: Tensor,
+                         multimodals: MultiModalInputs = None,
                          embeddings: List[InputEmbeddings] = None,
                          cross_attention_states: List[Tensor] = None):
         """Update token ids, old token ids will be added to history."""

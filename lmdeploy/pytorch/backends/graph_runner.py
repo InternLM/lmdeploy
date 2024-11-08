@@ -46,3 +46,10 @@ class GraphRunner:
             inputs_embeds,
             context,
         )
+
+    def prepare_multimodal_input(self, input_ids, input_multimodals, **kwargs):
+        """prepare multimodals inputs."""
+        if hasattr(self.model, 'prepare_multimodal_input'):
+            return self.model.prepare_multimodal_input(input_ids,
+                                                       input_multimodals,
+                                                       **kwargs)

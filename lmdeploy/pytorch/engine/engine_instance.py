@@ -2,10 +2,10 @@
 from typing import List
 
 from lmdeploy.messages import EngineOutput, GenerationConfig
+from lmdeploy.pytorch.multimodal import MultiModalData
 from lmdeploy.utils import get_logger
 
-from ..messages import (InputEmbeddingRangeType, InputEmbeddings,
-                        InputEmbeddingType, SamplingParam)
+from ..messages import SamplingParam
 from .engine import Engine
 from .request import RequestSender, RequestType, Response, ResponseType
 
@@ -130,9 +130,8 @@ class EngineInstance:
             session_id: int,
             input_ids: List[int],
             gen_config: GenerationConfig = None,
+            input_multimodals: List[MultiModalData] = None,
             adapter_name: str = None,
-            input_embeddings: InputEmbeddingType = None,
-            input_embedding_ranges: InputEmbeddingRangeType = None,
             **kwargs):
         """Send stream inference request.
 
@@ -155,21 +154,13 @@ class EngineInstance:
         await self.req_sender.async_send_async(
             RequestType.ADD_SESSION, dict(session_id=session_id,
                                           response=False))
-        input_embeddings_new: List[InputEmbeddings] = None
-        if input_embeddings is not None and len(input_embeddings) > 0:
-            assert len(input_embeddings) == len(input_embedding_ranges)
-            input_embeddings_new = [
-                InputEmbeddings(emb, rg[0], rg[1])
-                for emb, rg in zip(input_embeddings, input_embedding_ranges)
-            ]
-        msg = dict(token_ids=input_ids,
-                   session_id=session_id,
-                   sampling_param=sampling_param,
-                   adapter_name=adapter_name,
-                   input_embeddings=input_embeddings_new,
-                   mrope_position_ids=kwargs.get('mrope_position_ids'),
-                   mrope_position_delta=kwargs.get('mrope_position_delta'),
-                   cross_attention_states=kwargs.get('cross_attention_states'))
+        msg = dict(
+            token_ids=input_ids,
+            session_id=session_id,
+            sampling_param=sampling_param,
+            adapter_name=adapter_name,
+            input_multimodals=input_multimodals,
+        )
         req_id = await self.req_sender.async_send_async(
             RequestType.ADD_MESSAGE, msg)
 
@@ -190,14 +181,12 @@ class EngineInstance:
                 yield EngineOutput(resp.type, [], 0)
                 break
 
-    async def async_infer(
-            self,
-            session_id: int,
-            input_ids: List[int] = None,
-            gen_config: GenerationConfig = None,
-            input_embeddings: InputEmbeddingType = None,
-            input_embedding_ranges: InputEmbeddingRangeType = None,
-            **kwargs):
+    async def async_infer(self,
+                          session_id: int,
+                          input_ids: List[int] = None,
+                          input_multimodals: List[MultiModalData] = None,
+                          gen_config: GenerationConfig = None,
+                          **kwargs):
         """Send inference request.
 
         Args:
@@ -214,9 +203,8 @@ class EngineInstance:
         async for outputs in self.async_stream_infer(
                 session_id,
                 input_ids,
+                input_multimodals=input_multimodals,
                 gen_config=gen_config,
-                input_embeddings=input_embeddings,
-                input_embedding_ranges=input_embedding_ranges,
                 **kwargs):
             status, tmp_ids = outputs.status, outputs.token_ids
             if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
@@ -228,10 +216,9 @@ class EngineInstance:
     def stream_infer(self,
                      session_id: int,
                      input_ids: List[int],
+                     input_multimodals: List[MultiModalData] = None,
                      gen_config: GenerationConfig = None,
                      adapter_name: str = None,
-                     input_embeddings: InputEmbeddingType = None,
-                     input_embedding_ranges: InputEmbeddingRangeType = None,
                      **kwargs):
         """Send stream inference request.
 
@@ -252,14 +239,9 @@ class EngineInstance:
 
         def __call_async():
             """call async."""
-            coro_gen = self.async_stream_infer(
-                session_id,
-                input_ids,
-                gen_config,
-                adapter_name,
-                input_embeddings=input_embeddings,
-                input_embedding_ranges=input_embedding_ranges,
-                **kwargs)
+            coro_gen = self.async_stream_infer(session_id, input_ids,
+                                               input_multimodals, gen_config,
+                                               adapter_name, **kwargs)
             while True:
                 try:
                     yield self.req_sender.run_until_complete(
@@ -275,19 +257,12 @@ class EngineInstance:
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         self.req_sender.send_async(RequestType.ADD_SESSION,
                                    dict(session_id=session_id, response=False))
-        input_embeddings_new: List[InputEmbeddings] = None
-        if input_embeddings is not None and len(input_embeddings) > 0:
-            assert len(input_embeddings) == len(input_embedding_ranges)
-            input_embeddings_new = [
-                InputEmbeddings(emb, rg[0], rg[1])
-                for emb, rg in zip(input_embeddings, input_embedding_ranges)
-            ]
         msg = dict(
             token_ids=input_ids,
             session_id=session_id,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
-            input_embeddings=input_embeddings_new,
+            input_multimodals=input_multimodals,
         )
         req_id = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
 
@@ -311,9 +286,8 @@ class EngineInstance:
     def infer(self,
               session_id: int,
               input_ids: List[int] = None,
+              input_multimodals: List[MultiModalData] = None,
               gen_config: GenerationConfig = None,
-              input_embeddings: InputEmbeddingType = None,
-              input_embedding_ranges: InputEmbeddingRangeType = None,
               **kwargs):
         """Send inference request.
 
@@ -328,13 +302,11 @@ class EngineInstance:
             int: The number of the output tokens.
         """
         token_ids = []
-        for outputs in self.stream_infer(
-                session_id,
-                input_ids,
-                gen_config=gen_config,
-                input_embeddings=input_embeddings,
-                input_embedding_ranges=input_embedding_ranges,
-                **kwargs):
+        for outputs in self.stream_infer(session_id,
+                                         input_ids,
+                                         input_multimodals=input_multimodals,
+                                         gen_config=gen_config,
+                                         **kwargs):
             status, tmp_ids = outputs.status, outputs.token_ids
             if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
                 return EngineOutput(status, token_ids, len(token_ids))
@@ -346,11 +318,10 @@ class EngineInstance:
         self,
         session_ids: List[int],
         token_ids: List[List[int]] = None,
+        input_multimodals: List[List[MultiModalData]] = None,
         gen_config: GenerationConfig = None,
         adapter_names: List[str] = None,
         keep_cache: bool = False,
-        input_embeddings: List[InputEmbeddingType] = None,
-        input_embedding_ranges: List[InputEmbeddingRangeType] = None,
     ):
         """Send inference request.
 
@@ -373,37 +344,27 @@ class EngineInstance:
         else:
             adapter_names = [None for _ in range(batch_size)]
 
-        if input_embeddings is not None:
-            assert len(input_embeddings) == batch_size
-            assert len(input_embedding_ranges) == batch_size
+        if input_multimodals is not None:
+            assert len(input_multimodals) == batch_size
         else:
-            input_embeddings = [None] * batch_size
-            input_embedding_ranges = [None] * batch_size
+            input_multimodals = [None] * batch_size
 
         async def _add_sessions(session_ids):
             for session_id in session_ids:
                 await self._async_try_add_session(session_id)
 
         async def _add_messages(session_ids, token_ids, adapter_names,
-                                input_embeddings, input_embedding_ranges):
+                                input_multimodals):
             add_msgs = []
             sampling_param = SamplingParam.from_gen_config(gen_config)
-            for session_id, token_id, adapter_name, input_emb, input_ranges in zip(  # noqa: E501
-                    session_ids, token_ids, adapter_names, input_embeddings,
-                    input_embedding_ranges):
-                cur_input_embeddings: List[InputEmbeddings] = None
-                if input_emb is not None and len(input_emb) > 0:
-                    assert len(input_emb) == len(input_ranges)
-                    cur_input_embeddings = [
-                        InputEmbeddings(emb, rg[0], rg[1])
-                        for emb, rg in zip(input_emb, input_ranges)
-                    ]
+            for session_id, token_id, adapter_name, in_mm in zip(  # noqa: E501
+                    session_ids, token_ids, adapter_names, input_multimodals):
                 msg = dict(
                     token_ids=token_id,
                     session_id=session_id,
                     sampling_param=sampling_param,
                     adapter_name=adapter_name,
-                    input_embeddings=cur_input_embeddings,
+                    input_multimodals=in_mm,
                 )
                 add_msgs.append(msg)
             req_types = [RequestType.ADD_MESSAGE] * batch_size
@@ -413,7 +374,7 @@ class EngineInstance:
 
         await _add_sessions(session_ids)
         req_ids = await _add_messages(session_ids, token_ids, adapter_names,
-                                      input_embeddings, input_embedding_ranges)
+                                      input_multimodals)
 
         # receive messages
         req_idx_map = dict(zip(req_ids, range(len(req_ids))))
@@ -446,21 +407,18 @@ class EngineInstance:
         self,
         session_ids: List[int],
         token_ids: List[List[int]] = None,
+        input_multimodals: List[List[MultiModalData]] = None,
         gen_config: GenerationConfig = None,
         adapter_names: List[str] = None,
         keep_cache: bool = False,
-        input_embeddings: List[InputEmbeddingType] = None,
-        input_embedding_ranges: List[InputEmbeddingRangeType] = None,
     ):
         """batched infer."""
-        coro = self.async_batched_infer(
-            session_ids,
-            token_ids,
-            gen_config=gen_config,
-            adapter_names=adapter_names,
-            input_embeddings=input_embeddings,
-            input_embedding_ranges=input_embedding_ranges,
-            keep_cache=keep_cache)
+        coro = self.async_batched_infer(session_ids,
+                                        token_ids,
+                                        input_multimodals=input_multimodals,
+                                        gen_config=gen_config,
+                                        adapter_names=adapter_names,
+                                        keep_cache=keep_cache)
         return self.req_sender.run_until_complete(coro)
 
     async def async_end(self, session_id: int):
@@ -481,8 +439,7 @@ class EngineInstance:
 
     def decode(self,
                input_ids,
-               input_embeddings: List[InputEmbeddingType] = None,
-               input_embedding_ranges: List[InputEmbeddingRangeType] = None,
+               input_multimodals: List[List[MultiModalData]] = None,
                steps: List[int] = None,
                sequence_start: bool = True,
                sequence_end: bool = True,
@@ -492,10 +449,8 @@ class EngineInstance:
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
             steps (List[int]): the offset of the k/v cache
-            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
-                embeddings features
-            input_embedding_ranges: (List[List[Tuple[int, int]]]):
-                the begin/end offsets of input_embeddings to input_ids
+            input_multimodals (List[List[MultiModalData]]):
+                multimodals inputs.
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             adapter_names (List[str]): The name of the adapters.
@@ -505,33 +460,24 @@ class EngineInstance:
         batch_size = len(input_ids)
 
         def __add_messages(session_ids, input_ids, adapter_names,
-                           input_embeddings, input_embedding_ranges):
+                           input_multimodals):
             add_msgs = []
             sampling_param = SamplingParam(max_new_tokens=0)
             batch_size = len(input_ids)
-            if input_embeddings is None:
-                input_embeddings = [None] * batch_size
-                input_embedding_ranges = [None] * batch_size
-            for (session_id, token_id, adapter_name, input_emb,
-                 input_ranges) in zip(session_ids, input_ids, adapter_names,
-                                      input_embeddings,
-                                      input_embedding_ranges):
+            if input_multimodals is None:
+                input_multimodals = [None] * batch_size
+            for (session_id, token_id, adapter_name,
+                 in_mm) in zip(session_ids, input_ids, adapter_names,
+                               input_multimodals):
                 if len(token_id) > self.max_input_len:
                     raise RuntimeError(
                         f'Expect input length<={self.max_input_len} '
                         f'but get {len(token_id)}')
-                cur_input_embeddings: List[InputEmbeddings] = None
-                if input_emb is not None and len(input_emb) > 0:
-                    assert len(input_emb) == len(input_ranges)
-                    cur_input_embeddings = [
-                        InputEmbeddings(emb, rg[0], rg[1])
-                        for emb, rg in zip(input_emb, input_ranges)
-                    ]
                 msg = dict(token_ids=token_id,
                            session_id=session_id,
                            sampling_param=sampling_param,
                            adapter_name=adapter_name,
-                           input_embeddings=cur_input_embeddings,
+                           input_multimodals=in_mm,
                            return_logits=True)
                 add_msgs.append(msg)
             req_types = [RequestType.ADD_MESSAGE] * batch_size
@@ -547,13 +493,6 @@ class EngineInstance:
         else:
             adapter_names = [None] * batch_size
 
-        if input_embeddings is not None:
-            assert len(input_embeddings) == batch_size
-            assert len(input_embedding_ranges) == batch_size
-        else:
-            input_embeddings = [None] * batch_size
-            input_embedding_ranges = [None] * batch_size
-
         session_ids = tuple(range(batch_size))
         if sequence_start:
             for sid in session_ids:
@@ -562,7 +501,7 @@ class EngineInstance:
                 self._try_add_session(sid)
 
         req_ids = __add_messages(session_ids, input_ids, adapter_names,
-                                 input_embeddings, input_embedding_ranges)
+                                 input_multimodals)
         req_idx_map = dict(zip(req_ids, range(len(req_ids))))
 
         finish_count = batch_size

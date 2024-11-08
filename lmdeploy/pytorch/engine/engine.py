@@ -8,8 +8,7 @@ from typing import Any, Dict, List
 import numpy as np
 import torch
 
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               ResponseType)
+from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import (get_logger, get_max_batch_size, get_model,
                             logging_timer)
 
@@ -17,9 +16,8 @@ from ..adapter.adapter import AdapterManager
 from ..check_env import check_adapters, check_env, check_model
 from ..config import BackendConfig, CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
-from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
-                        MessageStatus, SchedulerSequence)
-from ..model_inputs import ModelInputs, MRopeModelInputs, VisionModelInputs
+from ..messages import MessageStatus, SchedulerSequence
+from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 from .model_agent import build_model_agent
@@ -165,12 +163,13 @@ class Engine:
         self.backend_config = backend_config
         self.stream = self.model_agent.stream
 
+        self._msg_preprocess_inque = asyncio.Queue()
+        self._msg_preprocess_outque = asyncio.Queue()
         self.req_manager = self._bind_request_manager()
 
         # create main thread
         self._start_loop()
         self._create_buffers()
-        self.engine_instance = self.create_instance()
 
     @classmethod
     def from_pretrained(cls,
@@ -300,6 +299,10 @@ class Engine:
     def _on_add_message(self, reqs: Request, **kwargs):
         """on add message callback."""
 
+        self._msg_preprocess_inque.put_nowait(reqs)
+
+    def _add_message(self):
+
         def __update_bad_words(msg):
             """update bad words."""
             sampling_param = msg.sampling_param
@@ -322,6 +325,11 @@ class Engine:
                     sampling_param.max_new_tokens,
                     max_session_len - msg.num_all_tokens())
 
+        if self._msg_preprocess_outque.qsize() == 0:
+            return
+
+        reqs = self._msg_preprocess_outque.get_nowait()
+
         for req in reqs:
             session_id = req.data['session_id']
             if session_id not in self.scheduler.sessions:
@@ -339,11 +347,8 @@ class Engine:
                     sampling_param=req.data['sampling_param'],
                     adapter_name=req.data['adapter_name'],
                     return_logits=req.data.get('return_logits', False),
+                    multimodals=req.data.get('input_multimodals'),
                     input_embeddings=req.data.get('input_embeddings'),
-                    mrope_position_ids=req.data.get('mrope_position_ids'),
-                    mrope_position_delta=req.data.get('mrope_position_delta'),
-                    cross_attention_states=req.data.get(
-                        'cross_attention_states'),
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_bad_words(msg)
@@ -351,9 +356,11 @@ class Engine:
                 self.scheduler.add_sequence(msg)
             else:
                 msg = next(iter(sess.sequences.values()))
-                msg.update_token_ids(req.data['token_ids'],
-                                     req.data.get('input_embeddings'),
-                                     req.data.get('cross_attention_states'))
+                msg.update_token_ids(
+                    req.data['token_ids'],
+                    req.data.get('input_embeddings'),
+                    multimodals=req.data.get('input_multimodals'),
+                )
                 msg.num_new_tokens = 0
                 msg.sampling_param = req.data['sampling_param']
                 msg.return_logits = req.data.get('return_logits', False)
@@ -448,12 +455,6 @@ class Engine:
             return (input_embeddings, input_embedding_indexing,
                     input_embedding_ranges)
 
-        def __get_mrope_inputs():
-            """get multimodal rotary position inputs."""
-            position_ids = [msg.mrope_position_ids for msg in messages]
-            deltas = [msg.mrope_position_delta for msg in messages]
-            return MRopeModelInputs(position_ids=position_ids, deltas=deltas)
-
         # for inputs with embeddings
         history_image_nums = None
         history_image_token_lengths = None
@@ -461,12 +462,6 @@ class Engine:
         if self.model_config.cogvlm_style:
             (history_image_nums,
              history_image_token_lengths) = __get_cogvlm_image_info()
-        # only for qwen2_vl
-        mrope_inputs = None
-        has_mrope_params = any(
-            [msg.mrope_position_ids is not None for msg in messages])
-        if has_mrope_params:
-            mrope_inputs = __get_mrope_inputs()
 
         input_embeddings = None
         input_embedding_indexing = None
@@ -477,15 +472,32 @@ class Engine:
             (input_embeddings, input_embedding_indexing,
              input_embedding_ranges) = __get_vlm_embeddings()
 
+        input_multimodals = None
+        has_multimodal = any(
+            [not msg.history_multimodals.empty() for msg in messages])
+        if has_multimodal:
+            has_multimodal = False
+            input_multimodals = [
+                msg.get_input_multimodals() for msg in messages
+            ]
+            for input_mm in input_multimodals:
+                for val in input_mm.values():
+                    if len(val) > 0:
+                        has_multimodal = True
+                        break
+                if has_multimodal:
+                    break
+
         vision_embedding_inputs = None
-        if has_embedding or history_image_nums is not None:
+        if has_embedding or has_multimodal or history_image_nums is not None:
             vision_embedding_inputs = VisionModelInputs(
                 history_lengths=history_lengths,
                 history_image_nums=history_image_nums,
                 history_image_token_lengths=history_image_token_lengths,
                 input_embeddings=input_embeddings,
                 input_embedding_indexing=input_embedding_indexing,
-                input_embedding_ranges=input_embedding_ranges)
+                input_embedding_ranges=input_embedding_ranges,
+                input_multimodals=input_multimodals)
 
         # only for mllama
         cross_attention_states = None
@@ -506,7 +518,6 @@ class Engine:
             num_ignored_history=num_ignored_history,
             local_adapter_ids=local_adapter_ids,
             vision_inputs=vision_embedding_inputs,
-            mrope_inputs=mrope_inputs,
             cross_attention_states=cross_attention_states,
             history_cross_kv_seqlens=history_cross_kv_seqlens,
         )
@@ -787,6 +798,28 @@ class Engine:
                 __update_inputs(next_token_ids)
 
     @torch.inference_mode()
+    async def _async_loop_preprocess_message(self):
+        """preprocess msg."""
+        while True:
+            reqs = await self._msg_preprocess_inque.get()
+
+            for req in reqs:
+                req_data = req.data
+                if req_data.get('input_multimodals', None) is None:
+                    continue
+                input_ids = req_data['token_ids']
+                input_multimodals = req_data['input_multimodals']
+                input_ids, input_multimodals = \
+                    self.model_agent.prepare_multimodal_input(
+                        input_ids, input_multimodals)
+
+                req_data['token_ids'] = input_ids
+                req_data['input_multimodals'] = input_multimodals
+
+            if len(reqs) > 0:
+                self._msg_preprocess_outque.put_nowait(reqs)
+
+    @torch.inference_mode()
     async def _async_loop_background(self, in_que: asyncio.Queue,
                                      out_que: asyncio.Queue):
         """async loop background."""
@@ -900,6 +933,9 @@ class Engine:
         loop_background = asyncio.get_event_loop().create_task(
             self._async_loop_background(in_que, out_que),
             name='MainLoopBackground')
+        loop_background = asyncio.get_event_loop().create_task(
+            self._async_loop_preprocess_message(),
+            name='MainLoopPreprocessMessage')
         loop_background.add_done_callback(_raise_exception_on_finish)
 
         def __send_resp(out: InferOutput):
@@ -933,6 +969,7 @@ class Engine:
             while not finish:
                 if self.req_manager.has_requests():
                     self.req_manager.step()
+                self._add_message()
                 finish, out = await out_que.get()
                 try:
                     if isinstance(out, Exception):
@@ -949,6 +986,7 @@ class Engine:
         while True:
             if self.req_manager.has_requests():
                 self.req_manager.step()
+            self._add_message()
 
             if not self.scheduler.has_unfinished():
                 await asyncio.sleep(0.01)
@@ -972,78 +1010,3 @@ class Engine:
         """
         from .engine_instance import EngineInstance
         return EngineInstance(self)
-
-    async def async_batched_infer(
-            self,
-            session_ids: List[int],
-            token_ids: List[List[int]] = None,
-            gen_config: GenerationConfig = None,
-            adapter_names: List[str] = None,
-            keep_cache: bool = False,
-            input_embeddings: List[InputEmbeddingType] = None,
-            input_embedding_ranges: List[InputEmbeddingRangeType] = None):
-        """Send inference request.
-
-        Args:
-            session_ids (List[int]): The session id.
-            token_ids (List[int]): The input token ids.
-            gen_config (GenerationConfig): The sampling parameters.
-            adapter_names (List[str]): The name of the adapters.
-            keep_cache (bool): Keep kv cache after infer.
-
-        Returns:
-            int: Error flags. 0 if success.
-            List[int]: The streaming output tokens.
-            int: The number of the output tokens.
-        """
-        return await self.engine_instance.async_batched_infer(
-            session_ids=session_ids,
-            token_ids=token_ids,
-            gen_config=gen_config,
-            adapter_names=adapter_names,
-            input_embeddings=input_embeddings,
-            input_embedding_ranges=input_embedding_ranges,
-            keep_cache=keep_cache)
-
-    def batched_infer(
-            self,
-            session_ids: List[int],
-            token_ids: List[List[int]] = None,
-            gen_config: GenerationConfig = None,
-            adapter_names: List[str] = None,
-            keep_cache: bool = False,
-            input_embeddings: List[InputEmbeddingType] = None,
-            input_embedding_ranges: List[InputEmbeddingRangeType] = None):
-        """batched infer."""
-        return self.engine_instance.batched_infer(
-            session_ids=session_ids,
-            token_ids=token_ids,
-            gen_config=gen_config,
-            adapter_names=adapter_names,
-            input_embeddings=input_embeddings,
-            input_embedding_ranges=input_embedding_ranges,
-            keep_cache=keep_cache)
-
-    async def async_add_session(self, session_id: int):
-        """Add new session."""
-        return await self.engine_instance._async_try_add_session(session_id)
-
-    def add_session(self, session_id: int):
-        """Add new session."""
-        return self.engine_instance._try_add_session(session_id)
-
-    async def async_cancel(self, session_id: int):
-        """Stop the given session."""
-        return await self.engine_instance.async_cancel(session_id)
-
-    def cancel(self, session_id: int):
-        """Add new session."""
-        return self.engine_instance.cancel(session_id)
-
-    async def async_end(self, session_id: int):
-        """End the given session."""
-        return await self.engine_instance.async_end(session_id)
-
-    def end(self, session_id: int):
-        """Add new session."""
-        return self.engine_instance.end(session_id)

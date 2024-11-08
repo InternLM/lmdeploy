@@ -164,10 +164,6 @@ class AutoModelAgent:
         self.model_config = model_config
         self.cache_config = cache_config
 
-    def get_block_numel(self):
-        """get block nelement."""
-        raise NotImplementedError('Not implemented')
-
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
                             swap_out_map: SwapMap):
         """model forward.
@@ -192,6 +188,10 @@ class AutoModelAgent:
 
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
+        raise NotImplementedError('Not implemented.')
+
+    def prepare_multimodal_input(self, input_ids, input_multimodals, **kwargs):
+        """prepare multimodal input."""
         raise NotImplementedError('Not implemented.')
 
 
@@ -257,11 +257,6 @@ class BaseModelAgent(AutoModelAgent):
                          device=device)
         return patched_model
 
-    def get_block_numel(self):
-        """get block nelement."""
-        k_cache = self.cache_engine.local_gpu_cache[0][0]
-        return k_cache[0].numel()
-
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
         cache_swapping(self.cache_engine,
@@ -310,6 +305,11 @@ class BaseModelAgent(AutoModelAgent):
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def prepare_multimodal_input(self, input_ids, input_multimodals, **kwargs):
+        """prepare multimodal input."""
+        return self.patched_model.prepare_multimodal_input(
+            input_ids, input_multimodals, **kwargs)
 
 
 @torch.inference_mode()
@@ -689,11 +689,6 @@ class TPModelAgent(AutoModelAgent):
 
         return model, cache_engine, cache_config
 
-    def get_block_numel(self):
-        """get block nelement."""
-        k_cache = self.cache_engine.local_gpu_cache[0][0]
-        return k_cache[0].numel()
-
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
         """forward impl."""
@@ -748,6 +743,11 @@ class TPModelAgent(AutoModelAgent):
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def prepare_multimodal_input(self, input_ids, input_multimodals, **kwargs):
+        """prepare multimodal input."""
+        return self.patched_model.prepare_multimodal_input(
+            input_ids, input_multimodals, **kwargs)
 
 
 def _exit_handler(agent: TPModelAgent):

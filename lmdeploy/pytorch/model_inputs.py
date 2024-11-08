@@ -6,45 +6,7 @@ from typing import Any, Dict, List, Literal
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
-
-
-@dataclass
-class MRopeModelInputs:
-    """Multimodal rotary position inputs."""
-    position_ids: List[torch.LongTensor] = None
-    deltas: List[torch.LongTensor] = None
-
-    def get_inputs(self, history_lengths: torch.Tensor,
-                   seq_lengths: torch.Tensor):
-        mrope_position_ids = []
-        for (his_len, seq_len, pos_ids,
-             delta) in zip(history_lengths, seq_lengths, self.position_ids,
-                           self.deltas):
-            assert pos_ids.dim() == 2, 'invalid mrope_position_ids'
-            if his_len + seq_len <= pos_ids.shape[1]:
-                mrope_position_ids.append(pos_ids[:,
-                                                  his_len:his_len + seq_len])
-            else:
-                mrope_position_ids.append(
-                    torch.tensor([his_len], device=delta.device).expand(3, -1)
-                    + delta)
-
-        mrope_position_ids = torch.cat(mrope_position_ids, dim=-1)
-        return mrope_position_ids
-
-    def to_device(self, device: str):
-        """to device."""
-        out_dict = dict()
-        for f in fields(self):
-            k = f.name
-            v = getattr(self, k)
-            if isinstance(v, torch.Tensor):
-                v = v.to(device)
-            elif isinstance(v, list):
-                v = [x.to(device) for x in v]
-            out_dict[k] = v
-
-        return MRopeModelInputs(**out_dict)
+from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 
 
 @dataclass
@@ -56,6 +18,7 @@ class VisionModelInputs:
     input_embeddings: List[List[torch.Tensor]] = None
     input_embedding_ranges: List[torch.LongTensor] = None
     input_embedding_indexing: torch.BoolTensor = None
+    input_multimodals: List[MultiModalTensor] = None
 
     def to_device(self, device: str):
         """to device."""
@@ -63,12 +26,19 @@ class VisionModelInputs:
         for f in fields(self):
             k = f.name
             v = getattr(self, k)
+            if v is None:
+                continue
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
-            elif k == 'input_embedding_ranges' and v is not None:
+            elif k == 'input_embedding_ranges':
                 v = [e.to(device) for e in v]
-            elif k == 'input_embeddings' and v is not None:
+            elif k == 'input_embeddings':
                 v = [[e.to(device) for e in li] for li in v]
+            elif k == 'input_multimodals':
+                for mm_datas in v:
+                    for modal_type, data in mm_datas.items():
+                        data = [d.to_device(device) for d in data]
+                        mm_datas[modal_type] = data
             out_dict[k] = v
 
         return VisionModelInputs(**out_dict)
@@ -119,7 +89,6 @@ class ModelInputs:
     num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
     vision_inputs: VisionModelInputs = None
-    mrope_inputs: MRopeModelInputs = None
     cross_attention_states: torch.Tensor = None
     history_cross_kv_seqlens: torch.LongTensor = None
 
@@ -165,7 +134,6 @@ class ModelInputs:
                 num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=self.local_adapter_ids,
                 vision_inputs=self.vision_inputs,
-                mrope_inputs=self.mrope_inputs,
                 cross_attention_states=self.cross_attention_states,
             )
             ret.append(inp)
@@ -182,8 +150,6 @@ class ModelInputs:
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
             elif isinstance(v, VisionModelInputs):
-                v = v.to_device(device)
-            elif isinstance(v, MRopeModelInputs):
                 v = v.to_device(device)
             out_dict[k] = v
 
@@ -210,8 +176,8 @@ class StepContext:
     local_adapter_ids: torch.LongTensor = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
+    input_multimodals: List[MultiModalTensor] = None
     vision_inputs: VisionModelInputs = None
-    mrope_position_ids: torch.Tensor = None
     attn_metadata: Any = None
     cross_attn_metadata: Any = None
     cross_attention_states: torch.Tensor = None
@@ -239,17 +205,16 @@ class StepContext:
         history_seqlens = inputs.history_lengths
         device = q_seqlens.device
 
+        input_multimodals = None
+        if inputs.vision_inputs is not None:
+            input_multimodals = inputs.vision_inputs.input_multimodals
+
         # for vlm
         input_embeddings, input_embedding_indexing = None, None
         if (inputs.vision_inputs is not None
                 and inputs.vision_inputs.input_embeddings is not None):
             input_embeddings, input_embedding_indexing = \
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
-        # for mrope
-        mrope_position_ids = None
-        if inputs.mrope_inputs is not None:
-            mrope_position_ids = inputs.mrope_inputs.get_inputs(
-                history_seqlens, q_seqlens)
 
         # kv_seqlens
         cross_attention_states = inputs.cross_attention_states
@@ -277,6 +242,7 @@ class StepContext:
             position_ids=position_ids,
             input_embeddings=input_embeddings,
             input_embedding_indexing=input_embedding_indexing,
+            input_multimodals=input_multimodals,
             attention_mask=attention_mask,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
@@ -286,7 +252,6 @@ class StepContext:
             world_size=world_size,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
-            mrope_position_ids=mrope_position_ids,
             cross_attention_states=cross_attention_states,
             cross_kv_seqlens=inputs.history_cross_kv_seqlens,
             kv_quant_policy=kv_quant_policy,
