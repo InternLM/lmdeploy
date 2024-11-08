@@ -701,6 +701,10 @@ class Engine:
                     if t == -1:
                         idx = i
                         break
+                if stopped:
+                    idx = min(
+                        idx,
+                        msg.sampling_param.max_new_tokens - msg.num_new_tokens)
                 token = token[:idx]
             else:
                 if stopped:
@@ -811,7 +815,7 @@ class Engine:
                     inputs, num_ignore_eos > 0)
                 # score the proposals with the target model
                 spec_inputs = copy.deepcopy(inputs)
-                batch_size, num_speculative_tokens = proposal_token_ids.shape
+                _, num_speculative_tokens = proposal_token_ids.shape
                 target_proposal_ids = torch.cat(
                     [next_token_ids.unsqueeze(-1), proposal_token_ids], -1)
                 spec_inputs.input_ids = target_proposal_ids.flatten(
@@ -834,12 +838,7 @@ class Engine:
                     draft_token_ids=proposal_token_ids)
                 next_token_ids = torch.cat(
                     [next_token_ids[:, None], target_output], -1)
-                # truncate final outputs to appendable length
-                batch_indices = torch.arange(batch_size,
-                                             device=score_output.device)
                 num_appendable_ids = num_appendable_ids - last_accpet - 1
-                max_len_ids = (num_appendable_ids - 1).clamp_max(-1)
-                next_token_ids[batch_indices, max_len_ids] = -1
 
             # stopping criteria
             stopped, num_appendable_ids = self._batch_stopping_criteria(
