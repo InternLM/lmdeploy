@@ -117,13 +117,7 @@ def auto_awq(model: str,
         act_scales = input_stats['absmax']
         smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size,
                       device)
-    quant_weights(model,
-                  fcs,
-                  w_bits,
-                  w_sym,
-                  w_group_size,
-                  device,
-                  skip_if_contains='lora')  # TODO quant lora weight
+    quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,

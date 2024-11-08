@@ -86,6 +86,16 @@ FC_FCS_MAP = {
     }
 }
 
+SKIPPED_MODULE = ['lora', 'block_sparse_moe.gate']
+
+
+def skipped_module(name: str):
+    """Whether the module should be skipped from quantization."""
+    for m in SKIPPED_MODULE:
+        if m in name:
+            return True
+    return False
+
 
 @torch.no_grad()
 def get_weight_scale(weight, q_group_size=-1):
@@ -235,13 +245,7 @@ def check_awq_supported(layer_type):
         raise NotImplementedError
 
 
-def quant_weights(model,
-                  fcs,
-                  bits,
-                  symmetry,
-                  group_size=-1,
-                  device='cuda',
-                  skip_if_contains: str = None):
+def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
     """Quantize the weights of the target model's linear layers."""
     from lmdeploy.lite.quantization import WeightQuantizer
     from lmdeploy.lite.quantization.modules import WeightOnlyQLinear
@@ -251,10 +255,7 @@ def quant_weights(model,
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         pack_or_skip = 'packed'
-        if skip_if_contains and skip_if_contains in child_name:
-            q_linear = fc
-            pack_or_skip = 'skipped'
-        elif 'block_sparse_moe.gate' in name:  # moe
+        if skipped_module(name):
             q_linear = fc
             pack_or_skip = 'skipped'
         else:
