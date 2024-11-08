@@ -695,13 +695,18 @@ class Engine:
         def __get_out_token_ids(token: torch.Tensor, msg: SchedulerSequence,
                                 stopped: bool):
             """check if output is necessary."""
-            if stopped:
-                return []
-            if token in msg.sampling_param.stop_words:
-                return []
             if isinstance(token, list):
-                token = [t for t in token if t != -1]
+                idx = len(token)
+                for i, t in enumerate(token):
+                    if t == -1:
+                        idx = i
+                        break
+                token = token[:idx]
             else:
+                if stopped:
+                    return []
+                if token in msg.sampling_param.stop_words:
+                    return []
                 token = [token]
             return token
 
@@ -806,7 +811,7 @@ class Engine:
                     inputs, num_ignore_eos > 0)
                 # score the proposals with the target model
                 spec_inputs = copy.deepcopy(inputs)
-                _, num_speculative_tokens = proposal_token_ids.shape
+                batch_size, num_speculative_tokens = proposal_token_ids.shape
                 target_proposal_ids = torch.cat(
                     [next_token_ids.unsqueeze(-1), proposal_token_ids], -1)
                 spec_inputs.input_ids = target_proposal_ids.flatten(
@@ -814,7 +819,6 @@ class Engine:
                 spec_inputs.history_lengths += spec_inputs.seq_length
                 spec_inputs.seq_length = torch.ones_like(
                     spec_inputs.seq_length) * (num_speculative_tokens + 1)
-                spec_inputs.is_decoding = False
                 score_output = await self.model_agent.score_proposal(
                     spec_inputs,
                     swap_in_map=swap_in_map,
@@ -824,12 +828,18 @@ class Engine:
                 rejection_sampler = RejectionSampler()
                 score_output = score_output.softmax(-1)
                 spec_logits = spec_logits.softmax(-1)
-                target_output = rejection_sampler.forward(
+                target_output, last_accpet = rejection_sampler.forward(
                     score_output,
                     draft_probs=spec_logits,
                     draft_token_ids=proposal_token_ids)
                 next_token_ids = torch.cat(
                     [next_token_ids[:, None], target_output], -1)
+                # truncate final outputs to appendable length
+                batch_indices = torch.arange(batch_size,
+                                             device=score_output.device)
+                num_appendable_ids = num_appendable_ids - last_accpet - 1
+                max_len_ids = (num_appendable_ids - 1).clamp_max(-1)
+                next_token_ids[batch_indices, max_len_ids] = -1
 
             # stopping criteria
             stopped, num_appendable_ids = self._batch_stopping_criteria(

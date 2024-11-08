@@ -113,7 +113,7 @@ class RejectionSampler(nn.Module):
             (batch_size, num_speculative_tokens + 1), -1)
         output_token_ids[~rejected_mask] = draft_token_ids[accepted_mask]
         output_token_ids[batch_indices, reject_idx] = adjusted_token_ids
-        return output_token_ids
+        return output_token_ids, reject_idx
 
 
 def test_rejection_sampler():
