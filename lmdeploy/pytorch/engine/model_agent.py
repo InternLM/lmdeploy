@@ -517,7 +517,8 @@ def _check_context_alive(mp_context: mp.ProcessContext):
     for idx, exitcode in log_procs:
         logger.error(f'TP process {idx} failed with exitcode {exitcode}.')
     # TODO: not safe exit.
-    os._exit(1)
+    exit_code = 1 if len(log_procs) > 0 else 0
+    os._exit(exit_code)
 
 
 def _find_available_port() -> bool:
