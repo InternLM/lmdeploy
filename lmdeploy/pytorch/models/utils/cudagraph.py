@@ -48,8 +48,7 @@ class CudaGraphMixin:
         **kwargs,
     ):
         """return True is model support cudagraph."""
-        seq_lens = input_ids.size(1)
-        return seq_lens <= 256
+        return attn_metadata.is_decoding
 
     def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args,
                                **kwargs) -> BuffType:
