@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Literal
+
 import dlinfer.ops as ext_ops
 import torch
 from dlinfer.utils.type_annotation import Optional, Sequence, Tensor
@@ -19,6 +21,9 @@ def prefill_attention(
     block_size: int,
     attn_mask: Sequence[Optional[Tensor]],
     is_unpaged_prefill: Optional[bool],
+    kv_scales: Tensor = None,
+    kv_zeros: Tensor = None,
+    quant_bits: Literal[0, 4, 8] = 0,
 ) -> Tensor:
     num_q_heads = query_states.shape[1]
     num_kv_heads = value_states.shape[1]
@@ -50,11 +55,25 @@ def prefill_attention(
             num_kv_heads,
             attn_mask,
             attn_output=attn_output,
+            kv_scales=kv_scales,
+            kv_zeros=kv_zeros,
+            quant_bits=quant_bits,
         )
 
 
-def paged_token_attention(q, k_cache, v_cache, attn_output, kv_seq_len,
-                          max_kv_seq_len, block_offsets, block_size):
+def paged_token_attention(
+    q,
+    k_cache,
+    v_cache,
+    attn_output,
+    kv_seq_len,
+    max_kv_seq_len,
+    block_offsets,
+    block_size,
+    kv_scales: Tensor = None,
+    kv_zeros: Tensor = None,
+    quant_bits: Literal[0, 4, 8] = 0,
+):
     num_q_heads, q_head_dim = q.shape[1:3]
     num_kv_heads = k_cache.shape[-1] // q_head_dim
     return ext_ops.paged_decode_attention(
@@ -68,6 +87,9 @@ def paged_token_attention(q, k_cache, v_cache, attn_output, kv_seq_len,
         num_q_heads,
         num_kv_heads,
         attn_output=attn_output,
+        kv_scales=kv_scales,
+        kv_zeros=kv_zeros,
+        quant_bits=quant_bits,
     )
 
 
@@ -88,6 +110,9 @@ def paged_attention_fwd(
     block_size: int,
     attn_mask: Sequence[Optional[Tensor]] = (),
     is_unpaged_prefill: Optional[bool] = None,
+    kv_scales: Tensor = None,
+    kv_zeros: Tensor = None,
+    quant_bits: Literal[0, 4, 8] = 0,
 ):
     if not is_decoding:
         return prefill_attention(
@@ -105,6 +130,9 @@ def paged_attention_fwd(
             block_size,
             attn_mask,
             is_unpaged_prefill,
+            kv_scales=kv_scales,
+            kv_zeros=kv_zeros,
+            quant_bits=quant_bits,
         )
     else:
         return paged_token_attention(
@@ -116,4 +144,7 @@ def paged_attention_fwd(
             max_kv_seq_len,
             block_offsets,
             block_size,
+            kv_scales=kv_scales,
+            kv_zeros=kv_zeros,
+            quant_bits=quant_bits,
         )

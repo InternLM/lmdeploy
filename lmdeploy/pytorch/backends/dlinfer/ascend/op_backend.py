@@ -1,5 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
+import itertools
+import os
+import re
+from pathlib import Path
+from typing import Dict, Tuple
 
 import torch
 
@@ -9,6 +13,81 @@ from lmdeploy.utils import get_logger
 from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
+
+
+class AscendKVQuantMeta:
+    has_set_value: bool = False
+    quant_meta: Dict = {}
+
+    @classmethod
+    def set_value(cls, device: str, dtype: torch.dtype, record_file: str,
+                  total_layers: int):
+        with open(record_file, 'r') as file:
+            data = file.read()
+        scale_offset_pairs = re.findall(
+            r'scale:\s*([\d\.\-]+)\s*offset:\s*(-?\d+)', data)
+        k_scales, v_scales, kv_scales = [], [], []
+        k_zeros, v_zeros, kv_zeros = [], [], []
+        if len(scale_offset_pairs) == total_layers:
+            for scale, offset in scale_offset_pairs:
+                k_scales.append(
+                    torch.tensor([float(scale)], device=device, dtype=dtype))
+                v_scales.append(
+                    torch.tensor([float(scale)], device=device, dtype=dtype))
+                kv_scales.append(
+                    torch.tensor([float(scale), float(scale)],
+                                 device=device,
+                                 dtype=dtype))
+                k_zeros.append(
+                    torch.tensor([float(offset)], device=device, dtype=dtype))
+                v_zeros.append(
+                    torch.tensor([float(offset)], device=device, dtype=dtype))
+                kv_zeros.append(
+                    torch.tensor([float(offset), float(offset)],
+                                 device=device,
+                                 dtype=dtype))
+        elif len(scale_offset_pairs) == total_layers * 2:
+            for i in range(total_layers):
+                k_scales.append(
+                    torch.tensor([float(scale_offset_pairs[2 * i][0])],
+                                 device=device,
+                                 dtype=dtype))
+                v_scales.append(
+                    torch.tensor([float(scale_offset_pairs[2 * i + 1][0])],
+                                 device=device,
+                                 dtype=dtype))
+                kv_scales.append(
+                    torch.tensor([
+                        float(scale_offset_pairs[2 * i][0]),
+                        float(scale_offset_pairs[2 * i + 1][0])
+                    ],
+                                 device=device,
+                                 dtype=dtype))
+                k_zeros.append(
+                    torch.tensor([float(scale_offset_pairs[2 * i][1])],
+                                 device=device,
+                                 dtype=dtype))
+                v_zeros.append(
+                    torch.tensor([float(scale_offset_pairs[2 * i + 1][1])],
+                                 device=device,
+                                 dtype=dtype))
+                kv_zeros.append(
+                    torch.tensor([
+                        float(scale_offset_pairs[2 * i][1]),
+                        float(scale_offset_pairs[2 * i + 1][1])
+                    ],
+                                 device=device,
+                                 dtype=dtype))
+
+        cls.quant_meta.update({
+            'k_scales': itertools.cycle(k_scales),
+            'k_zeros': itertools.cycle(k_zeros),
+            'v_scales': itertools.cycle(v_scales),
+            'v_zeros': itertools.cycle(v_zeros),
+            'kv_scales': itertools.cycle(kv_scales),
+            'kv_zeros': itertools.cycle(kv_zeros)
+        })
+        cls.has_set_value = True
 
 
 class AscendOpsBackend(DlinferOpsBackend):
@@ -153,6 +232,21 @@ class AscendOpsBackend(DlinferOpsBackend):
                     .repeat_interleave(step_context.q_seqlens, 0)
             kv_seqlens = kv_seqlens_cpu
 
+        if not cls.enable_graph and step_context.kv_quant_policy == 8:
+            record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
+            assert record_file, 'please specify valid ASCEND_QUANT_RECORD_FILE'
+            path = Path(record_file)
+            is_path = path.is_absolute() or path.is_relative_to('/')
+            exists = path.exists()
+            if not (is_path and exists):
+                raise ValueError(
+                    'please specify valid ASCEND_QUANT_RECORD_FILE')
+            if not AscendKVQuantMeta.has_set_value:
+                total_layers = len(step_context.kv_caches)
+                AscendKVQuantMeta.set_value(step_context.block_offsets.device,
+                                            step_context.model_config.dtype,
+                                            record_file, total_layers)
+
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
@@ -166,6 +260,8 @@ class AscendOpsBackend(DlinferOpsBackend):
             is_unpaged_prefill=is_unpaged_prefill,
             max_q_seq_len=max_q_seq_len,
             max_kv_seq_len=max_kv_seq_len,
+            quant_policy=step_context.kv_quant_policy,
+            quant_meta=AscendKVQuantMeta.quant_meta,
         )
 
         step_context.attn_metadata = attn_metadata
