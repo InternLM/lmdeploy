@@ -24,7 +24,7 @@
 #include <cuda_runtime.h>
 
 namespace turbomind {
-
+#if 0
 template<typename T>
 LlamaWeight<T>::LlamaWeight(size_t     head_num,
                             size_t     kv_head_num,
@@ -75,6 +75,37 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
 
     mallocWeights();
 }
+#else
+
+template<typename T>
+LlamaWeight<T>::LlamaWeight(
+    const ModelParam& model, const LoraParam& lora_param, const MoeParam& moe_param, size_t tp_size, size_t tp_rank):
+    hidden_units_(model.hidden_units),
+    inter_size_(model.inter_size),
+    vocab_size_(model.vocab_size),
+    vocab_size_padded_(model.vocab_size),
+    num_layer_(model.layer_num),
+    weight_type_(model.weight_type),
+    tensor_para_size_(tp_size),
+    tensor_para_rank_(tp_rank)
+{
+    if (vocab_size_padded_ % tensor_para_size_ != 0) {
+        vocab_size_padded_ = (vocab_size_padded_ + tensor_para_size_ - 1) / tensor_para_size_ * tensor_para_size_;
+        TM_LOG_WARNING("pad vocab size from %d to %d", vocab_size_, vocab_size_padded_);
+    }
+
+    FT_CHECK(hidden_units_ % tensor_para_size_ == 0);
+
+    decoder_layer_weights.reserve(num_layer_);
+    for (unsigned l = 0; l < num_layer_; ++l) {
+        decoder_layer_weights.push_back(
+            new LlamaDecoderLayerWeight<T>(l, model, lora_param, moe_param, tp_size, tp_rank));
+    }
+
+    mallocWeights();
+}
+
+#endif
 
 template<typename T>
 LlamaWeight<T>::~LlamaWeight()

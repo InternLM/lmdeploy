@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import collections
 import os.path as osp
 from abc import ABC
 
@@ -64,13 +65,14 @@ class BaseOutputModel(ABC):
         # get `model_info` and `tokenizer_info` at first, which
         # will be updated to `self.model_config` and `self.attention_config`
         self.input_model_info = self.input_model.model_info()
+        self.input_model_info = self.single_to_list(
+            self.input_model_info, keys=['inter_size', 'expert_num'])
         self.input_model_tokenizer_info = self.input_model.tokenizer_info()
         self.permute_qk = self.input_model_info.get('permute_qk', True)
-
         self.update_model_config()
-        self.model_config.inter_size = _pad_inter_size(
-            self.model_config.inter_size, self.model_config.group_size,
-            self.tensor_para_size)
+        for i, v in enumerate(self.model_config.inter_size):
+            self.model_config.inter_size[i] = _pad_inter_size(
+                v, self.model_config.group_size, self.tensor_para_size)
         if self.model_config.expert_num:
             self.model_config.expert_inter_size = _pad_inter_size(
                 self.model_config.expert_inter_size,
@@ -78,10 +80,20 @@ class BaseOutputModel(ABC):
         self.model_config.verify()
         assert self.model_config.kv_head_num % self.tensor_para_size == 0
 
+        # print(self.model_config)
+
         self.update_attention_config()
         self.update_lora_config()
         # ! Dependency on `self`
         self.model = model_cls(self)
+
+    def single_to_list(self, config: dict, keys):
+        num_layer = int(config['num_layer'])
+        for k in keys:
+            v = config.get(k, None)
+            if v is not None and not isinstance(v, collections.Sequence):
+                config[k] = [v] * num_layer
+        return config
 
     def update_model_config(self):
         """Update `self.model_config` according to the input_model's

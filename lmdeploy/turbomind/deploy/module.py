@@ -96,10 +96,12 @@ class Ffn(Module):
     def __init__(self, model: BaseOutputModel):
         self.model = model
         self.tp = model.tensor_para_size
+        # inter_sizes in config are padded and my differ from what's in the weights
         self.inter_size = model.model_config.inter_size
         self.group_size = max(1, model.model_config.group_size)
 
     def _export(self,
+                inter_size: int,
                 fmt: str,
                 idx: int,
                 w123,
@@ -110,11 +112,11 @@ class Ffn(Module):
         w1, w2, w3 = map(transpose, w123)
 
         if not is_lora_a:
-            w1 = pad_out_dims(w1, self.inter_size)
-            w3 = pad_out_dims(w3, self.inter_size)
+            w1 = pad_out_dims(w1, inter_size)
+            w3 = pad_out_dims(w3, inter_size)
         if not is_lora_b:
             group_size = self.group_size if apply_gs else 1
-            w2 = pad_in_dims(w2, self.inter_size // group_size)
+            w2 = pad_in_dims(w2, inter_size // group_size)
 
         w1, w2, w3 = map(pack_fn, (w1, w2, w3))
         self.model.save_split(w1,
@@ -132,7 +134,7 @@ class Ffn(Module):
 
     def apply(self, i: int, r: BaseReader):
         for e in get_params(r.ffn(i, None)):
-            e(partial(self._export, self._ffn), partial(r.ffn, i), i)
+            e(partial(self._export, self.inter_size[i], self._ffn), partial(r.ffn, i), i)
 
 
 class MoeFfn(Ffn):
@@ -155,9 +157,9 @@ class MoeFfn(Ffn):
 
     def apply(self, i: int, r: BaseReader):
         for p in get_params(r.moe_ffn_expert()):
-            for e in range(self.expert_num):
+            for e in range(self.expert_num[i]):
                 fmt = self._moe_ffn_expert.replace('E', str(e))
-                p(partial(self._export, fmt), partial(r.moe_ffn_expert, e, i),
+                p(partial(self._export, self.inter_size, fmt), partial(r.moe_ffn_expert, e, i),
                   i)
 
         gate = transpose(r.moe_ffn_gate(i))

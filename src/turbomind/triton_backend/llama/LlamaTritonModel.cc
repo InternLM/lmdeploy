@@ -250,17 +250,19 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     model_param_.kv_head_num        = model_reader["kv_head_num"].as<int>(0);
     model_param_.hidden_units       = model_reader["hidden_units"].as<int>();
     model_param_.layer_num          = model_reader["num_layer"].as<int>();
-    model_param_.inter_size         = model_reader["inter_size"].as<int>();
     model_param_.vocab_size         = model_reader["vocab_size"].as<int>();
     model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
     model_param_.start_id           = model_reader["start_id"].as<int>();
     model_param_.end_id             = model_reader["end_id"].as<int>();
     attn_param_.cache_block_seq_len = attention_reader["cache_block_seq_len"].as<int>(0);
     model_param_.quant_policy       = engine_reader["quant_policy"].as<int>(0);
-
+    YAML::Node inter_size           = model_reader["inter_size"];
+    for (auto it = inter_size.begin(); it != inter_size.end(); ++it) {
+        model_param_.inter_size.push_back(it->as<int>());
+    }
     // Only weight classes need these
-    attn_bias_  = model_reader["attn_bias"].as<int>(0);
-    group_size_ = model_reader["group_size"].as<int>(0);
+    model_param_.attn_bias  = model_reader["attn_bias"].as<int>(0);
+    model_param_.group_size = model_reader["group_size"].as<int>(0);
 
     // rotary embedding parameters
     attn_param_.rotary_embedding_dim    = attention_reader["rotary_embedding"].as<int>();
@@ -290,19 +292,23 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_param_.num_tokens_per_iter = engine_reader["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine_reader["max_prefill_iters"].as<int>(1);
 
-    lora_param_.policy           = ft::getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
-    lora_param_.r                = lora_reader["lora_r"].as<int>(0);
-    lora_param_.scale            = lora_reader["lora_scale"].as<float>(0);
-    lora_param_.max_wo_r         = lora_reader["lora_max_wo_r"].as<int>(0);
-    lora_param_.rank_pattern     = getLoraPattern<int>(lora_reader["lora_rank_pattern"].as<std::string>(""),
+    lora_param_.policy        = ft::getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
+    lora_param_.r             = lora_reader["lora_r"].as<int>(0);
+    lora_param_.scale         = lora_reader["lora_scale"].as<float>(0);
+    lora_param_.max_wo_r      = lora_reader["lora_max_wo_r"].as<int>(0);
+    lora_param_.rank_pattern  = getLoraPattern<int>(lora_reader["lora_rank_pattern"].as<std::string>(""),
                                                    [](const std::string& s) { return std::stoi(s); });
-    lora_param_.scale_pattern    = getLoraPattern<float>(lora_reader["lora_scale_pattern"].as<std::string>(""),
+    lora_param_.scale_pattern = getLoraPattern<float>(lora_reader["lora_scale_pattern"].as<std::string>(""),
                                                       [](const std::string& s) { return std::stof(s); });
-    moe_param_.expert_num        = model_reader["expert_num"].as<int>(0);
+
     moe_param_.experts_per_token = model_reader["experts_per_token"].as<int>(0);
     moe_param_.inter_size        = model_reader["expert_inter_size"].as<int>(0);
     moe_param_.shared_gate       = model_reader["moe_shared_gate"].as<int>(0);
     moe_param_.norm_topk         = model_reader["moe_norm_topk"].as<bool>(false);
+    YAML::Node expert_num        = model_reader["expert_num"];
+    for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
+        moe_param_.expert_num.push_back(it->as<int>());
+    }
 
     handleMissingParams();
 
@@ -314,19 +320,19 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
 
     const std::string weight_type_str = model_reader["weight_type"].as<std::string>();
     if (weight_type_str == "fp16" || weight_type_str == "float16") {
-        weight_type_ = ft::WeightType::kFP16;
+        model_param_.weight_type = ft::WeightType::kFP16;
     }
     else if (weight_type_str == "bf16" || weight_type_str == "bfloat16") {
-        weight_type_ = ft::WeightType::kBF16;
+        model_param_.weight_type = ft::WeightType::kBF16;
     }
     else if (weight_type_str == "fp32") {
-        weight_type_ = ft::WeightType::kFP32;
+        model_param_.weight_type = ft::WeightType::kFP32;
     }
     else if (weight_type_str == "int8") {
-        weight_type_ = ft::WeightType::kINT8;
+        model_param_.weight_type = ft::WeightType::kINT8;
     }
     else if (weight_type_str == "int4") {
-        weight_type_ = ft::WeightType::kINT4;
+        model_param_.weight_type = ft::WeightType::kINT4;
     }
     else {
         std::cout << "[ERROR] Unsupported weight type: '" << weight_type_str << "'\n";
@@ -411,20 +417,8 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
     const int tensor_para_rank   = rank % tensor_para_size_;
     const int pipeline_para_rank = rank / tensor_para_size_;
     ft::FT_CHECK(pipeline_para_size_ == 1 && pipeline_para_rank == 0);
-    weights_[device_id] = std::make_shared<ft::LlamaWeight<T>>(model_param_.head_num,
-                                                               model_param_.kv_head_num,
-                                                               model_param_.head_dim,
-                                                               model_param_.hidden_units,
-                                                               model_param_.inter_size,
-                                                               model_param_.vocab_size,
-                                                               model_param_.layer_num,
-                                                               attn_bias_,
-                                                               weight_type_,
-                                                               group_size_,
-                                                               lora_param_,
-                                                               moe_param_,
-                                                               tensor_para_size_,
-                                                               tensor_para_rank);
+    weights_[device_id] = std::make_shared<ft::LlamaWeight<T>>(
+        model_param_, lora_param_, moe_param_, tensor_para_size_, tensor_para_rank);
     // model inited with model_dir
     if (model_dir_ != "") {
         weights_[device_id]->loadModel(model_dir_);
@@ -480,9 +474,11 @@ std::string LlamaTritonModel<T>::toString()
     std::stringstream ss;
     ss << "Model: "  //
        << "\nhead_num: " << model_param_.head_num << "\nkv_head_num: " << model_param_.kv_head_num
-       << "\nsize_per_head: " << model_param_.head_dim << "\ninter_size: " << model_param_.inter_size
+       << "\nsize_per_head: "
+       << model_param_.head_dim
+       //    << "\ninter_size: " << model_param_.inter_size
        << "\nnum_layer: " << model_param_.layer_num << "\nvocab_size: " << model_param_.vocab_size
-       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_param_.max_batch_size
+       << "\nattn_bias: " << model_param_.attn_bias << "\nmax_batch_size: " << engine_param_.max_batch_size
        << "\nmax_prefill_token_num: " << engine_param_.max_prefill_token_num
        << "\nmax_context_token_num: " << engine_param_.max_context_token_num
        << "\nnum_tokens_per_iter: " << engine_param_.num_tokens_per_iter
@@ -493,8 +489,9 @@ std::string LlamaTritonModel<T>::toString()
        << "\nenable_prefix_caching: " << engine_param_.enable_prefix_caching << "\nstart_id: " << model_param_.start_id
        << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
        << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
-       << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << model_param_.quant_policy
-       << "\ngroup_size: " << group_size_ << "\nexpert_num: " << moe_param_.expert_num
+       << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << model_param_.quant_policy << "\ngroup_size: "
+       << model_param_.group_size
+       //    << "\nexpert_num: " << moe_param_.expert_num
        << "\nexpert_per_token: " << moe_param_.experts_per_token << "\nmoe_method: " << moe_param_.method << std::endl;
 
     return ss.str();

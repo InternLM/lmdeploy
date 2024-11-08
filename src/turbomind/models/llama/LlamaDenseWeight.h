@@ -20,63 +20,12 @@
 #pragma once
 
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/weight_type.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <cuda_bf16.h>
 
 namespace turbomind {
-
-enum class WeightType : int
-{
-    kFP32,
-    kFP16,
-    kFP8,  // not supported yet
-    kBF16,
-    kINT8,
-    kINT4
-};
-
-template<class T>
-constexpr WeightType get_default_weight_type()
-{
-    if constexpr (std::is_same_v<T, half>) {
-        return WeightType::kFP16;
-    }
-    else if constexpr (std::is_same_v<T, nv_bfloat16>) {
-        return WeightType::kBF16;
-    }
-    else if constexpr (std::is_same_v<T, float>) {
-        return WeightType::kFP32;
-    }
-    else {
-        static_assert(sizeof(T) != sizeof(T), "not implemented");
-        return {};
-    }
-}
-
-inline size_t getBitSize(WeightType type)
-{
-    switch (type) {
-        case WeightType::kFP32:
-            return 32;
-        case WeightType::kFP16:
-            return 16;
-        case WeightType::kFP8:
-            return 8;
-        case WeightType::kBF16:
-            return 16;
-        case WeightType::kINT8:
-            return 8;
-        case WeightType::kINT4:
-            return 4;
-    }
-    return 0;
-}
-
-enum class LoraPolicy : int
-{
-    kNull,
-    kPlora,
-};
 
 inline LoraPolicy getLoraPolicy(const std::string& policy)
 {
@@ -186,22 +135,26 @@ struct MoeFfnWeight {
 
     MoeFfnWeight() = default;
 
-    MoeFfnWeight(size_t     hidden_dim,
-                 int        inter_size,
-                 int        expert_num,
-                 int        method,
-                 bool       has_shared_gate,
-                 size_t     tp,
-                 WeightType weight_type,
-                 int        group_size,
-                 bool       fuse_silu_act)
+    MoeFfnWeight(int             layer_id,
+                 const MoeParam& param,
+                 size_t          hidden_dim,
+                 WeightType      weight_type,
+                 int             group_size,
+                 size_t          tp,
+                 bool            fuse_silu_act)
     {
 
-        // printf("%d %d %d\n", (int)hidden_dim, (int)inter_size, (int)expert_num);
+        if (param.expert_num.size() < layer_id) {
+            return;
+        }
+
+        const int expert_num = param.expert_num[layer_id];
 
         if (expert_num == 0) {
             return;
         }
+
+        printf("%d %d %d\n", (int)hidden_dim, (int)param.inter_size, (int)expert_num);
 
         gate.input_dims  = hidden_dim;
         gate.output_dims = expert_num;
@@ -210,15 +163,15 @@ struct MoeFfnWeight {
 
         experts.resize(expert_num);
 
-        this->method  = method;
-        fuse_silu_act = fuse_silu_act && method;
+        method        = param.method;
+        fuse_silu_act = fuse_silu_act && method == MoeParam::kFused;
 
         for (auto& e : experts) {
             // inter size is divided by tp in `FfnWeight`
-            e = LlamaFfnWeight<T>{hidden_dim, (size_t)inter_size, tp, weight_type, group_size, fuse_silu_act};
+            e = LlamaFfnWeight<T>{hidden_dim, (size_t)param.inter_size, tp, weight_type, group_size, fuse_silu_act};
         }
 
-        if (has_shared_gate) {
+        if (param.shared_gate) {
             shared_gate.input_dims  = hidden_dim;
             shared_gate.output_dims = 1;
             shared_gate.type        = get_default_weight_type<T>();
@@ -236,7 +189,7 @@ struct MoeFfnWeight {
 
     LlamaFfnWeight<T> block;
 
-    int method{};
+    MoeParam::Method method{};
 };
 
 }  // namespace turbomind

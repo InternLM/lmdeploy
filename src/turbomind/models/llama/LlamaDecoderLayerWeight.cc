@@ -50,7 +50,7 @@ static bool is_fuse_silu_act()
     }();
     return value;
 }
-
+#if 0
 template<typename T>
 LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
                                                     size_t     head_num,
@@ -145,7 +145,90 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
 
     mallocWeights();
 }
+#else
 
+template<typename T>
+LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int               layer_id,
+                                                    const ModelParam& model,
+                                                    const LoraParam&  lora_param,
+                                                    const MoeParam&   moe_param,
+                                                    size_t            tp_size,
+                                                    size_t            tp_rank):
+    head_num_(model.head_num),
+    kv_head_num_(model.kv_head_num),
+    size_per_head_(model.head_dim),
+    hidden_units_(model.hidden_units),
+    inter_size_(model.inter_size.at(layer_id)),
+    weight_type_(model.weight_type),
+    attn_bias_(model.attn_bias),
+    tensor_para_size_(tp_size),
+    tensor_para_rank_(tp_rank)
+{
+    if (lora_param.policy == LoraPolicy::kPlora) {
+        std::vector<std::string> keys = {
+            "attention.w_qkv", "attention.wo", "feed_forward.w1", "feed_forward.w2", "feed_forward.w3"};
+        std::vector<LlamaDenseWeight<T>*> weights = {&self_attn_weights.qkv,
+                                                     &self_attn_weights.output,
+                                                     &ffn_weights.gating,
+                                                     &ffn_weights.output,
+                                                     &ffn_weights.intermediate};
+        for (int i = 0; i < keys.size(); i++) {
+            const auto& name      = keys[i];
+            auto&       weight    = *weights[i];
+            int         rank      = lora_param.r;
+            float       scale     = lora_param.scale;
+            std::string full_name = "layers." + std::to_string(layer_id) + "." + name;
+
+            for (const auto& [re, pr] : lora_param.rank_pattern) {
+                if (std::regex_search(full_name, pr.first)) {
+                    rank = pr.second;
+                    TM_LOG_DEBUG("find rank, pattern=%s, name=%s, value=%d", re.c_str(), full_name.c_str(), rank);
+                    break;
+                }
+            }
+            for (const auto& [re, pr] : lora_param.scale_pattern) {
+                if (std::regex_search(full_name, pr.first)) {
+                    scale = pr.second;
+                    TM_LOG_DEBUG("find scale pattern=%s, name=%s, value=%f", re.c_str(), full_name.c_str(), scale);
+                    break;
+                }
+            }
+            if (rank) {
+                weight.lora.r      = rank;
+                weight.lora.scale  = scale;
+                weight.lora.policy = lora_param.policy;
+            }
+        }
+    }
+
+    fused_up_and_gate_ = ffn_weights.gating.lora.policy != LoraPolicy::kPlora;
+
+    self_attn_weights.qkv.input_dims  = hidden_units_;
+    self_attn_weights.qkv.output_dims = (head_num_ + 2 * kv_head_num_) * size_per_head_ / tensor_para_size_;
+    self_attn_weights.qkv.type        = weight_type_;
+    self_attn_weights.qkv.group_size  = model.group_size;
+
+    self_attn_weights.output.input_dims  = (head_num_ * size_per_head_) / tensor_para_size_;
+    self_attn_weights.output.output_dims = hidden_units_;
+    self_attn_weights.output.type        = weight_type_;
+    self_attn_weights.output.group_size  = model.group_size;
+
+    ffn_weights = LlamaFfnWeight<T>{
+        hidden_units_,
+        inter_size_,
+        tensor_para_size_,
+        weight_type_,
+        model.group_size,
+        weight_type_ == WeightType::kINT4 && is_fuse_silu_act(),
+    };
+
+    moe_weights = MoeFfnWeight<T>{
+        layer_id, moe_param, hidden_units_, weight_type_, model.group_size, tensor_para_size_, is_fuse_silu_act()};
+
+    mallocWeights();
+}
+
+#endif
 template<typename T>
 size_t LlamaDecoderLayerWeight<T>::workspace_size() const noexcept
 {
@@ -709,12 +792,12 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
     };
 
     if (inter_size_) {
-        // std::cerr << "process FFN\n";
+        std::cerr << "process FFN\n";
         process_ffn(ffn_weights, false);
     }
 
     if (!moe_weights.experts.empty()) {
-        // std::cerr << "process MoE\n";
+        std::cerr << "process MoE\n";
         std::vector<std::pair<void*, int>> fused_ptrs;
         std::vector<std::pair<void*, int>> output_ptrs;
         std::vector<std::pair<void*, int>> fused_param_ptrs;
@@ -722,7 +805,7 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
 
         for (auto& e : moe_weights.experts) {
 
-            process_ffn(e, moe_weights.method);
+            process_ffn(e, moe_weights.method == MoeParam::kFused);
 
             const auto& fused  = e.fused_gating_intermediate;
             const auto& output = e.output;

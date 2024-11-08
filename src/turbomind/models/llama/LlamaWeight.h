@@ -29,24 +29,30 @@ namespace turbomind {
 template<typename T>
 struct LlamaWeight {
     LlamaWeight() = default;
-    LlamaWeight(size_t     head_num,
-                size_t     kv_head_num,
-                size_t     size_per_head,
-                size_t     hidden_units,
-                size_t     inter_size,
-                size_t     vocab_size,
-                size_t     num_layer,
-                bool       attn_bias,
-                WeightType weight_type,
-                int        group_size,
-                LoraParam  lora_param,
-                MoeParam   moe_param,
-                size_t     tensor_para_size,
-                size_t     tensor_para_rank);
+    // LlamaWeight(size_t     head_num,
+    //             size_t     kv_head_num,
+    //             size_t     size_per_head,
+    //             size_t     hidden_units,
+    //             size_t     inter_size,
+    //             size_t     vocab_size,
+    //             size_t     num_layer,
+    //             bool       attn_bias,
+    //             WeightType weight_type,
+    //             int        group_size,
+    //             LoraParam  lora_param,
+    //             MoeParam   moe_param,
+    //             size_t     tensor_para_size,
+    //             size_t     tensor_para_rank);
+
+    LlamaWeight(const ModelParam& model_param,
+                const LoraParam&  lora_param,
+                const MoeParam&   moe_param,
+                size_t            tp_size,
+                size_t            tp_rank);
 
     ~LlamaWeight();
 
-    LlamaWeight(const LlamaWeight& other) = delete;
+    LlamaWeight(const LlamaWeight& other)            = delete;
     LlamaWeight& operator=(const LlamaWeight& other) = delete;
 
     void loadModel(std::string dir_path);
@@ -64,13 +70,14 @@ private:
     void mallocWeights();
 
     size_t     hidden_units_;
-    size_t     inter_size_;
     size_t     vocab_size_;
     size_t     vocab_size_padded_;
     size_t     num_layer_;
     WeightType weight_type_;
     size_t     tensor_para_size_;
     size_t     tensor_para_rank_;
+
+    std::vector<int> inter_size_;
 };
 
 }  // namespace turbomind

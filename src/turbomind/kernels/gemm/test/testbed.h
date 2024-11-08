@@ -357,7 +357,7 @@ public:
             }
         }
 
-        ((MoeGemmContext*)ctx_.get())->set_offsets(moe_m_offsets_.data().get());
+        ((MoeGemmContext*)ctx_.get())->update(experts_, exp_per_tok_, moe_m_offsets_.data().get());
 
         CHECK(batch_dim == 0);
         CHECK(a_desc_.order == kRowMajor);

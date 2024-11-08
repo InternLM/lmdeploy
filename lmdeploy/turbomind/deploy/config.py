@@ -2,6 +2,7 @@
 import inspect
 import json
 from dataclasses import asdict, fields
+from typing import List
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
@@ -36,7 +37,8 @@ class ModelConfig:
     hidden_units: int = None
     vocab_size: int = None
     num_layer: int = None
-    inter_size: int = None
+    # inter_size: int = None
+    inter_size: List[int] = None
     norm_eps: float = None
     attn_bias: int = 0
     start_id: int = None
@@ -47,7 +49,8 @@ class ModelConfig:
     session_len: int = None
     tp: int = 1
     model_format: str = 'hf'
-    expert_num: int = 0
+    # expert_num: int = 0
+    expert_num: List[int] = None
     expert_inter_size: int = 0
     experts_per_token: int = 0
     moe_shared_gate: int = False
