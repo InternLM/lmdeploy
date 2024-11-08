@@ -525,7 +525,7 @@ class Engine:
         # one more step to cache last token(stop word)
         stopped = num_appendable_ids < 0
         if stop_words is not None:
-            if len(stop_words.shape) == 1:
+            if len(token_ids.shape) == 1:
                 token_ids = token_ids[:, None]
             # TODO speculative model supports multiple stop word
             sw_stopped = (token_ids == stop_words).any(1)
