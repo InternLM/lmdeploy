@@ -23,8 +23,8 @@ SUPPORTED_ARCHS = dict(
     # mistral
     MistralForCausalLM='llama',
     # llava
-    LlavaLlamaForCausalLM='llava',
-    LlavaMistralForCausalLM='llava',
+    LlavaLlamaForCausalLM='llama',
+    LlavaMistralForCausalLM='llama',
     LlavaForConditionalGeneration='llava',
     # xcomposer2
     InternLMXComposer2ForCausalLM='xcomposer2',
@@ -95,7 +95,6 @@ def is_supported(model_path: str):
                     # glm-4v-9b not supported
                     support_by_turbomind = False
             elif arch == 'InternVLChatModel':
-                # internvl2-4b,internlm2-1b are not working yet
                 support_by_turbomind = _is_head_dim_supported(cfg.llm_config)
             elif arch == 'LlavaForConditionalGeneration':
                 sub_arch = cfg.text_config.architectures[0]

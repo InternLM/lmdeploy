@@ -30,18 +30,18 @@ class LlavaModel(LlamaModel):
         super().__init__(model_path, tokenizer_path, **kwargs)
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        config = getattr(config, 'text_config', config)
         arch = config.architectures[0]
-        _readers = dict(LlavaForConditionalGeneration=LlavaReader,
-                        LlavaMistralForCausalLM=LlamaReader,
-                        LlavaLlamaForCausalLM=LlamaReader)
+        _readers = dict(Qwen2ForCausalLM=LlavaReader,
+                        LlamaForCausalL=LlavaReader)
         self.Reader = _readers[arch]
         self.arch = arch
 
     def model_info(self):
-        if self.arch in ['LlavaMistralForCausalLM', 'LlavaLlamaForCausalLM']:
-            return super().model_info()
         """Read model info for LlavaForConditionalGeneration.
-        https://huggingface.co/llava-hf/llava-interleave-qwen-7b-hf"""
+
+        https://huggingface.co/llava-hf/llava-interleave-qwen-7b-hf
+        """
         params_path = osp.join(self.model_path, 'config.json')
         with open(params_path) as f:
             model_arg = json.load(f)['text_config']
