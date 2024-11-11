@@ -4,7 +4,7 @@ from subprocess import PIPE
 
 import allure
 import torch
-from pytest import assume
+from pytest_assume.plugin import assume
 from utils.get_run_config import get_model_name, get_tp_num
 from utils.rule_condition_assert import assert_result
 
@@ -304,7 +304,6 @@ def run_pipeline_vl_chat_test(config,
         backend_config.quant_policy = quant_policy
 
     if not is_bf16_supported():
-        backend_config.cache_max_entry_count = 0.5
         backend_config.dtype = 'float16'
     pipe = pipeline(hf_path, backend_config=backend_config)
 

@@ -178,7 +178,7 @@ def restful_test(config,
     if is_smoke:
         command += ' --num-prompts 200'
     else:
-        command += ' --num-prompts 2000'
+        command += ' --num-prompts 5000'
 
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/restful_batch_{batch}_1th.csv'
