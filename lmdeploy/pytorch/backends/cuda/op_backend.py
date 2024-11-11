@@ -104,12 +104,20 @@ class CudaOpsBackend(DefaultOpsBackend):
         attn_meta_cls = cls.get_attention_metadata_cls()
         q_seqlens = step_context.q_seqlens
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
+        kv_seqlens = step_context.kv_seqlens
+        kv_start_loc = None
+        kv_flatten_size = None
+        if not step_context.is_decoding:
+            kv_start_loc = kv_seqlens.cumsum(0) - kv_seqlens
+            kv_flatten_size = kv_seqlens.sum().item()
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
             q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
-            kv_seqlens=step_context.kv_seqlens,
+            kv_start_loc=kv_start_loc,
+            kv_seqlens=kv_seqlens,
+            kv_flatten_size=kv_flatten_size,
             quant_policy=step_context.kv_quant_policy,
         )
 
@@ -120,12 +128,20 @@ class CudaOpsBackend(DefaultOpsBackend):
             for idx, state in enumerate(step_context.cross_attention_states):
                 if state is not None:
                     fill_seqlens[idx] = state.shape[-2]
+        cross_kv_seqlens = step_context.cross_kv_seqlens
+        cross_kv_start_loc = None
+        cross_kv_flatten_size = None
+        if not step_context.is_decoding and cross_kv_seqlens is not None:
+            cross_kv_start_loc = cross_kv_seqlens.cumsum(0) - cross_kv_seqlens
+            cross_kv_flatten_size = cross_kv_seqlens.sum().item()
         cross_attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
             q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
-            kv_seqlens=step_context.cross_kv_seqlens,
+            kv_start_loc=cross_kv_start_loc,
+            kv_seqlens=cross_kv_seqlens,
+            kv_flatten_size=cross_kv_flatten_size,
             fill_seqlens=fill_seqlens,
             quant_policy=step_context.kv_quant_policy,
         )

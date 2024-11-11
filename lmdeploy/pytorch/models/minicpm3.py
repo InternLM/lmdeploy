@@ -237,7 +237,7 @@ class MiniCPMDecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = MiniCPMAttention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = MiniCPMMLP(config, dtype=dtype, device=device)
 
         # build input layer norm

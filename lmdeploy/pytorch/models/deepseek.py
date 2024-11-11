@@ -250,7 +250,7 @@ class DeepseekDecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = DeepseekAttention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = (DeepseekMoE(config, dtype=dtype, device=device) if
                     (config.n_routed_experts is not None
                      and layer_idx >= config.first_k_dense_replace

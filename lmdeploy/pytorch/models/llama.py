@@ -163,7 +163,7 @@ class LlamaDecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = LlamaAttention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = LlamaMLP(config, dtype=dtype, device=device)
 
         # build input layer norm
@@ -383,22 +383,6 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
         return self.lm_head(hidden_states)
-
-    def support_cuda_graph(
-        self,
-        input_ids: torch.Tensor,
-        **kwargs,
-    ):
-        """support cudagraph."""
-        seq_lens = input_ids.size(1)
-        if seq_lens <= 512:
-            return True
-
-        # prevent oom on llama-3 70b
-        if self.config.num_hidden_layers >= 40:
-            return False
-
-        return False
 
     def get_input_embeddings(self):
         """get input embeddings."""

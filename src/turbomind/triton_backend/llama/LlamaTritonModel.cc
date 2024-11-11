@@ -336,12 +336,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     }
     else {
         moe_param_.method = ft::MoeParam::kFused;
-        // Note: This will fail when GPUs of different SMs are mixed
-        if (weight_type_ != ft::WeightType::kINT4 && ft::getSMVersion() >= 90) {
-            // On sm90 the cuBLAS method may be faster as our grouped GEMM is not
-            // optimized for GMMA yet
-            moe_param_.method = ft::MoeParam::kNaive;
-        }
     }
 
     TM_LOG_INFO("%s", toString().c_str());
@@ -379,6 +373,10 @@ std::unique_ptr<ft::Engine<T>> LlamaTritonModel<T>::createSharedModelInstance(
                                                   std::move(ctx),
                                                   shared_state_,
                                                   device_id);
+
+    // Wait for pinned buffers to be allocated for all ranks, otherwise tuning will hang
+    // due to concurrent kernel launch & cudaMallocHost
+    shared_state_->barrier->wait();
 
     engine->Start();
 

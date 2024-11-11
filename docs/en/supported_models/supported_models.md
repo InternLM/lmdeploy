@@ -51,7 +51,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |     Llama3     |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |    Llama3.1    |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |    Llama3.2    |   1B, 3B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
-|  Llama3.2-VL   |   8B, 90B   | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|  Llama3.2-VL   |  11B, 90B   | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |    InternLM    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |   -   |
 |   InternLM2    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |  InternLM2.5   |     7B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
@@ -80,6 +80,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 | LLaVA(1.5,1.6) |   7B-34B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
 | InternVL(v1.5) |   2B-26B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |   InternVL2    |   1B-40B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+| Mono-InternVL  |     2B      | MLLM |   Yes\*   |   Yes   |   Yes   |  No  |   -   |
 |     Gemma2     |   9B-27B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |      GLM4      |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |     GLM-4V     |     9B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  No   |
@@ -87,6 +88,10 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |  Phi-3.5-mini  |    3.8B     | LLM  |    Yes    |   Yes   |   No    |  No  |   -   |
 |  Phi-3.5-MoE   |   16x3.8B   | LLM  |    Yes    |   Yes   |   No    |  No  |   -   |
 | Phi-3.5-vision |    4.2B     | MLLM |    Yes    |   Yes   |   No    |  No  |   -   |
+
+```{note}
+* Currently Mono-InternVL does not support FP16 due to numerical instability. Please use BF16 instead.
+```
 
 ## PyTorchEngine on Huawei Ascend Platform
 
