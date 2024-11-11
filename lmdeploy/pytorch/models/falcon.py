@@ -179,7 +179,7 @@ class FalconDecoderLayer(nn.Module):
                                               dtype=dtype,
                                               device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = FalconMLP(config, dtype=dtype, device=device)
 
         if not hasattr(config, 'num_ln_in_parallel_attn'):

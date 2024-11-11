@@ -17,12 +17,12 @@ on:
         required: true
         description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
         type: string
-        default: "['turbomind', 'pytorch', 'turbomind_vl']"
+        default: '["turbomind", "pytorch", "turbomind_vl"]'
       model:
         required: true
         description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
         type: string
-        default: "['pipeline','restful','chat']"
+        default: '["pipeline", "restful", "chat"]'
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -34,7 +34,7 @@ on:
         type: string
         default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
   schedule:
-    - cron:  '00 16 * * 0-4'
+    - cron:  '00 17 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -194,15 +194,15 @@ jobs:
           chmod -R 777 $workdir
 
   test_tools:
-    needs: test_quantization
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: linux-v100
+    needs: test_quantization
     timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend) || fromJSON('["turbomind", "pytorch", "turbomind_vl"]')}}
-        model: ${{ fromJSON(inputs.model) || fromJSON('["pipeline","restful","chat"]')}}
+        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch", "turbomind_vl"]')}}
+        model: ${{ fromJSON(inputs.model || '["pipeline", "restful", "chat"]')}}
         exclude:
           - backend: turbomind_vl
             model: chat
@@ -582,13 +582,13 @@ jobs:
         run: |
           export LMDEPLOY_DIR=$(pwd)
 
-          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_4bits, turbomind_internlm2_5_7b_chat_kvint4, pt_internlm2_5_7b_chat, turbomind_internlm2_5_20b_chat, turbomind_internlm2_5_20b_chat_4bits, turbomind_internlm2_5_20b_chat_kvint4, pt_internlm2_5_20b_chat, turbomind_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, turbomind_llama_3d1_8b_instruct_4bits, turbomind_llama_3d1_8b_instruct_kvint4, turbomind_qwen2_7b_instruct, turbomind_qwen2_7b_instruct_4bits, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]" "[*race_datasets, *gsm8k_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
+          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_chat_7b, pytorch_internlm2_chat_7b, turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_batch1, turbomind_internlm2_5_7b_chat_batch1_4bits, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama2_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it]" "[*race_datasets, *gsm8k_datasets, *ifeval_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
       - name: Evaluate base models
         if: matrix.evaluate_type == 'base'
         run: |
           export LMDEPLOY_DIR=$(pwd)
 
-          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b, turbomind_qwen2_7b, turbomind_internlm2_5_7b_batch1]" "[*mmlu_datasets, *gsm8k_datasets]" /root/evaluation-reports/${{ github.run_id }} base true
+          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b, turbomind_qwen2_5_14b, turbomind_internlm2_5_7b_batch1]" "[*race_datasets, *gsm8k_datasets, *gpqa_datasets, *winogrande_datasets]" /root/evaluation-reports/${{ github.run_id }} base true
       - name: Clear workspace
         if: always()
         run: |

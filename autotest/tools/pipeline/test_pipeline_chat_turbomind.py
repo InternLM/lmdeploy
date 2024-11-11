@@ -1,5 +1,5 @@
 import os
-from multiprocessing import Process
+from multiprocessing import get_context
 
 import pytest
 from utils.config_utils import get_all_model_list, get_cuda_id_by_workerid
@@ -16,9 +16,10 @@ from utils.pipeline_chat import (assert_pipeline_chat_log,
 def test_pipeline_chat_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind',
-                      worker_id))
+    spawn_context = get_context('spawn')
+    p = spawn_context.Process(target=run_pipeline_chat_test,
+                              args=(config, common_case_config, model,
+                                    'turbomind', worker_id))
     p.start()
     p.join()
     assert_pipeline_chat_log(config, common_case_config, model, 'turbomind',
@@ -35,9 +36,12 @@ def test_pipeline_chat_tp2(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
-    p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind',
-                      worker_id))
+        os.environ['MASTER_PORT'] = str(
+            int(worker_id.replace('gw', '')) + 29500)
+    spawn_context = get_context('spawn')
+    p = spawn_context.Process(target=run_pipeline_chat_test,
+                              args=(config, common_case_config, model,
+                                    'turbomind', worker_id))
     p.start()
     p.join()
     assert_pipeline_chat_log(config, common_case_config, model, 'turbomind',
@@ -56,11 +60,12 @@ def test_pipeline_chat_kvint4_tp1(config, common_case_config, model,
         return  # kvint4 for qwen2 is not support
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind-kvint',
-                      worker_id, {
-                          'quant_policy': 4
-                      }))
+    spawn_context = get_context('spawn')
+    p = spawn_context.Process(target=run_pipeline_chat_test,
+                              args=(config, common_case_config, model,
+                                    'turbomind-kvint', worker_id, {
+                                        'quant_policy': 4
+                                    }))
     p.start()
     p.join()
     assert_pipeline_chat_log(config, common_case_config, model,
@@ -78,11 +83,14 @@ def test_pipeline_chat_kvint4_tp2(config, common_case_config, model,
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
-    p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind-kvint',
-                      worker_id, {
-                          'quant_policy': 4
-                      }))
+        os.environ['MASTER_PORT'] = str(
+            int(worker_id.replace('gw', '')) + 29500)
+    spawn_context = get_context('spawn')
+    p = spawn_context.Process(target=run_pipeline_chat_test,
+                              args=(config, common_case_config, model,
+                                    'turbomind-kvint', worker_id, {
+                                        'quant_policy': 4
+                                    }))
     p.start()
     p.join()
     assert_pipeline_chat_log(config, common_case_config, model,
@@ -99,11 +107,12 @@ def test_pipeline_chat_kvint8_tp1(config, common_case_config, model,
                                   worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind-kvint',
-                      worker_id, {
-                          'quant_policy': 8
-                      }))
+    spawn_context = get_context('spawn')
+    p = spawn_context.Process(target=run_pipeline_chat_test,
+                              args=(config, common_case_config, model,
+                                    'turbomind-kvint', worker_id, {
+                                        'quant_policy': 8
+                                    }))
     p.start()
     p.join()
     assert_pipeline_chat_log(config, common_case_config, model,
@@ -121,11 +130,14 @@ def test_pipeline_chat_kvint8_tp2(config, common_case_config, model,
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
                                                                      tp_num=2)
-    p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind-kvint',
-                      worker_id, {
-                          'quant_policy': 8
-                      }))
+        os.environ['MASTER_PORT'] = str(
+            int(worker_id.replace('gw', '')) + 29500)
+    spawn_context = get_context('spawn')
+    p = spawn_context.Process(target=run_pipeline_chat_test,
+                              args=(config, common_case_config, model,
+                                    'turbomind-kvint', worker_id, {
+                                        'quant_policy': 8
+                                    }))
     p.start()
     p.join()
     assert_pipeline_chat_log(config, common_case_config, model,
@@ -143,8 +155,10 @@ def test_pipeline_chat_kvint8_tp2(config, common_case_config, model,
     'internlm/internlm2_5-20b-chat-inner-4bits'
 ])
 def test_pipeline_chat_pr(config, common_case_config, model):
-    p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind'))
+    spawn_context = get_context('spawn')
+    p = spawn_context.Process(target=run_pipeline_chat_test,
+                              args=(config, common_case_config, model,
+                                    'turbomind'))
     p.start()
     p.join()
     assert_pipeline_chat_log(config, common_case_config, model, 'turbomind')
@@ -161,9 +175,10 @@ def test_modelscope_pipeline_chat_tp1(config, common_case_config, model,
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
-    p = Process(target=run_pipeline_chat_test,
-                args=(config, common_case_config, model, 'turbomind',
-                      worker_id, None, False))
+    spawn_context = get_context('spawn')
+    p = spawn_context.Process(target=run_pipeline_chat_test,
+                              args=(config, common_case_config, model,
+                                    'turbomind', worker_id, None, False))
     p.start()
     p.join()
     del os.environ['LMDEPLOY_USE_MODELSCOPE']
