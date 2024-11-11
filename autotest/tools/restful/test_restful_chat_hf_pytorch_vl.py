@@ -1,5 +1,5 @@
 import pytest
-from utils.config_utils import get_all_model_list, get_workerid
+from utils.config_utils import get_torch_model_list, get_workerid
 from utils.run_restful_chat import (run_vl_testcase, start_restful_api,
                                     stop_restful_api)
 
@@ -14,7 +14,7 @@ def prepare_environment(request, config, worker_id):
     model_path = config.get('model_path') + '/' + model
 
     pid, startRes = start_restful_api(config, param, model, model_path,
-                                      'turbomind', worker_id)
+                                      'pytorch', worker_id)
     yield
     stop_restful_api(pid, startRes, param)
 
@@ -24,7 +24,7 @@ def getModelList(tp_num):
         'model': item,
         'cuda_prefix': None,
         'tp_num': tp_num,
-    } for item in get_all_model_list(tp_num, model_type='vl_model')]
+    } for item in get_torch_model_list(tp_num, model_type='vl_model')]
 
 
 @pytest.mark.order(7)
@@ -59,7 +59,7 @@ def getKvintModelList(tp_num, quant_policy: int = None):
         'cuda_prefix': None,
         'tp_num': tp_num,
         'extra': f'--quant-policy {quant_policy}'
-    } for item in get_all_model_list(
+    } for item in get_torch_model_list(
         tp_num, quant_policy, model_type='vl_model')
             if 'qwen2' not in item.lower() or quant_policy == 8]
 
