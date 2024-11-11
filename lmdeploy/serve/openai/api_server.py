@@ -337,10 +337,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         return error_check_ret
     try:
         _ = ChatCompletionRequestMessage(messages=request.messages)
-    except ValidationError as error:
+    except ValidationError:
         return create_error_response(
-            HTTPStatus.BAD_REQUEST,
-            f'Invalid input, input={request.messages}, error={error}')
+            HTTPStatus.BAD_REQUEST, f'Invalid input, input={request.messages}')
 
     if VariableInterface.async_engine.id2step.get(str(request.session_id),
                                                   0) != 0:

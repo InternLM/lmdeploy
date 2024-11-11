@@ -156,6 +156,12 @@ class ContentPartImageParam(BaseModel):
 ContentPartParam = Union[ContentPartTextParam, ContentPartImageParam]
 
 
+class ToolMessage(BaseModel):
+    role: Literal['tool']
+    tool_call_id: str
+    content: Union[str, List[ContentPartTextParam]]
+
+
 class AssistantMessage(BaseModel):
     role: Literal['assistant']
     content: Union[str, List[ContentPartTextParam]]
@@ -171,7 +177,8 @@ class UserMessage(BaseModel):
     content: Union[str, List[ContentPartParam]]
 
 
-ChatCompletionMessage = Union[SystemMessage, UserMessage, AssistantMessage]
+ChatCompletionMessage = Union[SystemMessage, UserMessage, AssistantMessage,
+                              ToolMessage]
 
 
 class ChatCompletionRequestMessage(BaseModel):
