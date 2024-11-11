@@ -358,8 +358,8 @@ class Engine:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
                     req.data['token_ids'],
-                    req.data.get('input_embeddings'),
                     multimodals=req.data.get('input_multimodals'),
+                    embeddings=req.data.get('input_embeddings'),
                 )
                 msg.num_new_tokens = 0
                 msg.sampling_param = req.data['sampling_param']

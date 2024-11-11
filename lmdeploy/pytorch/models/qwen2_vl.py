@@ -984,13 +984,17 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         """update model meta for prefilling."""
         model_metas = context.model_metas
         input_multimodals = context.input_multimodals
+        if input_multimodals is None:
+            input_multimodals = [None] * len(model_metas)
         position_ids = context.position_ids
         batched_pos_ids = position_ids[0].split(context.q_seqlens)
         mrope_position_ids = []
         new_model_metas = []
         for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas,
                                                  input_multimodals):
-            images = input_mm['image']
+            images = []
+            if input_mm is not None:
+                images = input_mm['image']
             if model_meta is None or 'mrope_delta' not in model_meta:
                 mrope_delta = 0
             else:

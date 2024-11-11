@@ -111,12 +111,49 @@ class ModelInputs:
         if input_ids.numel() < split_size:
             return self
 
+        flatten_mms = []
+        vision_inputs = self.vision_inputs
+        if vision_inputs is not None:
+            if vision_inputs.input_multimodals is not None:
+                input_mms = vision_inputs.input_multimodals[0]
+
+                flatten_mms = []
+                for k, mms in input_mms.items():
+                    mms = [(k, mm) for mm in mms]
+                    flatten_mms += mms
+
+                flatten_mms = sorted(flatten_mms, key=lambda mm: mm[1].start)
+
         max_seq_len = self.seq_length[0].item()
         ret = []
         start = 0
-        while start <= max_seq_len:
-            if self.vision_inputs is not None:
-                pass
+        while start < max_seq_len:
+            vision_inputs = None
+            if len(flatten_mms) > 0:
+                mm_start = flatten_mms[0][1].start
+                mm_end = flatten_mms[0][1].end
+                if mm_start > self.history_lengths + start:
+                    end = min(mm_start, start + split_size)
+                else:
+                    input_mms = dict()
+                    key, mm = flatten_mms.pop(0)
+                    input_mms.setdefault(key, [])
+                    input_mms[key].append(mm)
+                    end = start + mm.end - mm.start
+                    while len(flatten_mms) > 0:
+                        next_mm = flatten_mms[0]
+                        next_start = next_mm[1].start
+                        next_end = next_mm[1].end
+                        if next_start < mm_end:
+                            key = next_mm[0]
+                            input_mms.setdefault(key, [])
+                            input_mms[key].append(next_mm[1])
+                            end += max(0, next_end - mm_end)
+                            flatten_mms.pop(0)
+                        else:
+                            break
+                    vision_inputs = VisionModelInputs(
+                        input_multimodals=[input_mms], )
             else:
                 end = min(max_seq_len, start + split_size)
 
@@ -128,29 +165,13 @@ class ModelInputs:
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=self.local_adapter_ids,
-                vision_inputs=self.vision_inputs,
+                vision_inputs=vision_inputs,
                 cross_attention_states=self.cross_attention_states,
+                model_metas=self.model_metas,
             )
             ret.append(inp)
 
             start = end
-
-        # for i in range(0, max_seq_len, split_size):
-        #     start = i
-        #     end = min(max_seq_len, i + split_size)
-
-        #     inp = ModelInputs(
-        #         input_ids=self.input_ids[:, start:end],
-        #         seq_length=input_ids.new_tensor([end - start]),
-        #         block_offsets=self.block_offsets,
-        #         history_lengths=self.history_lengths + start,
-        #         is_decoding=self.is_decoding,
-        #         num_ignored_history=self.num_ignored_history,
-        #         local_adapter_ids=self.local_adapter_ids,
-        #         vision_inputs=self.vision_inputs,
-        #         cross_attention_states=self.cross_attention_states,
-        #     )
-        #     ret.append(inp)
 
         return ret
 
