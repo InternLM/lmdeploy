@@ -6,7 +6,7 @@ from time import sleep, time
 
 import allure
 import psutil
-from pytest import assume
+from pytest_assume.plugin import assume
 from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
 from utils.rule_condition_assert import assert_result

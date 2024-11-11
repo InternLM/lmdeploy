@@ -98,9 +98,6 @@ with read_base():
         models as lmdeploy_qwen2_7b_instruct  # noqa: F401, E501
     from opencompass.configs.models.qwen.lmdeploy_qwen_7b_chat import \
         models as lmdeploy_qwen_7b_chat  # noqa: F401, E501
-    # and output the results in a chosen format
-    from opencompass.configs.summarizers.medium import \
-        summarizer  # noqa: F401, E501
 
 llama2_meta_template = dict(round=[
     dict(role='HUMAN', begin='[INST] ', end=' [/INST]'),
@@ -129,6 +126,8 @@ turbomind_internlm2_5_7b_chat_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_kvint4 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_batch1 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm2_5_7b_chat_batch1_4bits = deepcopy(
+    *lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 
 # ===== Configs for internlm/internlm2_5_20b_chat =====
@@ -231,10 +230,10 @@ for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['gen_config']['do_sample'] = False
     model['batch_size'] = 64
 
-turbomind_internlm2_5_7b_chat_batch1[
-    'abbr'] = turbomind_internlm2_5_7b_chat_batch1['abbr'] + '_batch1'
-turbomind_internlm2_5_7b_chat_batch1['engine_config']['max_batch_size'] = 1
-turbomind_internlm2_5_7b_chat_batch1['batch_size'] = 1
+for model in [v for k, v in locals().items() if '_batch1' in k]:
+    model['abbr'] = model['abbr'] + '_batch1'
+    model['engine_config']['max_batch_size'] = 1
+    model['batch_size'] = 1
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               engine_config=dict(session_len=MAX_SESSION_LEN,
@@ -256,3 +255,97 @@ pytorch_qwen1_5_moe_2_7b_chat['path'] = 'Qwen/Qwen1.5-MoE-A2.7B-Chat'
 pytorch_gemma_2_9b_it = deepcopy(basic_pytorch_chat_tp1)
 pytorch_gemma_2_9b_it['abbr'] = 'pytorch_gemma_2_9b_it'
 pytorch_gemma_2_9b_it['path'] = 'google/gemma-2-9b-it'
+
+race_datasets = [race_datasets[1]]
+
+# Summarizer
+summarizer = dict(
+    dataset_abbrs=[
+        ['race-high', 'accuracy'],
+        ['ARC-c', 'accuracy'],
+        ['BoolQ', 'accuracy'],
+        ['mmlu_pro', 'naive_average'],
+        ['drop', 'accuracy'],
+        ['bbh', 'naive_average'],
+        ['GPQA_diamond', 'accuracy'],
+        ['math', 'accuracy'],
+        ['wikibench-wiki-single_choice_cncircular', 'perf_4'],
+        ['openai_humaneval', 'humaneval_pass@1'],
+        ['sanitized_mbpp', 'score'],
+        ['cmmlu', 'naive_average'],
+        ['mmlu', 'naive_average'],
+        ['teval', 'naive_average'],
+        ['SciCode', 'accuracy'],
+        ['SciCode', 'sub_accuracy'],
+        ['humanevalx', 'naive_average'],
+        ['ds1000', 'naive_average'],
+        ['IFEval', 'Prompt-level-strict-accuracy'],
+        ['gsm8k', 'accuracy'],
+        ['GaokaoBench', 'weighted_average'],
+        ['triviaqa_wiki_1shot', 'score'],
+        ['nq_open_1shot', 'score'],
+        ['hellaswag', 'accuracy'],
+        ['TheoremQA', 'score'],
+        '###### MathBench-A: Application Part ######',
+        'college',
+        'high',
+        'middle',
+        'primary',
+        'arithmetic',
+        'mathbench-a (average)',
+        '###### MathBench-T: Theory Part ######',
+        'college_knowledge',
+        'high_knowledge',
+        'middle_knowledge',
+        'primary_knowledge',
+        'mathbench-t (average)',
+        '###### Overall: Average between MathBench-A and MathBench-T ######',
+        'Overall',
+        '',
+        ''
+        'mmlu',
+        'mmlu-stem',
+        'mmlu-social-science',
+        'mmlu-humanities',
+        'mmlu-other',
+        '',
+        'cmmlu',
+        'cmmlu-stem',
+        'cmmlu-social-science',
+        'cmmlu-humanities',
+        'cmmlu-other',
+        'cmmlu-china-specific',
+        '',
+        'mmlu_pro',
+        'mmlu_pro_biology',
+        'mmlu_pro_business',
+        'mmlu_pro_chemistry',
+        'mmlu_pro_computer_science',
+        'mmlu_pro_economics',
+        'mmlu_pro_engineering',
+        'mmlu_pro_health',
+        'mmlu_pro_history',
+        'mmlu_pro_law',
+        'mmlu_pro_math',
+        'mmlu_pro_philosophy',
+        'mmlu_pro_physics',
+        'mmlu_pro_psychology',
+        'mmlu_pro_other',
+        '',
+        'humanevalx-python',
+        'humanevalx-cpp',
+        'humanevalx-go',
+        'humanevalx-java',
+        'humanevalx-js',
+        '',
+        'ds1000_Pandas',
+        'ds1000_Numpy',
+        'ds1000_Tensorflow',
+        'ds1000_Scipy',
+        'ds1000_Sklearn',
+        'ds1000_Pytorch',
+        'ds1000_Matplotlib',
+    ],
+    summary_groups=sum(
+        [v for k, v in locals().items() if k.endswith('_summary_groups')], []),
+)
