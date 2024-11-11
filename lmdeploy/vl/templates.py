@@ -489,10 +489,22 @@ class MolmoChatTemplateWrapper(VLChatTemplateWrapper):
         if isinstance(messages, str):
             return self.chat_template.messages2prompt(messages, sequence_start)
         else:
-            # Return the image placeholder so that
-            # `vl_asyn_engine._get_prompt_input` can know that the request
-            # contains images
-            return IMAGE_TOKEN
+            _messages = []
+            for message in messages:
+                role, content = message['role'], message['content']
+                if role != 'user' or isinstance(content, str):
+                    _messages.append(message)
+                    continue
+                for item in content:
+                    item_type = item['type']
+                    if item_type in ['image_url', 'image_data']:
+                        # Return the image placeholder so that
+                        # `vl_asyn_engine._get_prompt_input` can know that the
+                        # request contains images
+                        return IMAGE_TOKEN
+                    _messages.append(dict(role=role, content=item[item_type]))
+            return self.chat_template.messages2prompt(_messages,
+                                                      sequence_start)
 
 
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
