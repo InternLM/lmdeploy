@@ -165,8 +165,11 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
 
+    static constexpr int kAccessC_KV     = 128 / bitsof<Tkv>;
+    static constexpr int kWarpThreadC_KV = HeadDim != 192 ? HeadDim / kAccessC_KV : 8;
+
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
-    using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 128 / bitsof<Tkv>, kWarpCount>;
+    using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, kAccessC_KV, kWarpCount, kWarpThreadC_KV>;
     // `WARP_SIZE / WARP_S` is chosen to achieve minimum kIterS w/o introducing partial S iter
     using ThreadMapKVp = RakedThreadMap<2, CTA_S, 2, kWarpCount, WARP_SIZE / WARP_S>;
 

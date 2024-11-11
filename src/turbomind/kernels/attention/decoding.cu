@@ -2,6 +2,7 @@
 
 #include "decoding.h"
 #include "decoding_config.h"
+#include "src/turbomind/kernels/attention/arch.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 // #include "src/turbomind/utils/dispatch.h"
 #include <type_traits>
@@ -112,6 +113,11 @@ void dispatchDecoding(const AttentionParams<T>& params)
 
         return false;
     };
+
+    if (params.size_per_head == 192) {
+        invokeDecoding<Decoding<arch::Sm80, T, T, 1, 192>>(params);
+        return;
+    }
 
     auto success = dispatch();
 

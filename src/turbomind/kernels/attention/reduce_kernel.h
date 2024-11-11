@@ -127,10 +127,13 @@ struct Reduce {
         }
 
         __syncthreads();
+        
+        // HeadDim / WARP_SIZE
+        // 128     -> 4
+        // 64, 192 -> 2
+        constexpr int kVecSize = HeadDim % 128 == 0 ? 4 : 2;
 
-        constexpr int kVecSize = HeadDim / WARP_SIZE;
-
-        using Map = RakedThreadMap<HeadDim, WarpCnt * CTA_H, kVecSize, WarpCnt>;
+        using Map = RakedThreadMap<HeadDim, WarpCnt * CTA_H, kVecSize, WarpCnt, WARP_SIZE>;
 
         static_assert(Map::kIterS == CTA_H);
 

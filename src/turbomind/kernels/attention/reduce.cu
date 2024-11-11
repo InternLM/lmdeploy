@@ -66,12 +66,14 @@ void invokeReduce(T*           out,
                                     float        exp_scale,                                                            \
                                     cudaStream_t stream);
 
-INSTANTIATE_invokeReduce(128, half);
 INSTANTIATE_invokeReduce(64, half);
+INSTANTIATE_invokeReduce(128, half);
+INSTANTIATE_invokeReduce(192, half);
 
 #if ENABLE_BF16
-INSTANTIATE_invokeReduce(128, nv_bfloat16);
 INSTANTIATE_invokeReduce(64, nv_bfloat16)
+INSTANTIATE_invokeReduce(128, nv_bfloat16);
+INSTANTIATE_invokeReduce(192, nv_bfloat16);
 #endif
 
 }  // namespace turbomind::attention
