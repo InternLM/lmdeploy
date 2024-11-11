@@ -73,6 +73,7 @@ $LD_LIBRARY_PATH
 ARG CHIP=all
 ARG TOOLKIT_PKG=Ascend-cann-toolkit_*.run
 ARG KERNELS_PKG=Ascend-cann-kernels-*.run
+ARG NNAL_PKG=Ascend-cann-nnal_*.run
 
 RUN --mount=type=cache,target=/tmp,from=build_temp,source=/tmp \
     umask 0022 && \
@@ -83,10 +84,12 @@ RUN --mount=type=cache,target=/tmp,from=build_temp,source=/tmp \
     else \
         CHIPOPTION=""; \
     fi && \
-    chmod +x $TOOLKIT_PKG $KERNELS_PKG && \
+    chmod +x $TOOLKIT_PKG $KERNELS_PKG $NNAL_PKG && \
     ./$TOOLKIT_PKG --quiet --install --install-path=$ASCEND_BASE --install-for-all $CHIPOPTION && \
     ./$KERNELS_PKG --quiet --install --install-path=$ASCEND_BASE --install-for-all && \
-    rm -f $TOOLKIT_PKG $KERNELS_PKG
+    . /usr/local/Ascend/ascend-toolkit/set_env.sh && \
+    ./$NNAL_PKG --quiet --install --install-path=$ASCEND_BASE && \
+    rm -f $TOOLKIT_PKG $KERNELS_PKG $NNAL_PKG
 
 ENV GLOG_v=2 \
     LD_LIBRARY_PATH=$TOOLKIT_PATH/lib64:$LD_LIBRARY_PATH \
@@ -99,14 +102,15 @@ ENV PYTHONPATH=$TBE_IMPL_PATH:$PYTHONPATH
 
 SHELL ["/bin/bash", "-c"]
 RUN echo "source /usr/local/Ascend/ascend-toolkit/set_env.sh" >> ~/.bashrc && \
+    echo "source /usr/local/Ascend/nnal/atb/set_env.sh --cxx_abi=0" >> ~/.bashrc && \
     . ~/.bashrc
 
 # dlinfer
-# transformers>=4.41.0 is required for internlm2 model
 # timm is required for internvl2 model
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install transformers>=4.41.0 timm && \
-    pip3 install dlinfer-ascend==0.1.0.post1
+    pip3 install torch==2.3.1 torchvision==0.18.1 torch-npu==2.3.1 && \
+    pip3 install transformers timm && \
+    pip3 install dlinfer-ascend
 
 # lmdeploy
 FROM build_temp as copy_temp

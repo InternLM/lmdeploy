@@ -6,13 +6,14 @@ from time import sleep, time
 
 import allure
 import psutil
-from pytest import assume
+from pytest_assume.plugin import assume
 from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
 from utils.rule_condition_assert import assert_result
 from utils.run_client_chat import command_line_test
 
 from lmdeploy.serve.openai.api_client import APIClient
+from lmdeploy.utils import is_bf16_supported
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
@@ -60,11 +61,16 @@ def start_restful_api(config, param, model, model_path, backend_type,
             cmd += ' --model-format gptq'
     if backend_type == 'pytorch':
         cmd += ' --backend pytorch'
+        if not is_bf16_supported():
+            cmd += ' --dtype float16'
     if 'llava' in model:
         cmd += ' --model-name vicuna'
     if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
         quant_policy = param['quant_policy']
         cmd += f' --quant-policy {quant_policy}'
+
+    if not is_bf16_supported():
+        cmd += ' --cache-max-entry-count 0.5'
 
     start_log = os.path.join(
         log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
@@ -87,13 +93,18 @@ def start_restful_api(config, param, model, model_path, backend_type,
         content = file.read()
         print(content)
     start_time = int(time())
+
+    start_timeout = 300
+    if not is_bf16_supported():
+        start_timeout = 600
+
     sleep(5)
-    for i in range(300):
+    for i in range(start_timeout):
         sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
-        if result or total_time >= 300:
+        if result or total_time >= start_timeout:
             break
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
     return pid, startRes

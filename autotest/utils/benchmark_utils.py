@@ -7,6 +7,8 @@ import psutil
 from utils.config_utils import get_workerid
 from utils.run_restful_chat import health_check
 
+from lmdeploy.utils import is_bf16_supported
+
 DEFAULT_PORT = 23333
 GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
 GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 200000 -ct 1024 -pt 198000'
@@ -40,6 +42,8 @@ def generation_test(config,
     run_config = ''
     if backend == 'pytorch':
         command += ' --backend pytorch'
+        if not is_bf16_supported():
+            command += ' --dtype float16'
     else:
         if '4bit' in model:
             command += ' --model-format awq'
@@ -105,6 +109,8 @@ def throughput_test(config,
         run_config = '--num-prompts 3000'
     if backend == 'pytorch':
         command += ' --backend pytorch'
+        if not is_bf16_supported():
+            command += ' --dtype float16'
     else:
         if '4bit' in model:
             command += ' --model-format awq'
@@ -172,7 +178,7 @@ def restful_test(config,
     if is_smoke:
         command += ' --num-prompts 200'
     else:
-        command += ' --num-prompts 2000'
+        command += ' --num-prompts 5000'
 
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/restful_batch_{batch}_1th.csv'

@@ -42,7 +42,7 @@ def test_registered_models():
                                                      model_format=model_format)
         assert input_name in list(INPUT_MODELS.module_dict.keys())
 
-        output_name, config, _ = get_output_model_registered_name_and_config(
+        output_name, config = get_output_model_registered_name_and_config(
             model, model_format=model_format, dtype='auto', group_size=0)
         assert output_name == register_name
         assert config.model_config.group_size == group_size
@@ -53,7 +53,7 @@ def test_registered_models():
 
 def test_update_from_engine_config():
     import copy
-    _, _config, _ = get_output_model_registered_name_and_config(
+    _, _config = get_output_model_registered_name_and_config(
         'internlm/internlm2-chat-7b',
         model_format='hf',
         dtype='auto',
@@ -95,14 +95,14 @@ def test_dtype():
     testsets = [('auto', 'bfloat16'), ('float16', 'float16'),
                 ('bfloat16', 'bfloat16')]
     for specified_dtype, expected_dtype in testsets:
-        _, _config, _ = get_output_model_registered_name_and_config(
+        _, _config = get_output_model_registered_name_and_config(
             'internlm/internlm2-chat-7b',
             model_format='hf',
             dtype=specified_dtype,
             group_size=0)
         assert _config.weight_type == expected_dtype
     for specified_dtype in ['auto', 'float16', 'bfloat16']:
-        _, _config, _ = get_output_model_registered_name_and_config(
+        _, _config = get_output_model_registered_name_and_config(
             'internlm/internlm2_5-20b-chat-4bit-awq',
             model_format='awq',
             dtype=specified_dtype,

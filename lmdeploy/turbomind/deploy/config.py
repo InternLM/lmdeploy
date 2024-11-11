@@ -38,7 +38,7 @@ class ModelConfig:
     num_layer: int = None
     inter_size: int = None
     norm_eps: float = None
-    attn_bias: int = None
+    attn_bias: int = 0
     start_id: int = None
     end_id: int = None
     size_per_head: int = 128
@@ -47,12 +47,23 @@ class ModelConfig:
     session_len: int = None
     tp: int = 1
     model_format: str = 'hf'
+    expert_num: int = 0
+    expert_inter_size: int = 0
+    experts_per_token: int = 0
+
+    def verify(self):
+        invalid = {}
+        for k, v in self.__dict__.items():
+            if v is None:
+                invalid[k] = v
+        assert not invalid, f'incomplete model config: {invalid}'
 
 
 @dataclass
 class AttentionConfig:
     rotary_embedding: int = 128
     rope_theta: float = 10000.0
+    attention_factor: float = None
     max_position_embeddings: int = 0
     original_max_position_embeddings: int = 0
     rope_scaling_type: str = ''
@@ -60,6 +71,8 @@ class AttentionConfig:
     use_dynamic_ntk: int = 0
     low_freq_factor: float = 1.0
     high_freq_factor: float = 1.0
+    beta_fast: float = 32.0
+    beta_slow: float = 1.0
     use_logn_attn: int = 0
     cache_block_seq_len: int = 64
 

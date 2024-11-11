@@ -28,6 +28,9 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import DlinferApplyRotaryEmbBuilder
             return DlinferApplyRotaryEmbBuilder
+        elif layer_type == OpType.SiluAndMul:
+            from .activation import DlinferSiluAndMulBuilder
+            return DlinferSiluAndMulBuilder
         elif layer_type == OpType.RMSNorm:
             from .norm import DlinferRMSNormBuilder
             return DlinferRMSNormBuilder
@@ -37,9 +40,15 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoE:
             from .moe import DlinferFusedMoEBuilder
             return DlinferFusedMoEBuilder
+        elif layer_type == OpType.Linear:
+            from .linear import DlinferLinearBuilder
+            return DlinferLinearBuilder
         elif layer_type == OpType.LinearW4A16:
             from .awq_modules import AwqLinearW4A16Builder
             return AwqLinearW4A16Builder
+        elif layer_type == OpType.RotaryEmbedding:
+            from .rotary_embedding import DlinferRotaryEmbeddingBuilder
+            return DlinferRotaryEmbeddingBuilder
         else:
             logger.debug(
                 f'Op {layer_type} fallback to default implementation.')

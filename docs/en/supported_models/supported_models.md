@@ -4,36 +4,37 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 
 ## TurboMind on CUDA Platform
 
-|         Model         |    Size     | Type | FP16/BF16 | KV INT8 | KV INT4 | W4A16 |
-| :-------------------: | :---------: | :--: | :-------: | :-----: | :-----: | :---: |
-|         Llama         |  7B - 65B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|        Llama2         |  7B - 70B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|        Llama3         |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       Llama3.1        |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       InternLM        |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       InternLM2       |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|      InternLM2.5      |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|  InternLM-XComposer2  | 7B, 4khd-7B | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-| InternLM-XComposer2.5 |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|         Qwen          | 1.8B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|        Qwen1.5        | 1.8B - 110B | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|         Qwen2         | 1.5B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|        Mistral        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |   -   |
-|        Qwen-VL        |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|       Qwen2-VL        | 2B, 7B, 72B | MLLM |    Yes    |   Yes   |   Yes   |   -   |
-|      DeepSeek-VL      |     7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|       Baichuan        |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       Baichuan2       |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|      Code Llama       |  7B - 34B   | LLM  |    Yes    |   Yes   |   Yes   |  No   |
-|          YI           |  6B - 34B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|    LLaVA(1.5,1.6)     |  7B - 34B   | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|       InternVL        | v1.1- v1.5  | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|       InternVL2       |   2B-76B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-| MiniCPM-Llama3-V-2_5  |      -      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|     MiniCPM-V-2_6     |      -      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|    MiniGeminiLlama    |     7B      | MLLM |    Yes    |    -    |    -    |  Yes  |
-|         GLM4          |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       CodeGeeX4       |     9B      | LLM  |    Yes    |   Yes   |   Yes   |   -   |
+|         Model         |     Size     | Type | FP16/BF16 | KV INT8 | KV INT4 | W4A16 |
+| :-------------------: | :----------: | :--: | :-------: | :-----: | :-----: | :---: |
+|         Llama         |   7B - 65B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Llama2         |   7B - 70B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Llama3         |   8B, 70B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Llama3.1        |   8B, 70B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Llama3.2        |      3B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       InternLM        |   7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       InternLM2       |   7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|      InternLM2.5      |      7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|  InternLM-XComposer2  | 7B, 4khd-7B  | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+| InternLM-XComposer2.5 |      7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|         Qwen          |  1.8B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Qwen1.5        | 1.8B - 110B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|         Qwen2         |  1.5B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Mistral        |      7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Mixtral        | 8x7B, 8x22B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Qwen-VL        |      7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|      DeepSeek-VL      |      7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Baichuan        |      7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Baichuan2       |      7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|      Code Llama       |   7B - 34B   | LLM  |    Yes    |   Yes   |   Yes   |  No   |
+|          YI           |   6B - 34B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|    LLaVA(1.5,1.6)     |   7B - 34B   | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|       InternVL        | v1.1 - v1.5  | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|       InternVL2       | 2B, 8B - 76B | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+| MiniCPM-Llama3-V-2_5  |      -       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|     MiniCPM-V-2_6     |      -       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|    MiniGeminiLlama    |      7B      | MLLM |    Yes    |    -    |    -    |  Yes  |
+|         GLM4          |      9B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       CodeGeeX4       |      9B      | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 
 "-" means not verified yet.
 
@@ -49,7 +50,8 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |     Llama2     |  7B - 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |     Llama3     |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |    Llama3.1    |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
-|  Llama3.2-VL   |   8B, 90B   | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|    Llama3.2    |   1B, 3B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
+|  Llama3.2-VL   |  11B, 90B   | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |    InternLM    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |   -   |
 |   InternLM2    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |  InternLM2.5   |     7B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
@@ -59,7 +61,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |     Falcon     |  7B - 180B  | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |       YI       |  6B - 34B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |    Mistral     |     7B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-|    Mixtral     |    8x7B     | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|    Mixtral     | 8x7B, 8x22B | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |      QWen      | 1.8B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |    QWen1.5     | 0.5B - 110B | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |  QWen1.5-MoE   |    A2.7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
@@ -78,6 +80,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 | LLaVA(1.5,1.6) |   7B-34B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
 | InternVL(v1.5) |   2B-26B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |   InternVL2    |   1B-40B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
+| Mono-InternVL  |     2B      | MLLM |   Yes\*   |   Yes   |   Yes   |  No  |   -   |
 |     Gemma2     |   9B-27B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |      GLM4      |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |     GLM-4V     |     9B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  No   |
@@ -85,6 +88,10 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |  Phi-3.5-mini  |    3.8B     | LLM  |    Yes    |   Yes   |   No    |  No  |   -   |
 |  Phi-3.5-MoE   |   16x3.8B   | LLM  |    Yes    |   Yes   |   No    |  No  |   -   |
 | Phi-3.5-vision |    4.2B     | MLLM |    Yes    |   Yes   |   No    |  No  |   -   |
+
+```{note}
+* Currently Mono-InternVL does not support FP16 due to numerical instability. Please use BF16 instead.
+```
 
 ## PyTorchEngine on Huawei Ascend Platform
 

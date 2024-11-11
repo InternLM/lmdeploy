@@ -279,7 +279,7 @@ class GLMBlock(torch.nn.Module):
         # build attention layer
         self.self_attention = SelfAttention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = MLP(config, dtype=dtype, device=device)
 
         # build input layer norm

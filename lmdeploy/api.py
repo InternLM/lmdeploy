@@ -12,7 +12,7 @@ def pipeline(model_path: str,
                                             PytorchEngineConfig]] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
              speculative_model: str = None,
-             log_level: str = 'ERROR',
+             log_level: str = 'WARNING',
              max_log_len: int = None,
              **kwargs):
     """

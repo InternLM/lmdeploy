@@ -114,6 +114,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Llama2 (7B - 70B)</li>
   <li>Llama3 (8B, 70B)</li>
   <li>Llama3.1 (8B, 70B)</li>
+  <li>Llama3.2 (1B, 3B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM2.5 (7B)</li>
@@ -159,6 +160,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Phi-3-vision (4.2B)</li>
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
+  <li>Llama3.2-vision (11B, 90B)</li>
 </ul>
 </td>
 </tr>

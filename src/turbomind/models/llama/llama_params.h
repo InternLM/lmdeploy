@@ -25,6 +25,17 @@ struct ModelParam {
     int end_id;
 };
 
+struct MoeParam {
+    enum Method
+    {
+        kNaive,
+        kFused
+    } method;
+    int expert_num;
+    int experts_per_token;
+    int inter_size;
+};
+
 struct AttentionParam {
     int         rotary_embedding_dim;
     float       rotary_embedding_base;
@@ -34,6 +45,9 @@ struct AttentionParam {
     float       rope_scaling_factor;
     float       low_freq_factor;
     float       high_freq_factor;
+    float       attention_factor;
+    float       beta_fast;
+    float       beta_slow;
     bool        use_dynamic_ntk;
     bool        use_logn_attn;
     int         cache_block_seq_len;

@@ -341,12 +341,15 @@ def parse_args():
     ArgumentHelper.backend(parser)
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
+    ArgumentHelper.eager_mode(pt_group)
+
     tp_act = ArgumentHelper.tp(pt_group)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     session_len_act = ArgumentHelper.session_len(pt_group, default=2048)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
     rope_scaling_factor_act = ArgumentHelper.rope_scaling_factor(pt_group)
+    dtype_act = ArgumentHelper.dtype(pt_group)
 
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
@@ -356,6 +359,7 @@ def parse_args():
     tb_group._group_actions.append(cache_block_seq_len_act)
     tb_group._group_actions.append(prefix_caching_act)
     tb_group._group_actions.append(rope_scaling_factor_act)
+    tb_group._group_actions.append(dtype_act)
     ArgumentHelper.model_format(tb_group, default='hf')
     args = parser.parse_args()
     return args
@@ -414,6 +418,7 @@ def main():
                     rope_scaling_factor=args.rope_scaling_factor,
                     tp=args.tp,
                     enable_prefix_caching=args.enable_prefix_caching,
+                    dtype=args.dtype,
                 )
             elif args.backend == 'pytorch':
                 engine_config = PytorchEngineConfig(
@@ -422,7 +427,9 @@ def main():
                     session_len=session_len,
                     tp=args.tp,
                     thread_safe=True,
+                    eager_mode=args.eager_mode,
                     enable_prefix_caching=args.enable_prefix_caching,
+                    dtype=args.dtype,
                 )
             gen_config = GenerationConfig(top_k=args.top_k,
                                           top_p=args.top_p,

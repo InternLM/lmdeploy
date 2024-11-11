@@ -19,7 +19,7 @@ def prefill_attention(
     block_size: int,
     attn_mask: Sequence[Optional[Tensor]],
     is_unpaged_prefill: Optional[bool],
-):
+) -> Tensor:
     num_q_heads = query_states.shape[1]
     num_kv_heads = value_states.shape[1]
 

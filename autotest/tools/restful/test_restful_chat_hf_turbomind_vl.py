@@ -28,7 +28,7 @@ def getModelList(tp_num):
     return [{
         'model': item,
         'cuda_prefix': None,
-        'tp_num': tp_num,
+        'tp_num': tp_num
     } for item in get_vl_model_list(tp_num)]
 
 

@@ -63,6 +63,8 @@ class InternVLModel(LlamaModel):
             norm_eps = model_arg['rms_norm_eps']
             hidden_units = model_arg['hidden_size']
             attn_head_num = model_arg['num_attention_heads']
+            vocab_size = model_arg['vocab_size']
+            inter_size = model_arg['intermediate_size']
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
             else:
@@ -78,10 +80,17 @@ class InternVLModel(LlamaModel):
                 scaling_factor = model_arg['rope_scaling'].get('factor', '')
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
+            attn_bias = 1 if model_arg['architectures'][
+                0] == 'Qwen2ForCausalLM' else 0
 
         return dict(num_layer=num_layer,
+                    size_per_head=hidden_units // attn_head_num,
+                    rotary_embedding=hidden_units // attn_head_num,
+                    attn_bias=attn_bias,
                     norm_eps=norm_eps,
                     hidden_units=hidden_units,
+                    inter_size=inter_size,
+                    vocab_size=vocab_size,
                     head_num=attn_head_num,
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,

@@ -149,6 +149,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.InternVLChatModel'
 })
 
+# mono-internvl
+MODULE_MAP.update({
+    'InternLM2VEForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2_ve.InternLM2VEForCausalLM',
+})
+
 # phi3 vision
 MODULE_MAP.update({
     'Phi3VForCausalLM':

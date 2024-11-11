@@ -1,5 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import json
+import os.path as osp
+
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -18,3 +21,11 @@ class MiniCPMVReader(LlamaReader):
 class MiniCPMVModel(LlamaModel):
     """MiniCPMV model in hf format."""
     Reader = MiniCPMVReader
+
+    def model_info(self):
+        info = super().model_info()
+        with open(osp.join(self.model_path, 'config.json')) as f:
+            config = json.load(f)
+            if str(config.get('version')) == '2.6':
+                info['attn_bias'] = True
+        return info

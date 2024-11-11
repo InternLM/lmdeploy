@@ -6,8 +6,9 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
-                                 SiluAndMul, build_rotary_embedding)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm,
+                                 SiluAndMul, build_rotary_embedding,
+                                 build_rotary_params)
 from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -162,7 +163,7 @@ class Qwen2DecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = Qwen2Attention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = Qwen2MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
@@ -245,7 +246,8 @@ class Qwen2Model(nn.Module):
                             device=device)
 
         # build rotary embedding
-        emb_type = RopeType.LinearScaling
+        # emb_type = RopeType.LinearScaling
+        rope_params = build_rotary_params(config)
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
@@ -253,7 +255,7 @@ class Qwen2Model(nn.Module):
             rope_dim,
             rope_max_pos_emb,
             rope_base,
-            emb_type=emb_type,
+            **rope_params,
         )
 
     def forward(

@@ -11,10 +11,10 @@ from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_logger, get_model
 
-from ...utils import _get_and_verify_max_len
+from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS, is_supported
 from .config import TurbomindModelConfig
-from .exporter import get_exporter_factory
+from .module import Transformer
 from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS
@@ -99,7 +99,6 @@ def get_output_model_registered_name_and_config(model_path: str,
         group_size (int): the size of group used by awq model
     """
     register_name = 'tm'
-    turbomind_model_arch = 'llama'
     weight_type = 'float16'
 
     config = TurbomindModelConfig.from_dict()
@@ -108,7 +107,6 @@ def get_output_model_registered_name_and_config(model_path: str,
         session_len = 2048
     else:  # hf, awq, None
         model_arch, model_config = get_model_arch(model_path)
-        turbomind_model_arch = SUPPORTED_ARCHS[model_arch]
         session_len = _get_and_verify_max_len(model_config, None)
         if model_format in ['awq', 'gptq']:
             weight_type = 'int4'
@@ -138,17 +136,17 @@ def get_output_model_registered_name_and_config(model_path: str,
     else:
         assert 0, f'unsupported specified data type {dtype}'
 
+    if weight_type == 'bfloat16' and not is_bf16_supported():
+        logger.warn('data type fallback to float16 since '
+                    'torch.cuda.is_bf16_supported is False')
+        weight_type = 'float16'
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type
     config.model_config.model_format = model_format
     config.model_config.group_size = group_size
     config.model_config.session_len = session_len
 
-    lora_type = 'plora' if turbomind_model_arch == 'xcomposer2' else ''
-
-    exporter_factory = get_exporter_factory(weight_type, lora_type)
-
-    return register_name, config, exporter_factory
+    return register_name, config
 
 
 def pack_model_repository(workspace_path: str):
@@ -226,7 +224,7 @@ def get_tm_model(model_path,
             f'mismatched quant method: user input ' \
             f'"{engine_config.model_format}" ' \
             f'vs model quant_config "{quant_method}"'
-        assert group_size is None or group_size == _group_size, \
+        assert not group_size or group_size == _group_size, \
             f'mismatched quant group size: user input "{group_size}" ' \
             f'vs model quant_config "{_group_size}"'
 
@@ -260,7 +258,7 @@ def get_tm_model(model_path,
                                                      tokenizer_path=model_path,
                                                      input_policy=input_policy)
 
-    output_model_name, tm_cfg, exporter_factory = \
+    output_model_name, tm_cfg = \
         get_output_model_registered_name_and_config(
             model_path=model_path,
             model_format=engine_config.model_format,
@@ -274,7 +272,7 @@ def get_tm_model(model_path,
     output_model = OUTPUT_MODELS.get(output_model_name)(
         input_model=input_model,
         cfg=tm_cfg,
-        exporter_factory=exporter_factory,
+        model_cls=Transformer,
         out_dir=out_dir)
 
     return output_model

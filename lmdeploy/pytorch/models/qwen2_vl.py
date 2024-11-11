@@ -192,7 +192,7 @@ class Qwen2DecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = Qwen2Attention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = Qwen2MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
@@ -388,10 +388,11 @@ class Qwen2VLForConditionalGeneration(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
             mrope_position_ids=mrope_position_ids,
         )
+        return hidden_states
 
-        logits = self.lm_head(hidden_states)
-        logits = logits.float()
-        return logits
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def update_weights(self):
         """update weights."""

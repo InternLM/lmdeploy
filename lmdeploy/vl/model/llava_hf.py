@@ -31,13 +31,17 @@ class LlavaHfVisionModel(VisonModel):
             else:
                 self.vl_model = model
 
+        # fix for llava-hf/llava-interleave-qwen-7b-hf
+        setattr(model.config, 'tie_word_embeddings', False)
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
                 max_memory=self.max_memory,
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=['CLIPEncoderLayer'],
+                no_split_module_classes=[
+                    'CLIPEncoderLayer', 'SiglipEncoderLayer'
+                ],
                 dtype=torch.half)
         model.eval()
         self.model = model

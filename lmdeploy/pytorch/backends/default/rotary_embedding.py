@@ -232,9 +232,12 @@ class YarnRotaryEmbeddingImpl(RotaryEmbeddingImpl):
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
         # get mscale
-        self.mscale = float(
-            yarn_get_mscale(self.scaling_factor, self.mscale) /
-            yarn_get_mscale(self.scaling_factor, self.mscale_all_dim))
+        if yarn_params.attention_factor is not None:
+            self.mscale = yarn_params.attention_factor
+        else:
+            self.mscale = float(
+                yarn_get_mscale(self.scaling_factor, self.mscale) /
+                yarn_get_mscale(self.scaling_factor, self.mscale_all_dim))
         if self.mscale == 1.0:
             self.mscale = None
 
@@ -334,10 +337,10 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
             return LlamaDynamicNTKScalingRotaryEmbedding(
                 dim, base, scaling_factor, max_position_embeddings)
         elif emb_type == RopeType.Llama3:
-            return Llama3RotaryEmbeddingImpl(dim, base, scaling_factor,
-                                             llama3_params.low_freq_factor,
-                                             llama3_params.high_freq_factor,
-                                             max_position_embeddings)
+            return Llama3RotaryEmbeddingImpl(
+                dim, base, scaling_factor, llama3_params.low_freq_factor,
+                llama3_params.high_freq_factor,
+                llama3_params.original_max_position_embeddings)
         elif emb_type == RopeType.Yarn:
             return YarnRotaryEmbeddingImpl(dim,
                                            base,

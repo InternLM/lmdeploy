@@ -4,6 +4,8 @@ import os
 import yaml
 from utils.get_run_config import get_tp_num
 
+from lmdeploy.utils import is_bf16_supported
+
 
 def get_turbomind_model_list(tp_num: int = None,
                              model_type: str = 'chat_model',
@@ -85,14 +87,16 @@ def get_torch_model_list(tp_num: int = None,
 def get_all_model_list(tp_num: int = None,
                        quant_policy: int = None,
                        model_type: str = 'chat_model'):
+
     case_list = get_turbomind_model_list(tp_num=tp_num,
                                          model_type=model_type,
                                          quant_policy=quant_policy)
-    for case in get_torch_model_list(tp_num=tp_num,
-                                     quant_policy=quant_policy,
-                                     model_type=model_type):
-        if case not in case_list:
-            case_list.append(case)
+    if is_bf16_supported():
+        for case in get_torch_model_list(tp_num=tp_num,
+                                         quant_policy=quant_policy,
+                                         model_type=model_type):
+            if case not in case_list:
+                case_list.append(case)
     return [x for x in case_list if 'w8a8' not in x]
 
 

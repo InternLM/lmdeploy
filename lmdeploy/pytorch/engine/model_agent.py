@@ -536,9 +536,8 @@ def _start_tp_process(proc_id: int,
                                 timeout=timedelta(days=35600))
         dist_ctx = DistContext(rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
-        with (get_dist_manager().context(dist_ctx),
-              get_device_manager().context(device_context),
-              torch.inference_mode()):
+        with get_dist_manager().context(dist_ctx), get_device_manager(
+        ).context(device_context), torch.inference_mode():
             args = args or tuple()
             kwargs = kwargs or dict()
             func(rank, *args, **kwargs)
@@ -554,17 +553,25 @@ def _start_tp_process(proc_id: int,
 def _check_context_alive(mp_context: mp.ProcessContext):
     """check context alive."""
     procs: List[mp.Process] = mp_context.processes
-    failed_ranks = list(idx for idx, p in enumerate(procs) if not p.is_alive())
-    if len(failed_ranks) == 0:
+    failed_procs = list(idx for idx, p in enumerate(procs) if not p.is_alive())
+    if len(failed_procs) == 0:
         return
-    for p in procs:
+
+    log_procs = []
+    for idx, p in enumerate(procs):
         if p.is_alive():
             p.terminate()
         else:
+            exitcode = p.exitcode
+            if exitcode > 0:
+                # terminated exitcode < 0
+                log_procs.append((idx, exitcode))
             p.close()
-    logger.error(f'TP process {failed_ranks} failed.')
+    for idx, exitcode in log_procs:
+        logger.error(f'TP process {idx} failed with exitcode {exitcode}.')
     # TODO: not safe exit.
-    os._exit(1)
+    exit_code = 1 if len(log_procs) > 0 else 0
+    os._exit(exit_code)
 
 
 def _find_available_port() -> bool:

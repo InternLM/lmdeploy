@@ -515,7 +515,7 @@ class InternLM2Chat7B(InternLMChat7B):
                 for tool_call in message['tool_calls']:
                     function = tool_call.get('function', {})
                     function['arguments'] = function.pop('parameters', {})
-                    content += f'<|action_start|><|plugin|>\n{json.dumps(function)}<|action_end|>'
+                    content += f'<|action_start|><|plugin|>\n{json.dumps(function, ensure_ascii=False)}<|action_end|>'
             if 'name' in message and message['name'] in name_map:
                 begin = box_map[role].strip(
                 ) + f" name={name_map[message['name']]}\n"
@@ -578,7 +578,8 @@ class InternVL2InternLM2(InternLM2Chat7B):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'internvl2' in path and 'internvl2-4b' not in path:
+        if ('internvl2' in path
+                and 'internvl2-4b' not in path) or 'mono-internvl' in path:
             return 'internvl2-internlm2'
 
 
@@ -772,7 +773,7 @@ class Llama3(BaseChatTemplate):
             return 'llama3'
 
 
-@MODELS.register_module(name='llama3_1')
+@MODELS.register_module(name=['llama3_1', 'llama3_2'])
 class Llama3_1(Llama3):
     """Chat template of LLaMA3.1 model."""
 
