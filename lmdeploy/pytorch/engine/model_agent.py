@@ -804,7 +804,48 @@ class TPModelAgent(AutoModelAgent):
                 world_size=1,
                 stream=self.stream,
             )
+            if self.speculative_model is not None:
+                inputs.last_hidden_states = output['hidden_states']
+                spec_outputs = model_forward(
+                    self.speculative_model,
+                    inputs,
+                    self.cache_engine,
+                    world_size=1,
+                    stream=self.stream,
+                )
+                output['spec_hidden_states'] = spec_outputs['hidden_states']
         return output
+
+    async def score_proposal(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                             swap_out_map: SwapMap, num_speculative_tokens):
+        """model forward.
+
+        Args:
+            inputs (Dict): The input data comes from _make_inputs.
+            swap_in_map (SwapMap): Cache maps to swap in.
+            swap_out_map (SwapMap): Cache maps to swap out.
+            num_speculative_tokens (int): The number of the proposal tokens.
+        """
+        with get_dist_manager().context(self._dist_ctx):
+            self.mp_bar.wait()
+            rank = 0
+            _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
+                              self.stream)
+            cache_swapping(self.cache_engine,
+                           swap_in_map=swap_in_map,
+                           swap_out_map=swap_out_map)
+            spec_outputs = model_forward(
+                self.patched_model,
+                inputs,
+                self.cache_engine,
+                world_size=1,
+                stream=self.stream,
+            )
+            hidden_states = spec_outputs['hidden_states']
+            hidden_states = hidden_states.reshape(
+                [-1, num_speculative_tokens + 1, hidden_states.shape[-1]])
+            logits = self.get_logits(hidden_states)
+        return logits
 
     def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
                 swap_out_map: SwapMap):
@@ -840,6 +881,10 @@ class TPModelAgent(AutoModelAgent):
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def get_spec_logits(self, hidden_states_list: List[torch.Tensor]):
+        """get logits of model output."""
+        return self.speculative_model.get_logits(hidden_states_list)
 
 
 def _exit_handler(agent: TPModelAgent):
