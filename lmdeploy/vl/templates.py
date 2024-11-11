@@ -441,7 +441,7 @@ class MolmoChatTemplateWrapper(VLChatTemplateWrapper):
             messages = [messages]
         assert isinstance(messages, List)
 
-        out_messages = []
+        out_messages = [None] * len(messages)
 
         def _inner_call(i, in_messages, out_messages):
             role = in_messages[i]['role']
@@ -449,7 +449,7 @@ class MolmoChatTemplateWrapper(VLChatTemplateWrapper):
             if role != 'user' or isinstance(content, str):
                 # means message is user's prompt input or assistant's prompt,
                 # returning it directory
-                out_messages.append(in_messages[i])
+                out_messages[i] = in_messages[i]
                 return
             # the role is a user and the content is a list
             assert isinstance(content, List)
@@ -473,14 +473,13 @@ class MolmoChatTemplateWrapper(VLChatTemplateWrapper):
                     message['content'] = item['text']
                 else:
                     logger.error(f'unexpected content type {message}')
-            out_messages.append(message)
+            out_messages[i] = message
 
         await asyncio.gather(*[
             asyncio.get_event_loop().run_in_executor(None, _inner_call, i,
                                                      messages, out_messages)
             for i in range(len(messages))
         ])
-        #
         return [(None, out_messages)]
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs) -> str:
