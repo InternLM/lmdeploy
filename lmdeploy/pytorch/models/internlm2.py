@@ -160,7 +160,7 @@ class InternLM2DecoderLayer(nn.Module):
         # build attention layer
         self.attention = InternLM2Attention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.feed_forward = InternLM2MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
@@ -359,17 +359,6 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
         return self.output(hidden_states)
-
-    def support_cuda_graph(
-        self,
-        input_ids: torch.Tensor,
-        **kwargs,
-    ):
-        """support cudagraph."""
-        seq_lens = input_ids.size(1)
-        if seq_lens <= 512:
-            return True
-        return False
 
     def get_input_embeddings(self):
         """get input embeddings."""

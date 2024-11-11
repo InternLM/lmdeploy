@@ -177,7 +177,7 @@ class GemmaDecoderLayer(nn.Module):
                                         dtype=dtype,
                                         device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = GemmaMLP(config, dtype=dtype, device=device)
 
         # build input layer norm

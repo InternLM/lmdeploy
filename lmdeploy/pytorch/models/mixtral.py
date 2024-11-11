@@ -340,17 +340,6 @@ class MixtralForCausalLM(nn.Module, CudaGraphMixin):
         """compute logits of the model output."""
         return self.lm_head(hidden_states)
 
-    def support_cuda_graph(
-        self,
-        input_ids: torch.Tensor,
-        **kwargs,
-    ):
-        """support cudagraph."""
-        seq_lens = input_ids.size(1)
-        if seq_lens <= 512:
-            return True
-        return False
-
     def get_input_embeddings(self):
         """get input embeddings."""
         return self.model.get_input_embeddings()

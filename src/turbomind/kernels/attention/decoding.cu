@@ -29,8 +29,6 @@ constexpr auto get_kv_type(std::integral_constant<int, is_kv_int8>)
 template<class T>
 void dispatchDecoding(const AttentionParams<T>& params)
 {
-    static constexpr std::integral_constant<int, 128> kHeadDim{};
-
     const bool is_kv_int8     = params.quant_policy & QuantPolicy::kCacheKVInt8;
     const bool is_kv_int4     = params.quant_policy & QuantPolicy::kCacheKVInt4;
     const int  query_group_sz = params.num_heads / params.num_kv_heads;
@@ -39,9 +37,10 @@ void dispatchDecoding(const AttentionParams<T>& params)
 
     /// TODO: we need better Qh dispatching, when #waves < 1, smaller Qh may outperform larger Qh due to better
     // concurrency
-    auto dispatch_h = [&](auto arch, auto kv) -> bool {
-        using Arch = decltype(arch);
-        using Tkv  = decltype(kv);
+    auto dispatch_h = [&](auto arch, auto kv, const auto dim) -> bool {
+        using Arch             = decltype(arch);
+        using Tkv              = decltype(kv);
+        constexpr int kHeadDim = dim;
         if (0) {}
         else if (query_group_sz > 8) {
             return invokeDecoding<Decoding<Arch, T, Tkv, 9, kHeadDim>>(params);
@@ -73,31 +72,41 @@ void dispatchDecoding(const AttentionParams<T>& params)
         return false;
     };
 
-    auto dispatch_kv = [&](auto arch) -> bool {
+    auto dispatch_kv = [&](auto arch, const auto dim) -> bool {
         FT_CHECK(!(is_kv_int4 && is_kv_int8));
         if (is_kv_int4) {
-            return dispatch_h(arch, uint4_t{});
+            return dispatch_h(arch, uint4_t{}, dim);
         }
         else if (is_kv_int8) {
-            return dispatch_h(arch, uint8_t{});
+            return dispatch_h(arch, uint8_t{}, dim);
         }
         else {
-            return dispatch_h(arch, T{});
+            return dispatch_h(arch, T{}, dim);
+        }
+        return false;
+    };
+
+    auto dispatch_head_dim = [&](auto arch) {
+        if (params.size_per_head == 128) {
+            return dispatch_kv(arch, std::integral_constant<int, 128>{});
+        }
+        else if (params.size_per_head == 64) {
+            return dispatch_kv(arch, std::integral_constant<int, 64>{});
         }
         return false;
     };
 
     auto dispatch = [&]() {
         if (params.arch >= 80) {
-            return dispatch_kv(arch::Sm80{});
+            return dispatch_head_dim(arch::Sm80{});
         }
 
         if constexpr (!std::is_same_v<T, nv_bfloat16>) {
             if (params.arch == 75) {
-                return dispatch_kv(arch::Sm75{});
+                return dispatch_head_dim(arch::Sm75{});
             }
             else if (params.arch >= 70) {
-                return dispatch_kv(arch::Sm70{});
+                return dispatch_head_dim(arch::Sm70{});
             }
         }
 
