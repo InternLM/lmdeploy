@@ -26,58 +26,48 @@ class AscendKVQuantMeta:
             data = file.read()
         scale_offset_pairs = re.findall(
             r'scale:\s*([\d\.\-]+)\s*offset:\s*(-?\d+)', data)
+        scale_offset_pairs = [(float(scale), float(offset))
+                              for scale, offset in scale_offset_pairs]
         k_scales, v_scales, kv_scales = [], [], []
         k_zeros, v_zeros, kv_zeros = [], [], []
         if len(scale_offset_pairs) == total_layers:
             for scale, offset in scale_offset_pairs:
                 k_scales.append(
-                    torch.tensor([float(scale)], device=device, dtype=dtype))
+                    torch.tensor([scale], device=device, dtype=dtype))
                 v_scales.append(
-                    torch.tensor([float(scale)], device=device, dtype=dtype))
+                    torch.tensor([scale], device=device, dtype=dtype))
                 kv_scales.append(
-                    torch.tensor([float(scale), float(scale)],
-                                 device=device,
-                                 dtype=dtype))
+                    torch.tensor([scale, scale], device=device, dtype=dtype))
                 k_zeros.append(
-                    torch.tensor([float(offset)], device=device, dtype=dtype))
+                    torch.tensor([offset], device=device, dtype=dtype))
                 v_zeros.append(
-                    torch.tensor([float(offset)], device=device, dtype=dtype))
+                    torch.tensor([offset], device=device, dtype=dtype))
                 kv_zeros.append(
-                    torch.tensor([float(offset), float(offset)],
-                                 device=device,
-                                 dtype=dtype))
+                    torch.tensor([offset, offset], device=device, dtype=dtype))
         elif len(scale_offset_pairs) == total_layers * 2:
             for i in range(total_layers):
+                scale_k, offset_k = scale_offset_pairs[2 * i]
+                scale_v, offset_v = scale_offset_pairs[2 * i + 1]
                 k_scales.append(
-                    torch.tensor([float(scale_offset_pairs[2 * i][0])],
-                                 device=device,
-                                 dtype=dtype))
+                    torch.tensor([scale_k], device=device, dtype=dtype))
                 v_scales.append(
-                    torch.tensor([float(scale_offset_pairs[2 * i + 1][0])],
-                                 device=device,
-                                 dtype=dtype))
+                    torch.tensor([scale_v], device=device, dtype=dtype))
                 kv_scales.append(
-                    torch.tensor([
-                        float(scale_offset_pairs[2 * i][0]),
-                        float(scale_offset_pairs[2 * i + 1][0])
-                    ],
+                    torch.tensor([scale_k, scale_v],
                                  device=device,
                                  dtype=dtype))
                 k_zeros.append(
-                    torch.tensor([float(scale_offset_pairs[2 * i][1])],
-                                 device=device,
-                                 dtype=dtype))
+                    torch.tensor([offset_k], device=device, dtype=dtype))
                 v_zeros.append(
-                    torch.tensor([float(scale_offset_pairs[2 * i + 1][1])],
-                                 device=device,
-                                 dtype=dtype))
+                    torch.tensor([offset_v], device=device, dtype=dtype))
                 kv_zeros.append(
-                    torch.tensor([
-                        float(scale_offset_pairs[2 * i][1]),
-                        float(scale_offset_pairs[2 * i + 1][1])
-                    ],
+                    torch.tensor([offset_k, offset_v],
                                  device=device,
                                  dtype=dtype))
+        else:
+            raise ValueError(
+                f'num of scale_offset_pairs({len(scale_offset_pairs)}) '
+                f'must match num of total_layers({total_layers})')
 
         cls.quant_meta.update({
             'k_scales': itertools.cycle(k_scales),
