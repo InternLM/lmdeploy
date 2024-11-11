@@ -86,6 +86,14 @@ class MedusaModel(nn.Module, CudaGraphMixin):
             ) for _ in range(self.config.medusa_num_heads)
         ])
 
+    def support_cuda_graph(
+        self,
+        *args,
+        **kwargs,
+    ):
+        """support cudagraph."""
+        return True
+
     def forward(self, last_hidden_states: torch.Tensor,
                 **kwargs) -> List[torch.Tensor]:
         outputs = [head[0](last_hidden_states) for head in self.medusa_head]

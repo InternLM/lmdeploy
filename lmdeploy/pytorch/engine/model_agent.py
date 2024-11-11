@@ -604,6 +604,8 @@ class TPModelAgent(AutoModelAgent):
                  backend_config: BackendConfig,
                  world_size: int,
                  adapters: Dict[str, str] = None,
+                 speculative_model: str = None,
+                 speculative_model_config: ModelConfig = None,
                  trust_remote_code: bool = True) -> None:
         import signal
 
@@ -636,6 +638,13 @@ class TPModelAgent(AutoModelAgent):
                                 world_size=world_size,
                                 barrier=self.mp_bar)
 
+        self.speculative_model = None
+        if speculative_model is not None:
+            self.speculative_model_config = speculative_model_config
+            self.speculative_model = self._build_speculative_model(
+                speculative_model,
+                self.speculative_model_config,
+                world_size=world_size)
         model, cache_engine, cache_config = self._build_model(
             model_path=model_path,
             model_config=model_config,
@@ -742,6 +751,35 @@ class TPModelAgent(AutoModelAgent):
             )
 
         return model, cache_engine, cache_config
+
+    @torch.inference_mode()
+    def _build_speculative_model(
+        self,
+        model_path: str,
+        model_config: ModelConfig,
+        world_size: int,
+        cache_config: CacheConfig = None,
+        backend_config: BackendConfig = None,
+    ):
+        """build model.
+
+        Currently, cache engine and backend config not used.
+        """
+        with get_dist_manager().context(self._dist_ctx):
+            rank = 0
+            device_map = torch.device('cuda')
+
+            custom_module_map = model_config.custom_module_map
+            if custom_module_map is not None:
+                update_custom_module_map(custom_module_map)
+            if rank == 0:
+                logger.info('build model.')
+            patched_model = build_patched_model(model_config,
+                                                device=device_map)
+            if rank == 0:
+                logger.info('loading weights.')
+            load_model_weights(patched_model, model_path, device=device_map)
+        return patched_model
 
     def get_block_numel(self):
         """get block nelement."""
@@ -851,12 +889,14 @@ def build_model_agent(model_path: str,
             adapters=adapters,
             trust_remote_code=trust_remote_code)
     else:
-        model_agent = TPModelAgent(model_path,
-                                   model_config=model_config,
-                                   cache_config=cache_config,
-                                   backend_config=backend_config,
-                                   speculative_model=speculative_model,
-                                   world_size=tp,
-                                   adapters=adapters,
-                                   trust_remote_code=trust_remote_code)
+        model_agent = TPModelAgent(
+            model_path,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            speculative_model=speculative_model,
+            speculative_model_config=speculative_model_config,
+            world_size=tp,
+            adapters=adapters,
+            trust_remote_code=trust_remote_code)
     return model_agent
