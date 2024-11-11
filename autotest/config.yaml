@@ -90,8 +90,7 @@ pytorch_chat_model:
     - Qwen/Qwen1.5-MoE-A2.7B-Chat
     - Qwen/Qwen2-VL-2B-Instruct
     - Qwen/Qwen2-VL-7B-Instruct
-    - mistralai/Mistral-7B-Instruct-v0.1
-    - mistralai/Mistral-7B-Instruct-v0.2
+    - mistralai/Mistral-7B-Instruct-v0.3
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-7b-it
     - google/gemma-2-9b-it
