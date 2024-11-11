@@ -146,12 +146,17 @@ def model_forward(
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         with ctx_mgr.context(context):
+            model_metas = None
+            model_metas = model.update_model_metas(
+                past_key_values=cache_engine.gpu_cache,
+                context=context,
+            )
             input_dict = model.prepare_inputs_for_generation(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
             )
             output = model(**input_dict)
-    return dict(hidden_states=output)
+    return dict(hidden_states=output, model_metas=model_metas)
 
 
 SwapMap = Dict[int, int]

@@ -91,6 +91,7 @@ class ModelInputs:
     vision_inputs: VisionModelInputs = None
     cross_attention_states: torch.Tensor = None
     history_cross_kv_seqlens: torch.LongTensor = None
+    model_metas: List[Dict[str, Any]] = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -101,34 +102,28 @@ class ModelInputs:
         self.input_ids = input_ids
         return self
 
-    def split(self, split_size: int, block_size: int):
+    def split(self, split_size: int):
         """split inputs."""
         assert len(
             self.seq_length) == 1, ('Can not perform split on batched input.')
-        assert split_size % block_size == 0, (
-            'split_size should be multi of block_size.')
 
         input_ids = self.input_ids
         if input_ids.numel() < split_size:
             return self
 
-        num_blocks = split_size // block_size
-        overlap = (self.history_lengths[0] % block_size != 0)
         max_seq_len = self.seq_length[0].item()
         ret = []
-        block_start = 0
-        for i in range(0, max_seq_len, split_size):
-            start = i
-            end = min(max_seq_len, i + split_size)
-            block_end = block_start + num_blocks
-            if overlap:
-                block_end += 1
+        start = 0
+        while start <= max_seq_len:
+            if self.vision_inputs is not None:
+                pass
+            else:
+                end = min(max_seq_len, start + split_size)
 
-            block_offsets = self.block_offsets
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
-                block_offsets=block_offsets,
+                block_offsets=self.block_offsets,
                 history_lengths=self.history_lengths + start,
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
@@ -137,7 +132,25 @@ class ModelInputs:
                 cross_attention_states=self.cross_attention_states,
             )
             ret.append(inp)
-            block_start += num_blocks
+
+            start = end
+
+        # for i in range(0, max_seq_len, split_size):
+        #     start = i
+        #     end = min(max_seq_len, i + split_size)
+
+        #     inp = ModelInputs(
+        #         input_ids=self.input_ids[:, start:end],
+        #         seq_length=input_ids.new_tensor([end - start]),
+        #         block_offsets=self.block_offsets,
+        #         history_lengths=self.history_lengths + start,
+        #         is_decoding=self.is_decoding,
+        #         num_ignored_history=self.num_ignored_history,
+        #         local_adapter_ids=self.local_adapter_ids,
+        #         vision_inputs=self.vision_inputs,
+        #         cross_attention_states=self.cross_attention_states,
+        #     )
+        #     ret.append(inp)
 
         return ret
 
@@ -183,6 +196,7 @@ class StepContext:
     cross_attention_states: torch.Tensor = None
     cross_kv_seqlens: torch.LongTensor = None
     kv_quant_policy: Literal[0, 4, 8] = 0
+    model_metas: List[Dict[str, Any]] = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -255,6 +269,7 @@ class StepContext:
             cross_attention_states=cross_attention_states,
             cross_kv_seqlens=inputs.history_cross_kv_seqlens,
             kv_quant_policy=kv_quant_policy,
+            model_metas=inputs.model_metas,
         )
 
         ret = get_backend().update_step_context(ret)

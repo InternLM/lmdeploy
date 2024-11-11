@@ -406,7 +406,6 @@ class Engine:
             seq_length = self._seq_length_buf[:batch_size]
         max_q_seq_length = seq_length.max().item()
 
-        # TODO: get block offsets is slow when block_size = 1
         block_offsets = self.scheduler.get_block_tables(messages)
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
@@ -423,6 +422,8 @@ class Engine:
 
         num_ignored_history = [msg.num_ignored_history for msg in messages]
         num_ignored_history = torch.tensor(num_ignored_history)
+
+        model_metas = [msg.model_meta for msg in messages]
 
         def __get_cogvlm_image_info():
             """Get cogvlm history image info for position ids."""
@@ -520,6 +521,7 @@ class Engine:
             vision_inputs=vision_embedding_inputs,
             cross_attention_states=cross_attention_states,
             history_cross_kv_seqlens=history_cross_kv_seqlens,
+            model_metas=model_metas,
         )
 
     def _batch_stopping_criteria(self, token_ids: torch.Tensor,
@@ -563,11 +565,15 @@ class Engine:
 
     @logging_timer('UpdateRunning', logger)
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor,
-                       stopped: torch.Tensor):
+                       stopped: torch.Tensor, model_metas: List[Dict[str,
+                                                                     Any]]):
         """update scheduler."""
+        if model_metas is None:
+            model_metas = [None] * len(running)
         next_token_ids = next_token_ids.numpy()
         eos_token_id = self.model_config.eos_token_id
-        for token, msg, stop in zip(next_token_ids, running, stopped):
+        for token, msg, stop, model_meta in zip(next_token_ids, running,
+                                                stopped, model_metas):
             if msg.status != MessageStatus.RUNNING:
                 continue
             update_token = token
@@ -576,7 +582,7 @@ class Engine:
                 update_token = _EMPTY_TOKEN
             else:
                 msg.num_new_tokens += 1
-            msg.update_token_ids(update_token)
+            msg.update_token_ids(update_token, model_meta=model_meta)
             if stop:
                 msg.status = MessageStatus.STOPPED
 
@@ -642,12 +648,14 @@ class Engine:
             batch_size = seq_len.size(0)
             assert batch_size == 1
 
-            new_inputs = inputs.split(max_prefill_token_num,
-                                      self.cache_config.block_size)
+            new_inputs = inputs.split(max_prefill_token_num)
 
+            model_metas = new_inputs[0].model_metas
             output_gather = _OutputGather(max_seq_len)
             for inp in new_inputs:
+                inp.model_metas = model_metas
                 tmp_out = await __forward(inp)
+                model_metas = tmp_out.get('model_metas')
                 output_gather.gather(tmp_out)
                 tmp_out.pop('hidden_states', None)
             tmp_out['hidden_states'] = output_gather.get_output()
@@ -670,7 +678,8 @@ class Engine:
         return ret
 
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor,
-                            logits: torch.Tensor, stopped: torch.Tensor):
+                            logits: torch.Tensor, stopped: torch.Tensor,
+                            model_metas: List[Dict[str, Any]]):
         """make infer output."""
 
         def __get_out_token_ids(token: torch.Tensor, msg: SchedulerSequence,
@@ -694,7 +703,7 @@ class Engine:
         running = self._running
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
         stopped = stopped.tolist()
-        self.update_running(running, next_token_ids, stopped)
+        self.update_running(running, next_token_ids, stopped, model_metas)
 
         # generate output
         next_token_ids = next_token_ids.tolist()
@@ -782,11 +791,14 @@ class Engine:
                 next_token_ids, sampling_inputs.stop_words, num_appendable_ids)
 
             # send output
+            model_metas = output.get('model_metas')
             stopped = stopped.cpu()
             finish = stopped.all().item() or (idx == loop_count - 1)
             finish = finish or _check_finish(self.scheduler, idx)
-            output = (next_token_ids.cpu(), logits, stopped)
+            output = (next_token_ids.cpu(), logits, stopped, model_metas)
             output_que.put_nowait((finish, output))
+
+            inputs.model_metas = model_metas
 
             if finish:
                 break
@@ -974,9 +986,9 @@ class Engine:
                 try:
                     if isinstance(out, Exception):
                         raise out
-                    next_token_ids, logits, stopped = out
+                    next_token_ids, logits, stopped, model_metas = out
                     step_outputs = self._make_infer_outputs(
-                        next_token_ids, logits, stopped)
+                        next_token_ids, logits, stopped, model_metas)
                     __send_resps(step_outputs)
                 except Exception as e:
                     raise e

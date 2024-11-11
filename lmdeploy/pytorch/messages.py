@@ -382,11 +382,28 @@ class HistoryMultiModals:
                 outs[modal_type] = data
         return outs
 
+    def add_inputs(self, input_mms: MultiModalInputs):
+        """add new inputs."""
+        for modal_type, vals in input_mms.items():
+            if modal_type in self.multimodals:
+                self.multimodals[modal_type] += vals
+            else:
+                self.multimodals[modal_type] = vals
+
     def empty(self):
         if len(self.multimodals) == 0:
             return 0
 
         return all(len(vals) == 0 for vals in self.multimodals)
+
+    @staticmethod
+    def update_multimodals(input_mms: MultiModalInputs, prev_len: int):
+        """update multimodals."""
+        for vals in input_mms.values():
+            for val in vals:
+                val.start += prev_len
+                val.end += prev_len
+        return input_mms
 
 
 @dataclass
@@ -414,6 +431,7 @@ class SchedulerSequence:
     num_ignored_history: int = 0
     cross_attention_states: Optional[Tensor] = None
     history_cross_kv_seqlens: int = 0
+    model_meta: Dict[str, Any] = None
 
     def __post_init__(self):
         """post init."""
@@ -534,7 +552,8 @@ class SchedulerSequence:
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
                          embeddings: List[InputEmbeddings] = None,
-                         cross_attention_states: List[Tensor] = None):
+                         cross_attention_states: List[Tensor] = None,
+                         model_meta: Dict[str, Any] = None):
         """Update token ids, old token ids will be added to history."""
         # cross attention
         if cross_attention_states is not None:
@@ -550,6 +569,15 @@ class SchedulerSequence:
             ]
             self._num_images = len(new_embeddings)
             self.history_embeddings.append(new_embeddings)
+
+        # update multimodals
+        if multimodals is not None:
+            multimodals = HistoryMultiModals.update_multimodals(
+                multimodals, self.num_all_ids)
+            self.history_multimodals.add_inputs(multimodals)
+
+        if model_meta is not None:
+            self.model_meta = model_meta
 
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
@@ -574,3 +602,5 @@ class SchedulerSequence:
         self._num_history_ids = step
         self._num_token_ids = num_all_ids - step
         self.num_ignored_history = min(step, self.num_ignored_history)
+
+        self.model_meta = None

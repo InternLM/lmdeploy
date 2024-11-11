@@ -47,6 +47,22 @@ class GraphRunner:
             context,
         )
 
+    def update_model_metas(
+        self,
+        past_key_values: List[List[torch.Tensor]],
+        inputs_embeds: torch.Tensor = None,
+        context: StepContext = None,
+    ):
+        """prepare inputs."""
+        if hasattr(self.model, 'update_model_metas'):
+            return self.model.update_model_metas(
+                past_key_values,
+                inputs_embeds,
+                context,
+            )
+
+        return None
+
     def prepare_multimodal_input(self, input_ids, input_multimodals, **kwargs):
         """prepare multimodals inputs."""
         if hasattr(self.model, 'prepare_multimodal_input'):
