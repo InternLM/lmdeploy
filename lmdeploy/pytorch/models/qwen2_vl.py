@@ -7,7 +7,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention,
-                                 RMSNorm, RopeType, SiluAndMul,
+                                 LayerNorm, RMSNorm, RopeType, SiluAndMul,
                                  build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
                                         build_merged_colwise_linear,
@@ -463,27 +463,6 @@ class VisionAttention(nn.Module):
             q_seqlens=cu_seqlens[1:],
         )
 
-        # import math
-        # attention_mask = torch.full([1, seq_length, seq_length],
-        #                             torch.finfo(q.dtype).min,
-        #                             device=q.device,
-        #                             dtype=q.dtype)
-        # for i in range(1, len(cu_seqlens)):
-        #     attention_mask[..., cu_seqlens[i - 1]:cu_seqlens[i],
-        #                    cu_seqlens[i - 1]:cu_seqlens[i]] = 0
-
-        # q = q.transpose(0, 1)
-        # k = k.transpose(0, 1)
-        # v = v.transpose(0, 1)
-        # attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(
-        #     self.head_dim)
-        # attn_weights = attn_weights + attention_mask
-        # attn_weights = nn.functional.softmax(attn_weights,
-        #                                      dim=-1,
-        #                                      dtype=torch.float32).to(q.dtype)
-        # attn_output = torch.matmul(attn_weights, v)
-        # attn_output = attn_output.transpose(0, 1)
-
         attn_output = attn_output.reshape(seq_length, -1)
 
         # o proj
@@ -541,27 +520,37 @@ class Qwen2VLVisionBlock(nn.Module):
                  device: torch.device = None):
         super().__init__()
         self.layer_idx = layer_idx
-        self.norm1 = nn.LayerNorm(config.embed_dim,
-                                  eps=1e-6,
-                                  dtype=dtype,
-                                  device=device)
-        self.norm2 = nn.LayerNorm(config.embed_dim,
-                                  eps=1e-6,
-                                  dtype=dtype,
-                                  device=device)
+        self.norm1 = LayerNorm(config.embed_dim,
+                               eps=1e-6,
+                               dtype=dtype,
+                               device=device)
+        self.norm2 = LayerNorm(config.embed_dim,
+                               eps=1e-6,
+                               dtype=dtype,
+                               device=device)
 
         self.attn = VisionAttention(config, dtype=dtype, device=device)
 
         self.mlp = VisionMlp(config, dtype=dtype, device=device)
 
-    def forward(self, hidden_states, cu_seqlens,
-                rotary_pos_emb) -> torch.Tensor:
-        hidden_states = hidden_states + self.attn(
-            self.norm1(hidden_states),
-            cu_seqlens=cu_seqlens,
-            rotary_pos_emb=rotary_pos_emb)
-        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
-        return hidden_states
+    def forward(self,
+                hidden_states,
+                cu_seqlens,
+                rotary_pos_emb,
+                residual: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.norm1(hidden_states)
+        else:
+            hidden_states, residual = self.norm1(hidden_states, residual)
+
+        hidden_states = self.attn(hidden_states,
+                                  cu_seqlens=cu_seqlens,
+                                  rotary_pos_emb=rotary_pos_emb)
+
+        hidden_states, residual = self.norm2(hidden_states, residual)
+        hidden_states = self.mlp(hidden_states)
+        return hidden_states, residual
 
 
 class PatchMerger(nn.Module):
@@ -668,10 +657,14 @@ class Qwen2VisionTransformerPretrainedModel(nn.Module):
                                                  dim=0, dtype=torch.int32)
         cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
 
+        residual = None
         for blk in self.blocks:
-            hidden_states = blk(hidden_states,
-                                cu_seqlens=cu_seqlens,
-                                rotary_pos_emb=rotary_pos_emb)
+            hidden_states, residual = blk(hidden_states,
+                                          cu_seqlens=cu_seqlens,
+                                          rotary_pos_emb=rotary_pos_emb,
+                                          residual=residual)
+
+        hidden_states = hidden_states + residual
 
         return self.merger(hidden_states)
 

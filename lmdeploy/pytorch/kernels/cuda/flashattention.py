@@ -48,6 +48,17 @@ def softcapping(qk, logit_softcapping: tl.constexpr):
 
 
 @triton.jit
+def _load_kv(ptrs, causal_mask: tl.constexpr, boundary_check: tl.constexpr):
+    """load kv."""
+    if causal_mask:
+        return tl.load(ptrs,
+                       boundary_check=boundary_check,
+                       padding_option='zero')
+    else:
+        return tl.load(ptrs)
+
+
+@triton.jit
 def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
                        loop_start, loop_end, qk_scale, history_mask,
                        kv_min_loc, causal_mask: tl.constexpr,
@@ -63,11 +74,11 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
-        k = tl.load(k_ptrs)
+        k = _load_kv(k_ptrs, causal_mask, boundary_check=(1, ))
         qk = tl.dot(q, k)
 
         if BLOCK_DK1 != 0:
-            k1 = tl.load(k1_ptrs)
+            k1 = _load_kv(k1_ptrs, causal_mask, boundary_check=(1, ))
             qk += tl.dot(q1, k1)
 
         if causal_mask:
@@ -113,7 +124,7 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
         acc = acc * alpha[:, None]
 
         # update acc
-        v = tl.load(v_ptrs)
+        v = _load_kv(v_ptrs, causal_mask, boundary_check=(0, ))
         p = p.to(v.dtype)
         acc += tl.dot(p, v)
         # update m_i and l_i
