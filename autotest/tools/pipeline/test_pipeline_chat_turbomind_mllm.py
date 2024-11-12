@@ -21,7 +21,7 @@ def test_pipeline_chat_tp1(config, model, worker_id):
                 args=(config, model, BACKEND, worker_id))
     p.start()
     p.join()
-    assert_pipeline_vl_chat_log(config, model)
+    assert_pipeline_vl_chat_log(config, model, worker_id)
 
 
 @pytest.mark.order(6)
@@ -37,7 +37,7 @@ def test_pipeline_chat_tp2(config, model, worker_id):
                 args=(config, model, BACKEND, worker_id))
     p.start()
     p.join()
-    assert_pipeline_vl_chat_log(config, model)
+    assert_pipeline_vl_chat_log(config, model, worker_id)
 
 
 @pytest.mark.order(6)
@@ -56,7 +56,7 @@ def test_pipeline_chat_kvint4_tp1(config, model, worker_id):
                 args=(config, model, BACKEND, worker_id, 4))
     p.start()
     p.join()
-    assert_pipeline_vl_chat_log(config, model)
+    assert_pipeline_vl_chat_log(config, model, worker_id)
 
 
 @pytest.mark.order(6)
@@ -76,7 +76,7 @@ def test_pipeline_chat_kvint4_tp2(config, model, worker_id):
                 args=(config, model, BACKEND, worker_id, 4))
     p.start()
     p.join()
-    assert_pipeline_vl_chat_log(config, model)
+    assert_pipeline_vl_chat_log(config, model, worker_id)
 
 
 @pytest.mark.order(6)
@@ -93,7 +93,7 @@ def test_pipeline_chat_kvint8_tp1(config, model, worker_id):
                 args=(config, model, BACKEND, worker_id, 8))
     p.start()
     p.join()
-    assert_pipeline_vl_chat_log(config, model)
+    assert_pipeline_vl_chat_log(config, model, worker_id)
 
 
 @pytest.mark.order(6)
@@ -111,7 +111,7 @@ def test_pipeline_chat_kvint8_tp2(config, model, worker_id):
                 args=(config, model, BACKEND, worker_id, 8))
     p.start()
     p.join()
-    assert_pipeline_vl_chat_log(config, model)
+    assert_pipeline_vl_chat_log(config, model, worker_id)
 
 
 @pytest.mark.pipeline_chat
@@ -129,4 +129,4 @@ def test_pipeline_pr_test(config, model, worker_id):
                 args=(config, model, BACKEND, worker_id))
     p.start()
     p.join()
-    assert_pipeline_vl_chat_log(config, model)
+    assert_pipeline_vl_chat_log(config, model, worker_id)
