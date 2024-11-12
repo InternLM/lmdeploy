@@ -494,7 +494,12 @@ class VisionMlp(nn.Module):
         )
 
         # silu and mul
-        self.act = ACT2FN[config.hidden_act]
+        if config.hidden_act in [
+                'gelu', 'gelu_fast', 'quick_gelu', 'gelu_python'
+        ]:
+            self.act = nn.GELU()
+        else:
+            self.act = ACT2FN[config.hidden_act]
 
         # down
         self.fc2 = build_rowwise_linear(hidden_dim,
@@ -647,14 +652,10 @@ class Qwen2VisionTransformerPretrainedModel(nn.Module):
         rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
         return rotary_pos_emb
 
-    def forward(self, hidden_states: torch.Tensor, grid_thw: torch.Tensor,
+    def forward(self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
                 rotary_pos_emb: torch.Tensor) -> torch.Tensor:
         """forward."""
         hidden_states = self.patch_embed(hidden_states)
-
-        cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
-                                             grid_thw[:, 0]).cumsum(
-                                                 dim=0, dtype=torch.int32)
         cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
 
         residual = None
@@ -725,7 +726,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         inputs_embeds: torch.Tensor = None,
         mrope_position_ids: torch.Tensor = None,
         pixel_values: torch.Tensor = None,
-        grid_thw: torch.Tensor = None,
+        vis_cu_seqlens: torch.Tensor = None,
         vis_pos_emb: torch.Tensor = None,
         **kwargs,
     ):
@@ -738,7 +739,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
                 vis_pos_emb = (vis_pos_emb[0].to(dtype),
                                vis_pos_emb[1].to(dtype))
                 image_embeds = self.visual(pixel_values,
-                                           grid_thw=grid_thw,
+                                           cu_seqlens=vis_cu_seqlens,
                                            rotary_pos_emb=vis_pos_emb)
                 image_mask = ((input_ids == self.config.image_token_id
                                ).unsqueeze(-1).expand_as(inputs_embeds).to(
@@ -783,7 +784,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         attn_metadata = context.attn_metadata
 
         pixel_values = None
-        grid_thw = None
+        vis_cu_seqlens = None
         vis_pos_emb = None
         if context.input_multimodals is not None:
             image_data = [
@@ -793,8 +794,12 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
             image_data = [data for im_data in image_data for data in im_data]
             pixel_values = torch.cat([data.data for data in image_data])
             grid_thw = torch.cat(
-                [data.meta['grid_thw'] for data in image_data])
-            vis_pos_emb = self.visual.rot_pos_emb(grid_thw.cpu())
+                [data.meta['grid_thw'] for data in image_data]).cpu()
+            vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
+            vis_cu_seqlens = torch.repeat_interleave(
+                grid_thw[:, 1] * grid_thw[:, 2],
+                grid_thw[:, 0]).to(pixel_values.device)
+            vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
             vis_pos_emb = vis_pos_emb.repeat(1, 2)
             vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
 
@@ -819,7 +824,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
             inputs_embeds=inputs_embeds,
             mrope_position_ids=mrope_position_ids,
             pixel_values=pixel_values,
-            grid_thw=grid_thw,
+            vis_cu_seqlens=vis_cu_seqlens,
             vis_pos_emb=vis_pos_emb,
         )
 
