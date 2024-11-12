@@ -810,9 +810,8 @@ class Engine:
             num_ignore_eos = num_ignore_eos - 1
             if 'spec_logits' in output:
                 spec_logits = output['spec_logits']
-                proposal_token_ids = self.async_sampling_logits(
-                    spec_logits, all_ids, guided_input_ids, sampling_inputs,
-                    inputs, num_ignore_eos > 0)
+                # TODO add tree decoding
+                proposal_token_ids = spec_logits.argmax(-1)
                 # score the proposals with the target model
                 spec_inputs = copy.deepcopy(inputs)
                 _, num_speculative_tokens = proposal_token_ids.shape

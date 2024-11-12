@@ -973,6 +973,7 @@ async def startup_event():
 
 
 def serve(model_path: str,
+          speculative_model: Optional[str] = None,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
           backend_config: Optional[Union[PytorchEngineConfig,
@@ -1008,6 +1009,7 @@ def serve(model_path: str,
                     on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
+        speculative_model (str): the path of the speculative model.
         model_name (str): the name of the served model. It can be accessed
             by the RESTful API `/v1/models`. If it is not specified,
             `model_path` will be adopted
@@ -1072,6 +1074,7 @@ def serve(model_path: str,
 
     VariableInterface.async_engine = pipeline_class(
         model_path=model_path,
+        speculative_model=speculative_model,
         model_name=model_name,
         backend=backend,
         backend_config=backend_config,

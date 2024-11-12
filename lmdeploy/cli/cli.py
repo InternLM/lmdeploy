@@ -43,6 +43,7 @@ class CLI(object):
                             help='The directory path of the model')
         ArgumentHelper.model_format(parser)
         ArgumentHelper.tp(parser)
+        ArgumentHelper.speculative_model(parser)
         # other args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
@@ -121,6 +122,7 @@ class CLI(object):
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
         ArgumentHelper.adapters(pt_group)
+        ArgumentHelper.speculative_model(pt_group)
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
         # common engine args
@@ -270,6 +272,7 @@ class CLI(object):
                 quant_policy=args.quant_policy)
             run_chat(args.model_path,
                      engine_config,
+                     speculative_model=args.speculative_model,
                      chat_template_config=chat_template_config)
         else:
             from lmdeploy.turbomind.chat import main as run_chat

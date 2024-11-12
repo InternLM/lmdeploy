@@ -15,11 +15,7 @@ from ..messages import SchedulerSequence
 def _process_temperature_(scores: torch.Tensor, temperature: torch.Tensor):
     """process temperature."""
     temperature = temperature.to(scores.dtype)
-    if len(scores.shape) == 3:
-        temperature = temperature[:, None, None]
-    else:  # len==2
-        temperature = temperature[:, None]
-    scores.div_(temperature)
+    scores.div_(temperature[:, None])
     return scores
 
 
@@ -27,8 +23,6 @@ def _process_bad_words_(scores: torch.Tensor,
                         bad_words: torch.LongTensor,
                         filter_value: float = -float('inf')):
     """process bad words."""
-    if len(scores.shape) == 3:
-        bad_words = bad_words[:, :, None]
     mask = bad_words >= 0
     bad_words = bad_words.where(mask, 0)
     filtered_scores = scores.gather(1, bad_words)
