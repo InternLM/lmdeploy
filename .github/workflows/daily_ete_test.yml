@@ -218,6 +218,9 @@ jobs:
           - backend: turbomind
             model: mllm
             function: chat
+          - backend: pytorch
+            model: mllm
+            function: chat
         include:
           - backend: turbomind
             model: llm
