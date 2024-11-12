@@ -262,7 +262,7 @@ def _flash_prefill_fwd_kernel(
         history_mask = history_len + start_m * BLOCK_M + tl.arange(0, BLOCK_M)
         loop_end = (history_len + start_m * BLOCK_M) // BLOCK_N * BLOCK_N
     else:
-        history_mask = tl.full([BLOCK_M], kv_seqlen, dtype=tl.int32)
+        history_mask = tl.full([BLOCK_M], kv_seqlen - 1, dtype=tl.int32)
         loop_end = kv_seqlen // BLOCK_N * BLOCK_N
 
     acc, l_i, m_i = _prefill_fwd_inner(acc,

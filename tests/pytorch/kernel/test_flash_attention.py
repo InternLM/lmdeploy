@@ -216,11 +216,7 @@ class TestFlashAttention:
                             kv_seqlens=kv_seqlens,
                             max_seqlen=max_seq_len,
                             causal=causal)
-        if causal:
-            atol = 1e-3
-        else:
-            atol = 3e-2
-        torch.testing.assert_close(out, conti_gt, atol=atol, rtol=1e-5)
+        torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
 
     @pytest.fixture
     def win_size(self, request):
