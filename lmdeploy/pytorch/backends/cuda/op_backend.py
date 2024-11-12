@@ -23,9 +23,12 @@ class CudaOpsBackend(DefaultOpsBackend):
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """get cuda layer builder."""
-        if layer_type == OpType.Attention:
+        if layer_type == OpType.PagedAttention:
             from .attention import TritonAttentionBuilder
             return TritonAttentionBuilder
+        elif layer_type == OpType.FlashAttention:
+            from .flash_attention import TritonFlashAttentionBuilder
+            return TritonFlashAttentionBuilder
         elif layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import TritonApplyRotaryEmbBuilder
             return TritonApplyRotaryEmbBuilder

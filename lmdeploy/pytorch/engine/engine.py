@@ -163,8 +163,6 @@ class Engine:
         self.backend_config = backend_config
         self.stream = self.model_agent.stream
 
-        self._msg_preprocess_inque = asyncio.Queue()
-        self._msg_preprocess_outque = asyncio.Queue()
         self.req_manager = self._bind_request_manager()
 
         # create main thread
@@ -301,7 +299,7 @@ class Engine:
 
         self._msg_preprocess_inque.put_nowait(reqs)
 
-    def _add_message(self):
+    def _add_message(self, que):
 
         def __update_bad_words(msg):
             """update bad words."""
@@ -325,10 +323,10 @@ class Engine:
                     sampling_param.max_new_tokens,
                     max_session_len - msg.num_all_tokens())
 
-        if self._msg_preprocess_outque.qsize() == 0:
+        if que.qsize() == 0:
             return
 
-        reqs = self._msg_preprocess_outque.get_nowait()
+        reqs = que.get_nowait()
 
         for req in reqs:
             session_id = req.data['session_id']
@@ -810,10 +808,10 @@ class Engine:
                 __update_inputs(next_token_ids)
 
     @torch.inference_mode()
-    async def _async_loop_preprocess_message(self):
+    async def _async_loop_preprocess_message(self, inque, outque):
         """preprocess msg."""
         while True:
-            reqs = await self._msg_preprocess_inque.get()
+            reqs = await inque.get()
 
             for req in reqs:
                 req_data = req.data
@@ -829,7 +827,7 @@ class Engine:
                 req_data['input_multimodals'] = input_multimodals
 
             if len(reqs) > 0:
-                self._msg_preprocess_outque.put_nowait(reqs)
+                outque.put_nowait(reqs)
 
     @torch.inference_mode()
     async def _async_loop_background(self, in_que: asyncio.Queue,
@@ -939,6 +937,10 @@ class Engine:
 
         Each engine instance would communicate with the engine by queue.
         """
+
+        self._msg_preprocess_inque = asyncio.Queue()
+        self._msg_preprocess_outque = asyncio.Queue()
+
         prefill_interval = self.scheduler_config.prefill_interval
         in_que = asyncio.Queue()
         out_que = asyncio.Queue()
@@ -946,7 +948,8 @@ class Engine:
             self._async_loop_background(in_que, out_que),
             name='MainLoopBackground')
         loop_background = asyncio.get_event_loop().create_task(
-            self._async_loop_preprocess_message(),
+            self._async_loop_preprocess_message(self._msg_preprocess_inque,
+                                                self._msg_preprocess_outque),
             name='MainLoopPreprocessMessage')
         loop_background.add_done_callback(_raise_exception_on_finish)
 
@@ -981,7 +984,7 @@ class Engine:
             while not finish:
                 if self.req_manager.has_requests():
                     self.req_manager.step()
-                self._add_message()
+                self._add_message(self._msg_preprocess_outque)
                 finish, out = await out_que.get()
                 try:
                     if isinstance(out, Exception):
@@ -998,7 +1001,7 @@ class Engine:
         while True:
             if self.req_manager.has_requests():
                 self.req_manager.step()
-            self._add_message()
+            self._add_message(self._msg_preprocess_outque)
 
             if not self.scheduler.has_unfinished():
                 await asyncio.sleep(0.01)

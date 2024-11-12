@@ -6,8 +6,9 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
-                                 SiluAndMul, build_rotary_embedding)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention,
+                                 RMSNorm, RopeType, SiluAndMul,
+                                 build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
                                         build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
@@ -395,26 +396,6 @@ class VisionRotaryEmbedding(nn.Module):
         return freqs
 
 
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., :x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2:]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb_vision(tensor: torch.Tensor,
-                                freqs: torch.Tensor) -> torch.Tensor:
-    orig_dtype = tensor.dtype
-    tensor = tensor.float()
-    cos = freqs.cos()
-    sin = freqs.sin()
-    cos = cos.unsqueeze(1).repeat(1, 1, 2).unsqueeze(0).float()
-    sin = sin.unsqueeze(1).repeat(1, 1, 2).unsqueeze(0).float()
-    output = (tensor * cos) + (rotate_half(tensor) * sin)
-    output = output.to(orig_dtype)
-    return output
-
-
 class VisionAttention(nn.Module):
     """Vision attention."""
 
@@ -444,6 +425,13 @@ class VisionAttention(nn.Module):
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
 
+        # attention
+        self.attention = FlashAttention(
+            num_heads,
+            head_dim,
+            causal=False,
+        )
+
         # o_proj
         self.proj = build_rowwise_linear(dim,
                                          dim,
@@ -453,41 +441,49 @@ class VisionAttention(nn.Module):
                                          device=device,
                                          is_tp=True)
 
-    def forward(self,
-                hidden_states: torch.Tensor,
-                cu_seqlens: torch.Tensor,
-                rotary_pos_emb: torch.Tensor = None) -> torch.Tensor:
-        import math
+    def forward(
+        self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor]
+    ) -> torch.Tensor:
         seq_length = hidden_states.shape[0]
         # qkv proj
         qkv_states = self.qkv(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
         q, k, v = self.qkv.split_qkv(qkv_states)
-        q = apply_rotary_pos_emb_vision(q.unsqueeze(0),
-                                        rotary_pos_emb).squeeze(0)
-        k = apply_rotary_pos_emb_vision(k.unsqueeze(0),
-                                        rotary_pos_emb).squeeze(0)
 
-        attention_mask = torch.full([1, seq_length, seq_length],
-                                    torch.finfo(q.dtype).min,
-                                    device=q.device,
-                                    dtype=q.dtype)
-        for i in range(1, len(cu_seqlens)):
-            attention_mask[..., cu_seqlens[i - 1]:cu_seqlens[i],
-                           cu_seqlens[i - 1]:cu_seqlens[i]] = 0
+        cos, sin = rotary_pos_emb
+        q, k = self.apply_rotary_pos_emb(q, k, cos, sin)
 
-        q = q.transpose(0, 1)
-        k = k.transpose(0, 1)
-        v = v.transpose(0, 1)
-        attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(
-            self.head_dim)
-        attn_weights = attn_weights + attention_mask
-        attn_weights = nn.functional.softmax(attn_weights,
-                                             dim=-1,
-                                             dtype=torch.float32).to(q.dtype)
-        attn_output = torch.matmul(attn_weights, v)
-        attn_output = attn_output.transpose(0, 1)
+        attn_output = self.attention(
+            q,
+            k,
+            v,
+            q_start_loc=cu_seqlens[:-1],
+            q_seqlens=cu_seqlens[1:],
+        )
+
+        # import math
+        # attention_mask = torch.full([1, seq_length, seq_length],
+        #                             torch.finfo(q.dtype).min,
+        #                             device=q.device,
+        #                             dtype=q.dtype)
+        # for i in range(1, len(cu_seqlens)):
+        #     attention_mask[..., cu_seqlens[i - 1]:cu_seqlens[i],
+        #                    cu_seqlens[i - 1]:cu_seqlens[i]] = 0
+
+        # q = q.transpose(0, 1)
+        # k = k.transpose(0, 1)
+        # v = v.transpose(0, 1)
+        # attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(
+        #     self.head_dim)
+        # attn_weights = attn_weights + attention_mask
+        # attn_weights = nn.functional.softmax(attn_weights,
+        #                                      dim=-1,
+        #                                      dtype=torch.float32).to(q.dtype)
+        # attn_output = torch.matmul(attn_weights, v)
+        # attn_output = attn_output.transpose(0, 1)
+
         attn_output = attn_output.reshape(seq_length, -1)
 
         # o proj
@@ -746,7 +742,8 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
             if pixel_values is not None:
                 dtype = inputs_embeds.dtype
                 pixel_values = pixel_values.to(dtype)
-                vis_pos_emb = vis_pos_emb.to(dtype)
+                vis_pos_emb = (vis_pos_emb[0].to(dtype),
+                               vis_pos_emb[1].to(dtype))
                 image_embeds = self.visual(pixel_values,
                                            grid_thw=grid_thw,
                                            rotary_pos_emb=vis_pos_emb)
@@ -805,6 +802,8 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
             grid_thw = torch.cat(
                 [data.meta['grid_thw'] for data in image_data])
             vis_pos_emb = self.visual.rot_pos_emb(grid_thw.cpu())
+            vis_pos_emb = vis_pos_emb.repeat(1, 2)
+            vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
 
         mrope_position_ids = getattr(context, 'mrope_position_ids', None)
 
