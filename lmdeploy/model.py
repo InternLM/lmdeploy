@@ -906,12 +906,8 @@ class Qwen2halfChat(BaseChatTemplate):
             assistant='<|im_start|>assistant\n',
             eoa='<|im_end|>',
             separator='\n',
-            tools="""
-                     \n\n#Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>
-                    """,
-            eotools="""
-                    \n\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call><|im_end|>\
-                    """,
+            tools="""\n#Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n""",
+            eotools="""\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>""",
             stop_words=['<|im_end|>'],
             **kwargs):
 
@@ -952,7 +948,7 @@ class Qwen2halfChat(BaseChatTemplate):
             for tool in tools:
                 tool_prompt += json.dumps(tool, ensure_ascii=False)
             if len(messages) and messages[0]['role'] == 'system':
-                ret += f"{messages[0]['content']}{self.tools}{tool_prompt}{self.eotools}{self.meta_instruction}{self.eosys}"
+                ret += f"{self.system}{messages[0]['content']}{self.tools}{tool_prompt}{self.eotools}{self.eosys}"
             else:
                 ret += f'{self.system}{self.meta_instruction}{self.tools}{tool_prompt}{self.eotools}{self.eosys}'
         else:
@@ -967,7 +963,7 @@ class Qwen2halfChat(BaseChatTemplate):
                     or (message['role'] == 'system' and index != 0)
                     or (message['role'] == 'assistant'
                         and message.get('tools_call') is not None)):
-                ret += f"{box_map[message['role']]}\n{message['content']}\n{self.eoh}"
+                ret += f"{box_map[message['role']]}{message['content']}{self.eoh}"
             if message['role'] == 'assistant':
                 ret += f"{box_map[message['role']]}"
                 if message.get('content') is not None:
