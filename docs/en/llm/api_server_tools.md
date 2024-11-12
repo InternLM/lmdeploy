@@ -1,6 +1,6 @@
 # Tools Calling
 
-LMDeploy supports tools for InternLM2, InternLM2.5 and llama3.1 models.
+LMDeploy supports tools for InternLM2, InternLM2.5, llama3.1 and Qwen2.5 models.
 
 ## Single Round Invocation
 

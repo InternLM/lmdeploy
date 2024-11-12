@@ -1,6 +1,6 @@
 # Tools
 
-LMDeploy 支持 InternLM2, InternLM2.5 和 Llama3.1 模型的工具调用。
+LMDeploy 支持 InternLM2, InternLM2.5, Llama3.1 和 Qwen2.5模型的工具调用。
 
 ## 单轮调用
 

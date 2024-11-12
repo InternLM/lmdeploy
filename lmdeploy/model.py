@@ -892,6 +892,113 @@ Reminder:
             return 'llama3_1'
 
 
+@MODELS.register_module(name='qwen2d5')
+class Qwen2halfChat(BaseChatTemplate):
+    """Chat template for Qwen-7B-Chat."""
+
+    def __init__(
+            self,
+            system='<|im_start|>system\n',
+            meta_instruction='You are Qwen, created by Alibaba Cloud. You are a helpful assistant.',
+            eosys='<|im_end|>\n',
+            user='<|im_start|>user\n',
+            eoh='<|im_end|>\n',
+            assistant='<|im_start|>assistant\n',
+            eoa='<|im_end|>',
+            separator='\n',
+            tools="""
+                     \n\n#Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>
+                    """,
+            eotools="""
+                    \n\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call><|im_end|>\
+                    """,
+            stop_words=['<|im_end|>'],
+            **kwargs):
+
+        self.tools = tools
+        self.eotools = eotools
+        super().__init__(system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    def messages2prompt(self,
+                        messages,
+                        sequence_start=True,
+                        tools=None,
+                        **kwargs):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        box_map = dict(user=self.user,
+                       assistant=self.assistant,
+                       system=self.system)
+        ret = ''
+        tool_prompt = ''
+        if tools is not None:
+            for tool in tools:
+                tool_prompt += json.dumps(tool, ensure_ascii=False)
+            if len(messages) and messages[0]['role'] == 'system':
+                ret += f"{messages[0]['content']}{self.tools}{tool_prompt}{self.eotools}{self.meta_instruction}{self.eosys}"
+            else:
+                ret += f'{self.system}{self.meta_instruction}{self.tools}{tool_prompt}{self.eotools}{self.eosys}'
+        else:
+            if self.meta_instruction is not None and sequence_start:
+                if len(messages) and messages[0]['role'] == 'system':
+                    ret += f"{self.system}{messages[0]['content']}{self.eosys}"
+                else:
+                    ret += f'{self.system}{self.meta_instruction}{self.eosys}'
+
+        for index, message in enumerate(messages):
+            if (message['role'] == 'user'
+                    or (message['role'] == 'system' and index != 0)
+                    or (message['role'] == 'assistant'
+                        and message['tools_call'] is not None)):
+                ret += f"{box_map[message['role']]}\n{message['content']}\n{self.eoh}"
+            if message['role'] == 'assistant':
+                ret += f"{box_map[message['role']]}"
+                if message['content'] is not None:
+                    ret += f"\n{message['content']}"
+            if message.get('tools_call') is not None:
+                toolsCall = message['tools_call']
+                for toolCall in toolsCall:
+                    if toolCall['function'] is not None:
+                        toolCall = toolCall['function']
+                    ret += f'\n<tool_call>\n{{"name": "{toolCall["name"]}, "arguments": {json.dumps(tools["arguments"])}"\n</toolcall>}}'
+            if message['role'] == 'tool':
+                if index == 0 or messages[index - 1]['role'] != 'tool':
+                    ret += f'{self.user}'
+                ret += f"\n<tool_response>\n{message['content']}\n</tool_response>"
+                if index == len(messages) - 1 or messages[index +
+                                                          1]['role'] != 'tool':
+                    ret += f'{self.eoh}'
+        ret += f'{self.assistant}'
+        return ret
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'qwen2.5' in model_path.lower():
+            return 'qwen2d5'
+
+
 @MODELS.register_module(name='minicpmv-2d6')
 @MODELS.register_module(name='minicpm3')
 @MODELS.register_module(name='qwen')
@@ -927,7 +1034,8 @@ class Qwen7BChat(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'qwen' in model_path.lower():
+        if 'qwen' in model_path.lower() and 'qwen2.5' not in model_path.lower(
+        ):
             return 'qwen'
         if 'minicpm-v-2_6' in model_path.lower():
             return 'minicpmv-2d6'
