@@ -7,6 +7,7 @@ from PIL.Image import Image
 from transformers import AutoModelForCausalLM, AutoProcessor
 
 from lmdeploy.utils import get_logger
+from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
@@ -74,20 +75,37 @@ class MolmoVisionModel(VisonModel):
 
         messages = params[0]
         assert isinstance(messages, List)
-
+        # append an assistant message to `messages`
+        messages.append(dict(role='assistant', content=''))
+        # results is a list of tuple(input_ids, embeddings)
         results = []
+        # the concat prompt. It is not used during inference but to adhere the
+        # interface definition of `_get_prompt_input` in `class VLAsyncEngine`
         prompts = ''
-        for message in messages:
+        # Prepend BOS
+        # qwen2 and olmo do not have a BOS, and instead use EOS as a generic
+        # separator token.
+        bos = (self.processor.tokenizer.bos_token_id
+               or self.processor.tokenizer.eos_token_id)
+        results.append(([bos], None))
+        for i, message in enumerate(messages):
             if 'images' in message.keys():
-                prompts += message['content']
+                prompts += ' User: ' + (IMAGE_TOKEN + '\n') * len(
+                    message['images']) + message['content']
+                prompt = f' User: {message["content"]}'
+                tokens = self.processor.tokenizer.encode(
+                    prompt, add_special_tokens=False)
                 # preprocess images. The output is a dict
                 inputs = self.processor.process(images=message['images'],
-                                                text=message['content'])
+                                                tokens=tokens)
                 inputs = {
                     k: v.to(self.model.device).unsqueeze(0)
                     for k, v in inputs.items()
                 }
                 input_ids = inputs['input_ids']
+                # remove the bos from input_ids which is prepended by molmo's
+                # processor
+                input_ids = input_ids[:, 1:]
                 images = inputs[
                     'images']  # (batch_size, num_image, num_patch, d_model)
                 image_input_idx = inputs[
@@ -128,15 +146,16 @@ class MolmoVisionModel(VisonModel):
                 assert isinstance(content, str)
                 prompt = ''
                 if role == 'user':
-                    prompt = f'User: {content} '
+                    prompt = f' User: {content}'
                 elif role == 'assistant':
-                    prompt = f'Assistant:{content}'
+                    prompt = f' Assistant:{content}'
                 else:
                     assert 0, f'molmo does not support role {role}, message is {message}'  # noqa
                 input_ids = self.processor.tokenizer.encode(
                     prompt, add_special_tokens=False)
                 results.append((input_ids, None))
                 prompts += prompt
+
         # concat input_ids from results, calculate the range in the input_ids
         # where embeddings will be copied to
         input_ids = []

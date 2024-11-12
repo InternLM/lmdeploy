@@ -1734,9 +1734,9 @@ class InternVLPhi3(Phi3Instruct):
 class Molmo(BaseChatTemplate):
 
     def __init__(self,
-                 user='User: ',
-                 eoh=' ',
-                 assistant='Assistant:',
+                 user=' User: ',
+                 eoh='',
+                 assistant=' Assistant:',
                  eoa='',
                  separator=' ',
                  stop_words=['<|endoftext|>'],
