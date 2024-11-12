@@ -966,16 +966,16 @@ class Qwen2halfChat(BaseChatTemplate):
             if (message['role'] == 'user'
                     or (message['role'] == 'system' and index != 0)
                     or (message['role'] == 'assistant'
-                        and message['tools_call'] is not None)):
+                        and message.get('tools_call') is not None)):
                 ret += f"{box_map[message['role']]}\n{message['content']}\n{self.eoh}"
             if message['role'] == 'assistant':
                 ret += f"{box_map[message['role']]}"
-                if message['content'] is not None:
+                if message.get('content') is not None:
                     ret += f"\n{message['content']}"
             if message.get('tools_call') is not None:
                 toolsCall = message['tools_call']
                 for toolCall in toolsCall:
-                    if toolCall['function'] is not None:
+                    if toolCall.get('function') is not None:
                         toolCall = toolCall['function']
                     ret += f'\n<tool_call>\n{{"name": "{toolCall["name"]}, "arguments": {json.dumps(tools["arguments"])}"\n</toolcall>}}'
             if message['role'] == 'tool':
