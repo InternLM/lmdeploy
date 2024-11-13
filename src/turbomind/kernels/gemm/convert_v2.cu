@@ -279,17 +279,44 @@ get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool for
     return {};
 }
 
+namespace {
+
+template<int N>
+struct Param {
+    StridedPtr  data[N];
+    StridedPtr* ptr;
+    int         n;
+};
+
+template<int N>
+__global__ void fill_strided_ptrs(Param<N> param)
+{
+    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx < param.n) {
+        param.ptr[idx] = param.data[idx];
+    }
+}
+
+}  // namespace
+
 void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream)
 {
-    std::vector<StridedPtr> tmp;
-    for (const auto& [p, s] : ptrs) {
-        tmp.push_back({p, s});
-    }
+    constexpr int N = 64;
+    Param<N>      param{};
+    static_assert(sizeof(param) <= 4096); // max parameter size for cuda11
     StridedPtr* ptr{};
     cudaMallocAsync(&ptr, sizeof(StridedPtr) * ptrs.size(), stream);
-    cudaMemcpyAsync(ptr, tmp.data(), sizeof(StridedPtr) * ptrs.size(), cudaMemcpyDefault, stream);
-    // Sync before tmp can be destructed
-    cudaStreamSynchronize(stream);
+    param.ptr = ptr;
+    for (int i = 0; i < (int)ptrs.size(); i += N) {
+        const int n = std::min<int>(ptrs.size() - i, N);
+        for (int j = 0; j < n; ++j) {
+            auto& [p, s]  = ptrs[i + j];
+            param.data[j] = StridedPtr{p, s};
+        }
+        param.n = n;
+        fill_strided_ptrs<<<1, N, 0, stream>>>(param);
+        param.ptr += N;
+    }
     return ptr;
 }
 

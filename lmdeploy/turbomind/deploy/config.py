@@ -50,7 +50,7 @@ class ModelConfig:
     tp: int = 1
     model_format: str = 'hf'
     # expert_num: int = 0
-    expert_num: List[int] = None
+    expert_num: List[int] = ()
     expert_inter_size: int = 0
     experts_per_token: int = 0
     moe_shared_gate: int = False
