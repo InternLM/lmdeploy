@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal
-
 import dlinfer.ops as ext_ops
 import torch
 from dlinfer.utils.type_annotation import Optional, Sequence, Tensor
@@ -21,9 +19,9 @@ def prefill_attention(
     block_size: int,
     attn_mask: Sequence[Optional[Tensor]],
     is_unpaged_prefill: Optional[bool],
-    kv_scales: Tensor = None,
-    kv_zeros: Tensor = None,
-    quant_bits: Literal[0, 4, 8] = 0,
+    kv_scales: Optional[Tensor],
+    kv_zeros: Optional[Tensor],
+    quant_bits: Optional[int],
 ) -> Tensor:
     num_q_heads = query_states.shape[1]
     num_kv_heads = value_states.shape[1]
@@ -70,9 +68,9 @@ def paged_token_attention(
     max_kv_seq_len,
     block_offsets,
     block_size,
-    kv_scales: Tensor = None,
-    kv_zeros: Tensor = None,
-    quant_bits: Literal[0, 4, 8] = 0,
+    kv_scales: Optional[Tensor],
+    kv_zeros: Optional[Tensor],
+    quant_bits: Optional[int],
 ):
     num_q_heads, q_head_dim = q.shape[1:3]
     num_kv_heads = k_cache.shape[-1] // q_head_dim
@@ -110,9 +108,9 @@ def paged_attention_fwd(
     block_size: int,
     attn_mask: Sequence[Optional[Tensor]] = (),
     is_unpaged_prefill: Optional[bool] = None,
-    kv_scales: Tensor = None,
-    kv_zeros: Tensor = None,
-    quant_bits: Literal[0, 4, 8] = 0,
+    kv_scales: Optional[Tensor] = None,
+    kv_zeros: Optional[Tensor] = None,
+    quant_bits: Optional[int] = 0,
 ):
     if not is_decoding:
         return prefill_attention(

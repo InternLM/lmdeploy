@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal
+from typing import Optional, Sequence
 
 import dlinfer.ops as ext_ops
 from torch import Tensor
@@ -11,9 +11,9 @@ def fill_kv_cache(
     key_caches: Tensor,
     value_caches: Tensor,
     kv_start_indices: Tensor,
-    k_scales_zeros: list = [],
-    v_scales_zeros: list = [],
-    quant_bits: Literal[0, 4, 8] = 0,
+    k_scales_zeros: Sequence[Optional[Tensor]],
+    v_scales_zeros: Sequence[Optional[Tensor]],
+    quant_bits: int = 0,
 ):
     """fill key/value state to cache for paged attention."""
     return ext_ops.fill_kv_cache(key_states,

@@ -79,11 +79,11 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         k_scales_zeros = [
             next(attn_metadata.quant_meta['k_scales']),
             next(attn_metadata.quant_meta['k_zeros'])
-        ] if 'k_scales' in attn_metadata.quant_meta else k_scales_zeros
+        ] if 'k_scales' in attn_metadata.quant_meta else []
         v_scales_zeros = [
             next(attn_metadata.quant_meta['v_scales']),
             next(attn_metadata.quant_meta['v_zeros'])
-        ] if 'v_scales' in attn_metadata.quant_meta else v_scales_zeros
+        ] if 'v_scales' in attn_metadata.quant_meta else []
         kv_scales = next(attn_metadata.quant_meta['kv_scales']
                          ) if 'kv_scales' in attn_metadata.quant_meta else None
         kv_zeros = next(attn_metadata.quant_meta['kv_zeros']
