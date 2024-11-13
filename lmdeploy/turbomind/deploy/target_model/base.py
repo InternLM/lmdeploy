@@ -38,7 +38,8 @@ def _weight_dtype_map(weight_type: str, default=None):
 
 def _pad_inter_size(inter_size: int, group_size: int, tp: int):
     group_size = max(1, group_size)
-    groups_per_rank = (inter_size // group_size + tp - 1) // tp
+    group_num = (inter_size + group_size - 1) // group_size
+    groups_per_rank = (group_num + tp - 1) // tp
     inter_size_padded = groups_per_rank * group_size * tp
     return inter_size_padded
 
