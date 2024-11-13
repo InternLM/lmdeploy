@@ -139,52 +139,6 @@ class ChatCompletionRequest(BaseModel):
     seed: Optional[int] = None
 
 
-class ContentPartTextParam(BaseModel):
-    type: Literal['text']
-    text: str
-
-
-class ImageURL(BaseModel):
-    url: str
-
-
-class ContentPartImageParam(BaseModel):
-    type: Literal['image_url']
-    image_url: ImageURL
-
-
-ContentPartParam = Union[ContentPartTextParam, ContentPartImageParam]
-
-
-class ToolMessage(BaseModel):
-    role: Literal['tool']
-    tool_call_id: str
-    content: Union[str, List[ContentPartTextParam]]
-
-
-class AssistantMessage(BaseModel):
-    role: Literal['assistant']
-    content: Union[str, List[ContentPartTextParam]]
-
-
-class SystemMessage(BaseModel):
-    role: Literal['system']
-    content: Union[str, List[ContentPartTextParam]]
-
-
-class UserMessage(BaseModel):
-    role: Literal['user']
-    content: Union[str, List[ContentPartParam]]
-
-
-ChatCompletionMessage = Union[SystemMessage, UserMessage, AssistantMessage,
-                              ToolMessage]
-
-
-class ChatCompletionRequestMessage(BaseModel):
-    messages: Union[str, List[ChatCompletionMessage]]
-
-
 class FunctionResponse(BaseModel):
     """Function response."""
     name: str
