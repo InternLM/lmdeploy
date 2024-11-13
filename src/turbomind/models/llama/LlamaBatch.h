@@ -36,6 +36,13 @@ struct Control {
     Request::Callback     callback;
 };
 
+struct MropeInput {
+    int  session_len;
+    int* position_ids{};
+    int* position_delta{};
+    int* length{};
+};
+
 struct BatchState {
     int*  h_prompt_length;  // history + input, ignore generated
     int*  h_context_length;
@@ -43,6 +50,8 @@ struct BatchState {
 
     curandState_t* curand_state;
     int*           output_ids;  // output ids in [B, S]
+
+    MropeInput mrope;
 
     float* h_rope_theta;
 
@@ -115,6 +124,7 @@ public:
                              const std::vector<const Sequence*>& sequences);
 
     explicit LlamaBatch(const EngineParam&           param,
+                        const AttentionParam&        attn_param,
                         std::unique_ptr<LlamaV2<T>>  model,
                         std::unique_ptr<Context<T>>  ctx,
                         std::shared_ptr<SharedState> state,
@@ -211,7 +221,8 @@ private:
     }
 
 private:
-    const EngineParam param_;
+    const EngineParam    param_;
+    const AttentionParam attn_param_;
 
     const std::shared_ptr<SharedState> shared_state_;
 

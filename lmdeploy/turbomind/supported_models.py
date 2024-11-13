@@ -20,6 +20,8 @@ SUPPORTED_ARCHS = dict(
     QWenLMHeadModel='qwen',
     # Qwen2
     Qwen2ForCausalLM='qwen2',
+    # # Qwen2-VL
+    Qwen2VLForConditionalGeneration='qwen2',
     # mistral
     MistralForCausalLM='llama',
     # llava

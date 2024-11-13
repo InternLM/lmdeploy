@@ -153,10 +153,15 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            0.,
                            1.0,
                            1.0,
-                           0.0,
-                           0.0,
-                           0.0,
-                           1.0,
+                           0.0,      // yarn_ramp_inv_factor_div_2
+                           0.0,      // yarn_ramp_inv_factor_mul_min
+                           0.0,      // yarn_inv_scaling_factor
+                           1.0,      // attention_scaling
+                           {},       // mrope_section
+                           nullptr,  // mrope_position_ids
+                           0,        // mrope_offset
+                           nullptr,  // mrope_position_delta
+                           nullptr,  // mrope_position_length
                            2 * head_num * seq_len,
                            0,
                            seq_len,
@@ -191,6 +196,11 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            0.0,
                            0.0,
                            1.0,
+                           {},       // mrope_section
+                           nullptr,  // mrope_position_ids
+                           0,        // mrope_offset
+                           nullptr,  // mrope_position_delta
+                           nullptr,  // mrope_position_length
                            2 * head_num * seq_len,
                            0,
                            seq_len,
@@ -555,6 +565,11 @@ int test_attention()
                        0.0,
                        0.0,
                        1.0,
+                       {},       // mrope_section
+                       nullptr,  // mrope_position_ids
+                       0,        // mrope_offset
+                       nullptr,  // mrope_position_delta
+                       nullptr,  // mrope_position_length
                        KvHeadNum * kContextLen,
                        0,
                        kContextLen,

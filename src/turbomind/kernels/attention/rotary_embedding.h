@@ -76,19 +76,32 @@ struct FastRoPE {
     bool                is_valid_;
     float               attention_scaling_;
 
-    __device__ FastRoPE(int   idx,
-                        D     dims,
-                        float base,
-                        float ti_scale,
-                        float factor,
-                        float llama3_inv_scaling_factor,
-                        float llama3_alpha,
-                        float llama3_beta,
-                        float yarn_ramp_inv_factor_div_2,
-                        float yarn_ramp_inv_factor_mul_min,
-                        float yarn_inv_scaling_factor,
-                        float attention_scaling,
-                        std::integral_constant<int, N>)
+    int3       mrope_selection_;
+    const int* mrope_position_ids_{};
+    const int  mrope_position_length_;
+    const int  mrope_position_delta_;
+
+    __device__ FastRoPE(int        idx,
+                        D          dims,
+                        float      base,
+                        float      ti_scale,
+                        float      factor,
+                        float      llama3_inv_scaling_factor,
+                        float      llama3_alpha,
+                        float      llama3_beta,
+                        float      yarn_ramp_inv_factor_div_2,
+                        float      yarn_ramp_inv_factor_mul_min,
+                        float      yarn_inv_scaling_factor,
+                        float      attention_scaling,
+                        int3       mrope_section,
+                        const int* mrope_ids,
+                        int        mrope_length,
+                        int        mrope_delta,
+                        std::integral_constant<int, N>):
+        mrope_selection_(mrope_section),
+        mrope_position_ids_(mrope_ids),
+        mrope_position_length_(mrope_length),
+        mrope_position_delta_(mrope_delta)
     {
         is_valid_          = idx < dims;
         attention_scaling_ = attention_scaling;
@@ -126,13 +139,60 @@ struct FastRoPE {
                 inv_freq_[i / 2] = freq - freq * alpha * yarn_inv_scaling_factor;
             }
         }
+        if (mrope_position_ids_ != nullptr) {
+            mrope_selection_.x = mrope_selection_.x * 2;
+            mrope_selection_.y = mrope_selection_.y * 2 + mrope_selection_.x;
+            mrope_selection_.z = mrope_selection_.z * 2 + mrope_selection_.y;
+        }
     }
 
     template<typename T>
     __device__ void apply(Array<T, N>& x, float timestep)
     {
+        if (mrope_position_ids_) {
+            return apply_mrope(x, timestep);
+        }
+
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
+            float c, s;
+            sincosf(timestep * inv_freq_[i / 2], &s, &c);
+            s *= attention_scaling_;
+            c *= attention_scaling_;
+            float tmp0 = c * (float)x[i] - s * (float)x[i + 1];
+            float tmp1 = c * (float)x[i + 1] + s * (float)x[i];
+            if (is_valid_) {
+                x[i]     = (T)tmp0;
+                x[i + 1] = (T)tmp1;
+            }
+        }
+    }
+
+    template<typename T>
+    __device__ void apply_mrope(Array<T, N>& x, float timestep)
+    {
+        int p1, p2, p3;
+        if (timestep < mrope_position_length_) {
+            const int* p = mrope_position_ids_ + 3 * (int)timestep;
+            p1           = *p;
+            p2           = *(p + 1);
+            p3           = *(p + 2);
+        }
+        else {
+            p1 = p2 = p3 = (int)timestep - mrope_position_delta_;
+        }
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 2) {
+            if (i < mrope_selection_.x) {
+                timestep = (float)p1;
+            }
+            else if (i < mrope_selection_.y) {
+                timestep = (float)p2;
+            }
+            else {
+                timestep = (float)p3;
+            }
             float c, s;
             sincosf(timestep * inv_freq_[i / 2], &s, &c);
             s *= attention_scaling_;

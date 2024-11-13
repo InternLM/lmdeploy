@@ -276,6 +276,12 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     attn_param_.use_dynamic_ntk         = attention_reader["use_dynamic_ntk"].as<int>(0);
     attn_param_.use_logn_attn           = attention_reader["use_logn_attn"].as<int>(0);
 
+    if (attn_param_.rope_scaling_type == "mrope") {
+        std::vector<int> mrope_section = attention_reader["mrope_section"].as<std::vector<int>>();
+        ft::FT_CHECK(mrope_section.size() == 3);
+        attn_param_.mrope_section = {mrope_section[0], mrope_section[1], mrope_section[2]};
+    }
+
     attn_param_.original_max_position_embeddings = attention_reader["original_max_position_embeddings"].as<int>(0);
 
     engine_param_.max_batch_size        = engine_reader["max_batch_size"].as<int>(0);
@@ -369,6 +375,7 @@ std::unique_ptr<ft::Engine<T>> LlamaTritonModel<T>::createSharedModelInstance(
                                                   weights_[device_id]);
 
     auto engine = std::make_unique<ft::Engine<T>>(engine_param_,  //
+                                                  attn_param_,
                                                   std::move(model),
                                                   std::move(ctx),
                                                   shared_state_,

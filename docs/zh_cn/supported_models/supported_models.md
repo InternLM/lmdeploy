@@ -19,6 +19,7 @@
 |         Qwen          |  1.8B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen1.5        | 1.8B - 110B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |         Qwen2         |  1.5B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       QWen2-VL        |   2B- 72B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Mistral        |      7B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Mixtral        | 8x7B, 8x22B  | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen-VL        |      7B      | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
