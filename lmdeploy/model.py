@@ -19,7 +19,9 @@ def random_uuid() -> str:
 
 
 def get_text(content: Union[str, List[dict]]):
-    """extract text from content."""
+    """openai format support Union[str,
+    List[ChatCompletionContentPartTextParam]] input."""
+
     if isinstance(content, str):
         return content
     return content[0]['text']
