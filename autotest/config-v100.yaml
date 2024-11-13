@@ -115,10 +115,13 @@ pytorch_quatization:
         - internlm/internlm2_5-7b-chat
         - internlm/internlm2_5-7b
     no_kvint4:
+        - OpenGVLab/InternVL2-1B
         - OpenGVLab/InternVL2-4B
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - microsoft/Phi-3-mini-4k-instruct
         - microsoft/Phi-3-vision-128k-instruct
+        - microsoft/Phi-3.5-vision-instruct
+        - openbmb/MiniCPM-V-2_6
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
 
