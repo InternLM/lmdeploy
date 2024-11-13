@@ -19,9 +19,8 @@ class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
 
     def forward(self, x: torch.Tensor):
         routing_weights, selected_experts = moe_gating_topk_softmax(
-            x, self.top_k)
-        return routing_weights.to(torch.float32), selected_experts.to(
-            torch.int64)
+            x.to(torch.float32), self.top_k)
+        return routing_weights, selected_experts
 
 
 class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
