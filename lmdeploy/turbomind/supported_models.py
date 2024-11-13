@@ -103,5 +103,9 @@ def is_supported(model_path: str):
                 if sub_arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
                     support_by_turbomind = _is_head_dim_supported(
                         cfg.text_config)
+            elif arch == 'MolmoForCausalLM':
+                kv_heads = cfg.num_key_value_heads
+                # TM hasn't supported allenai/Molmo-7B-O-0924 yet
+                support_by_turbomind = kv_heads is not None
 
     return support_by_turbomind
