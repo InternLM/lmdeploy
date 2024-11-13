@@ -96,10 +96,12 @@ def is_supported(model_path: str):
                     # glm-4v-9b not supported
                     support_by_turbomind = False
             elif arch == 'InternVLChatModel':
-                support_by_turbomind = _is_head_dim_supported(cfg.llm_config)
+                llm_arch = cfg.llm_config.architectures[0]
+                support_by_turbomind = (llm_arch in SUPPORTED_ARCHS and
+                                        _is_head_dim_supported(cfg.llm_config))
             elif arch == 'LlavaForConditionalGeneration':
-                sub_arch = cfg.text_config.architectures[0]
-                if sub_arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
+                llm_arch = cfg.text_config.architectures[0]
+                if llm_arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
                     support_by_turbomind = _is_head_dim_supported(
                         cfg.text_config)
 
