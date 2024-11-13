@@ -892,9 +892,53 @@ Reminder:
             return 'llama3_1'
 
 
-@MODELS.register_module(name='qwen2d5')
-class Qwen2halfChat(BaseChatTemplate):
+@MODELS.register_module(name='minicpmv-2d6')
+@MODELS.register_module(name='minicpm3')
+@MODELS.register_module(name='qwen')
+class Qwen7BChat(BaseChatTemplate):
     """Chat template for Qwen-7B-Chat."""
+
+    def __init__(self,
+                 system='<|im_start|>system\n',
+                 meta_instruction='You are a helpful assistant.',
+                 eosys='<|im_end|>\n',
+                 user='<|im_start|>user\n',
+                 eoh='<|im_end|>\n',
+                 assistant='<|im_start|>assistant\n',
+                 eoa='<|im_end|>',
+                 separator='\n',
+                 stop_words=['<|im_end|>'],
+                 **kwargs):
+        super().__init__(system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'qwen' in model_path.lower() and 'qwen2.5' not in model_path.lower(
+        ):
+            return 'qwen'
+        if 'minicpm-v-2_6' in model_path.lower():
+            return 'minicpmv-2d6'
+        if 'minicpm3-' in model_path.lower():
+            return 'minicpm3'
+
+
+@MODELS.register_module(name='qwen2d5')
+class Qwen2d5Chat(Qwen7BChat):
+    """Chat template for Qwen2.5-Instruct series."""
 
     def __init__(
             self,
@@ -969,8 +1013,8 @@ class Qwen2halfChat(BaseChatTemplate):
                 if message.get('content') is not None:
                     ret += f"\n{message['content']}"
             if message.get('tools_call') is not None:
-                toolsCall = message['tools_call']
-                for toolCall in toolsCall:
+                tools_call = message['tools_call']
+                for toolCall in tools_call:
                     if toolCall.get('function') is not None:
                         toolCall = toolCall['function']
                     ret += f'\n<tool_call>\n{{"name": "{toolCall["name"]}, "arguments": {json.dumps(tools["arguments"])}"\n</toolcall>}}'
@@ -993,50 +1037,6 @@ class Qwen2halfChat(BaseChatTemplate):
         """
         if 'qwen2.5' in model_path.lower():
             return 'qwen2d5'
-
-
-@MODELS.register_module(name='minicpmv-2d6')
-@MODELS.register_module(name='minicpm3')
-@MODELS.register_module(name='qwen')
-class Qwen7BChat(BaseChatTemplate):
-    """Chat template for Qwen-7B-Chat."""
-
-    def __init__(self,
-                 system='<|im_start|>system\n',
-                 meta_instruction='You are a helpful assistant.',
-                 eosys='<|im_end|>\n',
-                 user='<|im_start|>user\n',
-                 eoh='<|im_end|>\n',
-                 assistant='<|im_start|>assistant\n',
-                 eoa='<|im_end|>',
-                 separator='\n',
-                 stop_words=['<|im_end|>'],
-                 **kwargs):
-        super().__init__(system=system,
-                         meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         assistant=assistant,
-                         eoa=eoa,
-                         separator=separator,
-                         stop_words=stop_words,
-                         **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        if 'qwen' in model_path.lower() and 'qwen2.5' not in model_path.lower(
-        ):
-            return 'qwen'
-        if 'minicpm-v-2_6' in model_path.lower():
-            return 'minicpmv-2d6'
-        if 'minicpm3-' in model_path.lower():
-            return 'minicpm3'
 
 
 @MODELS.register_module(name='codellama')

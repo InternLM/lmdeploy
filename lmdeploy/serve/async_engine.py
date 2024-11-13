@@ -660,8 +660,9 @@ class AsyncEngine(LogitsMixin):
             else:
                 text, action = action
             action = json.loads(action)
-            name, parameters = action['name'], json.dumps(
-                action.get('parameters', action.get('arguments', {})))
+            name, parameters = action['name'], json.dumps(action.get(
+                'parameters', action.get('arguments', {})),
+                                                          ensure_ascii=False)
         else:
             raise RuntimeError(f'Unexpected model response: {text}')
         action_id = [tool.function.name for tool in tools].index(name)
