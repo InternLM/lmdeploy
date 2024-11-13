@@ -1035,7 +1035,7 @@ class Qwen2d5Chat(Qwen7BChat):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'qwen2.5' in model_path.lower():
+        if 'qwen2.5' in model_path.lower() or 'qwen2_5' in model_path.lower():
             return 'qwen2d5'
 
 
