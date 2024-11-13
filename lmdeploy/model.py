@@ -19,8 +19,13 @@ def random_uuid() -> str:
 
 
 def get_text(content: Union[str, List[dict]]):
-    """openai format support Union[str,
-    List[ChatCompletionContentPartTextParam]] input."""
+    """Within the OpenAI API, the content field may be specified as either a
+    string or a list of ChatCompletionContentPartTextParam (defined in openai).
+
+    When a list is provided, lmdeploy selects the first element to incorporate
+    into the chat template, as the manner in which OpenAI processes lists is
+    not explicitly defined.
+    """
 
     if isinstance(content, str):
         return content
