@@ -22,7 +22,6 @@ class AscendGraphRunner(GraphRunner):
         super().__init__(model, model_config, cache_config, backend_config,
                          device)
 
-        self.supported_model = ['Llama3-8B', 'Llama2-7B', 'Qwen2-7B']
         self.enable_graph = self.check_enable_graph()
         if self.enable_graph:
             import dlinfer.graph
@@ -43,11 +42,8 @@ class AscendGraphRunner(GraphRunner):
         warnings.warn(
             '\n\n'
             '**********************************************************\n'
-            '  The following models were tested in graph mode of\n'
-            "  device_type 'ascend' when tp=1:\n"
-            f"  {', '.join(self.supported_model)}\n"
-            '  Other LLaMa-like models may work in graph mode, please\n'
-            '  check the result yourself!\n'
+            '  Graph mode is an experimental feature.We are now support\n'
+            '  both dense and moe model with bf16/fp16 datatype.\n'
             '  If graph mode does not work correctly with your model,\n'
             '  please use eager mode instead.\n'
             '**********************************************************\n\n',
