@@ -950,7 +950,7 @@ class Qwen2d5Chat(Qwen7BChat):
             assistant='<|im_start|>assistant\n',
             eoa='<|im_end|>',
             separator='\n',
-            tools="""\n#Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n""",
+            tools="""\n#Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>""",
             eotools="""\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>""",
             stop_words=['<|im_end|>'],
             **kwargs):
@@ -990,6 +990,7 @@ class Qwen2d5Chat(Qwen7BChat):
         tool_prompt = ''
         if tools is not None:
             for tool in tools:
+                tool_prompt += '\n'
                 tool_prompt += json.dumps(tool, ensure_ascii=False)
             if len(messages) and messages[0]['role'] == 'system':
                 ret += f"{self.system}{messages[0]['content']}{self.tools}{tool_prompt}{self.eotools}{self.eosys}"
