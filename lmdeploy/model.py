@@ -1010,7 +1010,7 @@ class Qwen2d5Chat(Qwen7BChat):
                         and message.get('tool_calls') is None)):
                 ret += f"{box_map[message['role']]}{message['content']}{self.eoh}"
             elif message['role'] == 'assistant':
-                ret += f'{self.assistant}'
+                ret += f'<|im_start|>assistant'
                 if message.get('content') is not None:
                     ret += f"\n{message['content']}"
             if message.get('tool_calls') is not None:
@@ -1018,11 +1018,11 @@ class Qwen2d5Chat(Qwen7BChat):
                 for tool_call in tool_calls:
                     if tool_call.get('function') is not None:
                         tool_call = tool_call['function']
-                    ret += f'\n<tool_call>\n{{"name": "{tool_call["name"]}, "arguments": {json.dumps(tool_call["arguments"], ensure_ascii=False)}"\n</tool_call>}}'
+                    ret += f'<tool_call>\n{{"name": "{tool_call["name"]}, "arguments": {json.dumps(tool_call["arguments"], ensure_ascii=False)}}}"\n</tool_call>\n'
             if message['role'] == 'tool':
                 if index == 0 or messages[index - 1]['role'] != 'tool':
                     ret += f'{self.user}'
-                ret += f"\n<tool_response>\n{message['name']}:{message['content']}\n</tool_response>"
+                ret += f"<tool_response>\n{message['name']}:{message['content']}\n</tool_response>\n"
                 if index == len(messages) - 1 or messages[index +
                                                           1]['role'] != 'tool':
                     ret += f'{self.eoh}'
