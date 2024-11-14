@@ -565,6 +565,9 @@ class InternVLInternLM2Chat(InternLM2Chat7B):
                 return None
             return 'internvl-internlm2'
 
+        if 'chemvlm' in path:
+            return 'internvl-internlm2'
+
 
 @MODELS.register_module(name='internvl2-internlm2')
 class InternVL2InternLM2(InternLM2Chat7B):
