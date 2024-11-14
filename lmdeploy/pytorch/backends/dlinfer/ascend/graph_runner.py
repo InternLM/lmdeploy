@@ -41,12 +41,13 @@ class AscendGraphRunner(GraphRunner):
 
         warnings.warn(
             '\n\n'
-            '**********************************************************\n'
-            '  Graph mode is an experimental feature.We are now support\n'
-            '  both dense and moe model with bf16/fp16 datatype.\n'
-            '  If graph mode does not work correctly with your model,\n'
-            '  please use eager mode instead.\n'
-            '**********************************************************\n\n',
+            '************************************************************\n'
+            '  Graph mode is an experimental feature. We currently\n'
+            '  support both dense and Mixture of Experts (MoE) models\n'
+            '  with bf16 and fp16 data types.\n'
+            '  If graph mode does not function correctly with your model,\n'
+            '  please consider using eager mode as an alternative.\n'
+            '************************************************************\n\n',
             RuntimeWarning)
 
         # tp
