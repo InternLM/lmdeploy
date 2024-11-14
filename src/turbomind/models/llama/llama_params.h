@@ -18,6 +18,7 @@ struct ModelParam {
     size_t layer_num;
     size_t inter_size;
     size_t vocab_size;
+    size_t embedding_size;
     float  norm_eps;
     int    quant_policy;
     //

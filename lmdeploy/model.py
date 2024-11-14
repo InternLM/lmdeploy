@@ -1747,6 +1747,37 @@ class InternVLPhi3(Phi3Instruct):
             return 'internvl-phi3'
 
 
+@MODELS.register_module(name='molmo')
+class Molmo(BaseChatTemplate):
+
+    def __init__(self,
+                 user=' User: ',
+                 eoh='',
+                 assistant=' Assistant:',
+                 eoa='',
+                 separator=' ',
+                 stop_words=['<|endoftext|>'],
+                 **kwargs):
+        super().__init__(user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'molmo' in path:
+            return 'molmo'
+
+
 def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 

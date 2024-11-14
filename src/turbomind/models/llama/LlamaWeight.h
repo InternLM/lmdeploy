@@ -35,6 +35,7 @@ struct LlamaWeight {
                 size_t     hidden_units,
                 size_t     inter_size,
                 size_t     vocab_size,
+                size_t     embedding_size,
                 size_t     num_layer,
                 bool       attn_bias,
                 WeightType weight_type,
@@ -67,6 +68,7 @@ private:
     size_t     inter_size_;
     size_t     vocab_size_;
     size_t     vocab_size_padded_;
+    size_t     embedding_size_;
     size_t     num_layer_;
     WeightType weight_type_;
     size_t     tensor_para_size_;
