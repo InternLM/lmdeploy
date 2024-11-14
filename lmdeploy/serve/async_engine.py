@@ -676,10 +676,10 @@ class AsyncEngine(LogitsMixin):
         else:
             raise RuntimeError(f'Unexpected model response: {text}')
 
-        call_info = [([tool.function.name for tool in tools
-                       ].index(call_info[0]), call_info[0], call_info[1])
-                     for call_info in call_info_list]
-        return text, call_info
+        call_info_list = [([tool.function.name for tool in tools
+                            ].index(call_info[0]), call_info[0], call_info[1])
+                          for call_info in call_info_list]
+        return text, call_info_list
 
     def chat(self,
              prompt: str,
