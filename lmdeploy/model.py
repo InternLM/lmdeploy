@@ -3,7 +3,7 @@ import dataclasses
 import json
 import uuid
 from abc import abstractmethod
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Union
 
 from mmengine import Registry
 
@@ -16,6 +16,20 @@ MODELS = Registry('model', locations=['lmdeploy.model'])
 def random_uuid() -> str:
     """Return a random uuid."""
     return str(uuid.uuid4().hex)
+
+
+def get_text(content: Union[str, List[dict]]):
+    """Within the OpenAI API, the content field may be specified as either a
+    string or a list of ChatCompletionContentPartTextParam (defined in openai).
+
+    When a list is provided, lmdeploy selects the first element to incorporate
+    into the chat template, as the manner in which OpenAI processes lists is
+    not explicitly defined.
+    """
+
+    if isinstance(content, str):
+        return content
+    return content[0]['text']
 
 
 @dataclasses.dataclass
@@ -219,7 +233,7 @@ class BaseChatTemplate(BaseModel):
                 ret += f'{self.system}{self.meta_instruction}{self.eosys}'
         for message in messages:
             role = message['role']
-            content = message['content']
+            content = get_text(message['content'])
             ret += f'{box_map[role]}{content}{eox_map[role]}'
         if len(messages) and messages[-1]['role'] == 'assistant':
             return ret[:-len(eox_map['assistant'])]  # prefix of response
@@ -509,7 +523,7 @@ class InternLM2Chat7B(InternLMChat7B):
             messages.insert(insert_index, tools_prompt)
         for message in messages:
             role = message['role']
-            content = message['content']
+            content = get_text(message['content'])
             if role == 'assistant' and message.get('tool_calls',
                                                    None) is not None:
                 for tool_call in message['tool_calls']:
@@ -549,6 +563,9 @@ class InternVLInternLM2Chat(InternLM2Chat7B):
             if 'mini' in path and '4b' in path:
                 # use internvl-phi3 template
                 return None
+            return 'internvl-internlm2'
+
+        if 'chemvlm' in path:
             return 'internvl-internlm2'
 
 
@@ -862,7 +879,7 @@ Reminder:
                     ret += f'{self.system}{self.knowledge}{self.tools}{tool_prompt}{self.eotools}{self.meta_instruction}{self.eosys}'
         for message in messages:
             role = message['role']
-            content = message['content']
+            content = get_text(message['content'])
             if role == 'assistant' and ('<|python_tag|>' in content
                                         or '</function>' in content):
                 ret += f'{box_map[role]}{content}<|eom_id|>'
@@ -1038,7 +1055,7 @@ class ChatGLM2(BaseModel):
         count = 0
         for message in messages:
             role = message['role']
-            content = message['content']
+            content = get_text(message['content'])
             if role == 'user':
                 count += 1
                 ret += f'[Round {count}]\n\n'
@@ -1728,6 +1745,37 @@ class InternVLPhi3(Phi3Instruct):
         path = model_path.lower()
         if all([c in path for c in ['mini-internvl-chat', '4b', 'v1-5']]):
             return 'internvl-phi3'
+
+
+@MODELS.register_module(name='molmo')
+class Molmo(BaseChatTemplate):
+
+    def __init__(self,
+                 user=' User: ',
+                 eoh='',
+                 assistant=' Assistant:',
+                 eoa='',
+                 separator=' ',
+                 stop_words=['<|endoftext|>'],
+                 **kwargs):
+        super().__init__(user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'molmo' in path:
+            return 'molmo'
 
 
 def best_match_model(query: str) -> Optional[str]:

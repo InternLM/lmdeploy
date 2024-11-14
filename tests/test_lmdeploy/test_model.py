@@ -475,6 +475,25 @@ def test_internvl2():
     assert res == expected
 
 
+def test_chemvlm():
+    deduced_name = best_match_model('AI4Chem/ChemVLM-8B')
+
+    assert deduced_name == 'internvl-internlm2'
+    model = MODELS.get(deduced_name)()
+    messages = [{
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }]
+    expected = '<|im_start|>system\nYou are an AI assistant whose name is '\
+        'InternLM (书生·浦语).<|im_end|>\n<|im_start|>user\nwho are you'\
+        '<|im_end|>\n<|im_start|>assistant\nI am an AI'
+    res = model.messages2prompt(messages)
+    assert res == expected
+
+
 def test_codegeex4():
     model_path_and_name = 'THUDM/codegeex4-all-9b'
     deduced_name = best_match_model(model_path_and_name)

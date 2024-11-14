@@ -157,6 +157,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
   <li>Mono-InternVL (2B)</li>
+  <li>ChemVLM (8B-26B)</li>
   <li>MiniGeminiLlama (7B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>

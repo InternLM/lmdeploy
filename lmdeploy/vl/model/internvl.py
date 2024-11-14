@@ -108,8 +108,15 @@ class InternVLVisionModel(VisonModel):
         # avoid randomness in inference.
         self.model = model.eval()
         self.config = config
+        dynamic_image_size = getattr(self.config, 'dynamic_image_size', False)
+        image_processor = None
+        try:
+            image_processor = CLIPImageProcessor.from_pretrained(
+                self.model_path)
+        except OSError:
+            pass
 
-        if getattr(self.config, 'dynamic_image_size', False):
+        if dynamic_image_size or image_processor is None:
             logger.info('using InternVL-Chat-V1-5 vision preprocess')
             MEAN = (0.485, 0.456, 0.406)
             STD = (0.229, 0.224, 0.225)
@@ -126,8 +133,7 @@ class InternVLVisionModel(VisonModel):
             ])
             self._forward_func = self._forward_v1_5
         else:
-            self.image_processor = CLIPImageProcessor.from_pretrained(
-                self.model_path)
+            self.image_processor = image_processor
             self._forward_func = self._forward
 
     def _preprocess_v1_5(self, images: List[Image], params: List[Dict] = None):
