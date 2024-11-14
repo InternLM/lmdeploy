@@ -39,12 +39,6 @@ class AscendGraphRunner(GraphRunner):
         # eager_mode
         if self.backend_config.eager_mode:
             return False
-        # tp
-        if torch.distributed.is_initialized():
-            warnings.warn(
-                "Graph mode of device_type 'ascend' only supports tp=1 "
-                'for now, fallback to eager mode', RuntimeWarning)
-            return False
 
         warnings.warn(
             '\n\n'
@@ -58,6 +52,11 @@ class AscendGraphRunner(GraphRunner):
             '  please use eager mode instead.\n'
             '**********************************************************\n\n',
             RuntimeWarning)
+
+        # tp
+        if torch.distributed.is_initialized():
+            torch._inductor.config.compile_threads = 1
+            return True
 
         return True
 
