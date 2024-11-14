@@ -1018,7 +1018,7 @@ class Qwen2d5Chat(Qwen7BChat):
                 for tool_call in tools_call:
                     if tool_call.get('function') is not None:
                         tool_call = tool_call['function']
-                    ret += f'\n<tool_call>\n{{"name": "{tool_call["name"]}, "arguments": {json.dumps(tools["arguments"])}"\n</toolcall>}}'
+                    ret += f'\n<tool_call>\n{{"name": "{tool_call["name"]}, "arguments": {json.dumps(tools["arguments"], ensure_ascii=False)}"\n</toolcall>}}'
             if message['role'] == 'tool':
                 if index == 0 or messages[index - 1]['role'] != 'tool':
                     ret += f'{self.user}'
