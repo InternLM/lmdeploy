@@ -950,7 +950,7 @@ class Qwen2d5Chat(Qwen7BChat):
             assistant='<|im_start|>assistant\n',
             eoa='<|im_end|>',
             separator='\n',
-            tools="""\n#Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>""",
+            tools="""\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>""",
             eotools="""\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>""",
             stop_words=['<|im_end|>'],
             **kwargs):
@@ -990,7 +990,7 @@ class Qwen2d5Chat(Qwen7BChat):
         tool_prompt = ''
         if tools is not None:
             for tool in tools:
-                tool_prompt += '\n'
+                tool_prompt += self.separator
                 tool_prompt += json.dumps(tool, ensure_ascii=False)
             if len(messages) and messages[0]['role'] == 'system':
                 ret += f"{self.system}{messages[0]['content']}{self.tools}{tool_prompt}{self.eotools}{self.eosys}"
@@ -1008,21 +1008,23 @@ class Qwen2d5Chat(Qwen7BChat):
                     or (message['role'] == 'system' and index != 0)
                     or (message['role'] == 'assistant'
                         and message.get('tool_calls') is None)):
-                ret += f"{box_map[message['role']]}{message['content']}{self.eoh}"
+                ret += f"{box_map[message['role']]}{message['content']}{self.eosys}"
             elif message['role'] == 'assistant':
                 ret += f'<|im_start|>assistant'
                 if message.get('content') is not None:
-                    ret += f"\n{message['content']}"
-            if message.get('tool_calls') is not None:
-                tool_calls = message['tool_calls']
-                for tool_call in tool_calls:
-                    if tool_call.get('function') is not None:
-                        tool_call = tool_call['function']
-                    ret += f'<tool_call>\n{{"name": "{tool_call["name"]}, "arguments": {json.dumps(tool_call["arguments"], ensure_ascii=False)}}}"\n</tool_call>\n'
+                    ret += f"{self.separator}{message['content']}"
+
+                if message.get('tool_calls') is not None:
+                    tool_calls = message['tool_calls']
+                    for tool_call in tool_calls:
+                        if tool_call.get('function') is not None:
+                            tool_call = tool_call['function']
+                        ret += f'{self.separator}<tool_call>{self.separator}{{"name": "{tool_call["name"]}", "arguments": {tool_call["arguments"]}}}{self.separator}</tool_call>'
+                ret += self.eosys
             if message['role'] == 'tool':
                 if index == 0 or messages[index - 1]['role'] != 'tool':
                     ret += f'{self.user}'
-                ret += f"<tool_response>\n{message['content']}\n</tool_response>\n"
+                ret += f"<tool_response>{self.separator}{message['content']}{self.separator}</tool_response>{self.separator}"
                 if index == len(messages) - 1 or messages[index +
                                                           1]['role'] != 'tool':
                     ret += f'{self.eoh}'
