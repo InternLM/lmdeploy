@@ -36,6 +36,7 @@
 |    MiniGeminiLlama    |      7B      | MLLM |    Yes    |    -    |    -    |  Yes  |
 |         GLM4          |      9B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       CodeGeeX4       |      9B      | LLM  |    Yes    |   Yes   |   Yes   |   -   |
+|         Molmo         |   7B-D,72B   | MLLM |    Yes    |   Yes   |   Yes   |  NO   |
 
 “-” 表示还没有验证。
 
