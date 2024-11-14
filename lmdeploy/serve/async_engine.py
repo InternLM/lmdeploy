@@ -669,7 +669,7 @@ class AsyncEngine(LogitsMixin):
             if not text.startswith('<tool_call>'):
                 text = text[:text.find('<tool_call>')]
             elif not text.endswith('</tool_call>'):
-                text = text[text.find('</tool_call>') + len('</tool_call>'):]
+                text = text[text.rfind('</tool_call>') + len('</tool_call>'):]
             else:
                 text = ''
 
