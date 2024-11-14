@@ -241,3 +241,130 @@ messages += [
 assistant_response = request_llama3_1_service(messages)
 print(assistant_response)
 ```
+
+### Qwen2.5
+
+Qwen2.5 supports multi tool calling, which means that multiple tool requests can be initiated in one request
+
+```python
+from openai import OpenAI
+import json
+
+def get_current_temperature(arguments):
+    if json.loads(arguments).get('location') == 'San Francisco, CA, USA':
+        return "26.0­°C"
+    else:
+        return "27.0"
+
+def get_temperature_date(arguments):
+    if json.loads(arguments)['location'] == 'San Francisco, CA, USA' and json.loads(arguments)['location'] == 'San Francisco, CA, USA':
+        return "26.5­°C"
+    else:
+        return "27.5­°C"
+
+tools = [{
+    'type': 'function',
+    'function': {
+        'name': 'get_current_temperature',
+        'description': 'Get current temperature at a location.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'location': {
+                    'type': 'string',
+                    'description': 'The location to get the temperature for, in the format \'City, State, Country\'.'
+                },
+                'unit': {
+                    'type': 'string',
+                    'enum': [
+                        'celsius',
+                        'fahrenheit'
+                    ],
+                    'description': 'The unit to return the temperature in. Defaults to \'celsius\'.'
+                }
+            },
+            'required': [
+                'location'
+            ]
+        }
+    }
+}, {
+    'type': 'function',
+    'function': {
+        'name': 'get_temperature_date',
+        'description': 'Get temperature at a location and date.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'location': {
+                    'type': 'string',
+                    'description': 'The location to get the temperature for, in the format \'City, State, Country\'.'
+                },
+                'date': {
+                    'type': 'string',
+                    'description': 'The date to get the temperature for, in the format \'Year-Month-Day\'.'
+                },
+                'unit': {
+                    'type': 'string',
+                    'enum': [
+                        'celsius',
+                        'fahrenheit'
+                    ],
+                    'description': 'The unit to return the temperature in. Defaults to \'celsius\'.'
+                }
+            },
+            'required': [
+                'location',
+                'date'
+            ]
+        }
+    }
+}]
+messages = [{'role': 'user', 'content': 'Today is 2024-11-14, What\'s the temperature in San Francisco now? How about tomorrow?'}]
+
+client = OpenAI(api_key='YOUR_API_KEY', base_url='http://0.0.0.0:23333/v1')
+model_name = client.models.list().data[0].id
+response = client.chat.completions.create(
+    model=model_name,
+    messages=messages,
+    temperature=0.8,
+    top_p=0.8,
+    stream=False,
+    tools=tools)
+print(response.choices[0].message.tool_calls)
+messages.append(response.choices[0].message)
+
+for tool_call in response.choices[0].message.tool_calls:
+    if tool_call.function.name == 'get_temperature_date':
+        content = get_temperature_date(tool_call.function.arguments)
+    if tool_call.function.name == 'get_current_temperature':
+        content = get_current_temperature(tool_call.function.arguments)
+    messages.append({
+            'role': 'tool',
+            'name': tool_call.function.name,
+            'content': content,
+            'tool_call_id': tool_call.id
+        })
+
+
+response = client.chat.completions.create(
+    model=model_name,
+    messages=messages,
+    temperature=0.8,
+    top_p=0.8,
+    stream=False,
+    tools=tools)
+print(response.choices[0].message.content)
+
+```
+
+Using the Qwen2.5-14B-Instruct, similar results can be obtained as follows
+
+```
+[ChatCompletionMessageToolCall(id='0', function=Function(arguments='{"location": "San Francisco, California, USA"}', name='get_current_temperature'), type='function'),
+ ChatCompletionMessageToolCall(id='1', function=Function(arguments='{"location": "San Francisco, California, USA", "date": "2024-11-15", "unit": "celsius"}', name='get_temperature_date'), type='function')]
+
+ The current temperature in San Francisco is 26.0°C. The temperature is forecasted to be 26.5°C tomorrow.
+```
+
+It is important to note that in scenarios involving multiple tool calls, the order of the tool call results can affect the response quality. The tool_call_id has not been correctly provided to the LLM.
