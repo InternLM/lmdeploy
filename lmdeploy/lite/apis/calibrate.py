@@ -236,7 +236,6 @@ def calibrate(model: str,
     if model_type == 'llm':
         # Load tokenizer and configuration
         tokenizer = AutoTokenizer.from_pretrained(model,
-                                                  use_fast=False,
                                                   trust_remote_code=True)
 
         model = load_hf_from_pretrained(model,
