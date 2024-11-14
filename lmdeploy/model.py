@@ -1022,7 +1022,7 @@ class Qwen2d5Chat(Qwen7BChat):
             if message['role'] == 'tool':
                 if index == 0 or messages[index - 1]['role'] != 'tool':
                     ret += f'{self.user}'
-                ret += f"\n<tool_response>\n{message['name']}{message['content']}\n</tool_response>"
+                ret += f"\n<tool_response>\n{message['name']}:{message['content']}\n</tool_response>"
                 if index == len(messages) - 1 or messages[index +
                                                           1]['role'] != 'tool':
                     ret += f'{self.eoh}'
