@@ -49,7 +49,7 @@ docker run -e ASCEND_VISIBLE_DEVICES=0 --rm --name lmdeploy -t lmdeploy-aarch64-
 ## 离线批处理
 
 > \[!TIP\]
-> 图模式已经支持了Atlas 800T A2。目前，单卡下的LLaMa3-8B/LLaMa2-7B/Qwen2-7B已经通过测试。用户可以设定`eager_mode=False`来开启图模式，或者设定`eager_mode=True`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)
+> 图模式已经支持了Atlas 800T A2。用户可以设定`eager_mode=False`来开启图模式，或者设定`eager_mode=True`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)
 
 ### LLM 推理
 
@@ -84,7 +84,7 @@ if __name__ == "__main__":
 ## 在线服务
 
 > \[!TIP\]
-> 图模式已经支持Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。
+> 图模式已经支持Atlas 800T A2。
 > 在线服务时，图模式默认开启，用户可以添加`--eager-mode`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)
 
 ### LLM 模型服务
