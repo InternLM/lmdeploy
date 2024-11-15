@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
+import threading
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -66,7 +67,7 @@ class Stats:
     def refresh(self):
         """Fresh system status."""
         p = psutil.Process()
-        self.cpu_utilization = p.cpu_percent()
+        self.cpu_utilization = psutil.cpu_percent()
         self.cpu_memory_used_bytes = p.memory_info().rss
         pynvml.nvmlInit()
         self.gpu_memory_used_bytes = {}
@@ -79,9 +80,24 @@ class Stats:
             self.gpu_utilization[str(i)] = str(utilization.gpu)
 
 
+def refresh_system(metrics):
+
+    while True:
+        time.sleep(1)
+        # Log to prometheus.
+        stats = metrics.stats
+        stats.refresh()
+        # Info gpu stats
+        metrics.info_gpu_utilization.info(stats.gpu_utilization)
+        metrics.info_gpu_memory_used_bytes.info(stats.gpu_memory_used_bytes)
+        # Set system stat gauges.
+        metrics.gauge_cpu_utilization.set(stats.cpu_utilization)
+        metrics.gauge_cpu_memory_used_bytes.set(stats.cpu_memory_used_bytes)
+
+
 class Metrics:
 
-    def __init__(self, labelnames: Optional[List[str]] = []):
+    def __init__(self, stats: Stats, labelnames: Optional[List[str]] = []):
         # Unregister any existing lmdeploy collectors
         for collector in list(REGISTRY._collector_to_names):
             if hasattr(collector, '_name') and 'lmdeploy' in collector._name:
@@ -144,6 +160,11 @@ class Metrics:
             documentation='Average duration of processing outputs in s.',
             labelnames=labelnames,
         )
+        self.stats = stats
+        self.refresh_thread = threading.Thread(target=refresh_system,
+                                               args=(self, ),
+                                               daemon=True)
+        self.refresh_thread.start()
 
     def info(self, backend_config: object) -> None:
         config_dict = {
@@ -158,15 +179,6 @@ class Metrics:
         Logs to prometheus and tracked stats every iteration. Logs to Stdout
         every self.local_interval seconds.
         """
-
-        # Log to prometheus.
-        stats.refresh()
-        # Info gpu stats
-        self.info_gpu_utilization.info(stats.gpu_utilization)
-        self.info_gpu_memory_used_bytes.info(stats.gpu_memory_used_bytes)
-        # Set system stat gauges.
-        self.gauge_cpu_utilization.set(stats.cpu_utilization)
-        self.gauge_cpu_memory_used_bytes.set(stats.cpu_memory_used_bytes)
 
         # Add to request counters.
         self.gauge_request_total.set(stats.request_total)

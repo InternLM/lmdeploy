@@ -193,7 +193,7 @@ class AsyncEngine(LogitsMixin):
         self.apply_metrics = metrics
         if self.apply_metrics:
             self.stats = Stats(now=time.time())
-            self.metrics = Metrics()
+            self.metrics = Metrics(self.stats)
             self.metrics.info(self.backend_config)
 
     def _build_turbomind(

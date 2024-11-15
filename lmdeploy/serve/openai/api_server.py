@@ -1085,6 +1085,7 @@ def serve(model_path: str,
         backend_config=backend_config,
         chat_template_config=chat_template_config,
         max_log_len=max_log_len,
+        metrics=metrics,
         **kwargs)
 
     if proxy_url is not None:
