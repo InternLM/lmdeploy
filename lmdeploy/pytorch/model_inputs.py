@@ -89,8 +89,8 @@ class ModelInputs:
     num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
     vision_inputs: VisionModelInputs = None
-    cross_attention_states: torch.Tensor = None
-    history_cross_kv_seqlens: torch.LongTensor = None
+    cross_length: torch.LongTensor = None
+    history_cross_length: torch.LongTensor = None
     model_metas: List[Dict[str, Any]] = None
 
     def update(self, input_ids: torch.LongTensor):
@@ -127,6 +127,10 @@ class ModelInputs:
         max_seq_len = self.seq_length[0].item()
         ret = []
         start = 0
+        history_cross_length = self.history_cross_length
+        cross_length = None
+        if history_cross_length is not None:
+            cross_length = self.history_cross_length.clone()
         while start < max_seq_len:
             vision_inputs = None
             if len(flatten_mms) > 0:
@@ -150,6 +154,11 @@ class ModelInputs:
                             input_mms[key].append(next_mm[1])
                             end += max(0, next_end - mm_end)
                             flatten_mms.pop(0)
+
+                            if cross_length is not None:
+                                encoder_len = next_mm[1].encoder_len
+                                if encoder_len is not None:
+                                    cross_length += encoder_len
                         else:
                             break
                     vision_inputs = VisionModelInputs(
@@ -166,10 +175,12 @@ class ModelInputs:
                 num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=self.local_adapter_ids,
                 vision_inputs=vision_inputs,
-                cross_attention_states=self.cross_attention_states,
                 model_metas=self.model_metas,
+                cross_length=cross_length,
+                history_cross_length=history_cross_length,
             )
             ret.append(inp)
+            history_cross_length = cross_length
 
             start = end
 
@@ -213,9 +224,9 @@ class StepContext:
     input_multimodals: List[MultiModalTensor] = None
     vision_inputs: VisionModelInputs = None
     attn_metadata: Any = None
-    cross_attn_metadata: Any = None
-    cross_attention_states: torch.Tensor = None
+    cross_seqlens: torch.LongTensor = None
     cross_kv_seqlens: torch.LongTensor = None
+    cross_attn_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
     model_metas: List[Dict[str, Any]] = None
 
@@ -252,11 +263,9 @@ class StepContext:
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
 
         # kv_seqlens
-        cross_attention_states = inputs.cross_attention_states
         if inputs.is_decoding:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
             position_ids = history_seqlens.unsqueeze(-1)
-            cross_attention_states = None
         else:
             max_q_seqlen = q_seqlens.max().item()
             mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
@@ -264,6 +273,10 @@ class StepContext:
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids += history_seqlens.unsqueeze(-1)
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
+
+        # cross
+        cross_seqlens = inputs.cross_length
+        cross_kv_seqlens = inputs.cross_length + inputs.history_cross_length
 
         # position ids 1d
         position_ids = cls.get_position_ids_1d(position_ids, q_seqlens)[None]
@@ -287,10 +300,10 @@ class StepContext:
             world_size=world_size,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
-            cross_attention_states=cross_attention_states,
-            cross_kv_seqlens=inputs.history_cross_kv_seqlens,
             kv_quant_policy=kv_quant_policy,
             model_metas=inputs.model_metas,
+            cross_seqlens=cross_seqlens,
+            cross_kv_seqlens=cross_kv_seqlens,
         )
 
         ret = get_backend().update_step_context(ret)

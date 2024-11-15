@@ -19,6 +19,7 @@ class MultiModalTensor:
     data: NestedTensor
     start: int
     end: int
+    encoder_len: int = None
     meta: Dict[str, Any] = None
 
     def to_device(self, device: str, non_blocking: bool = False):

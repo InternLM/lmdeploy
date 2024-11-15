@@ -3,6 +3,7 @@ from typing import Iterable, List, Optional, Tuple
 
 import torch
 
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext
 
 
@@ -38,4 +39,8 @@ class DeployModelMixin:
                            inputs_embeds: Optional[torch.Tensor] = None,
                            context: StepContext = None):
         """update model meta."""
+        return None
+
+    def get_input_processor(self) -> BaseModelInputProcessor:
+        """get input processor."""
         return None

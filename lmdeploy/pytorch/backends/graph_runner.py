@@ -63,9 +63,9 @@ class GraphRunner:
 
         return None
 
-    def prepare_multimodal_input(self, input_ids, input_multimodals, **kwargs):
-        """prepare multimodals inputs."""
-        if hasattr(self.model, 'prepare_multimodal_input'):
-            return self.model.prepare_multimodal_input(input_ids,
-                                                       input_multimodals,
-                                                       **kwargs)
+    def get_input_processor(self):
+        """get input processor."""
+        if hasattr(self.model, 'get_input_processor'):
+            return self.model.get_input_processor()
+        else:
+            return None

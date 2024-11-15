@@ -124,14 +124,11 @@ class CudaOpsBackend(DefaultOpsBackend):
             quant_policy=step_context.kv_quant_policy,
         )
 
-        cross_attn_metadata = None
-        fill_seqlens = None
-        if step_context.cross_attention_states is not None:
-            fill_seqlens = torch.zeros_like(q_seqlens)
-            for idx, state in enumerate(step_context.cross_attention_states):
-                if state is not None:
-                    fill_seqlens[idx] = state.shape[-2]
+        cross_seqlens = step_context.cross_seqlens
         cross_kv_seqlens = step_context.cross_kv_seqlens
+        fill_seqlens = cross_seqlens
+        if fill_seqlens.sum().item() == 0:
+            fill_seqlens = None
         cross_kv_start_loc = None
         cross_kv_flatten_size = None
         if not step_context.is_decoding and cross_kv_seqlens is not None:

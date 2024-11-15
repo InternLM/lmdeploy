@@ -195,8 +195,8 @@ class AutoModelAgent:
         """get logits of model output."""
         raise NotImplementedError('Not implemented.')
 
-    def prepare_multimodal_input(self, input_ids, input_multimodals, **kwargs):
-        """prepare multimodal input."""
+    def get_input_processor(self):
+        """get input processor."""
         raise NotImplementedError('Not implemented.')
 
 
@@ -311,10 +311,9 @@ class BaseModelAgent(AutoModelAgent):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
 
-    def prepare_multimodal_input(self, input_ids, input_multimodals, **kwargs):
-        """prepare multimodal input."""
-        return self.patched_model.prepare_multimodal_input(
-            input_ids, input_multimodals, **kwargs)
+    def get_input_processor(self):
+        """get input processor.."""
+        return self.patched_model.get_input_processor()
 
 
 @torch.inference_mode()
@@ -750,10 +749,9 @@ class TPModelAgent(AutoModelAgent):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
 
-    def prepare_multimodal_input(self, input_ids, input_multimodals, **kwargs):
-        """prepare multimodal input."""
-        return self.patched_model.prepare_multimodal_input(
-            input_ids, input_multimodals, **kwargs)
+    def get_input_processor(self):
+        """get input processor.."""
+        return self.patched_model.get_input_processor()
 
 
 def _exit_handler(agent: TPModelAgent):

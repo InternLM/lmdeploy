@@ -154,6 +154,8 @@ class Engine:
                 dtype=engine_config.dtype,
                 custom_module_map=engine_config.custom_module_map)
 
+        self.input_processor = self.model_agent.get_input_processor()
+
         cache_config = self.model_agent.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
         self.scheduler = Scheduler(scheduler_config, cache_config)
@@ -498,15 +500,10 @@ class Engine:
                 input_embedding_ranges=input_embedding_ranges,
                 input_multimodals=input_multimodals)
 
-        # only for mllama
-        cross_attention_states = None
-        history_cross_kv_seqlens = None
-        if any([msg.cross_attention_states is not None for msg in messages]):
-            cross_attention_states = [
-                msg.cross_attention_states for msg in messages
-            ]
-        history_cross_kv_seqlens = torch.tensor(
-            [msg.history_cross_kv_seqlens for msg in messages])
+        # cross
+        cross_length = torch.tensor([msg.num_cross for msg in messages])
+        history_cross_length = torch.tensor(
+            [msg.num_history_cross for msg in messages])
 
         return ModelInputs(
             input_ids=input_ids,
@@ -517,8 +514,8 @@ class Engine:
             num_ignored_history=num_ignored_history,
             local_adapter_ids=local_adapter_ids,
             vision_inputs=vision_embedding_inputs,
-            cross_attention_states=cross_attention_states,
-            history_cross_kv_seqlens=history_cross_kv_seqlens,
+            cross_length=cross_length,
+            history_cross_length=history_cross_length,
             model_metas=model_metas,
         )
 
@@ -819,9 +816,11 @@ class Engine:
                     continue
                 input_ids = req_data['token_ids']
                 input_multimodals = req_data['input_multimodals']
-                input_ids, input_multimodals = \
-                    self.model_agent.prepare_multimodal_input(
-                        input_ids, input_multimodals)
+                result = self.input_processor.preprocess_input(
+                    input_ids, input_multimodals)
+
+                input_ids = result.input_ids
+                input_multimodals = result.input_multimodals
 
                 req_data['token_ids'] = input_ids
                 req_data['input_multimodals'] = input_multimodals
