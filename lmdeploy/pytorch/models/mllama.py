@@ -20,7 +20,7 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
 from lmdeploy.pytorch.nn.rotary_embedding import Llama3Parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .utils.cudagraph import CudaGraphMixin
+from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
 from .utils.model import DeployModelMixin
 
 MLLAMA_IMAGE_TOKEN_ID = 128256
@@ -776,35 +776,7 @@ class MllamaVisionAttention(nn.Module):
         query = query.unflatten(0, (batch_size, -1))
         key = key.unflatten(0, (batch_size, -1))
         value = value.unflatten(0, (batch_size, -1))
-
-        # query = self.q_proj(hidden_state)
-        # key = self.k_proj(hidden_state)
-        # value = self.v_proj(hidden_state)
-
         q_seq_len = query.shape[1]
-
-        # query = query.view(batch_size, q_seq_len, self.num_heads,
-        #                    self.head_dim).transpose(1, 2)
-        # key = key.view(batch_size, kv_seq_len, self.num_heads,
-        #                self.head_dim).transpose(1, 2)
-        # value = value.view(batch_size, kv_seq_len, self.num_heads,
-        #                    self.head_dim).transpose(1, 2)
-
-        # import math
-        # attn_weights = (torch.matmul(query, key.transpose(2, 3)) /
-        #                 math.sqrt(self.head_dim))
-
-        # # no matter the length, we just slice it
-        # if attention_mask is not None:
-        #     causal_mask = attention_mask[:, :, :, :key.shape[-2]]
-        #     attn_weights = attn_weights + causal_mask
-
-        # # upcast attention to fp32
-        # attn_weights = nn.functional.softmax(attn_weights,
-        #                                      dim=-1,
-        #                                      dtype=torch.float32).to(
-        #                                          query.dtype)
-        # attn_output = torch.matmul(attn_weights, value)
 
         query = query.transpose(1, 2)
         key = key.transpose(1, 2)
@@ -1276,10 +1248,8 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin,
                                                  is None):
             full_text_row_masked_out_mask = None
         elif cross_attn_metadata.is_decoding:
-            full_text_row_masked_out_mask = torch.ones(
-                (attn_metadata.q_seqlens.sum(), 1),
-                dtype=torch.bool,
-                device=input_ids.device)
+            full_text_row_masked_out_mask = input_ids.new_ones(
+                input_ids.size(-1), 1)
         else:
             (cross_attention_states,
              full_text_row_masked_out_mask) = self.flat_encoder_result(
@@ -1300,15 +1270,6 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin,
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
         return self.language_model.get_logits(hidden_states)
-
-    def support_cuda_graph(
-        self,
-        input_ids: torch.Tensor,
-        **kwargs,
-    ):
-        """support cudagraph."""
-
-        return False
 
     def get_input_embeddings(self):
         """get input embeddings."""
@@ -1404,6 +1365,70 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin,
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
+
+    def support_cuda_graph(
+        self,
+        input_ids: torch.Tensor,
+        attn_metadata: Any,
+        cross_attn_metadata: Any,
+        **kwargs,
+    ):
+        """support cudagraph."""
+
+        if not attn_metadata.is_decoding:
+            return False
+
+        if cross_attn_metadata is None:
+            return False
+
+        if cross_attn_metadata.kv_seqlens is None:
+            return False
+
+        return True
+
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
+        """make cudagraph buffers from forward inputs."""
+        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta,
+                                                       **kwargs)
+
+        device = graph_meta.device
+        max_batches = graph_meta.max_batchs
+        input_buffers['cross_kv_seqlens'] = torch.zeros(max_batches,
+                                                        dtype=torch.int64,
+                                                        device=device)
+
+        return input_buffers
+
+    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
+        """fill cudagraph buffers from forward inputs."""
+        input_buffers = graph_meta.input_buffers
+
+        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta,
+                                                    **kwargs)
+
+        attn_metadata = new_inputs['attn_metadata']
+        cross_attn_metadata = new_inputs['cross_attn_metadata']
+        block_offsets = attn_metadata.block_offsets
+        batch_size, _ = block_offsets.size()
+
+        kv_seqlens = cross_attn_metadata.kv_seqlens
+        if kv_seqlens.data_ptr() != input_buffers['cross_kv_seqlens'].data_ptr(
+        ):
+            input_buffers['cross_kv_seqlens'].zero_()
+        input_buffers['cross_kv_seqlens'][:batch_size] = kv_seqlens
+
+        new_batch_size = next_power_of_2(batch_size)
+        cross_attn_metadata.block_offsets = input_buffers[
+            'block_offsets'][:new_batch_size]
+        cross_attn_metadata.q_start_loc = input_buffers[
+            'q_start_loc'][:new_batch_size]
+        cross_attn_metadata.q_seqlens = input_buffers[
+            'q_seqlens'][:new_batch_size]
+        cross_attn_metadata.kv_seqlens = input_buffers[
+            'cross_kv_seqlens'][:new_batch_size]
+
+        new_inputs['cross_attn_metadata'] = cross_attn_metadata
+        return new_inputs
 
     def update_model_metas(self,
                            past_key_values: List[List[torch.Tensor]],
