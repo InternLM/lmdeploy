@@ -291,6 +291,28 @@ def test_qwen2d5():
     assert model.get_prompt(prompt, sequence_start=False) == prompt
 
     model = MODELS.get('qwen2d5')(capability='chat')
+
+    # No tool call
+    messages = [
+        dict(role='user',
+             content='What\'s the temperature in San Francisco now?')
+    ]
+    no_tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
+                      'Cloud. You are a helpful '
+                      "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
+                      'temperature in San Francisco '
+                      'now?<|im_end|>\n<|im_start|>assistant\n')
+    assert model.messages2prompt(messages) == no_tool_prompt
+    assert model.messages2prompt(messages, tools=[]) == no_tool_prompt
+
+    messages.append({'role': 'assistant', 'content': 'I don\'t know.'})
+    no_tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
+                      'Cloud. You are a helpful '
+                      "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
+                      'temperature in San Francisco '
+                      "now?<|im_end|>\n<|im_start|>assistant\nI don't "
+                      'know.<|im_end|>\n<|im_start|>assistant\n')
+    assert model.messages2prompt(messages) == no_tool_prompt
     # Single tool call
     tools = [{
         'name': 'get_current_temperature',

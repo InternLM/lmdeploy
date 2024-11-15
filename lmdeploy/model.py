@@ -988,7 +988,7 @@ class Qwen2d5Chat(Qwen7BChat):
                        system=self.system)
         ret = ''
         tool_prompt = ''
-        if tools is not None:
+        if tools is not None and len(tools) > 0:
             for tool in tools:
                 tool_prompt += self.separator
                 tool_prompt += f'{{"type": "function", "function": {json.dumps(tool, ensure_ascii=False)}}}'
