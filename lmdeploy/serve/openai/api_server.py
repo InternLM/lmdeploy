@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
+from prometheus_client import make_asgi_app
 
 from lmdeploy.archs import get_task
 from lmdeploy.messages import (GenerationConfig, LogitsProcessor,
@@ -483,7 +484,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
-            await VariableInterface.async_engine.stop_session(
+            await VariableInterface.async_engine.handle_exception(
                 request.session_id)
             return create_error_response(HTTPStatus.BAD_REQUEST,
                                          'Client disconnected')
@@ -711,7 +712,7 @@ async def completions_v1(request: CompletionRequest,
         async for res in generator:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(
+                await VariableInterface.async_engine.handle_exception(
                     request.session_id)
                 return create_error_response(HTTPStatus.BAD_REQUEST,
                                              'Client disconnected')
@@ -843,7 +844,7 @@ async def chat_interactive_v1(request: GenerateRequest,
     """
     if request.cancel:
         if request.session_id != -1:
-            await VariableInterface.async_engine.stop_session(
+            await VariableInterface.async_engine.handle_exception(
                 request.session_id)
             return {
                 'text': '',
@@ -927,7 +928,7 @@ async def chat_interactive_v1(request: GenerateRequest,
         async for out in generation:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                await async_engine.stop_session(request.session_id)
+                await async_engine.handle_exception(request.session_id)
                 return create_error_response(HTTPStatus.BAD_REQUEST,
                                              'Client disconnected')
             text += out.response
@@ -990,6 +991,7 @@ def serve(model_path: str,
           proxy_url: Optional[str] = None,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
+          metrics: bool = False,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1034,6 +1036,7 @@ def serve(model_path: str,
         proxy_url (str): The proxy url to register the api_server.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
+        metrics (bool): Whether log stats to prometheus.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1049,6 +1052,11 @@ def serve(model_path: str,
         app = FastAPI(docs_url='/')
 
     app.include_router(router)
+
+    if metrics is True:
+        # Add prometheus asgi middleware to route /metrics requests
+        metrics_app = make_asgi_app()
+        app.mount('/metrics', metrics_app)
 
     if allow_origins:
         app.add_middleware(
