@@ -991,7 +991,7 @@ class Qwen2d5Chat(Qwen7BChat):
         if tools is not None:
             for tool in tools:
                 tool_prompt += self.separator
-                tool_prompt += json.dumps(tool, ensure_ascii=False)
+                tool_prompt += f'{{"type": "function", "function": {json.dumps(tool, ensure_ascii=False)}}}'
             if len(messages) and messages[0]['role'] == 'system':
                 ret += f"{self.system}{messages[0]['content']}{self.tools}{tool_prompt}{self.eotools}{self.eosys}"
             else:
@@ -1019,12 +1019,12 @@ class Qwen2d5Chat(Qwen7BChat):
                     for tool_call in tool_calls:
                         if tool_call.get('function') is not None:
                             tool_call = tool_call['function']
-                        ret += f'{self.separator}<tool_call>{self.separator}{{"name": "{tool_call["name"]}", "arguments": {tool_call["arguments"]}}}{self.separator}</tool_call>'
+                        ret += f'{self.separator}<tool_call>{self.separator}{{"name": "{tool_call["name"]}", "arguments": {json.dumps(tool_call["arguments"], ensure_ascii=False)}}}{self.separator}</tool_call>'
                 ret += self.eosys
             if message['role'] == 'tool':
                 if index == 0 or messages[index - 1]['role'] != 'tool':
-                    ret += f'{self.user}'
-                ret += f"<tool_response>{self.separator}{message['content']}{self.separator}</tool_response>{self.separator}"
+                    ret += f'<|im_start|>user'
+                ret += f"{self.separator}<tool_response>{self.separator}{message['content']}{self.separator}</tool_response>"
                 if index == len(messages) - 1 or messages[index +
                                                           1]['role'] != 'tool':
                     ret += f'{self.eoh}'
