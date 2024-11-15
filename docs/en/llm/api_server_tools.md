@@ -250,17 +250,46 @@ Qwen2.5 supports multi tool calling, which means that multiple tool requests can
 from openai import OpenAI
 import json
 
-def get_current_temperature(arguments):
-    if json.loads(arguments).get('location') == 'San Francisco, CA, USA':
-        return "26.0­°C"
-    else:
-        return "27.0"
+def get_current_temperature(location: str, unit: str = "celsius"):
+    """Get current temperature at a location.
 
-def get_temperature_date(arguments):
-    if json.loads(arguments)['location'] == 'San Francisco, CA, USA' and json.loads(arguments)['location'] == 'San Francisco, CA, USA':
-        return "26.5­°C"
-    else:
-        return "27.5­°C"
+    Args:
+        location: The location to get the temperature for, in the format "City, State, Country".
+        unit: The unit to return the temperature in. Defaults to "celsius". (choices: ["celsius", "fahrenheit"])
+
+    Returns:
+        the temperature, the location, and the unit in a dict
+    """
+    return {
+        "temperature": 26.1,
+        "location": location,
+        "unit": unit,
+    }
+
+
+def get_temperature_date(location: str, date: str, unit: str = "celsius"):
+    """Get temperature at a location and date.
+
+    Args:
+        location: The location to get the temperature for, in the format "City, State, Country".
+        date: The date to get the temperature for, in the format "Year-Month-Day".
+        unit: The unit to return the temperature in. Defaults to "celsius". (choices: ["celsius", "fahrenheit"])
+
+    Returns:
+        the temperature, the location, the date and the unit in a dict
+    """
+    return {
+        "temperature": 25.9,
+        "location": location,
+        "date": date,
+        "unit": unit,
+    }
+
+def get_function_by_name(name):
+    if name == "get_current_temperature":
+        return get_current_temperature
+    if name == "get_temperature_date":
+        return get_temperature_date
 
 tools = [{
     'type': 'function',
@@ -335,17 +364,14 @@ print(response.choices[0].message.tool_calls)
 messages.append(response.choices[0].message)
 
 for tool_call in response.choices[0].message.tool_calls:
-    if tool_call.function.name == 'get_temperature_date':
-        content = get_temperature_date(tool_call.function.arguments)
-    if tool_call.function.name == 'get_current_temperature':
-        content = get_current_temperature(tool_call.function.arguments)
+    tool_call_args = json.loads(tool_call.function.arguments)
+    tool_call_result =  get_function_by_name(tool_call.function.name)(**tool_call_args)
     messages.append({
-            'role': 'tool',
-            'name': tool_call.function.name,
-            'content': content,
-            'tool_call_id': tool_call.id
-        })
-
+        'role': 'tool',
+        'name': tool_call.function.name,
+        'content': tool_call_result,
+        'tool_call_id': tool_call.id
+    })
 
 response = client.chat.completions.create(
     model=model_name,
@@ -362,9 +388,9 @@ Using the Qwen2.5-14B-Instruct, similar results can be obtained as follows
 
 ```
 [ChatCompletionMessageToolCall(id='0', function=Function(arguments='{"location": "San Francisco, California, USA"}', name='get_current_temperature'), type='function'),
- ChatCompletionMessageToolCall(id='1', function=Function(arguments='{"location": "San Francisco, California, USA", "date": "2024-11-15", "unit": "celsius"}', name='get_temperature_date'), type='function')]
+ ChatCompletionMessageToolCall(id='1', function=Function(arguments='{"location": "San Francisco, California, USA", "date": "2024-11-15"}', name='get_temperature_date'), type='function')]
 
- The current temperature in San Francisco is 26.0°C. The temperature is forecasted to be 26.5°C tomorrow.
+The current temperature in San Francisco, California, USA is 26.1°C. For tomorrow, 2024-11-15, the temperature is expected to be 25.9°C.
 ```
 
 It is important to note that in scenarios involving multiple tool calls, the order of the tool call results can affect the response quality. The tool_call_id has not been correctly provided to the LLM.
