@@ -18,9 +18,13 @@ NestedTensor = Union[Tensor, List[Tensor]]
 class MultiModalTensor:
     data: NestedTensor
     start: int
-    end: int
+    end: int = None
     encoder_len: int = None
     meta: Dict[str, Any] = None
+
+    def __post_init__(self):
+        if self.end is None:
+            self.end = self.start
 
     def to_device(self, device: str, non_blocking: bool = False):
         """to device."""

@@ -1500,35 +1500,22 @@ class MLlamaInputProcessor(BaseModelInputProcessor):
     def preprocess_input(self, input_ids, input_multimodals: MultiModalInputs,
                          **kwargs):
         """prepare multimodal input."""
-        from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+        if input_multimodals is None:
+            return input_ids, input_multimodals
 
-        multimodals_dict = dict()
-        multimodals_dict['image'] = []
+        input_imgs = input_multimodals.get('image', None)
+        if input_imgs is None:
+            return input_ids, input_multimodals
 
-        input_multimodals = sorted(input_multimodals, key=lambda mm: mm.loc)
+        input_imgs = sorted(input_imgs, key=lambda mm: mm.start)
 
-        for input_mm in input_multimodals:
-            image = input_mm.data
-            start = input_mm.loc
-            size = image.size
-            if any([s < 3 for s in size]):
-                image = image.resize([s * 3 for s in size])
-            image_inputs = self.processor.image_processor(images=image,
-                                                          return_tensors='pt')
-            pixel_values = image_inputs['pixel_values'].to(self.dtype)
-            aspect_ratio_ids = image_inputs['aspect_ratio_ids']
-            aspect_ratio_mask = image_inputs['aspect_ratio_mask']
-            mm_tensor = MultiModalTensor(
-                data=pixel_values,
-                start=start,
-                end=start + 1,
-                encoder_len=self.encoder_len,
-                meta=dict(aspect_ratio_ids=aspect_ratio_ids,
-                          aspect_ratio_mask=aspect_ratio_mask))
-            multimodals_dict['image'].append(mm_tensor)
+        for img in input_imgs:
+            img.data = img.data.to(self.dtype)
+            img.end = img.start + 1
+            img.encoder_len = self.encoder_len
 
         result = PreprocessInputResult(
             input_ids=input_ids,
-            input_multimodals=multimodals_dict,
+            input_multimodals=dict(image=input_imgs),
         )
         return result

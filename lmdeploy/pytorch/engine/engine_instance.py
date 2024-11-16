@@ -2,7 +2,7 @@
 from typing import List
 
 from lmdeploy.messages import EngineOutput, GenerationConfig
-from lmdeploy.pytorch.multimodal import MultiModalData
+from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
 from ..messages import SamplingParam
@@ -125,14 +125,13 @@ class EngineInstance:
         """
         return try_add_session(self.req_sender, session_id)
 
-    async def async_stream_infer(
-            self,
-            session_id: int,
-            input_ids: List[int],
-            gen_config: GenerationConfig = None,
-            input_multimodals: List[MultiModalData] = None,
-            adapter_name: str = None,
-            **kwargs):
+    async def async_stream_infer(self,
+                                 session_id: int,
+                                 input_ids: List[int],
+                                 gen_config: GenerationConfig = None,
+                                 input_multimodals: MultiModalInputs = None,
+                                 adapter_name: str = None,
+                                 **kwargs):
         """Send stream inference request.
 
         Args:
@@ -184,7 +183,7 @@ class EngineInstance:
     async def async_infer(self,
                           session_id: int,
                           input_ids: List[int] = None,
-                          input_multimodals: List[MultiModalData] = None,
+                          input_multimodals: MultiModalInputs = None,
                           gen_config: GenerationConfig = None,
                           **kwargs):
         """Send inference request.
@@ -216,7 +215,7 @@ class EngineInstance:
     def stream_infer(self,
                      session_id: int,
                      input_ids: List[int],
-                     input_multimodals: List[MultiModalData] = None,
+                     input_multimodals: MultiModalInputs = None,
                      gen_config: GenerationConfig = None,
                      adapter_name: str = None,
                      **kwargs):
@@ -286,7 +285,7 @@ class EngineInstance:
     def infer(self,
               session_id: int,
               input_ids: List[int] = None,
-              input_multimodals: List[MultiModalData] = None,
+              input_multimodals: MultiModalInputs = None,
               gen_config: GenerationConfig = None,
               **kwargs):
         """Send inference request.
@@ -318,7 +317,7 @@ class EngineInstance:
         self,
         session_ids: List[int],
         token_ids: List[List[int]] = None,
-        input_multimodals: List[List[MultiModalData]] = None,
+        input_multimodals: List[MultiModalInputs] = None,
         gen_config: GenerationConfig = None,
         adapter_names: List[str] = None,
         keep_cache: bool = False,
@@ -407,7 +406,7 @@ class EngineInstance:
         self,
         session_ids: List[int],
         token_ids: List[List[int]] = None,
-        input_multimodals: List[List[MultiModalData]] = None,
+        input_multimodals: List[MultiModalInputs] = None,
         gen_config: GenerationConfig = None,
         adapter_names: List[str] = None,
         keep_cache: bool = False,
@@ -439,7 +438,7 @@ class EngineInstance:
 
     def decode(self,
                input_ids,
-               input_multimodals: List[List[MultiModalData]] = None,
+               input_multimodals: List[MultiModalInputs] = None,
                steps: List[int] = None,
                sequence_start: bool = True,
                sequence_end: bool = True,
@@ -449,7 +448,7 @@ class EngineInstance:
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
             steps (List[int]): the offset of the k/v cache
-            input_multimodals (List[List[MultiModalData]]):
+            input_multimodals (List[MultiModalInputs]):
                 multimodals inputs.
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence

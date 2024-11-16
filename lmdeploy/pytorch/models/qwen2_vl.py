@@ -672,9 +672,6 @@ class Qwen2VisionTransformerPretrainedModel(nn.Module):
         return self.merger(hidden_states)
 
 
-OPTIONAL_KEYS = ['resized_height', 'resized_width', 'min_pixels', 'max_pixels']
-
-
 class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
                                       CudaGraphMixin):
     """ModelForCausalLM."""
@@ -1004,52 +1001,34 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
 
     def preprocess_input(self,
                          input_ids: List[int],
-                         input_mms: MultiModalInputs = None,
+                         input_multimodals: MultiModalInputs = None,
                          **kwargs) -> PreprocessInputResult:
         """prepare multimodal input."""
-        from qwen_vl_utils import process_vision_info
+        if input_multimodals is None:
+            return input_ids, input_multimodals
 
-        from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-        global OPTIONAL_KEYS
+        input_imgs = input_multimodals.get('image', None)
+        if input_imgs is None:
+            return input_ids, input_multimodals
 
-        multimodals_dict = dict()
-        multimodals_dict['image'] = []
-
-        input_mms = sorted(input_mms, key=lambda mm: mm.loc)
+        input_imgs = sorted(input_imgs, key=lambda mm: mm.start)
 
         cum_pad = 0
         image_token_id = self.config.image_token_id
 
-        # image
-        for in_mm in input_mms:
-            image = in_mm.data
-            param = in_mm.meta
-            param = dict() if param is None else param
-            item = dict(type='image', image=image)
-            item.update({k: param[k] for k in OPTIONAL_KEYS if k in param})
-            messages = [dict(content=[item])]
-            image_inputs, _ = process_vision_info(messages)
-            image_inputs = self.processor.image_processor(images=image_inputs,
-                                                          videos=None,
-                                                          return_tensors='pt')
-            pixel_values = image_inputs['pixel_values']
-            image_grid_thw = image_inputs['image_grid_thw']
+        for img in input_imgs:
+            pixel_values = img.data
             pad_size = pixel_values.size(0) // 4
-            loc = in_mm.loc
-            start = loc + cum_pad
+            start = img.start + cum_pad
             end = start + pad_size
             cum_pad += pad_size
-            input_ids = input_ids[:start] + [image_token_id
-                                             ] * pad_size + input_ids[start:]
-
-            mm_tensor = MultiModalTensor(data=pixel_values,
-                                         start=start,
-                                         end=end,
-                                         meta=dict(grid_thw=image_grid_thw))
-            multimodals_dict['image'].append(mm_tensor)
+            input_ids = (input_ids[:start] + [image_token_id] * pad_size +
+                         input_ids[start:])
+            img.start = start
+            img.end = end
 
         result = PreprocessInputResult(
             input_ids=input_ids,
-            input_multimodals=multimodals_dict,
+            input_multimodals=dict(image=input_imgs),
         )
         return result
