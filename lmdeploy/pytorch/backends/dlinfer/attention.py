@@ -30,8 +30,10 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         alibi: bool = None,
         sliding_window: int = None,
         logit_softcapping: float = None,
+        causal: bool = True,
         **kwargs,
     ):
+        assert causal
         super().__init__(
             num_heads,
             head_size,
@@ -41,6 +43,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             alibi,
             sliding_window,
             logit_softcapping,
+            causal=causal,
             **kwargs,
         )
 
@@ -121,6 +124,7 @@ class DlinferAttentionBuilder(AttentionBuilder[DlinferAttentionMetadata]):
         alibi_scale: float = None,
         sliding_window: int = None,
         logical_softcapping: float = None,
+        causal: bool = True,
         **kwargs,
     ) -> DlinferAttentionImpl:
         """build."""
@@ -132,4 +136,5 @@ class DlinferAttentionBuilder(AttentionBuilder[DlinferAttentionMetadata]):
                                     alibi_scale=alibi_scale,
                                     sliding_window=sliding_window,
                                     logical_softcapping=logical_softcapping,
+                                    causal=causal,
                                     **kwargs)

@@ -195,6 +195,7 @@ class MllamaTextCrossAttention(nn.Module):
             self.head_dim,
             num_kv_heads=self.num_key_value_heads,
             v_head_size=self.head_dim,
+            causal=False,
         )
 
         self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
@@ -1128,10 +1129,12 @@ class MllamaVisionModel(nn.Module):
 
         # Collect intermediate layer outputs from encoder output
         all_intermediate_hidden_states = output[1]
+        all_intermediate_hidden_states = [
+            all_intermediate_hidden_states[i]
+            for i in self.intermediate_layers_indices
+        ]
         intermediate_hidden_states = torch.stack(
             all_intermediate_hidden_states, dim=-1)
-        intermediate_hidden_states = intermediate_hidden_states[
-            ..., self.intermediate_layers_indices]
 
         # Remove padding from intermediate hidden states
         intermediate_hidden_states = intermediate_hidden_states.reshape(
@@ -1196,8 +1199,8 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin,
         # preprocessor
         self.input_processor = MLlamaInputProcessor(self.config, dtype)
 
-    def flat_encoder_result(self, cross_attention_states: torch.Tensor,
-                            attn_metadata: Any, input_ids: torch.LongTensor):
+    def flat_encoder_result(self, attn_metadata: Any,
+                            input_ids: torch.LongTensor):
         # since every state share the same shape
         full_text_row_masked_out_mask = torch.ones(
             (attn_metadata.q_seqlens.sum(), 1), dtype=torch.bool)
@@ -1208,9 +1211,9 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin,
             full_text_row_masked_out_mask[start_pos:img_id] = False
             start_pos += q_seq_len
         full_text_row_masked_out_mask = full_text_row_masked_out_mask.to(
-            cross_attention_states.device)
+            input_ids.device)
 
-        return cross_attention_states, full_text_row_masked_out_mask
+        return full_text_row_masked_out_mask
 
     def forward(
         self,
@@ -1227,6 +1230,19 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin,
     ):
         """model forward, return logits."""
 
+        if cross_attn_metadata is None:
+            full_text_row_masked_out_mask = None
+        # FIXME basically, we want to inference
+        # text requests and image requests separately
+        elif pixel_values is None and (cross_attn_metadata.kv_seqlens is None):
+            full_text_row_masked_out_mask = None
+        elif cross_attn_metadata.is_decoding:
+            full_text_row_masked_out_mask = input_ids.new_ones(
+                input_ids.size(-1), 1)
+        else:
+            full_text_row_masked_out_mask = self.flat_encoder_result(
+                cross_attn_metadata, input_ids)  # noqa
+
         cross_attention_states = None
         if pixel_values is not None:
             cross_attention_states = self.vision_model(
@@ -1240,21 +1256,6 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin,
             cross_attention_states = cross_attention_states.view(
                 bsz, -1, image_token_dim)
 
-        if cross_attn_metadata is None:
-            full_text_row_masked_out_mask = None
-        # FIXME basically, we want to inference
-        # text requests and image requests separately
-        elif cross_attention_states is None and (cross_attn_metadata.kv_seqlens
-                                                 is None):
-            full_text_row_masked_out_mask = None
-        elif cross_attn_metadata.is_decoding:
-            full_text_row_masked_out_mask = input_ids.new_ones(
-                input_ids.size(-1), 1)
-        else:
-            (cross_attention_states,
-             full_text_row_masked_out_mask) = self.flat_encoder_result(
-                 cross_attention_states, cross_attn_metadata,
-                 input_ids)  # noqa
         hidden_states = self.language_model(
             input_ids=input_ids,
             position_ids=position_ids,
