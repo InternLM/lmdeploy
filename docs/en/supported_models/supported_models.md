@@ -99,7 +99,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 ## PyTorchEngine on Huawei Ascend Platform
 
 |     Model      |   Size   | Type | FP16/BF16(eager) | FP16/BF16(graph) | W4A16(eager) |
-| :------------: | :------: | :--: | :--------------: | :-------------_: | :----------: |
+| :------------: | :------: | :--: | :--------------: | :--------------: | :----------: |
 |     Llama2     | 7B - 70B | LLM  |        Yes       |        Yes       |      Yes     |
 |     Llama3     |    8B    | LLM  |        Yes       |        Yes       |      Yes     |
 |    Llama3.1    |    8B    | LLM  |        Yes       |        Yes       |      Yes     |
