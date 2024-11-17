@@ -3,7 +3,6 @@
 from typing import Dict, List
 
 import torch
-from PIL.Image import Image
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
@@ -31,9 +30,12 @@ class Qwen2VLModel(VisonModel):
 
     _arch = 'Qwen2VLForConditionalGeneration'
 
-    def build_model(self):
+    def build_proprocessor(self):
         check_qwen_vl_deps_install()
+        from transformers import AutoProcessor
+        self.processor = AutoProcessor.from_pretrained(self.model_path)
 
+    def build_model(self):
         from accelerate import init_empty_weights
         with init_empty_weights():
             config = self.hf_config
@@ -63,51 +65,106 @@ class Qwen2VLModel(VisonModel):
 
         self.model = model.eval()
 
-        # processor
-        from transformers import AutoProcessor
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+    def preprocess(self, messages: List[Dict]) -> Dict:
+        """preprocess multimodal data in the messages, of which only the last
+        item includes the mulitmodal data.
+
+        Args:
+            message(Dict): multimodal data in a dict, which is as follows:
+            [
+                {'role': 'user', 'content': 'user prompt'},
+                {'role': 'assisant', 'content': 'AI reponse'},
+                {
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'text',
+                            'text': 'string',
+                        },
+                        {
+                            'type': 'image',
+                            'image': pillow.Image,
+                            key1: value1,
+                            ...
+                        },
+                        {
+                            'type': 'image',
+                            'image': pillow.Image,
+                            key1: value1,
+                            ...
+                        },
+                        ...
+                    ]
+                }
+            ]
+        Returns:
+            the preprocessing results in a dict
+        """
+        assert isinstance(messages, List)
+        assert isinstance(messages[-1]['content'], List)
+        text = self.processor.apply_chat_template(messages,
+                                                  tokenize=False,
+                                                  add_generation_prompt=False)
+        from qwen_vl_utils import process_vision_info
+        image_inputs, video_inputs = process_vision_info(messages)
+        outputs = self.processor(text=[text],
+                                                 images=image_inputs,
+                                                 videos=video_inputs,
+                                                 return_tensors='pt')
+        outputs.pop('attention_mask')
+        outputs.update(prompt=text)
+        return outputs
 
     @torch.no_grad()
-    def forward(self,
-                images: List[Image],
-                params: List[Dict] = None) -> List[torch.Tensor]:
-        """forward."""
-        # only support image input
-        if params is not None:
-            assert len(images) == len(
-                params), 'different length of images and params'
-        else:
-            params = [{}] * len(images)
-
-        from qwen_vl_utils import process_vision_info
-        images = [x.convert('RGB') for x in images]
-        content = []
-        optional_keys = [
-            'resized_height', 'resized_width', 'min_pixels', 'max_pixels'
-        ]
-        for image, param in zip(images, params):
-            item = dict(type='image', image=image)
-            item.update({k: param[k] for k in optional_keys if k in param})
-            content.append(item)
-        messages = [dict(content=content)]
-        image_inputs, _ = process_vision_info(messages)
-        image_inputs = self.processor.image_processor(images=image_inputs,
-                                                      videos=None,
-                                                      return_tensors='pt')
-        pixel_values = image_inputs['pixel_values'].to(
+    def forward(self, preprocess_output) -> List[torch.Tensor]:
+        pixel_values = preprocess_output['pixel_values'].to(
             self.model.visual.get_device())
-        image_grid_thw = image_inputs['image_grid_thw'].to(
+        image_grid_thw = preprocess_output['image_grid_thw'].to(
             self.model.visual.get_device())
         pixel_values = pixel_values.type(self.model.visual.get_dtype())
         image_embeds = self.model.visual(pixel_values,
                                          grid_thw=image_grid_thw).cpu()
         merge_length = self.processor.image_processor.merge_size**2
-        split_size = image_inputs['image_grid_thw'].prod(dim=1) // merge_length
+        split_size = preprocess_output['image_grid_thw'].prod(
+            dim=1) // merge_length
         image_embeds = image_embeds.split(split_size.tolist())
 
         outputs = []
         for i, embeddings in enumerate(image_embeds):
             outputs.append(
                 dict(embeddings=embeddings,
-                     grid_thw=image_inputs['image_grid_thw'][i].tolist()))
+                     grid_thw=preprocess_output['image_grid_thw'][i].tolist()))
         return outputs
+
+    def to_pytorch(self, messages, chat_template, sequence_start):
+        text = self.processor.apply_chat_template(messages,
+                                                  tokenize=False,
+                                                  add_generation_prompt=True)
+        input_ids = [
+            torch.squeeze(message['preprocess']['input_ids'])
+            for message in messages if 'preprocess' in message
+        ]
+        # inputs_ids[1:] contains bos_id which should be removed
+        input_ids = [
+            input_id if i == 0 else input_id[1:]
+            for i, input_id in enumerate(input_ids)
+        ]
+        input_ids = torch.concat(input_ids, dim=-1)
+        pixel_values = [
+            message['preprocess']['pixel_values'] for message in messages
+            if 'preprocess' in message
+        ]
+        pixel_values = torch.concat(pixel_values, dim=0)
+        image_grid_thw = [
+            message['preprocess']['image_grid_thw'] for message in messages
+            if 'preprocess' in message
+        ]
+        image_grid_thw = torch.concat(image_grid_thw, dim=0)
+
+        return dict(prompt=text,
+                    input_ids=input_ids,
+                    pixel_values=pixel_values,
+                    image_grid_thw=image_grid_thw)
+
+    def to_turbomind(self, messages, chat_template, sequence_start):
+        pass

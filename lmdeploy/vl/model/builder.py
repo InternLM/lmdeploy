@@ -29,6 +29,7 @@ logger = get_logger('lmdeploy')
 
 
 def load_vl_model(model_path: str,
+                  backend: str,
                   with_llm: bool = False,
                   backend_config: Optional[Union[TurbomindEngineConfig,
                                                  PytorchEngineConfig]] = None):
@@ -57,7 +58,8 @@ def load_vl_model(model_path: str,
     kwargs = dict(model_path=model_path,
                   with_llm=with_llm,
                   max_memory=max_memory,
-                  hf_config=hf_config)
+                  hf_config=hf_config,
+                  backend=backend)
     for name, module in VISION_MODELS.module_dict.items():
         try:
             if module.match(hf_config):

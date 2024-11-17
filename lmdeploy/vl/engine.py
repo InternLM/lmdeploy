@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import inspect
 import queue
 import time
 from threading import Thread
@@ -82,19 +81,23 @@ class Record:
 class ImageEncoder:
     """Image encoder."""
 
-    def __init__(self,
-                 model_path: str,
-                 vision_config: VisionConfig = None,
-                 backend_config: Optional[Union[TurbomindEngineConfig,
-                                                PytorchEngineConfig]] = None):
-        self.model = load_vl_model(model_path, backend_config=backend_config)
+    def __init__(
+        self,
+        model_path: str,
+        backend: str,
+        vision_config: VisionConfig = None,
+        backend_config: Optional[Union[TurbomindEngineConfig,
+                                       PytorchEngineConfig]] = None,
+    ):
+        self.model = load_vl_model(model_path,
+                                   backend,
+                                   backend_config=backend_config)
         if vision_config is None:
             vision_config = VisionConfig()
         self.vision_config = vision_config
         self.max_batch_size = vision_config.max_batch_size
         torch.cuda.empty_cache()
-        self._que: asyncio.Queue = None
-        self._loop_task: asyncio.Task = None
+        self._que = asyncio.Queue()
         if vision_config.thread_safe:
             self._create_thread_safe_task()
 
@@ -104,12 +107,10 @@ class ImageEncoder:
 
         def _work_thread():
             asyncio.set_event_loop(self._loop)
-            self._que = asyncio.Queue()
             self._loop.run_until_complete(self._forward_loop())
 
         thread = Thread(target=_work_thread, daemon=True)
         thread.start()
-        self._loop_thread = thread
 
     def _create_event_loop_task(self):
         """event loop task."""
@@ -121,8 +122,6 @@ class ImageEncoder:
     def req_que(self):
         if self.vision_config.thread_safe:
             return self._que
-        if self._que is None:
-            self._que = asyncio.Queue()
         if self._loop_task is None:
             self._create_event_loop_task()
         if asyncio.get_event_loop() != self._loop:
@@ -150,46 +149,127 @@ class ImageEncoder:
             while record.notify():
                 pass
 
-    def _init_input_params(self,
-                           inputs: List[Image],
-                           params: List[Dict] = None):
-        """Check and init inputs params."""
-        if params is None:
-            params = [{}] * len(inputs)
-        assert len(params) == len(inputs), \
-            'different length of inputs and kwargs'
-        return params
+    def forward(self, messages: List[List[Dict]]) -> Dict:
+        # messages in batch
+        assert all(isinstance(message, List) for message in messages)
 
-    def forward(self, inputs: List[Image], params: List[Dict] = None):
-        """Model forward."""
-        params = self._init_input_params(inputs, params)
         time_start = time.perf_counter()
-        func_params = inspect.signature(self.model.forward).parameters
-        func_inputs = [inputs, params] if len(func_params) > 1 else [inputs]
-        outputs = self.model.forward(*func_inputs)
+        outputs, n_image = self.model.forward(messages)
         if isinstance(outputs[0], torch.Tensor):
             outputs = [x.cpu() for x in outputs]
         time_end = time.perf_counter()
-        logger.info(f'ImageEncoder forward {len(inputs)} images, '
+        logger.info(f'ImageEncoder forward {n_image} images, '
                     f'cost {time_end - time_start:.3f}s')
         return outputs
 
-    def infer(self, inputs: List[Image], params: List[Dict] = None):
-        """infer."""
-        params = self._init_input_params(inputs, params)
-        results = self.forward(inputs, params)
-        return results
+    def infer(self, messages: List[Dict]) -> Dict:
+        """perform vision encoding to get a dict, in which there are input_ids,
+        embeddings, embedding_ranges and so on. They will be used by turbomind
+        engine. The key in the dict must be the same defined in turbmoind
+        engine's infer API.
 
-    async def async_infer(self,
-                          inputs: List[Image],
-                          params: List[Dict] = None):
-        """async infer."""
-        params = self._init_input_params(inputs, params)
-        outputs = asyncio.Queue()
-        item = (inputs, params, outputs)
-        if self.vision_config.thread_safe:
-            self._loop.call_soon_threadsafe(self._que.put_nowait, item)
-        else:
-            self.req_que.put_nowait(item)
-        results = await outputs.get()
-        return results
+        Args:
+            messages (List[Dict]): user's input in GPT4V format
+        """
+        assert isinstance(messages, List)
+        assert all(isinstance(item, Dict) for item in messages)
+
+        return self.forward(messages)
+
+    async def preprocess(self, messages: List[Dict]) -> List[Dict]:
+        """preprocess multimodal data in the messages.
+
+        Args:
+            messages (List[Dict]): a list of message. For instance,
+            [
+                {'role': 'user', 'content': 'string'},
+                {'role': 'assistant', 'content': 'string'},
+                {
+                    'role': 'user',
+                    'content': [
+                        {'type': 'text', 'text': 'string'},
+                        {
+                            'type': 'image',
+                            'image': pillow.Image,
+                            'key1': 'value1',
+                            ...
+                        },
+                        {...},
+                    ]
+                },
+                {...}
+            ]
+        Returns:
+            [
+                {'role': 'user', 'content': 'string'},
+                {'role': 'assistant', 'content': 'string'},
+                {
+                    'role': 'user',
+                    'content': [
+                        {'type': 'text', 'text': 'string'},
+                        {
+                            'type': 'image',
+                            'image': pillow.Image,
+                            'key1': 'value1',
+                            ...
+                        },
+                        {...},
+                    ],
+                    # depends on each vision model's preprocessing
+                    'preprocess': {
+                        'pixel_value': torch.tensor,
+                        ...
+                    }
+                },
+                {...}
+            ]
+        """
+        start = 0
+        for i, message in enumerate(messages):
+            role = message['role']
+            content = message['content']
+            if role == 'user' and isinstance(content, List):
+                result = self.model.preprocess(messages[start:i + 1])
+                messages[i].update(preprocess=result)
+                start = i + 1
+        return messages
+
+    async def async_infer(self, messages: List[Dict]) -> Dict:
+        """perform vision encoding on a request to get a dict, in which there
+        are input_ids, embeddings, embedding_ranges and so on.
+
+        They will be used by turbomind engine. The key in the dict must be the
+        same defined in turbmoind engine's infer API
+
+        Args:
+            messages (List[Dict]): a list of message, which is supposed to be
+                the output of `preprocess`
+        """
+
+        assert isinstance(messages, List)
+        assert all(isinstance(item, Dict) for item in messages)
+        return self.model.forward(messages)
+
+    async def wrap_for_pytorch(self, messages: List[Dict], chat_template,
+                               sequence_start) -> List[Dict]:
+        """
+        Args:
+            messages (List[Dict]): a list of message, which is supposed to be
+                the output of `preprocess`
+        Returns:
+            a dict which will be passed to pytorch engine_instance's forward.
+            The dict is like the following:
+            Dict(
+                'prompt': 'the prompt after applying chat template'
+                'input_ids': [],
+                'preprocess': [
+                    {},
+                    {}
+                ]
+            )
+        """
+        return self.model.to_pytorch(messages, chat_template, sequence_start)
+
+    async def wrap_for_turbomind(self, messages: List[Dict], chat_template,
+                                 sequence_start) -> Dict:
+        return self.model.to_turbomind(messages, chat_template, sequence_start)

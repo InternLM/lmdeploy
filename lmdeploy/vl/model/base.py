@@ -20,7 +20,8 @@ class VisonModel(ABC):
                  model_path: str,
                  with_llm: bool = False,
                  max_memory: Dict[int, int] = None,
-                 hf_config: AutoConfig = None):
+                 hf_config: AutoConfig = None,
+                 backend: str = ''):
         """init."""
         self.model_path = model_path
         self.with_llm = with_llm
@@ -28,10 +29,16 @@ class VisonModel(ABC):
         if hf_config is None:
             _, hf_config = get_model_arch(model_path)
         self.hf_config = hf_config
-        self.build_model()
+        self.build_proprocessor()
+        if backend == 'turbomind':
+            self.build_model()
 
     @abstractmethod
-    def build_model():
+    def build_proprocessor(self, ):
+        raise NotImplementedError()
+
+    @abstractmethod
+    def build_model(self, ):
         """build model."""
         raise NotImplementedError()
 
@@ -48,6 +55,14 @@ class VisonModel(ABC):
         Return:
             List[torch.Tensor]: extract image feature for each input image
         """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def to_pytorch(self, messages, chat_template, sequence_start):
+        raise NotImplementedError()
+
+    @abstractmethod
+    def to_turbomind(self, messages, chat_template, sequence_start):
         raise NotImplementedError()
 
     @classmethod
