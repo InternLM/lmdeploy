@@ -99,7 +99,7 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 ## PyTorchEngine 华为昇腾平台
 
 |     Model      |   Size   | Type | FP16/BF16(eager) | FP16/BF16(graph) | W4A16(eager) |
-| :------------: | :------: | :--: | :--------------: | :-------------_: | :----------: |
+| :------------: | :------: | :--: | :--------------: | :--------------: | :----------: |
 |     Llama2     | 7B - 70B | LLM  |        Yes       |        Yes       |      Yes     |
 |     Llama3     |    8B    | LLM  |        Yes       |        Yes       |      Yes     |
 |    Llama3.1    |    8B    | LLM  |        Yes       |        Yes       |      Yes     |
