@@ -42,7 +42,7 @@ public:
     static constexpr int kMaxWorkspaceTokens = 4096;
 
     void freeBuffer();
-    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, const WeightType* weights);
+    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, size_t qkv_lora_rank);
 
     void allocateWorkspace();
     void freeWorkspace();
@@ -70,7 +70,7 @@ public:
                           const NcclParam&      tp,
                           const Context<T>&     context);
 
-    void forward(TensorMap* outputs, const TensorMap* inputs, const LlamaAttentionWeight<T>* weights);
+    void forward(TensorMap* outputs, const TensorMap* inputs, const WeightType* weights);
 
     void prefill(T*                output,
                  T*                tmp_kv_buffer,
@@ -106,6 +106,9 @@ public:
                 int               dc_max_seq_len,
                 int               max_split_k,
                 const WeightType* weights);
+
+private:
+    void forward_mla(const T* inputs, int token_num, const WeightType& weights);
 
 private:
     const size_t head_num_;

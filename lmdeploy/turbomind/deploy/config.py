@@ -37,7 +37,6 @@ class ModelConfig:
     hidden_units: int = None
     vocab_size: int = None
     num_layer: int = None
-    # inter_size: int = None
     inter_size: List[int] = None
     norm_eps: float = None
     attn_bias: int = 0
@@ -49,12 +48,18 @@ class ModelConfig:
     session_len: int = None
     tp: int = 1
     model_format: str = 'hf'
-    # expert_num: int = 0
     expert_num: List[int] = ()
     expert_inter_size: int = 0
     experts_per_token: int = 0
     moe_shared_gate: int = False
-    moe_norm_topk: int = False
+    norm_topk_prob: int = False
+    # MLA
+    q_lora_rank: int = 0
+    kv_lora_rank: int = 0
+    qk_rope_dim: int = 0
+    v_head_dim: int = 0
+    # tuning
+    tune_layer_num: int = 1
 
     def verify(self):
         invalid = {}

@@ -23,7 +23,8 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
     rmsnorm_eps_(model.norm_eps),
     stream_(ctx.stream),
     allocator_(ctx.allocator.get()),
-    dtype_(getTensorType<T>())
+    dtype_(getTensorType<T>()),
+    tune_layer_num_(model.tune_layer_num)
 {
 
     attn_layer_ = std::make_unique<UnifiedAttentionLayer<T>>(model, attn, lora, tp, ctx);
@@ -65,13 +66,13 @@ void UnifiedDecoder<T>::freeBuffer()
 }
 
 template<typename T>
-void UnifiedDecoder<T>::forwardSelfAttn(T*                             attn_io,
-                                        TensorMap*                     _outputs,
-                                        const TensorMap*               _inputs,
-                                        size_t                         token_num,
-                                        size_t                         batch_size,
-                                        int                            layer_id,
-                                        const LlamaAttentionWeight<T>* weight)
+void UnifiedDecoder<T>::forwardSelfAttn(T*                attn_io,
+                                        TensorMap*        _outputs,
+                                        const TensorMap*  _inputs,
+                                        size_t            token_num,
+                                        size_t            batch_size,
+                                        int               layer_id,
+                                        const WeightType* weight)
 {
     TensorMap inputs(*_inputs);
     inputs.insert("input_query", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, attn_io});
@@ -84,7 +85,7 @@ void UnifiedDecoder<T>::forwardSelfAttn(T*                             attn_io,
     TensorMap outputs(*_outputs);
     outputs.insert("hidden_features", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, attn_io});
 
-    attn_layer_->forward(&outputs, &inputs, weight);
+    attn_layer_->forward(&outputs, &inputs, &weight->self_attn_weights);
 }
 
 template<typename T>
@@ -161,7 +162,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     for (size_t layer = 0; layer < layer_num_; ++layer) {
 
         /// TODO: do not skip the layers when they are heterogeneous
-        if (isTuning() && layer != 0) {
+        if (isTuning() && layer < tune_layer_num_) {
             continue;
         }
 
@@ -175,7 +176,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                         token_num,
                         batch_size,
                         layer,
-                        &weights->at(layer)->self_attn_weights);
+                        weights->at(layer));
 
         count_and_fix(decoder_output, token_num * hidden_units_, Concat("attn_block", layer), 2);
 
@@ -211,7 +212,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
         }
 
         if (!weights->at(layer)->moe_weights.experts.empty()) {
-            moe_ffn_layer_->reduce(decoder_output, token_num, weights->at(layer)->moe_weights);
+            moe_ffn_layer_->reduce(decoder_output, token_num, (bool)ffn_layer_, weights->at(layer)->moe_weights);
         }
 
         count_and_fix(decoder_output, token_num * hidden_units_, Concat("ffn_block", layer), 2);

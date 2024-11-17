@@ -518,6 +518,7 @@ public:
                             batch_size_,
                             expert_ids_.size() / batch_size_,
                             output_dims_,
+                            0.f,
                             stream_);
 
             invokeMoeReduce(c_ref_.data().get(),
@@ -528,6 +529,7 @@ public:
                             batch_size_,
                             expert_ids_.size() / batch_size_,
                             output_dims_,
+                            0.f,
                             stream_);
 
             cudaDeviceSynchronize();

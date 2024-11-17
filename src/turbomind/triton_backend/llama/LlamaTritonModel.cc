@@ -254,6 +254,11 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
     model_param_.start_id           = model_reader["start_id"].as<int>();
     model_param_.end_id             = model_reader["end_id"].as<int>();
+    model_param_.tune_layer_num     = model_reader["tune_layer_num"].as<int>(1);
+    model_param_.mla.q_lora_rank    = model_reader["q_lora_rank"].as<int>();
+    model_param_.mla.kv_lora_rank   = model_reader["kv_lora_rank"].as<int>();
+    model_param_.mla.qk_rope_dim    = model_reader["qk_rope_dim"].as<int>();
+    model_param_.mla.v_head_dim     = model_reader["v_head_dim"].as<int>();
     attn_param_.cache_block_seq_len = attention_reader["cache_block_seq_len"].as<int>(0);
     model_param_.quant_policy       = engine_reader["quant_policy"].as<int>(0);
     YAML::Node inter_size           = model_reader["inter_size"];
@@ -304,7 +309,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     moe_param_.experts_per_token = model_reader["experts_per_token"].as<int>(0);
     moe_param_.inter_size        = model_reader["expert_inter_size"].as<int>(0);
     moe_param_.shared_gate       = model_reader["moe_shared_gate"].as<int>(0);
-    moe_param_.norm_topk         = model_reader["moe_norm_topk"].as<bool>(false);
+    moe_param_.norm_topk_prob    = model_reader["norm_topk_prob"].as<bool>(false);
     YAML::Node expert_num        = model_reader["expert_num"];
     for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
         moe_param_.expert_num.push_back(it->as<int>());

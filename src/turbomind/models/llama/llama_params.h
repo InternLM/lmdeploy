@@ -11,6 +11,13 @@
 
 namespace turbomind {
 
+struct MLAParam {
+    size_t q_lora_rank;
+    size_t kv_lora_rank;
+    size_t qk_rope_dim;
+    size_t v_head_dim;
+};
+
 struct ModelParam {
     size_t     head_num;
     size_t     head_dim;
@@ -25,6 +32,8 @@ struct ModelParam {
     int        group_size;
     int        start_id;
     int        end_id;
+    MLAParam   mla;
+    int        tune_layer_num;
 
     std::vector<int> inter_size;
 };
@@ -37,7 +46,7 @@ struct MoeParam {
 
     int  experts_per_token;
     int  inter_size;
-    bool norm_topk;
+    bool norm_topk_prob;
     bool shared_gate;
 
     std::vector<int> expert_num;

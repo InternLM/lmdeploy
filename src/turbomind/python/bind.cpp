@@ -293,8 +293,17 @@ PYBIND11_MODULE(_turbomind, m)
                             std::accumulate(src->shape.begin(), src->shape.end(), 1LL, std::multiplies<int64_t>());
                         auto num_bytes = num_element * dlmt->dl_tensor.dtype.bits / 8;
                         ft::FT_CHECK(self->shape.size() == 1 && num_bytes == self->shape[0]);
-                        cudaMemcpy(
-                            const_cast<void*>(self->data), const_cast<void*>(src->data), num_bytes, cudaMemcpyDefault);
+                        cudaPointerAttributes at{};
+                        ft::check_cuda_error(cudaPointerGetAttributes(&at, self->data));
+                        {
+                            // Switch to the same device where TM's tenosr memory resides because it's allocated
+                            // from a pool with no peer access enabled (can't be accessed from a context of other devices)
+                            ft::CudaDeviceGuard guard{at.device};
+                            ft::check_cuda_error(cudaMemcpy(const_cast<void*>(self->data),
+                                                            const_cast<void*>(src->data),
+                                                            num_bytes,
+                                                            cudaMemcpyDefault));
+                        }
                         break;
                     }
                     default:

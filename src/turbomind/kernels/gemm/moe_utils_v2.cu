@@ -687,7 +687,8 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
                                 const int*   en2f,        // [  e, n] :: (e,n) -> e*n
                                 const float* dst_scales,  // [n]
                                 int          dims,
-                                int          tokens)
+                                int          tokens,
+                                float        dst_scale)
 {
     using Vec = Array<T, vec_size>;
 
@@ -695,7 +696,6 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
 
     auto dst_ptr = (Vec*)dst + dims * ti;
 
-    float dst_scale = 0;
     if (dst_scales) {
         dst_scale = dst_scales[ti];
         dst_scale = fdividef(1.f, 1.f + expf(-dst_scale));
@@ -712,7 +712,7 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
 
     for (int i = threadIdx.x; i < dims; i += block_dim) {
         Array<float, vec_size> accum{};
-        if (dst_scales) {
+        if (dst_scale) {
             Vec v;
             Ldg(v, dst_ptr[i].data());
             using namespace ops;
@@ -739,6 +739,7 @@ void invokeMoeReduce(T*           dst,
                      int          tokens,
                      int          experts_per_token,
                      int          dims,
+                     float        dst_scale,
                      cudaStream_t st)
 {
     // std::cout << __PRETTY_FUNCTION__ << std::endl;
@@ -754,7 +755,8 @@ void invokeMoeReduce(T*           dst,
             en2f,
             dst_scales,
             dims / vec_size,
-            tokens);
+            tokens,
+            dst_scale);
     };
 
     switch (experts_per_token) {
@@ -774,10 +776,11 @@ void invokeMoeReduce(T*           dst,
     }
 }
 
-template void invokeMoeReduce(half*, const half*, const float*, const int*, const float*, int, int, int, cudaStream_t);
-#ifdef ENABLE_BF16
 template void
-invokeMoeReduce(nv_bfloat16*, const nv_bfloat16*, const float*, const int*, const float*, int, int, int, cudaStream_t);
+invokeMoeReduce(half*, const half*, const float*, const int*, const float*, int, int, int, float, cudaStream_t);
+#ifdef ENABLE_BF16
+template void invokeMoeReduce(
+    nv_bfloat16*, const nv_bfloat16*, const float*, const int*, const float*, int, int, int, float, cudaStream_t);
 #endif
 
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g)

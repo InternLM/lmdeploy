@@ -107,7 +107,7 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
                      padded,
                      expert_num,
                      param_.experts_per_token,
-                     param_.norm_topk,
+                     param_.norm_topk_prob,
                      stream_);
     sync_check_cuda_error();
 
@@ -220,7 +220,7 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
 }
 
 template<class T>
-void MoeFfnLayer<T>::reduce(T* output, int tokens, const MoeFfnWeight<T>& moe)
+void MoeFfnLayer<T>::reduce(T* output, int tokens, float output_scale, const MoeFfnWeight<T>& moe)
 {
     invokeMoeReduce(output,
                     inout_buf_,
@@ -230,6 +230,7 @@ void MoeFfnLayer<T>::reduce(T* output, int tokens, const MoeFfnWeight<T>& moe)
                     tokens,
                     param_.experts_per_token,
                     hidden_dim_,
+                    output_scale,
                     stream_);
     sync_check_cuda_error();
 

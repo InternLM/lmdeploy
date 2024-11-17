@@ -111,6 +111,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int               layer_id,
                                                 size_per_head_,
                                                 head_num_,
                                                 kv_head_num_,
+                                                model.mla,
                                                 attn_bias_,
                                                 tensor_para_size_,
                                                 weight_type_,
@@ -346,6 +347,25 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
     }
 }
 
+template<class T>
+void getMLATensor(LlamaAttentionWeight<T>& w, const std::string& p, TensorMap& m, int tp_rank)
+{
+    if (w.q_proj.output_dims) {
+        getWeightTensor(w.q_proj, false, concat(p, "attention.q_proj", tp_rank), m);
+    }
+    else {
+        getWeightTensor(w.q_a_proj, false, concat(p, "attention.q_a_proj"), m);
+        getWeightTensor(w.q_b_proj, false, concat(p, "attention.q_b_proj", tp_rank), m);
+        m.insert(concat(p, "attention.q_a_layernorm"),
+                 Tensor{MEMORY_GPU, getTensorType<T>(), {sizeof(T) * w.q_b_proj.input_dims}, w.q_a_layernorm});
+    }
+    getWeightTensor(w.kv_a_proj, false, concat(p, "attention.kv_a_proj"), m);
+    getWeightTensor(w.kv_b_proj, false, concat(p, "attention.kv_b_proj", tp_rank), m);
+    m.insert(concat(p, "attention.kv_a_layernorm"),
+             Tensor{MEMORY_GPU, getTensorType<T>(), {sizeof(T) * w.kv_b_proj.input_dims}, w.kv_a_layernorm});
+}
+
+
 template<typename T>
 TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
 {
@@ -359,7 +379,12 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
 
     auto get_prefix = [=](std::string_view name) { return concat(prefix, name, tensor_para_rank_); };
 
-    getWeightTensor(self_attn_weights.qkv, attn_bias_, get_prefix("attention.w_qkv"), output);
+    if (self_attn_weights.qkv.output_dims) {
+        getWeightTensor(self_attn_weights.qkv, attn_bias_, get_prefix("attention.w_qkv"), output);
+    }
+    else {
+        getMLATensor(self_attn_weights, prefix, output, tensor_para_rank_);
+    }
     getWeightTensor(self_attn_weights.output, attn_bias_, get_prefix("attention.wo"), output);
 
     if (inter_size_) {

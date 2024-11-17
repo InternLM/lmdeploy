@@ -54,11 +54,13 @@ public:
 
     void free(cudaStream_t st);
 
-    T*                      self_attn_norm_weights{};
-    T*                      ffn_norm_weights{};
+    T* self_attn_norm_weights{};
+    T* ffn_norm_weights{};
+
     LlamaAttentionWeight<T> self_attn_weights{};
-    LlamaFfnWeight<T>       ffn_weights{};
-    MoeFfnWeight<T>         moe_weights{};
+
+    LlamaFfnWeight<T> ffn_weights{};
+    MoeFfnWeight<T>   moe_weights{};
 
 private:
     size_t     head_num_;

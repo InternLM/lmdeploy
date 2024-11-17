@@ -54,6 +54,7 @@ void invokeMoeReduce(T*           dst,
                      int          tokens,
                      int          experts_per_token,
                      int          dims,
+                     float        dst_scale,
                      cudaStream_t st);
 
 // Sample `e` from `E` experts uniformly for every token

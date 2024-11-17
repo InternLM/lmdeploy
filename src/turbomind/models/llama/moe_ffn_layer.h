@@ -55,7 +55,7 @@ public:
 
     void forward(T* output, const T* input, int tokens, int layer_id, const MoeFfnWeight<T>& moe);
 
-    void reduce(T* output, int tokens, const MoeFfnWeight<T>& moe);
+    void reduce(T* output, int tokens, float output_scale, const MoeFfnWeight<T>& moe);
 
     void gate(float* logits, const T* input, int tokens, const LlamaDenseWeight<T>& weight);
 

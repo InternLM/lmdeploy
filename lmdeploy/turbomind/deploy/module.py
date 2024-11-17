@@ -96,7 +96,8 @@ class Ffn(Module):
     def __init__(self, model: BaseOutputModel):
         self.model = model
         self.tp = model.tensor_para_size
-        # inter_sizes in config are padded and my differ from what's in the weights
+        # inter_sizes in config are padded and may be different from what's
+        # in the weights
         self.inter_size = model.model_config.inter_size
         self.group_size = max(1, model.model_config.group_size)
 
@@ -134,7 +135,8 @@ class Ffn(Module):
 
     def apply(self, i: int, r: BaseReader):
         for e in get_params(r.ffn(i, None)):
-            e(partial(self._export, self.inter_size[i], self._ffn), partial(r.ffn, i), i)
+            e(partial(self._export, self.inter_size[i], self._ffn),
+              partial(r.ffn, i), i)
 
 
 class MoeFfn(Ffn):
@@ -156,11 +158,13 @@ class MoeFfn(Ffn):
         self.shared_gate = model.model_config.moe_shared_gate
 
     def apply(self, i: int, r: BaseReader):
+        if self.expert_num[i] == 0:
+            return
         for p in get_params(r.moe_ffn_expert()):
             for e in range(self.expert_num[i]):
                 fmt = self._moe_ffn_expert.replace('E', str(e))
-                p(partial(self._export, self.inter_size, fmt), partial(r.moe_ffn_expert, e, i),
-                  i)
+                p(partial(self._export, self.inter_size, fmt),
+                  partial(r.moe_ffn_expert, e, i), i)
 
         gate = transpose(r.moe_ffn_gate(i))
         self.model.save_split(gate, self._moe_ffn_gate.format(i))
@@ -220,6 +224,67 @@ class Attn(Module):
             e(self._export, partial(r.attn, i), i)
 
 
+class MLA(Module):
+    """
+    requires:
+        r.mla(i, kind)
+        r.mla_norm(i)
+    """
+
+    _mla = 'layers.{0}.attention.{1}.{2}'
+
+    def __init__(self, model: BaseOutputModel):
+        self.model = model
+
+    def _export(self, idx: int, xs, kind: str, pack_fn, **kwargs):
+        if all(x is None for x in xs):
+            return
+        q_a, q_b, kv_a, kv_b, o = map(transpose, xs)
+
+        cfg = self.model.model_config
+        qk_nope_dim = cfg.size_per_head - cfg.qk_rope_dim
+
+        q_b = q_b.reshape(-1, cfg.size_per_head)
+
+        # [nope_dim | rope_dim] -> [rope_dim | nope_dim]
+        q_nope, q_pe = torch.split(q_b, (qk_nope_dim, cfg.qk_rope_dim), dim=-1)
+        q_b = torch.cat((q_pe, q_nope),
+                        dim=-1).view(-1, cfg.head_num * cfg.size_per_head)
+
+        o = o.reshape(cfg.head_num, cfg.v_head_dim, -1)
+        o = torch.nn.functional.pad(
+            o, (0, 0, 0, cfg.size_per_head - cfg.v_head_dim, 0, 0))
+        o = o.view(cfg.head_num * cfg.size_per_head, cfg.hidden_units)
+
+        if q_a is not None:
+            self.model.save_split(pack_fn(q_a),
+                                  self._mla.format(idx, 'q_a_proj', kind))
+        q_b_name = 'q_proj' if q_a is None else 'q_b_proj'
+        self.model.save_split(pack_fn(q_b),
+                              self._mla.format(idx, q_b_name, kind),
+                              split_dim=-1)
+        self.model.save_split(pack_fn(kv_a),
+                              self._mla.format(idx, 'kv_a_proj', kind))
+        self.model.save_split(pack_fn(kv_b),
+                              self._mla.format(idx, 'kv_b_proj', kind),
+                              split_dim=-1)
+        self.model.save_split(pack_fn(o),
+                              self._mla.format(idx, 'wo', kind),
+                              split_dim=0)
+
+    _layernorm = 'layers.{0}.attention.{1}_a_layernorm'
+
+    def apply(self, i: int, r: BaseReader):
+
+        for f in get_params(r.attn(i, None), bias=False):
+            f(self._export, partial(r.mla, i), i)
+
+        q, k = r.mla_norm(i)
+        if q is not None:
+            self.model.save_split(q, self._layernorm.format(i, 'q'))
+        self.model.save_split(k, self._layernorm.format(i, 'kv'))
+
+
 class Misc(Module):
     """
     requires:
@@ -260,7 +325,11 @@ class Transformer:
 
     def __init__(self, model: BaseOutputModel):
         self.model = model
-        modules = [Attn, LayerNorm]
+        modules = [LayerNorm]
+        if model.model_config.kv_lora_rank:
+            modules.append(MLA)
+        else:
+            modules.append(Attn)
         if model.model_config.inter_size:
             modules.append(Ffn)
         if model.model_config.expert_num:

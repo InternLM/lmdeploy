@@ -127,7 +127,7 @@ struct Reduce {
         }
 
         __syncthreads();
-        
+
         // HeadDim / WARP_SIZE
         // 128     -> 4
         // 64, 192 -> 2
