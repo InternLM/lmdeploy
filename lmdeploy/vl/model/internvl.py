@@ -14,8 +14,6 @@ from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
-IMAGE_TOKEN = '<IMAGE_TOKEN>'
-
 
 def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height,
                               image_size):
@@ -136,7 +134,6 @@ class InternVLVisionModel(VisonModel):
 
     def build_model(self):
         """Load model."""
-
         self.model.half()
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
@@ -236,6 +233,7 @@ class InternVLVisionModel(VisonModel):
     def proc_messages(cls, messages, chat_template, sequence_start):
         # apply chat template to get the prompt
         prompt_messages = []
+        IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
