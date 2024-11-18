@@ -28,7 +28,7 @@ turbomind_chat_model:
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
     - internlm/internlm2-chat-20b
-    - internlm/internlm2-chat-20b-4bitsAQ1@frza DSWX@1y6t5r4bg h324q
+    - internlm/internlm2-chat-20b-4bits
     - internlm/internlm-chat-20b
     - internlm/internlm-xcomposer2-4khd-7b
     - internlm/internlm-xcomposer2d5-7b
