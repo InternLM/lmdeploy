@@ -216,7 +216,7 @@ class ImageEncoder:
                         {...},
                     ],
                     # depends on each vision model's preprocessing
-                    'preprocess': {
+                    'multimodal': {
                         'pixel_value': torch.tensor,
                         ...
                     }
@@ -234,24 +234,26 @@ class ImageEncoder:
                 start = i + 1
         return messages
 
-    async def async_infer(self, messages: List[Dict]) -> Dict:
-        """perform vision encoding on a request to get a dict, in which there
-        are input_ids, embeddings, embedding_ranges and so on.
-
-        They will be used by turbomind engine. The key in the dict must be the
-        same defined in turbmoind engine's infer API
+    async def async_infer(self, messages: List[Dict]) -> List[Dict]:
+        """get multimodal embedding.
 
         Args:
-            messages (List[Dict]): a list of message, which is supposed to be
-                the output of `preprocess`
+            messages (List[Dict]): a list of message. The embedding
+                will be performed with the item that includes
+                `preprocess` key. Refer to the output of `preprocess()`
         """
 
         assert isinstance(messages, List)
         assert all(isinstance(item, Dict) for item in messages)
-        return self.model.forward(messages)
+        for i, message in enumerate(messages):
+            preprocess = message.pop('preprocess', None)
+            if preprocess:
+                result = self.model.forward(preprocess)
+                messages[i].update(preprocess=result)
+        return messages
 
     async def wrap_for_pytorch(self, messages: List[Dict], chat_template,
-                               sequence_start) -> List[Dict]:
+                               tokenizer, sequence_start) -> List[Dict]:
         """
         Args:
             messages (List[Dict]): a list of message, which is supposed to be
@@ -262,14 +264,16 @@ class ImageEncoder:
             Dict(
                 'prompt': 'the prompt after applying chat template'
                 'input_ids': [],
-                'preprocess': [
-                    {},
-                    {}
+                'multimodal': {
+                    'pixel_values': torch.Tensor,
+                    ...
                 ]
             )
         """
-        return self.model.to_pytorch(messages, chat_template, sequence_start)
+        return self.model.to_pytorch(messages, chat_template, tokenizer,
+                                     sequence_start)
 
     async def wrap_for_turbomind(self, messages: List[Dict], chat_template,
-                                 sequence_start) -> Dict:
-        return self.model.to_turbomind(messages, chat_template, sequence_start)
+                                 tokenizer, sequence_start) -> Dict:
+        return self.model.to_turbomind(messages, chat_template, tokenizer,
+                                       sequence_start)

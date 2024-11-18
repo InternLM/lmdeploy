@@ -26,15 +26,16 @@ class VisonModel(ABC):
         self.model_path = model_path
         self.with_llm = with_llm
         self.max_memory = max_memory
+        self.backend = backend
         if hf_config is None:
             _, hf_config = get_model_arch(model_path)
         self.hf_config = hf_config
-        self.build_proprocessor()
+        self.build_preprocessor()
         if backend == 'turbomind':
             self.build_model()
 
     @abstractmethod
-    def build_proprocessor(self, ):
+    def build_preprocessor(self, ):
         raise NotImplementedError()
 
     @abstractmethod
