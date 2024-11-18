@@ -290,11 +290,11 @@ def run_pipeline_vl_chat_test(config,
     hf_path = model_path + '/' + model_case
 
     if 'pytorch' in backend:
-        backend_config = PytorchEngineConfig(tp=tp)
+        backend_config = PytorchEngineConfig(tp=tp, session_len=8192)
         if not is_bf16_supported():
             backend_config.dtype = 'float16'
     else:
-        backend_config = TurbomindEngineConfig(tp=tp)
+        backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
 
     if 'llava' in model_case:
         backend_config.model_name = 'vicuna'
