@@ -128,6 +128,12 @@ class InternVLVisionModel(VisonModel):
             self.image_processor = image_processor
             self._forward_func = self._forward
 
+        force_image_size = self.hf_config.force_image_size
+        patch_size = self.hf_config.vision_config.patch_size
+        downsample_ratio = self.hf_config.downsample_ratio
+        self.image_tokens_per_patch = int(
+            (force_image_size // patch_size)**2 * (downsample_ratio**2))
+
     def build_model(self):
         """Load model."""
 
@@ -270,8 +276,8 @@ class InternVLVisionModel(VisonModel):
         for i, seg in enumerate(segs):
             if i > 0 and i <= len(preps):
                 preps[i - 1].update(offset=len(input_ids))
-                # TODO(hardcode 256)
-                image_dim = preps[i - 1]['pixel_values'].shape[0] * 256
+                image_dim = (preps[i - 1]['pixel_values'].shape[0] *
+                             self.image_tokens_per_patch)
                 input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
             token_ids = tokenizer.encode(seg,
                                          add_bos=((i == 0) and sequence_start))
