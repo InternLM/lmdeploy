@@ -239,9 +239,13 @@ class EngineInstance:
 
         def __call_async():
             """call async."""
-            coro_gen = self.async_stream_infer(session_id, input_ids,
-                                               input_multimodals, gen_config,
-                                               adapter_name, **kwargs)
+            coro_gen = self.async_stream_infer(
+                session_id,
+                input_ids,
+                input_multimodals=input_multimodals,
+                gen_config=gen_config,
+                adapter_name=adapter_name,
+                **kwargs)
             while True:
                 try:
                     yield self.req_sender.run_until_complete(
