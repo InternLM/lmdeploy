@@ -276,9 +276,9 @@ class InternVLVisionModel(VisonModel):
         for i, seg in enumerate(segs):
             if i > 0 and i <= len(preps):
                 preps[i - 1].update(offset=len(input_ids))
-                image_dim = (preps[i - 1]['pixel_values'].shape[0] *
-                             self.image_tokens_per_patch)
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
+                image_tokens = (preps[i - 1]['pixel_values'].shape[0] *
+                                self.image_tokens_per_patch)
+                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_tokens)
             token_ids = tokenizer.encode(seg,
                                          add_bos=((i == 0) and sequence_start))
             input_ids.extend(token_ids)
